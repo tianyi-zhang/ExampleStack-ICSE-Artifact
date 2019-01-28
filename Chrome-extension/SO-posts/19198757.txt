@@ -1,0 +1,609 @@
+<p>I've tried vget,
+<a href="https://github.com/axet/vget" rel="nofollow">https://github.com/axet/vget</a>
+and it works fine.
+You can use maven to setup or download manually dependencies from pom files.
+Dependencies are</p>
+
+<ul>
+<li><p>wget (<a href="https://github.com/axet/wget" rel="nofollow">https://github.com/axet/wget</a>)</p></li>
+<li><p>commons-io-2.4.jar</p></li>
+<li><p>commons-lang3-3.1.jar</p></li>
+<li><p>httpcore-4.3.jar</p></li>
+<li><p>httpclient-4.3.jar</p></li>
+<li><p>xstream-1.4.2.jar</p></li>
+</ul>
+
+<p>compiled with jdk6</p>
+
+<p>ran the direct download sample as,</p>
+
+<pre><code>public class DirectDownload {
+
+    public static void main(String[] args) {
+        try {
+            VGet v = new VGet(new URL("http://www.youtube.com/watch?v=fNU4UNPNeWI"), new File("/"));
+            v.download();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+}
+</code></pre>
+
+<p><strike>check out a ready working example, sources are included in the jar</p>
+
+<p>zip file - 1,89KB
+<a href="https://www.wetransfer.com/downloads/465f7ef8c6a76f79e4cbd7c9f38a608c20131005141332/41c09a86ed8eaa6e61f59282eabda2a120131005141332/4ac689" rel="nofollow">https://www.wetransfer.com/downloads/465f7ef8c6a76f79e4cbd7c9f38a608c20131005141332/41c09a86ed8eaa6e61f59282eabda2a120131005141332/4ac689</a></strike></p>
+
+<h1>UPDATE# <em>- npe issue when downloading as mentioned in comments</em></h1>
+
+<p><strong>tldr;</strong> There seem to be couple of issues with <code>com.github.axet.vget.vhs.YouTubeParser</code>, so added non intrusive code to patch it and make the example work as it used to. So just replace the original <code>YoutubeParser</code> class with the one posted here at the end.</p>
+
+<p>Also find another ready working example with jar and all required libs, sources are included in the jar <em>(this will be automatically removed after a period of time (will be deleted on 13 September, 2014) - the youtube urls included in the code are random)</em></p>
+
+<p>zip file - 1,69MB (wetransfer.com displays 1.7MB)</p>
+
+<p><a href="https://www.wetransfer.com/downloads/7b2d9182c9d91577919df3907cfd025620140906080118/a9ded3ba71496d4df9b4d035ac5a1e3920140906080118/6acf46#" rel="nofollow">https://www.wetransfer.com/downloads/7b2d9182c9d91577919df3907cfd025620140906080118/a9ded3ba71496d4df9b4d035ac5a1e3920140906080118/6acf46#</a></p>
+
+<p><strong>A. ISSUES</strong></p>
+
+<ol>
+<li><p>In com.github.axet.vget.vhs.YouTubeParser ln229 the variable <code>qs</code> most of the times it does not contain the resulting query string of the http get executed with <code>WGet</code>. This causes the <code>npe</code> to be thrown later on when trying to parse the query string.</p></li>
+<li><p>If issue 1 is resolved then the <code>sig</code> variable is not found in the urls returned from the <code>get_video_info</code>, so parsing with <code>Pattern.compile("sig=([^&amp;,]*)")</code> does not return any values. This results in continuous retries without ever downloading the video.</p></li>
+</ol>
+
+<p><strong>B. RESOLUTIONS</strong> <em>(these are temporary patches, as the original format of the response and the cause of WGet misbehaving are not known)</em></p>
+
+<ol>
+<li>Calling <code>WGet</code> once more, if the resulting query string is empty, without a <code>WGet.HtmlLoader</code> seems to do the job. Also provided an approach of calling a simple HTTP GET using the apache httpclient v4, in this case there is one more dependency on apache commons-logging.jar.</li>
+</ol>
+
+<p>added in ln248</p>
+
+<pre><code>        if (qs == null || qs.trim().length() == 0) {
+            qs = WGet.getHtml(url);
+
+////below is sample code for simple HTTP GET with httpclient v4
+////if used then apache commons-logging.jar is also required
+//            CloseableHttpClient httpclient = HttpClients.createDefault();
+//            try {
+//                HttpGet httpget = new HttpGet(get);
+//
+//                System.out.println("Executing request " + httpget.getRequestLine());
+//
+//                // Create a custom response handler
+//                ResponseHandler&lt;String&gt; responseHandler = new ResponseHandler&lt;String&gt;() {
+//
+//                    public String handleResponse(
+//                            final HttpResponse response) throws ClientProtocolException, IOException {
+//                        int status = response.getStatusLine().getStatusCode();
+//                        if (status &gt;= 200 &amp;&amp; status &lt; 300) {
+//                            HttpEntity entity = response.getEntity();
+//                            return entity != null ? EntityUtils.toString(entity) : null;
+//                        } else {
+//                            throw new ClientProtocolException("Unexpected response status: " + status);
+//                        }
+//                    }
+//
+//                };
+//                String responseBody = httpclient.execute(httpget, responseHandler);
+//                qs = responseBody;
+//            } finally {
+//                httpclient.close();
+//            }
+        }
+</code></pre>
+
+<p>2.After looking at the response there seems to be the signature in a certain place, so enhanced the parsing a bit. Thus, if the pattern execution of <code>Pattern.compile("sig=([^&amp;,]*)")</code> does not return anything then also trying with <code>Pattern.compile("signature%3D([^&amp;,%]*)")</code>. This change took place in method <code>extractUrlEncodedVideos</code>.</p>
+
+<pre><code>String sig = null;
+                {
+                    Pattern link = Pattern.compile("signature=([^&amp;,]*)");
+                    Matcher linkMatch = link.matcher(urlString);
+                    if (linkMatch.find()) {
+                        sig = linkMatch.group(1);
+                    } else {
+                        link = Pattern.compile("signature%3D([^&amp;,%]*)");
+                        linkMatch = link.matcher(urlString);
+                        if (linkMatch.find()) {
+                            sig = linkMatch.group(1);
+                        }
+                    }
+                }
+</code></pre>
+
+<p>The modified <code>com.github.axet.vget.vhs.YouTubeParser</code> file is as follows,</p>
+
+<pre><code>package com.github.axet.vget.vhs;
+
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.commons.lang3.StringEscapeUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.utils.URLEncodedUtils;
+
+import com.github.axet.vget.info.VGetParser;
+import com.github.axet.vget.info.VideoInfo;
+import com.github.axet.vget.info.VideoInfo.States;
+import com.github.axet.vget.info.VideoInfo.VideoQuality;
+import com.github.axet.wget.WGet;
+import com.github.axet.wget.info.ex.DownloadError;
+import java.io.IOException;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.ResponseHandler;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+
+public class YouTubeParser extends VGetParser {
+
+    public static class VideoUnavailablePlayer extends DownloadError {
+
+        private static final long serialVersionUID = 10905065542230199L;
+
+        public VideoUnavailablePlayer() {
+            super("unavailable-player");
+        }
+    }
+
+    public static class AgeException extends DownloadError {
+
+        private static final long serialVersionUID = 1L;
+
+        public AgeException() {
+            super("Age restriction, account required");
+        }
+    }
+
+    public static class PrivateVideoException extends DownloadError {
+
+        private static final long serialVersionUID = 1L;
+
+        public PrivateVideoException() {
+            super("Private video");
+        }
+
+        public PrivateVideoException(String s) {
+            super(s);
+        }
+    }
+
+    public static class EmbeddingDisabled extends DownloadError {
+
+        private static final long serialVersionUID = 1L;
+
+        public EmbeddingDisabled(String msg) {
+            super(msg);
+        }
+    }
+
+    public static class VideoDeleted extends DownloadError {
+
+        private static final long serialVersionUID = 1L;
+
+        public VideoDeleted(String msg) {
+            super(msg);
+        }
+    }
+
+    List&lt;VideoDownload&gt; sNextVideoURL = new ArrayList&lt;VideoDownload&gt;();
+
+    URL source;
+
+    public YouTubeParser(URL input) {
+        this.source = input;
+    }
+
+    public static boolean probe(URL url) {
+        return url.toString().contains("youtube.com");
+    }
+
+    void downloadone(VideoInfo info, AtomicBoolean stop, Runnable notify) throws Exception {
+        try {
+            extractEmbedded(info, stop, notify);
+        } catch (EmbeddingDisabled e) {
+            streamCpature(info, stop, notify);
+        }
+    }
+
+    /**
+     * do not allow to download age restricted videos
+     *
+     * @param info
+     * @param stop
+     * @param notify
+     * @throws Exception
+     */
+    void streamCpature(final VideoInfo info, final AtomicBoolean stop, final Runnable notify) throws Exception {
+        String html;
+        html = WGet.getHtml(info.getWeb(), new WGet.HtmlLoader() {
+            @Override
+            public void notifyRetry(int delay, Throwable e) {
+                info.setDelay(delay, e);
+                notify.run();
+            }
+
+            @Override
+            public void notifyDownloading() {
+                info.setState(States.DOWNLOADING);
+                notify.run();
+            }
+
+            @Override
+            public void notifyMoved() {
+                info.setState(States.RETRYING);
+                notify.run();
+            }
+        }, stop);
+        extractHtmlInfo(info, html, stop, notify);
+        extractIcon(info, html);
+    }
+
+    /**
+     * Add resolution video for specific youtube link.
+     *
+     * @param url download source url
+     * @throws MalformedURLException
+     */
+    void addVideo(String itag, String url) throws MalformedURLException {
+        Integer i = Integer.decode(itag);
+        VideoQuality vd = itagMap.get(i);
+
+        URL u = new URL(url);
+
+        if (u != null) {
+            sNextVideoURL.add(new VideoDownload(vd, u));
+        }
+    }
+
+    // http://en.wikipedia.org/wiki/YouTube#Quality_and_codecs
+    static final Map&lt;Integer, VideoQuality&gt; itagMap = new HashMap&lt;Integer, VideoInfo.VideoQuality&gt;() {
+        private static final long serialVersionUID = -6925194111122038477L;
+
+        {
+            put(120, VideoQuality.p720);
+            put(102, VideoQuality.p720);
+            put(101, VideoQuality.p360);
+            put(100, VideoQuality.p360);
+            put(85, VideoQuality.p520);
+            put(84, VideoQuality.p720);
+            put(83, VideoQuality.p240);
+            put(82, VideoQuality.p360);
+            put(46, VideoQuality.p1080);
+            put(45, VideoQuality.p720);
+            put(44, VideoQuality.p480);
+            put(43, VideoQuality.p360);
+            put(38, VideoQuality.p3072);
+            put(37, VideoQuality.p1080);
+            put(36, VideoQuality.p240);
+            put(35, VideoQuality.p480);
+            put(34, VideoQuality.p360);
+            put(22, VideoQuality.p720);
+            put(18, VideoQuality.p360);
+            put(17, VideoQuality.p144);
+            put(6, VideoQuality.p270);
+            put(5, VideoQuality.p240);
+        }
+    };
+
+    public static String extractId(URL url) {
+        {
+            Pattern u = Pattern.compile("youtube.com/watch?.*v=([^&amp;]*)");
+            Matcher um = u.matcher(url.toString());
+            if (um.find()) {
+                return um.group(1);
+            }
+        }
+
+        {
+            Pattern u = Pattern.compile("youtube.com/v/([^&amp;]*)");
+            Matcher um = u.matcher(url.toString());
+            if (um.find()) {
+                return um.group(1);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * allows to download age restricted videos
+     *
+     * @param info
+     * @param stop
+     * @param notify
+     * @throws Exception
+     */
+    void extractEmbedded(final VideoInfo info, final AtomicBoolean stop, final Runnable notify) throws Exception {
+        String id = extractId(source);
+        if (id == null) {
+            throw new RuntimeException("unknown url");
+        }
+
+        info.setTitle(String.format("http://www.youtube.com/watch?v=%s", id));
+
+        String get = String
+                .format("http://www.youtube.com/get_video_info?video_id=%s&amp;el=embedded&amp;ps=default&amp;eurl=", id);
+
+        URL url = new URL(get);
+
+        String qs = WGet.getHtml(url, new WGet.HtmlLoader() {
+            @Override
+            public void notifyRetry(int delay, Throwable e) {
+                info.setDelay(delay, e);
+                notify.run();
+            }
+
+            @Override
+            public void notifyDownloading() {
+                info.setState(States.DOWNLOADING);
+                notify.run();
+            }
+
+            @Override
+            public void notifyMoved() {
+                info.setState(States.RETRYING);
+                notify.run();
+            }
+        }, stop);
+
+        if (qs == null || qs.trim().length() == 0) {
+            qs = WGet.getHtml(url);
+
+////below is sample code for simple HTTP GET with httpclient v4
+////if used then apache commons-logging.jar is also required
+//            CloseableHttpClient httpclient = HttpClients.createDefault();
+//            try {
+//                HttpGet httpget = new HttpGet(get);
+//
+//                System.out.println("Executing request " + httpget.getRequestLine());
+//
+//                // Create a custom response handler
+//                ResponseHandler&lt;String&gt; responseHandler = new ResponseHandler&lt;String&gt;() {
+//
+//                    public String handleResponse(
+//                            final HttpResponse response) throws ClientProtocolException, IOException {
+//                        int status = response.getStatusLine().getStatusCode();
+//                        if (status &gt;= 200 &amp;&amp; status &lt; 300) {
+//                            HttpEntity entity = response.getEntity();
+//                            return entity != null ? EntityUtils.toString(entity) : null;
+//                        } else {
+//                            throw new ClientProtocolException("Unexpected response status: " + status);
+//                        }
+//                    }
+//
+//                };
+//                String responseBody = httpclient.execute(httpget, responseHandler);
+//                qs = responseBody;
+//            } finally {
+//                httpclient.close();
+//            }
+        }
+
+        Map&lt;String, String&gt; map = getQueryMap(qs);
+
+        if (map.get("status").equals("fail")) {
+            String r = URLDecoder.decode(map.get("reason"), "UTF-8");
+            if (map.get("errorcode").equals("150")) {
+                throw new EmbeddingDisabled("error code 150");
+            }
+            if (map.get("errorcode").equals("100")) {
+                throw new VideoDeleted("error code 100");
+            }
+
+            throw new DownloadError(r);
+            // throw new PrivateVideoException(r);
+        }
+
+        info.setTitle(URLDecoder.decode(map.get("title"), "UTF-8"));
+
+        // String fmt_list = URLDecoder.decode(map.get("fmt_list"), "UTF-8");
+        // String[] fmts = fmt_list.split(",");
+        String url_encoded_fmt_stream_map = URLDecoder.decode(map.get("url_encoded_fmt_stream_map"), "UTF-8");
+
+        extractUrlEncodedVideos(url_encoded_fmt_stream_map);
+
+        // 'iurlmaxresæ or 'iurlsd' or 'thumbnail_url'
+        String icon = map.get("thumbnail_url");
+        icon = URLDecoder.decode(icon, "UTF-8");
+        info.setIcon(new URL(icon));
+    }
+
+    void extractIcon(VideoInfo info, String html) {
+        try {
+            Pattern title = Pattern.compile("itemprop=\"thumbnailUrl\" href=\"(.*)\"");
+            Matcher titleMatch = title.matcher(html);
+            if (titleMatch.find()) {
+                String sline = titleMatch.group(1);
+                sline = StringEscapeUtils.unescapeHtml4(sline);
+                info.setIcon(new URL(sline));
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static Map&lt;String, String&gt; getQueryMap(String qs) {
+        try {
+            qs = qs.trim();
+            List&lt;NameValuePair&gt; list;
+            list = URLEncodedUtils.parse(new URI(null, null, null, -1, null, qs, null), "UTF-8");
+            HashMap&lt;String, String&gt; map = new HashMap&lt;String, String&gt;();
+            for (NameValuePair p : list) {
+                map.put(p.getName(), p.getValue());
+            }
+            return map;
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(qs, e);
+        }
+    }
+
+    void extractHtmlInfo(VideoInfo info, String html, AtomicBoolean stop, Runnable notify) throws Exception {
+        {
+            Pattern age = Pattern.compile("(verify_age)");
+            Matcher ageMatch = age.matcher(html);
+            if (ageMatch.find()) {
+                throw new AgeException();
+            }
+        }
+
+        {
+            Pattern age = Pattern.compile("(unavailable-player)");
+            Matcher ageMatch = age.matcher(html);
+            if (ageMatch.find()) {
+                throw new VideoUnavailablePlayer();
+            }
+        }
+
+        {
+            Pattern urlencod = Pattern.compile("\"url_encoded_fmt_stream_map\": \"([^\"]*)\"");
+            Matcher urlencodMatch = urlencod.matcher(html);
+            if (urlencodMatch.find()) {
+                String url_encoded_fmt_stream_map;
+                url_encoded_fmt_stream_map = urlencodMatch.group(1);
+
+                // normal embedded video, unable to grab age restricted videos
+                Pattern encod = Pattern.compile("url=(.*)");
+                Matcher encodMatch = encod.matcher(url_encoded_fmt_stream_map);
+                if (encodMatch.find()) {
+                    String sline = encodMatch.group(1);
+
+                    extractUrlEncodedVideos(sline);
+                }
+
+                // stream video
+                Pattern encodStream = Pattern.compile("stream=(.*)");
+                Matcher encodStreamMatch = encodStream.matcher(url_encoded_fmt_stream_map);
+                if (encodStreamMatch.find()) {
+                    String sline = encodStreamMatch.group(1);
+
+                    String[] urlStrings = sline.split("stream=");
+
+                    for (String urlString : urlStrings) {
+                        urlString = StringEscapeUtils.unescapeJava(urlString);
+
+                        Pattern link = Pattern.compile("(sparams.*)&amp;itag=(\\d+)&amp;.*&amp;conn=rtmpe(.*),");
+                        Matcher linkMatch = link.matcher(urlString);
+                        if (linkMatch.find()) {
+
+                            String sparams = linkMatch.group(1);
+                            String itag = linkMatch.group(2);
+                            String url = linkMatch.group(3);
+
+                            url = "http" + url + "?" + sparams;
+
+                            url = URLDecoder.decode(url, "UTF-8");
+
+                            addVideo(itag, url);
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            Pattern title = Pattern.compile("&lt;meta name=\"title\" content=(.*)");
+            Matcher titleMatch = title.matcher(html);
+            if (titleMatch.find()) {
+                String sline = titleMatch.group(1);
+                String name = sline.replaceFirst("&lt;meta name=\"title\" content=", "").trim();
+                name = StringUtils.strip(name, "\"&gt;");
+                name = StringEscapeUtils.unescapeHtml4(name);
+                info.setTitle(name);
+            }
+        }
+    }
+
+    void extractUrlEncodedVideos(String sline) throws Exception {
+        String[] urlStrings = sline.split("url=");
+
+        for (String urlString : urlStrings) {
+            urlString = StringEscapeUtils.unescapeJava(urlString);
+
+            // universal request
+            {
+                String url = null;
+                {
+                    Pattern link = Pattern.compile("([^&amp;]*)&amp;");
+                    Matcher linkMatch = link.matcher(urlString);
+                    if (linkMatch.find()) {
+                        url = linkMatch.group(1);
+                        url = URLDecoder.decode(url, "UTF-8");
+                    }
+                }
+                String itag = null;
+                {
+                    Pattern link = Pattern.compile("itag=(\\d+)");
+                    Matcher linkMatch = link.matcher(urlString);
+                    if (linkMatch.find()) {
+                        itag = linkMatch.group(1);
+                    }
+                }
+                String sig = null;
+                {
+                    Pattern link = Pattern.compile("signature=([^&amp;,]*)");
+                    Matcher linkMatch = link.matcher(urlString);
+                    if (linkMatch.find()) {
+                        sig = linkMatch.group(1);
+                    } else {
+                        link = Pattern.compile("signature%3D([^&amp;,%]*)");
+                        linkMatch = link.matcher(urlString);
+                        if (linkMatch.find()) {
+                            sig = linkMatch.group(1);
+                        }
+                    }
+                }
+
+                if (url != null &amp;&amp; itag != null &amp;&amp; sig != null) {
+                    try {
+                        new URL(url);
+
+                        if (sig != null) {
+                            url += "&amp;signature=" + sig;
+                        }
+
+                        if (itag != null) {
+                            addVideo(itag, url);
+                            continue;
+                        }
+                    } catch (MalformedURLException e) {
+                        // ignore bad urls
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public void extract(VideoInfo info, AtomicBoolean stop, Runnable notify) {
+        try {
+            downloadone(info, stop, notify);
+
+            getVideo(info, sNextVideoURL);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+}
+</code></pre>

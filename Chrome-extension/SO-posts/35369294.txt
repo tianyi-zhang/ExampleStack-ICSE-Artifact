@@ -1,0 +1,221 @@
+<p>Here is another example. Very similar but the biggest difference is this is a data class designed to allow other post variables with it also. For example you have a specific file store for different users and groups. You then would want to send that data with the video. This data class can actually be used for all post to your site. So the data class is </p>
+
+<pre><code>public class MultiPartData {
+    final String requestURL = "http://www.yoursite.com/some.php";
+    final String charset="UTF-8";
+    final String boundary="*******";
+    private static final String LINE_FEED = "\r\n";
+    private HttpURLConnection httpConn;
+    private DataOutputStream outputStream;
+    private PrintWriter writer;
+
+    //establishes connection
+    public MultiPartData() throws IOException {
+        URL url = new URL(requestURL);
+        httpConn = (HttpURLConnection) url.openConnection();
+        httpConn.setUseCaches(false);
+        httpConn.setChunkedStreamingMode(4096);
+        httpConn.setDoOutput(true); // indicates POST method
+        httpConn.setDoInput(true);
+        httpConn.setRequestMethod("POST");
+        httpConn.setRequestProperty("ENCTYPE", "multipart/form-data");
+        httpConn.setRequestProperty("Content-Type",
+                "multipart/form-data; boundary=\"" + boundary + "\"");
+        httpConn.setRequestProperty("Connection", "Keep-Alive");
+        outputStream = new DataOutputStream(httpConn.getOutputStream());
+        writer = new PrintWriter(new OutputStreamWriter(outputStream, charset),true);
+
+   }
+
+    //adds post variables to the header body
+    public void addFormField(String name, String value) {
+        writer.append("--" + boundary).append(LINE_FEED);
+        writer.append("Content-Disposition: form-data; name=\"").append(name).append("\"")
+            .append(LINE_FEED);
+        writer.append("Content-Type: text/plain; charset=" + charset).append(
+            LINE_FEED);
+        writer.append(LINE_FEED);
+        writer.append(value).append(LINE_FEED);
+        writer.flush();
+    }
+
+    //adds files to header body can be anytype of files
+    public void addFilePart(String fieldName, String filePath) throws IOException {
+        File uploadFile=new File(filePath);
+
+        String fileName = uploadFile.getName();
+        writer.append("--" + boundary).append(LINE_FEED);
+        writer.append("Content-Disposition:form-data; name=\"")
+                .append(fieldName).append("\"; filename=\"")
+                .append(fileName).append("\"")
+                .append(LINE_FEED);
+        writer.append("Content-Type: ").append(URLConnection.guessContentTypeFromName(fileName))
+                .append(LINE_FEED);
+        writer.append("Content-Transfer-Encoding: binary").append(LINE_FEED);
+        writer.append(LINE_FEED);
+        writer.flush();
+
+        FileInputStream inputStream = new FileInputStream(uploadFile);
+        int maxBufferSize=2*1024*1024;
+        int bufferSize;
+        int bytesAvailable=inputStream.available();
+        bufferSize = Math.min(bytesAvailable, maxBufferSize);
+        byte[] buffer = new byte[bufferSize];
+        int bytesRead=inputStream.read(buffer);
+        do {
+            outputStream.write(buffer, 0, bytesRead);
+            bytesAvailable = inputStream.available();
+            bufferSize = Math.min(bytesAvailable, maxBufferSize);
+            bytesRead = inputStream.read(buffer, 0, bufferSize);
+        }while (bytesRead &gt;0);
+        outputStream.flush();
+        inputStream.close();
+
+        writer.append(LINE_FEED);
+        writer.flush();
+    }
+
+    //adds header values to body
+    public void addHeaderField(String name, String value) {
+        writer.append(name).append(": ").append(value).append(LINE_FEED);
+        writer.flush();
+    }
+
+    //closing options you must use one of the options to close the  connection
+    // finishString()  gets results as a string
+    // finnishJOBJECT() gets results as an JSONObject
+    // finnishJARRAY() gets results as an JSONArray
+    // finnishNoResponse()  closes connection with out looking for response
+    public String finishString() throws IOException {
+        String response = "";
+
+        writer.append(LINE_FEED).flush();
+        writer.append("--" + boundary + "--").append(LINE_FEED);
+        writer.close();
+
+        String line;
+        StringBuilder sb= new StringBuilder();
+        BufferedReader br = new BufferedReader(new InputStreamReader(httpConn.getInputStream(), "UTF-8"));
+        while ((line=br.readLine()) != null) {
+            sb.append(line);
+            response =sb.toString();
+        }
+        br.close();
+
+        return response;
+     }
+    public JSONObject finnishJOBJECT() throws IOException, JSONException {
+        JSONObject response = null;
+        writer.append(LINE_FEED).flush();
+        writer.append("--" + boundary + "--").append(LINE_FEED);
+        writer.close();
+
+        String line;
+        StringBuilder sb= new StringBuilder();
+        BufferedReader br = new BufferedReader(new InputStreamReader(httpConn.getInputStream(), "UTF-8"));
+        while ((line=br.readLine()) != null) {
+            sb.append(line);
+            response =new JSONObject(sb.toString());
+        }
+        br.close();
+        return response;
+    }
+
+    public JSONArray finnishJARRAY()throws IOException, JSONException {
+        JSONArray response = null;
+        writer.append(LINE_FEED).flush();
+        writer.append("--" + boundary + "--").append(LINE_FEED);
+        writer.close();
+
+        String line;
+        StringBuilder sb= new StringBuilder();
+        BufferedReader br = new BufferedReader(new InputStreamReader(httpConn.getInputStream(), "UTF-8"));
+        while ((line=br.readLine()) != null) {
+            sb.append(line);
+            response =new JSONArray(sb.toString());
+        }
+        br.close();
+        return response;
+    }
+    public void finnishNoResponse(){
+        writer.append(LINE_FEED).flush();
+        writer.append("--" + boundary + "--").append(LINE_FEED);
+        writer.close();
+    }
+}
+</code></pre>
+
+<p>An example AsyncTask to implement the data class would be.</p>
+
+<pre><code> public void storeVideoBackground(String filePath,String identifier,String vType,String vName, storeImage serverPath){
+    progress.show();
+    new storeVideoAsyncTask(filePath,identifier,vType,vName,serverPath).execute();
+}
+public class storeVideoAsyncTask extends AsyncTask&lt;Void,Void,String&gt;{
+    String filePath; //path of the file to be uploaded
+    String vType;    //variable used on server
+    String vName;    //variable used on server
+    String identifier;  //variable used on server
+    storeImage serverPath; //interface used to get my response
+    MultiPartData upload;  //declares the data class for posting
+
+    public storeVideoAsyncTask(String filePath,String identifier,String vType,String vName, storeImage serverPath){
+        this.filePath=filePath;
+        this.vName=vName;
+        this.vType=vType;
+        this.identifier=identifier;
+        this.serverPath=serverPath;
+    }
+
+    @Override
+    protected String doInBackground(Void... params) {
+        JSONObject result;
+        String sPath="";
+        try {
+            upload=new MultiPartData();
+            upload.addHeaderField("User-Agent", "Android-User");
+            upload.addHeaderField("Test-Header","Header-Value");
+            upload.addFormField("appAuth",auth); //an auth string compared on server
+            upload.addFormField("action","storeVideo");//added post variable
+            upload.addFormField("vName",vName);//added post variable
+            upload.addFormField("identifier",identifier);//added post variable
+            upload.addFormField("vType",vType);//added post variable
+            upload.addFilePart("video",filePath);//added file video is the reference on server side to retrieve the file 
+            sPath=upload.finishString();//returned server path to be used later
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return sPath;
+    }
+
+    @Override
+    protected void onPostExecute(String servPath) {
+        super.onPostExecute(servPath);
+        progress.dismiss();
+        serverPath.done(servPath);
+    }
+} 
+</code></pre>
+
+<p>Now I like reusing my code so this is part of another class called ServerRequest. I pass the context into it for progress dialog and declare other values like my appAuth. </p>
+
+<p>The file is retrieved like so. This is server side php you can use any script you like to interact with the post variables. </p>
+
+<pre><code> if(isset($_FILES['video']['error'])){
+            $path = //path to store video
+            $file_name = $_FILES['video']['name'];
+            $file_size = $_FILES['video']['size'];
+            $file_type = $_FILES['video']['type'];
+            $temp_name = $_FILES['video']['tmp_name'];
+            if(move_uploaded_file($temp_name, $path.'/'.$file_name)){
+                $response =$path.'/'.$file_name;
+            }
+ }
+</code></pre>
+
+<p>The post variables will be retrieved usual methods $data=$_POST['data'];
+If this code isn't working for files it would then be the result of something on your server. probably the file size. most hosted servers have restrictions on post size upload file size etc. Some will let you override that in your .htaccess. To debug the issue add an echo under if(isset in on server side to echo out the error code and the php manual has great explanations of what they mean. If it reads 1 then try to override php.ini in the .htaccess with something like this inside</p>
+
+<pre><code> php_value post_max_size 30M
+ php_value upload_max_filesize 30M
+</code></pre>

@@ -1,0 +1,60 @@
+<p>So far there have been no Java SDK API support access directly Azure Storage through proxy server, because BaseRequest Class miss "url.openConnection(proxy)" in the function "public static HttpConnection createURLConnection(...)".</p>
+
+<p>Per my experience, there are two ways to help you implement the access function.</p>
+
+<p>The one is that you can use Azure Storage REST API through the java.net.Proxy Class to access storage service.</p>
+
+<pre><code>Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port));
+URLConnection conn = url.openConnection(proxy);
+And if you should be authorize proxy user &amp; password, you can do it as the follows:
+//Proxy-Authorization: Basic &lt;Base64.encode(user:password)&gt;
+String headerKey = "Proxy-Authorization";
+String headerValue = "Basic " + Base64.encode(user+":"+password);
+conn.setRequestProperty(headerKey, headerValue);
+</code></pre>
+
+<p>The last one is that you can modify Azure SDK API and <strong><em>overwrite the method “createURLConnection” in Class “BaseRequest”</em></strong> to implement accessing. The Azure Storage SDK  v2.2.0 project  on GitHub is <a href="https://github.com/Azure/azure-storage-java/tree/v2.2.0/" rel="nofollow">https://github.com/Azure/azure-storage-java/tree/v2.2.0/</a>.</p>
+
+<p>Note: </p>
+
+<p>public static HttpURLConnection createURLConnection(final URI uri, final RequestOptions options, UriQueryBuilder builder, final OperationContext opContext, <strong><em>java.net.Proxy proxy</em></strong>)</p>
+
+<p>and</p>
+
+<p>final HttpURLConnection retConnection = (HttpURLConnection) resourceUrl.openConnection(<strong><em>proxy</em></strong>);</p>
+
+<pre><code>public static HttpURLConnection createURLConnection(final URI uri, final RequestOptions options, UriQueryBuilder builder, final OperationContext opContext, java.net.Proxy proxy) throws IOException, URISyntaxException, StorageException {
+    if (builder == null) {
+        builder = new UriQueryBuilder();
+    }
+
+    final URL resourceUrl = builder.addToURI(uri).toURL();
+
+    final HttpURLConnection retConnection = (HttpURLConnection) resourceUrl.openConnection(proxy);
+
+    if (options.getTimeoutIntervalInMs() != null &amp;&amp; options.getTimeoutIntervalInMs() != 0) {
+        builder.add(TIMEOUT, String.valueOf(options.getTimeoutIntervalInMs() / 1000));
+    }
+
+    // Note: ReadTimeout must be explicitly set to avoid a bug in JDK 6.
+    // In certain cases, this bug causes an immediate read timeout exception to be thrown even if ReadTimeout is not set.
+    retConnection.setReadTimeout(Utility.getRemainingTimeout(options.getOperationExpiryTimeInMs(), options.getTimeoutIntervalInMs()));
+
+    // Note : accept behavior, java by default sends Accept behavior as text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2
+    retConnection.setRequestProperty(Constants.HeaderConstants.ACCEPT, Constants.HeaderConstants.XML_TYPE);
+    retConnection.setRequestProperty(Constants.HeaderConstants.ACCEPT_CHARSET, Constants.UTF8_CHARSET);
+
+    // Note : Content-Type behavior, java by default sends Content-type behavior as application/x-www-form-urlencoded for posts.
+    retConnection.setRequestProperty(Constants.HeaderConstants.CONTENT_TYPE, Constants.EMPTY_STRING);
+
+    retConnection.setRequestProperty(Constants.HeaderConstants.STORAGE_VERSION_HEADER,
+        Constants.HeaderConstants.TARGET_STORAGE_VERSION);
+    retConnection.setRequestProperty(Constants.HeaderConstants.USER_AGENT, getUserAgent());
+    retConnection.setRequestProperty(Constants.HeaderConstants.CLIENT_REQUEST_ID_HEADER,
+        opContext.getClientRequestID());
+
+    return retConnection;
+}
+</code></pre>
+
+<p>By the way, You need to call above method in every CloudXXXClient(CloudBlobClient, etc) Class.</p>

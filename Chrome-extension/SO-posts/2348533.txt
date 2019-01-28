@@ -1,0 +1,51 @@
+<p>How about the cache described in section 5.6 of <a href="http://rads.stackoverflow.com/amzn/click/0321349601" rel="nofollow">Concurrency In Practice</a>, by <a href="http://www.briangoetz.com/" rel="nofollow">Brian Goetz</a>? It's outlined <a href="http://www.javaspecialists.eu/archive/Issue125.html" rel="nofollow">here</a>.</p>
+
+<p>It only uses classes from the <a href="http://www.uni-muenster.de/ZIV.BennoSueselbeck/java/jdk1.5.0_01/docs/api/java/util/concurrent/package-summary.html" rel="nofollow">java.util.concurrent</a> package.</p>
+
+<p>The linked article builds up a cache and describes the weaknesses of each version, until final version is an efficient cache in which only one concurrent thread will compute an absent entry.</p>
+
+<p>I've cut and pasted the final code below, but its worth reading through the article and thinking about the issues outlined. Or even better - buy the book - it's great.</p>
+
+<pre><code>import java.util.concurrent.*;
+
+public class Memoizer&lt;A, V&gt; implements Computable&lt;A, V&gt; {
+  private final ConcurrentMap&lt;A, Future&lt;V&gt;&gt; cache
+      = new ConcurrentHashMap&lt;A, Future&lt;V&gt;&gt;();
+  private final Computable&lt;A, V&gt; c;
+  public Memoizer(Computable&lt;A, V&gt; c) { this.c = c; }
+  public V compute(final A arg) throws InterruptedException {
+      while (true) {
+          Future&lt;V&gt; f = cache.get(arg);
+          if (f == null) {
+              Callable&lt;V&gt; eval = new Callable&lt;V&gt;() {
+                  public V call() throws InterruptedException {
+                      return c.compute(arg);
+                  } 
+              };
+              FutureTask&lt;V&gt; ft = new FutureTask&lt;V&gt;(eval);
+              f = cache.putIfAbsent(arg, ft);
+              if (f == null) {
+                  f = ft;
+                  ft.run();
+              }
+          }
+          try {
+              return f.get();
+          } catch (CancellationException e) {
+              cache.remove(arg, f);
+          } catch (ExecutionException e) {
+          // Kabutz: this is my addition to the code...
+          try {
+             throw e.getCause();
+          } catch (RuntimeException ex) {
+              throw ex;
+          } catch (Error ex) {
+              throw ex;
+          } catch (Throwable t) {
+              throw new IllegalStateException("Not unchecked", t);
+          }
+        }
+     }
+  }
+}
+</code></pre>

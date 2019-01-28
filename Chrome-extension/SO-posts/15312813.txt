@@ -1,0 +1,363 @@
+<p>The question here changed direction a few times (from GET to POST). In an effort to create a simple but broad answer that might help you, I've included an EXAMPLE below that can do both a POST and a GET via <code>HttpClient</code> on Android (each using an <code>AsyncTask</code>). </p>
+
+<p>Keep in mind this example ISN'T the only way to do HTTP on Android, and is oversimplified in a few places. It's intended to get you started with <code>HttpClient</code>. </p>
+
+<p>There are alternative HTTP clients, including just using <code>java.net</code> in some scenarios, see this blog post for more info: <a href="http://android-developers.blogspot.com/2011/09/androids-http-clients.html" rel="nofollow">http://android-developers.blogspot.com/2011/09/androids-http-clients.html</a>. </p>
+
+<p>Also, you may want to consider one of the many good third party libraries that make stuff even easier, like loopj's Asynchronous Android Http Client: <a href="http://loopj.com/android-async-http/" rel="nofollow">http://loopj.com/android-async-http/</a>.</p>
+
+<p>And, note that I've used <a href="http://httpbin.org/" rel="nofollow">http://httpbin.org/</a> in the example as a server endpoint. httpbin.org serves as a great test server that let's you send and check all kinds of HTTP data.</p>
+
+<p>ACTIVITY</p>
+
+<pre><code>import android.app.Activity;
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.net.http.AndroidHttpClient;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.TextView;
+
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpRequestBase;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.protocol.HTTP;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.zip.GZIPInputStream;
+
+public class MainActivity extends Activity {
+
+   private ProgressDialog dialog;
+
+   private Button get;
+   private Button post;
+   private TextView output;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+  super.onCreate(savedInstanceState);
+  setContentView(R.layout.activity_main);
+
+  output = (TextView) findViewById(R.id.output);
+
+  get = (Button) findViewById(R.id.get_button);
+  post = (Button) findViewById(R.id.post_button);
+
+  get.setOnClickListener(new OnClickListener() {
+     @Override
+     public void onClick(View v) {
+        output.setText("");
+        new SimpleHttpGetTask(MainActivity.this).execute("http://httpbin.org/get");
+     }
+  });
+
+  post.setOnClickListener(new OnClickListener() {
+     @Override
+     public void onClick(View v) {
+        output.setText("");
+        new SimpleHttpPostTask(MainActivity.this).execute("http://httpbin.org/post", "param1name", "param1Value");
+     }
+  });
+}
+
+@Override
+protected void onPause() {
+  super.onPause();
+  if (dialog != null) {
+     dialog.dismiss();
+  }
+}
+
+private class SimpleHttpGetTask extends AsyncTask&lt;String, Void, String&gt; {
+
+  private final Context context;
+
+  public SimpleHttpGetTask(Context context) {
+     this.context = context;
+     dialog = new ProgressDialog(context);
+  }
+
+  @Override
+  protected void onPreExecute() {
+     dialog.setMessage("doing a GET...");
+     dialog.show();
+  }
+
+  @Override
+  protected String doInBackground(String... args) {
+
+     if (args == null || args.length != 1) {
+        Log.w("TAG", "args size must be 1: URL to invoke");
+        return null;
+     }
+
+     String url = args[0];
+     Log.d("TAG", "hitting URL:" + url);
+
+     // AndroidHttpClient has more reasonable default settings than "DefaultHttpClient", but it was only added in API 8
+     // (if you need to support API levels lower than 8, I'd create your own HttpClient with similar settings [see bottom of page for example])
+     AndroidHttpClient client = AndroidHttpClient.newInstance("Android-MyUserAgent");
+
+     HttpRequestBase request = new HttpGet(url);
+     HttpResponse response = null;
+
+     try {
+        response = client.execute(request);
+
+        int code = response.getStatusLine().getStatusCode();
+        String message = response.getStatusLine().getReasonPhrase();
+
+        // use the response here
+        // if the code is 200 thru 399 it worked or was redirected
+        // if the code is &gt;= 400 there was a problem
+
+        Log.d("TAG", "http GET completed, code:" + code + " message:" + message);
+
+        HttpEntity entity = response.getEntity();
+        if (entity != null) {
+           InputStream instream = null;
+           try {
+              instream = entity.getContent();
+
+              // convert stream if gzip header present in response
+              Header contentEncoding = response.getFirstHeader("Content-Encoding");
+              if (contentEncoding != null &amp;&amp; contentEncoding.getValue().equalsIgnoreCase("gzip")) {
+                 instream = new GZIPInputStream(instream);
+              }
+
+              // returning the string here, but if you want return the code, whatever
+              String result = convertStreamToString(instream);
+              Log.d("TAG", "http GET result (as String):" + result);
+              return result;
+
+           } finally {
+              if (instream != null) {
+                 instream.close();
+              }
+           }
+        }
+     } catch (Exception e) {
+        Log.e("TAG", "Error with HTTP GET", e);
+     } finally {
+        client.close();
+     }
+
+     return null;
+  }
+
+  @Override
+  protected void onPostExecute(String result) {
+     dialog.dismiss();
+
+     if (result != null) {
+        // use response back on UI thread here
+        output.setText(result);
+     }
+  }
+}
+
+private class SimpleHttpPostTask extends AsyncTask&lt;String, Void, String&gt; {
+
+  private final Context context;
+
+  public SimpleHttpPostTask(Context context) {
+     this.context = context;
+     dialog = new ProgressDialog(context);
+  }
+
+  @Override
+  protected void onPreExecute() {
+     dialog.setMessage("doing a POST...");
+     dialog.show();
+  }
+
+  @Override
+  protected String doInBackground(String... args) {
+
+     if (args == null || args.length != 3) {
+        // in real use you might want to make a better request class of your own to pass in, instead of using a bunch of strings
+        Log.w("TAG", "args size must be 3: URL to invoke, and 1st param (name/value) to submit");
+        return null;
+     }
+
+     String url = args[0];
+     String param1Name = args[1];
+     String param1Value = args[2];
+     Log.d("TAG", "hitting URL:" + url);
+
+     // AndroidHttpClient has more reasonable default settings than "DefaultHttpClient", but it was only added in API 8
+     // (if you need to support API levels lower than 8, I'd create your own HttpClient with similar settings [see bottom of page for example])
+     AndroidHttpClient client = AndroidHttpClient.newInstance("Android-MyUserAgent");
+
+     HttpRequestBase request = new HttpPost(url);
+     HttpResponse response = null;
+
+     try {
+        // there are different kinds of POSTS, url encoded form is ONE 
+        // (which you need depends on what you're trying to post and how the server is implemented)
+        List&lt;NameValuePair&gt; params = new ArrayList&lt;NameValuePair&gt;();
+        params.add(new BasicNameValuePair(param1Name, param1Value));
+        ((HttpPost) request).setEntity(new UrlEncodedFormEntity(params, HTTP.UTF_8));
+
+        response = client.execute(request);
+
+        int code = response.getStatusLine().getStatusCode();
+        String message = response.getStatusLine().getReasonPhrase();
+
+        // use the response here
+        // if the code is 200 thru 399 it worked or was redirected
+        // if the code is &gt;= 400 there was a problem
+
+        Log.d("TAG", "http POST completed, code:" + code + " message:" + message);
+
+        HttpEntity entity = response.getEntity();
+        if (entity != null) {
+           InputStream instream = null;
+           try {
+              instream = entity.getContent();
+
+              // convert stream if gzip header present in response
+              Header contentEncoding = response.getFirstHeader("Content-Encoding");
+              if (contentEncoding != null &amp;&amp; contentEncoding.getValue().equalsIgnoreCase("gzip")) {
+                 instream = new GZIPInputStream(instream);
+              }
+
+              // returning the string here, but if you want return the code, whatever
+              String result = convertStreamToString(instream);
+              Log.d("TAG", "http GET result (as String):" + result);
+              return result;
+
+           } finally {
+              if (instream != null) {
+                 instream.close();
+              }
+           }
+        }
+     } catch (Exception e) {
+        Log.e("TAG", "Error with HTTP POST", e);
+     } finally {
+        client.close();
+     }
+     return null;
+  }
+
+  @Override
+  protected void onPostExecute(String result) {
+     dialog.dismiss();
+     if (result != null) {
+        // use response back on UI thread here
+        output.setText(result);
+     }
+  }
+}
+
+// this is OVERSIMPLE (for the example), in the real world, if you have big responses, use the stream 
+private static String convertStreamToString(InputStream is) {
+  try {
+     return new java.util.Scanner(is, "UTF-8").useDelimiter("\\A").next();
+  } catch (java.util.NoSuchElementException e) {
+     return "";
+  }
+}
+
+/*
+// ONE example of some default settings for DefaultHttpClient (if you can't use AndroidHttpClient, or want more fine grained control)
+HttpParams params = new BasicHttpParams();
+HttpConnectionParams.setConnectionTimeout(params, 15000);
+HttpConnectionParams.setSoTimeout(params, 20000);
+HttpConnectionParams.setStaleCheckingEnabled(params, false);
+HttpConnectionParams.setSocketBufferSize(params, 8192);
+HttpClientParams.setRedirecting(params, false);
+HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+HttpProtocolParams.setContentCharset(params, HTTP.UTF_8);
+HttpClient client = new DefaultHttpClient(params);
+*/
+}
+</code></pre>
+
+<p>LAYOUT</p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+xmlns:tools="http://schemas.android.com/tools"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:layout_margin="10dp"
+android:orientation="vertical"
+android:padding="10dp" &gt;
+
+&lt;TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="HTTP BASICS" /&gt;
+
+&lt;Button
+    android:id="@+id/get_button"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="HTTP GET" /&gt;
+
+&lt;Button
+    android:id="@+id/post_button"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="HTTP POST" /&gt;
+
+&lt;ScrollView
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent" &gt;
+    &lt;TextView
+        android:id="@+id/output"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" /&gt;
+&lt;/ScrollView&gt;
+</code></pre>
+
+<p></p>
+
+<p>MANIFEST</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+package="com.example.com.totsp.httptest"
+android:versionCode="1"
+android:versionName="1.0" &gt;
+
+&lt;uses-sdk
+    android:minSdkVersion="8"
+    android:targetSdkVersion="17" /&gt;
+
+&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+
+&lt;application
+    android:allowBackup="true"
+    android:icon="@drawable/ic_launcher"
+    android:label="@string/app_name"
+    android:theme="@style/AppTheme" &gt;
+    &lt;activity
+        android:name="com.example.com.totsp.httptest.MainActivity"
+        android:label="@string/app_name" &gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+            &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/activity&gt;
+&lt;/application&gt;
+</code></pre>
+
+<p></p>
+
+<p><img src="http://i.stack.imgur.com/3dVsb.png" alt="enter image description here"></p>

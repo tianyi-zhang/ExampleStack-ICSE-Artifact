@@ -1,0 +1,603 @@
+<p>I know its bit late to answer this question, but i think i have to, so that if others are facing this problem, they can easily deal with it. </p>
+
+<p>Actually the problem is when you lower the video quality via this</p>
+
+<pre><code> intent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 0);
+</code></pre>
+
+<p>the camera intent no longer works as a video recorder. It actually creates a mms when we try lowering the quality. As far as time is concerned, I don't know whether it is a bug in Android or may be some memory constraints. So the solution I adopted is to make custom video recording class using SurfaceView.
+So I am pasting the code of Video Recording from one of my projects.Also the video recorded is almost playable in all android/iOS devices, i have tested so far. Here is my Video Recording Class</p>
+
+<pre><code> package com.mukesh.videorecordingsample;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.hardware.Camera;
+import android.hardware.Camera.Size;
+import android.media.CamcorderProfile;
+import android.media.MediaRecorder;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Message;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.Window;
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+public class RecordVideoPostsActivity extends Activity implements
+        SurfaceHolder.Callback, OnClickListener {
+
+    protected static final int RESULT_ERROR = 0x00000001;
+
+    private static final int MAX_VIDEO_DURATION = 8 * 1000;
+    private static final int ID_TIME_COUNT = 0x1006;
+
+    private SurfaceView mSurfaceView;
+    private ImageView iv_cancel, iv_ok, iv_record;
+    private TextView tv_counter;
+
+    private SurfaceHolder mSurfaceHolder;
+    private MediaRecorder mMediaRecorder;
+    private Camera mCamera;
+
+    private List&lt;Size&gt; mSupportVideoSizes;
+
+    private String filePath;
+
+    private boolean mIsRecording = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        this.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        setContentView(R.layout.activity_recordvideo);
+
+        initView();
+    }
+
+    private void initView() {
+
+        mSurfaceView = (SurfaceView) findViewById(R.id.surfaceView);
+
+        iv_record = (ImageView) findViewById(R.id.iv_record);
+        iv_cancel = (ImageView) findViewById(R.id.iv_cancel);
+        iv_ok = (ImageView) findViewById(R.id.iv_ok);
+        iv_record.setImageResource(R.drawable.btn_video_start);
+
+        tv_counter = (TextView) findViewById(R.id.timer);
+        tv_counter.setVisibility(View.GONE);
+
+        iv_cancel.setOnClickListener(this);
+        iv_ok.setOnClickListener(this);
+        iv_record.setOnClickListener(this);
+
+        mSurfaceHolder = mSurfaceView.getHolder();
+        mSurfaceHolder.addCallback(this);
+
+    }
+
+    private void exit(final int resultCode, final Intent data) {
+        if (mIsRecording) {
+            new AlertDialog.Builder(RecordVideoPostsActivity.this)
+                    .setTitle("Video Recorder")
+                    .setMessage("Do you want to exit?")
+                    .setPositiveButton("yes",
+                            new DialogInterface.OnClickListener() {
+
+                                @Override
+                                public void onClick(DialogInterface dialog,
+                                                    int which) {
+                                    stopRecord();
+                                    if (resultCode == RESULT_CANCELED) {
+                                        if (filePath != null)
+                                            deleteFile(new File(filePath));
+                                    }
+                                    setResult(resultCode, data);
+                                    finish();
+                                }
+                            })
+                    .setNegativeButton("no",
+                            new DialogInterface.OnClickListener() {
+
+                                @Override
+                                public void onClick(DialogInterface dialog,
+                                                    int which) {
+
+                                }
+                            }).show();
+            return;
+        }
+        if (resultCode == RESULT_CANCELED) {
+            if (filePath != null)
+                deleteFile(new File(filePath));
+        }
+        setResult(resultCode, data);
+        finish();
+    }
+
+    private void deleteFile(File delFile) {
+        if (delFile == null) {
+            return;
+        }
+        final File file = new File(delFile.getAbsolutePath());
+        delFile = null;
+        new Thread() {
+            @Override
+            public void run() {
+                super.run();
+                if (file.exists()) {
+                    file.delete();
+                }
+            }
+        }.start();
+    }
+
+    private Handler mHandler = new Handler() {
+
+        @Override
+        public void handleMessage(android.os.Message msg) {
+            switch (msg.what) {
+                case ID_TIME_COUNT:
+                    if (mIsRecording) {
+                        if (msg.arg1 &gt; msg.arg2) {
+                            // mTvTimeCount.setVisibility(View.INVISIBLE);
+                            tv_counter.setText("00:00");
+                            stopRecord();
+                        } else {
+                            tv_counter.setText("00:0" + (msg.arg2 - msg.arg1));
+                            Message msg2 = mHandler.obtainMessage(ID_TIME_COUNT,
+                                    msg.arg1 + 1, msg.arg2);
+                            mHandler.sendMessageDelayed(msg2, 1000);
+                        }
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        ;
+
+    };
+
+    private void openCamera() {
+        try {
+            this.mCamera = Camera.open();
+            Camera.Parameters parameters = mCamera.getParameters();
+            parameters.setRotation(90);
+            System.out.println(parameters.flatten());
+            parameters.set("orientation", "portrait");
+            mCamera.setParameters(parameters);
+            mCamera.lock();
+            if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.FROYO) {
+                try {
+                    mCamera.setDisplayOrientation(90);
+                } catch (NoSuchMethodError e) {
+                    e.printStackTrace();
+                }
+            }
+            mSupportVideoSizes = parameters.getSupportedVideoSizes();
+            if (mSupportVideoSizes == null || mSupportVideoSizes.isEmpty()) {
+                String videoSize = parameters.get("video-size");
+                Log.i(EmBazaarConstants.APP_NAME, videoSize);
+                mSupportVideoSizes = new ArrayList&lt;Camera.Size&gt;();
+                if (!RecordVideoPostsActivity.isEmpty(videoSize)) {
+                    String[] size = videoSize.split("x");
+                    if (size.length &gt; 1) {
+                        try {
+                            int width = Integer.parseInt(size[0]);
+                            int height = Integer.parseInt(size[1]);
+                            mSupportVideoSizes.add(mCamera.new Size(width,
+                                    height));
+                        } catch (Exception e) {
+                            Log.e(EmBazaarConstants.APP_NAME, e.toString());
+                        }
+                    }
+                }
+            }
+            for (Size size : mSupportVideoSizes) {
+                Log.i(EmBazaarConstants.APP_NAME, size.width + "&lt;&gt;" + size.height);
+            }
+        } catch (Exception e) {
+            Log.e(EmBazaarConstants.APP_NAME, "Open Camera error\n" + e.toString());
+        }
+    }
+
+    private boolean initVideoRecorder() {
+        if (mCamera == null) {
+            mCamera = Camera.open();
+            mCamera.unlock();
+        } else {
+            mCamera.unlock();
+        }
+        mMediaRecorder = new MediaRecorder();
+
+        mMediaRecorder.setCamera(mCamera);
+
+        try {
+            mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        try {
+            CamcorderProfile lowProfile = CamcorderProfile
+                    .get(CamcorderProfile.QUALITY_LOW);
+            CamcorderProfile hightProfile = CamcorderProfile
+                    .get(CamcorderProfile.QUALITY_HIGH);
+            if (lowProfile != null &amp;&amp; hightProfile != null) {
+                lowProfile.audioCodec = MediaRecorder.AudioEncoder.AAC;
+                lowProfile.duration = hightProfile.duration;
+                lowProfile.videoCodec = MediaRecorder.VideoEncoder.H264;
+                lowProfile.videoFrameRate = hightProfile.videoFrameRate;
+                lowProfile.videoBitRate = 1500000 &gt; hightProfile.videoBitRate ? hightProfile.videoBitRate
+                        : 1500000;
+                if (mSupportVideoSizes != null &amp;&amp; !mSupportVideoSizes.isEmpty()) {
+                    int width = 640;
+                    int height = 480;
+                    Collections.sort(mSupportVideoSizes, new SizeComparator());
+                    int lwd = mSupportVideoSizes.get(0).width;
+                    for (Size size : mSupportVideoSizes) {
+                        int wd = Math.abs(size.width - 640);
+                        if (wd &lt; lwd) {
+                            width = size.width;
+                            height = size.height;
+                            lwd = wd;
+                        } else {
+                            break;
+                        }
+                    }
+                    lowProfile.videoFrameWidth = width;
+                    lowProfile.videoFrameHeight = height;
+                }
+
+                mMediaRecorder.setProfile(lowProfile);
+            }
+        } catch (Exception e) {
+            try {
+                mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+            try {
+                mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+            if (mSupportVideoSizes != null &amp;&amp; !mSupportVideoSizes.isEmpty()) {
+                Collections.sort(mSupportVideoSizes, new SizeComparator());
+                Size size = mSupportVideoSizes.get(0);
+                try {
+                    mMediaRecorder.setVideoSize(size.width, size.height);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            } else {
+                try {
+                    mMediaRecorder.setVideoSize(640, 480);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+            e.printStackTrace();
+        }
+
+        File f = null;
+        try {
+            f = setUpVideoFile();
+            filePath = f.getAbsolutePath();
+        } catch (IOException e) {
+            e.printStackTrace();
+            f = null;
+            filePath = null;
+        }
+        mMediaRecorder.setOutputFile(filePath);
+
+        mMediaRecorder.setPreviewDisplay(mSurfaceHolder.getSurface());
+
+        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.GINGERBREAD) {
+            try {
+                mMediaRecorder.setOrientationHint(90);
+            } catch (NoSuchMethodError e) {
+                e.printStackTrace();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        try {
+            mMediaRecorder.prepare();
+        } catch (IllegalStateException e) {
+            Log.d("VideoPreview",
+                    "IllegalStateException preparing MediaRecorder: "
+                            + e.getMessage());
+            releaseMediaRecorder();
+            return false;
+        } catch (IOException e) {
+            Log.d("VideoPreview",
+                    "IOException preparing MediaRecorder: " + e.getMessage());
+            releaseMediaRecorder();
+            return false;
+        } catch (Exception e) {
+            releaseMediaRecorder();
+            e.printStackTrace();
+        }
+        return true;
+    }
+
+    private void releaseMediaRecorder() {
+        if (mMediaRecorder != null) {
+            mMediaRecorder.reset();
+            mMediaRecorder.release();
+            mMediaRecorder = null;
+            mCamera.lock();
+        }
+    }
+
+    private void releaseCamera() {
+        if (mCamera != null) {
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+
+    private void startRecord() {
+        try {
+            if (initVideoRecorder()) {
+                mMediaRecorder.start();
+                iv_record.setImageResource(R.drawable.btn_video_stop);
+            } else {
+                releaseMediaRecorder();
+                iv_record.setImageResource(R.drawable.btn_video_start);
+            }
+            tv_counter.setVisibility(View.VISIBLE);
+            tv_counter.setText("00:0" + (MAX_VIDEO_DURATION / 1000));
+            Message msg = mHandler.obtainMessage(ID_TIME_COUNT, 1,
+                    MAX_VIDEO_DURATION / 1000);
+            mHandler.sendMessage(msg);
+            mIsRecording = true;
+        } catch (Exception e) {
+            showShortToast("problem while capturing video");
+            e.printStackTrace();
+            exit(RESULT_ERROR, null);
+        }
+    }
+
+    private void stopRecord() {
+        try {
+            mMediaRecorder.stop();
+        } catch (Exception e) {
+            if (new File(filePath) != null
+                    &amp;&amp; new File(filePath).exists()) {
+                new File(filePath).delete();
+            }
+        }
+        releaseMediaRecorder();
+        mCamera.lock();
+        iv_record.setImageResource(R.drawable.btn_video_start);
+        mIsRecording = false;
+
+        iv_record.setVisibility(View.GONE);
+        iv_cancel.setVisibility(View.VISIBLE);
+        iv_ok.setVisibility(View.VISIBLE);
+    }
+
+    public static void setCameraDisplayOrientation(Activity activity,
+                                                   int cameraId, Camera camera) {
+        Camera.CameraInfo info = new Camera.CameraInfo(); // Since API level 9
+        Camera.getCameraInfo(cameraId, info);
+        int rotation = activity.getWindowManager().getDefaultDisplay()
+                .getRotation();
+        int degrees = 0;
+        switch (rotation) {
+            case Surface.ROTATION_0:
+                degrees = 0;
+                break;
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+        }
+
+        int result;
+        if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            result = (info.orientation + degrees) % 360;
+            result = (360 - result) % 360;
+        } else {
+            result = (info.orientation - degrees + 360) % 360;
+        }
+        camera.setDisplayOrientation(result);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        openCamera();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        releaseCamera();
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        if (mCamera != null) {
+            try {
+                mCamera.setPreviewDisplay(holder);
+                mCamera.startPreview();
+            } catch (Exception e) {
+            }
+        }
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width,
+                               int height) {
+
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        if (mCamera != null) {
+            try {
+                mCamera.stopPreview();
+            } catch (Exception e) {
+            }
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            exit(RESULT_CANCELED, null);
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onClick(View arg0) {
+        switch (arg0.getId()) {
+            case R.id.iv_ok:
+                Intent data = new Intent();
+                if (filePath != null) {
+                    data.putExtra("videopath", filePath);
+                }
+                exit(RESULT_OK, data);
+                break;
+            case R.id.iv_cancel:
+                exit(RESULT_CANCELED, null);
+                break;
+            case R.id.iv_record:
+                if (mIsRecording) {
+                    stopRecord();
+                } else {
+                    startRecord();
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    protected void showShortToast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+    }
+
+    private File setUpVideoFile() throws IOException {
+
+        File videoFile = null;
+
+        if (Environment.MEDIA_MOUNTED.equals(Environment
+                .getExternalStorageState())) {
+
+            File storageDir = new File(
+                    EmBazaarConstants.LOCAL_STORAGE_BASE_PATH_FOR_POSTED_VIDEOS)
+                    .getParentFile();
+
+            if (storageDir != null) {
+                if (!storageDir.mkdirs()) {
+                    if (!storageDir.exists()) {
+                        Log.d("CameraSample", "failed to create directory");
+                        return null;
+                    }
+                }
+            }
+            videoFile = File.createTempFile(EmBazaarConstants.MP4_FILE_PREFIX
+                            + System.currentTimeMillis() + "_",
+                    EmBazaarConstants.MP4_FILE_SUFIX, storageDir);
+        } else {
+            Log.v(getString(R.string.app_name),
+                    "External storage is not mounted READ/WRITE.");
+        }
+
+        return videoFile;
+    }
+
+    private class SizeComparator implements Comparator&lt;Size&gt; {
+
+        @Override
+        public int compare(Size lhs, Size rhs) {
+            return rhs.width - lhs.width;
+        }
+    }
+
+    public static boolean isEmpty(String str) {
+        return str == null || "".equals(str.trim());
+    }
+
+}
+</code></pre>
+
+<p>and you can simply call this class in your Activity like this</p>
+
+<pre><code>if (isDeviceSupportCamera()) {
+                    startActivityForResult(new Intent(PostStatusActivity.this,
+                                    yourActivity.class),
+                            EmBazaarConstants.CAMERA_CAPTURE_VIDEO);
+                } else {
+                    Toast.makeText(this, "Your device doesn't support camera",
+                            Toast.LENGTH_LONG).show();
+                }
+</code></pre>
+
+<p>and here is isDeviceSupportCamera() function</p>
+
+<pre><code> private boolean isDeviceSupportCamera() {
+        if (getApplicationContext().getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_CAMERA)) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+</code></pre>
+
+<p>In your onActivityResult, you have to write this code</p>
+
+<pre><code> @Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == EmBazaarConstants.CAMERA_CAPTURE_VIDEO
+                &amp;&amp; resultCode == RESULT_OK) {
+
+            if (data != null &amp;&amp; data.getStringExtra("videopath") != null) 
+                videoFilePath= data.getStringExtra("videopath"); 
+}           
+
+}
+</code></pre>
+
+<p>Hope this helps.</p>
+
+<p>** Although we have new Camera2 APIs in android lollipop, but this code still works in android lollipop as well.But still you can change to new Camera2 APIs,if you want.</p>

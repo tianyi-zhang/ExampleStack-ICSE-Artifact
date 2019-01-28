@@ -1,0 +1,222 @@
+<p>You should be able to use HttpClient in Android to do what you need. I just finished the first part of an integration of Android with an ASP.NET MVC 3 site and I must say - it was quite painless. I use Json as my data exchange format.</p>
+
+<p>You can view exactly what the header looks like by setting a debug point after building your request. Here is some sample code (please remember it is just sample code - not a full implementation).</p>
+
+<p>This class is called by a separate thread than the UI thread:</p>
+
+<pre><code>public class RemoteDBAdapter {
+
+
+    public String register(String email, String password) throws Exception
+    {
+        RestClient c = new RestClient("http://myurl/Account/Register");
+        c.AddHeader("Accept", "application/json");
+        c.AddHeader("Content-type", "application/json");
+        c.AddParam("Email", email);
+        c.AddParam("Password", password);
+
+        c.Execute(RequestMethod.POST);
+
+        JSONObject key = new JSONObject(c.getResponse());
+
+        return key.getString("status");
+
+
+    }
+
+}
+</code></pre>
+
+<p>Use this class to build your request and execute it:</p>
+
+<pre><code>public class RestClient {
+
+    public enum RequestMethod {
+        GET,
+        POST
+    }
+
+    private ArrayList &lt;NameValuePair&gt; params;
+    private ArrayList &lt;NameValuePair&gt; headers;
+
+    private String url;
+
+    private int responseCode;
+    private String message;
+
+    private String response;
+
+    public String getResponse() {
+        return response;
+    }
+
+    public String getErrorMessage() {
+        return message;
+    }
+
+    public int getResponseCode() {
+        return responseCode;
+    }
+
+    public RestClient(String url)
+    {
+        this.url = url;
+        params = new ArrayList&lt;NameValuePair&gt;();
+        headers = new ArrayList&lt;NameValuePair&gt;();
+    }
+
+    public void AddParam(String name, String value)
+    {
+        params.add(new BasicNameValuePair(name, value));
+    }
+
+    public void AddHeader(String name, String value)
+    {
+        headers.add(new BasicNameValuePair(name, value));
+    }
+
+    public void Execute(RequestMethod method) throws Exception
+    {
+        switch(method) {
+            case GET:
+            {
+                //add parameters
+                String combinedParams = "";
+                if(!params.isEmpty()){
+                    combinedParams += "?";
+                    for(NameValuePair p : params)
+                    {
+                        String paramString = p.getName() + "=" + URLEncoder.encode(p.getValue(),"UTF-8");
+                        if(combinedParams.length() &gt; 1)
+                        {
+                            combinedParams  +=  "&amp;" + paramString;
+                        }
+                        else
+                        {
+                            combinedParams += paramString;
+                        }
+                    }
+                }
+
+                HttpGet request = new HttpGet(url + combinedParams);
+
+                //add headers
+                for(NameValuePair h : headers)
+                {
+                    request.addHeader(h.getName(), h.getValue());
+                }
+
+                executeRequest(request, url);
+                break;
+            }
+            case POST:
+            {
+                HttpPost request = new HttpPost(url);
+
+                //add headers
+                for(NameValuePair h : headers)
+                {
+                    request.addHeader(h.getName(), h.getValue());
+                }
+                JSONObject jo = new JSONObject();
+
+
+                if(!params.isEmpty()){
+                    for (int i = 0; i &lt; params.size();i++)
+                    {
+                        jo.put(params.get(i).getName(),params.get(i).getValue());
+
+
+                    }
+                    StringEntity se = new StringEntity(jo.toString());
+                    se.setContentType("text/xml"); 
+                    se.setContentEncoding( new BasicHeader(HTTP.CONTENT_TYPE, "application/json")); 
+
+                    request.setEntity(se);
+                    //request.setEntity(new UrlEncodedFormEntity(params, HTTP.UTF_8));
+                }
+
+                executeRequest(request, url);
+                break;
+            }
+        }
+    }
+
+    private void executeRequest(HttpUriRequest request, String url)
+    {
+        //HttpClient client = new DefaultHttpClient();
+        HttpClient client = HttpClientFactory.getThreadSafeClient();
+
+        HttpResponse httpResponse;
+
+        try {
+            httpResponse = client.execute(request);
+            responseCode = httpResponse.getStatusLine().getStatusCode();
+            message = httpResponse.getStatusLine().getReasonPhrase();
+
+            HttpEntity entity = httpResponse.getEntity();
+
+            if (entity != null) {
+
+                InputStream instream = entity.getContent();
+                response = convertStreamToString(instream);
+
+                // Closing the input stream will trigger connection release
+                instream.close();
+            }
+
+        } catch (ClientProtocolException e)  {
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+        } catch (IOException e) {
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+        }
+    }
+
+    private static String convertStreamToString(InputStream is) {
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+        StringBuilder sb = new StringBuilder();
+
+        String line = null;
+        try {
+            while ((line = reader.readLine()) != null) {
+                sb.append(line + "\n");
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                is.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return sb.toString();
+    }
+}
+</code></pre>
+
+<p>EDIT:</p>
+
+<p>Oh ya and the HttpClientFactory:</p>
+
+<pre><code>// Should be thread safe
+public class HttpClientFactory {
+
+            private static DefaultHttpClient client;
+
+            public synchronized static DefaultHttpClient getThreadSafeClient() {
+                    if (client != null)
+                            return client;
+                    client = new DefaultHttpClient();
+                    ClientConnectionManager mgr = client.getConnectionManager();
+                    HttpParams params = client.getParams();
+                    client = new DefaultHttpClient(new ThreadSafeClientConnManager(params,
+                                    mgr.getSchemeRegistry()), params);
+                return client;
+
+            }
+    }
+</code></pre>

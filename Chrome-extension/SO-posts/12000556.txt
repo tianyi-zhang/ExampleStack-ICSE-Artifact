@@ -1,0 +1,100 @@
+<p>We solved this issue like this:</p>
+
+<p>Like @keuleJ we build our own SerializerFactory (see below) but we do not return com.caucho.hessian.io.BigDecimalDeserializer because it is not checking for null.</p>
+
+<pre><code>public class BigDecimalSerializerFactory extends AbstractSerializerFactory {
+private BigDecimalSerializer bigDecimalSerializer = new BigDecimalSerializer();
+private BigDecimalDeserializer bigDecimalDeserializer = new BigDecimalDeserializer();
+
+@Override
+public Serializer getSerializer(Class cl) throws HessianProtocolException {
+    if (BigDecimal.class.isAssignableFrom(cl)) {
+        return bigDecimalSerializer;
+    }
+    return null;
+}
+
+@Override
+public Deserializer getDeserializer(Class cl) throws HessianProtocolException {
+    if (BigDecimal.class.isAssignableFrom(cl)) {
+        return bigDecimalDeserializer;
+    }
+    return null;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>Then we defined our own Deserializer. It differs from the implementation of com.couchos#s one by verifying if value is not null. It is necessary to extend <em>AbstractStringValueDeserialize</em>!</p>
+
+<pre><code>public class BigDecimalDeserializer extends AbstractStringValueDeserializer {
+
+
+@Override
+public Class getType() {
+    return BigDecimal.class;
+}
+
+@Override
+protected Object create(String value) {
+    if (null != value) {
+        return new BigDecimal(value);
+    } else {
+        return null;
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>The Serializer only transfers the BigDecimal to String representation:</p>
+
+<p>public class BigDecimalSerializer extends AbstractSerializer {</p>
+
+<pre><code>@Override
+public void writeObject(Object obj, AbstractHessianOutput out) throws IOException {
+
+    if (obj == null)
+        out.writeNull();
+    else {
+        Class cl = obj.getClass();
+
+        if (out.addRef(obj))
+            return;
+
+        int ref = out.writeObjectBegin(cl.getName());
+
+        BigDecimal bi = (BigDecimal) obj;
+
+        if (ref &lt; -1) {
+            out.writeString("value");
+            out.writeString(bi.toString());
+            out.writeMapEnd();
+        } else {
+            if (ref == -1) {
+                out.writeInt(1);
+                out.writeString("value");
+                out.writeObjectBegin(cl.getName());
+            }
+
+            out.writeString(bi.toString());
+        }
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>This implementation works for us, not only for BigDecimal but for joda DateTime too.</p>
+
+<p>To use this you have to add the Serializer Factory to</p>
+
+<pre><code>    SerializerFactory serializerFactory = newSerializerFactory();
+    serializerFactory.addFactory(new BigDecimalSerializerFactory());
+</code></pre>
+
+<p>You have to do this both, on server side and on client side!</p>
+
+<p><strong>HINT!</strong>
+In our case we have had a combined problem with BigDecimal and DateTime. Thus stacktraces and the debug views were weird. 
+So if you use "non-standard" objects check them for their serialization!</p>

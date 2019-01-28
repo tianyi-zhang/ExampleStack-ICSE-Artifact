@@ -1,0 +1,242 @@
+<p>I am using ebean to save the users.</p>
+
+<p>My user class looks like this:</p>
+
+<p>package models;</p>
+
+<pre><code>import javax.persistence.Entity;
+import javax.persistence.Id;
+
+import play.db.ebean.Model;
+
+
+@Entity
+public class LocalUser extends Model  {
+
+    private static final long serialVersionUID = 1L;
+
+    @Id
+    public String id;
+
+    public String provider;
+
+    public String firstName;
+
+    public String lastName;
+
+    public String email;
+
+    public String password;
+
+    public static Finder&lt;String, LocalUser&gt; find = new Finder&lt;String, LocalUser&gt;(
+            String.class, LocalUser.class
+    );
+
+    @Override
+    public String toString() {
+        return this.id + " - " + this.firstName;
+    }
+}
+</code></pre>
+
+<p>My token class:</p>
+
+<pre><code>package models;
+
+
+import java.util.Date;
+
+import javax.persistence.Entity;
+import javax.persistence.Id;
+
+import play.db.ebean.Model;
+
+@Entity
+public class LocalToken extends Model {
+
+    private static final long serialVersionUID = 1L;
+
+    @Id
+    public String uuid;
+
+    public String email;
+
+    public Date createdAt;
+
+    public Date expireAt;
+
+    public boolean isSignUp;
+
+    public static Finder&lt;String, LocalToken&gt; find = new Finder&lt;String, LocalToken&gt;(
+            String.class, LocalToken.class
+    );
+}
+</code></pre>
+
+<p>And last but not least my UserService:</p>
+
+<pre><code>package services;
+
+
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+
+import org.joda.time.DateTime;
+
+import models.LocalToken;
+import models.LocalUser;
+import play.Application;
+import play.Logger;
+import scala.Option;
+import scala.Some;
+import securesocial.core.AuthenticationMethod;
+import securesocial.core.Identity;
+import securesocial.core.PasswordInfo;
+import securesocial.core.SocialUser;
+import securesocial.core.UserId;
+import securesocial.core.java.BaseUserService;
+import securesocial.core.java.Token;
+
+public class SqlUserService extends BaseUserService {
+
+    public SqlUserService(Application application) {
+        super(application);
+    }
+
+    @Override
+    public void doDeleteExpiredTokens() {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("deleteExpiredTokens...");
+        }
+        List&lt;LocalToken&gt; list = LocalToken.find.where().lt("expireAt", new DateTime().toString()).findList();
+        for(LocalToken localToken : list) {
+            localToken.delete();
+        }
+    }
+
+    @Override
+    public void doDeleteToken(String uuid) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("deleteToken...");
+            Logger.debug(String.format("uuid = %s", uuid));
+        }
+        LocalToken localToken = LocalToken.find.byId(uuid);
+        if(localToken != null) {
+            localToken.delete();
+        }
+    }
+
+    @Override
+    public Identity doFind(UserId userId) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("find...");
+            Logger.debug(String.format("id = %s", userId.id()));
+        }
+        LocalUser localUser = LocalUser.find.byId(userId.id());
+        if(localUser == null) return null;
+        SocialUser socialUser = new SocialUser(new UserId(localUser.id, localUser.provider), 
+            localUser.firstName, localUser.lastName, String.format("%s %s", localUser.firstName, localUser.lastName),
+            Option.apply(localUser.email), null, new AuthenticationMethod("userPassword"),
+            null, null, Some.apply(new PasswordInfo("bcrypt", localUser.password, null))
+        );  
+        if (Logger.isDebugEnabled()) {
+            Logger.debug(String.format("socialUser = %s", socialUser));
+        }
+        return socialUser;
+    }
+
+
+    @Override
+    public Identity doFindByEmailAndProvider(String email, String providerId) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("findByEmailAndProvider...");
+            Logger.debug(String.format("email = %s", email));
+            Logger.debug(String.format("providerId = %s", providerId));
+        }
+        List&lt;LocalUser&gt; list = LocalUser.find.where().eq("email", email).eq("provider", providerId).findList();
+        if(list.size() != 1) return null;
+        LocalUser localUser = list.get(0);
+        SocialUser socialUser = new SocialUser(new UserId(localUser.id, localUser.provider), 
+                localUser.firstName, localUser.lastName, String.format("%s %s", localUser.firstName, localUser.lastName),
+                Option.apply(localUser.email), null, new AuthenticationMethod("userPassword"),
+                null, null, Some.apply(new PasswordInfo("bcrypt", localUser.password, null))
+            );  
+            if (Logger.isDebugEnabled()) {
+                Logger.debug(String.format("socialUser = %s", socialUser));
+            }
+            return socialUser;
+    }
+
+    @Override
+    public Token doFindToken(String token) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("findToken...");
+            Logger.debug(String.format("token = %s", token));
+        }
+        LocalToken localToken = LocalToken.find.byId(token);
+        if(localToken == null) return null;
+        Token result = new Token();
+        result.uuid = localToken.uuid;
+        result.creationTime = new DateTime(localToken.createdAt);
+        result.email = localToken.email;
+        result.expirationTime = new DateTime(localToken.expireAt);
+        result.isSignUp = localToken.isSignUp;
+        if (Logger.isDebugEnabled()) {
+            Logger.debug(String.format("foundToken = %s", result));
+        }
+        return result;
+    }
+
+    @Override
+    public Identity doSave(Identity user) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("save...");
+            Logger.debug(String.format("user = %s", user));
+        }
+        LocalUser localUser = null;
+        localUser = LocalUser.find.byId(user.id().id());
+        if (localUser == null) {
+            localUser = new LocalUser();
+            localUser.id = user.id().id();
+            localUser.provider = user.id().providerId();
+            localUser.firstName = user.firstName();
+            localUser.lastName = user.lastName();
+            localUser.email = user.email().get();
+            localUser.password = user.passwordInfo().get().password();
+            localUser.save();
+        } else {
+            localUser.id = user.id().id();
+            localUser.provider = user.id().providerId();
+            localUser.firstName = user.firstName();
+            localUser.lastName = user.lastName();
+            localUser.email = user.email().get();
+            localUser.password = user.passwordInfo().get().password();
+            localUser.update();
+        }
+        return user;
+    }
+
+    @Override
+    public void doSave(Token token) {
+        if (Logger.isDebugEnabled()) {
+            Logger.debug("save...");
+            Logger.debug(String.format("token = %s", token.uuid));
+        }
+        LocalToken localToken = new LocalToken();
+        localToken.uuid = token.uuid;
+        localToken.email = token.email;
+        try {
+            SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            localToken.createdAt = df.parse(token.creationTime.toString("yyyy-MM-dd HH:mm:ss"));
+            localToken.expireAt = df.parse(token.expirationTime.toString("yyyy-MM-dd HH:mm:ss"));
+        } catch (ParseException e) {
+            Logger.error("SqlUserService.doSave(): ", e);
+        }
+        localToken.isSignUp = token.isSignUp;
+        localToken.save();
+    }
+}
+</code></pre>

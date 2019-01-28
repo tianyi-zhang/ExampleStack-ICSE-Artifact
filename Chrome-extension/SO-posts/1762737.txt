@@ -1,0 +1,74 @@
+<p>When you think about it, the <code>ProgressView</code> does just that: whenever a Job starts, it displays it in its view.<br>
+Note, as mentioned in this thread, the <a href="http://dev.eclipse.org/newslists/news.eclipse.platform/msg35257.html" rel="nofollow"><code>ProgressView</code> is tightly coupled with the eclipse Jobs API</a> (i.e., it may not monitor any plain vanilla thread)</p>
+
+<p><img src="http://www.eclipse.org/articles/Article-Concurrency/images/progressview.gif" alt="alt text"><br>
+<sup>(From the article <a href="http://www.eclipse.org/articles/Article-Concurrency/jobs-api.html" rel="nofollow"><strong>On the Job: The Eclipse Jobs API</strong></a>)</sup></p>
+
+<p>So may be you can start by looking at the code in <a href="http://kickjava.com/src/org/eclipse/ui/internal/progress/ProgressView.java.htm" rel="nofollow"><code>org.eclipse.ui.internal.progress.ProgressView</code></a>, which needs a <a href="http://kickjava.com/src/org/eclipse/ui/internal/progress/ProgressViewerContentProvider.java.htm" rel="nofollow"><code>ProgressViewerContentProvider</code></a>, based on a <a href="http://kickjava.com/src/org/eclipse/ui/internal/progress/ProgressContentProvider.java.htm" rel="nofollow"><code>ProgressContentProvider</code></a> (implementing a <a href="http://kickjava.com/src/org/eclipse/ui/internal/progress/IProgressUpdateCollector.java.htm" rel="nofollow"><code>IProgressUpdateCollector</code></a>)</p>
+
+<p>The all thing seems to be based upon the <a href="http://www.devdaily.com/java/jwarehouse/eclipse/org.eclipse.ui.workbench/Eclipse-UI/org/eclipse/ui/internal/progress/ProgressViewUpdater.java.shtml" rel="nofollow"><code>ProgressViewUpdater</code></a> singleton, which create one UI thread in charge of monitoring those Jobs:</p>
+
+<pre><code>    /**
+     * Create the update job that handles the updatesInfo.
+     */
+    private void createUpdateJob() {
+        updateJob = new WorkbenchJob(ProgressMessages.ProgressContentProvider_UpdateProgressJob) {
+            /*
+             * (non-Javadoc)
+             * 
+             * @see org.eclipse.ui.progress.UIJob#runInUIThread(org.eclipse.core.runtime.IProgressMonitor)
+             */
+            public IStatus runInUIThread(IProgressMonitor monitor) {
+
+                //Abort the job if there isn't anything
+                if (collectors.length == 0) {
+        return Status.CANCEL_STATUS;
+       }
+
+                if (currentInfo.updateAll) {
+                    synchronized (updateLock) {
+                        currentInfo.reset();
+                    }
+                    for (int i = 0; i &lt; collectors.length; i++) {
+                        collectors[i].refresh();
+                    }
+
+                } else {
+                    //Lock while getting local copies of the caches.
+                    Object[] updateItems;
+                    Object[] additionItems;
+                    Object[] deletionItems;
+                    synchronized (updateLock) {
+                        currentInfo.processForUpdate();
+
+                        updateItems = currentInfo.refreshes.toArray();
+                        additionItems = currentInfo.additions.toArray();
+                        deletionItems = currentInfo.deletions.toArray();
+
+                        currentInfo.reset();
+                    }
+
+                    for (int v = 0; v &lt; collectors.length; v++) {
+                        IProgressUpdateCollector collector = collectors[v];
+
+                        if (updateItems.length &gt; 0) {
+          collector.refresh(updateItems);
+         }
+                        if (additionItems.length &gt; 0) {
+          collector.add(additionItems);
+         }
+                        if (deletionItems.length &gt; 0) {
+          collector.remove(deletionItems);
+         }
+                    }
+                }
+
+                return Status.OK_STATUS;
+            }
+        };
+        updateJob.setSystem(true);
+        updateJob.setPriority(Job.DECORATE);
+        updateJob.setProperty(ProgressManagerUtil.INFRASTRUCTURE_PROPERTY, new Object());
+
+    }
+</code></pre>

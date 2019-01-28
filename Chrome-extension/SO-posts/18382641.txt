@@ -1,0 +1,158 @@
+<p>I use the following library on my apps:
+<a href="https://github.com/jasonpolites/gesture-imageview" rel="nofollow">https://github.com/jasonpolites/gesture-imageview</a></p>
+
+<p>This library offers what you are asking (double tap and pinch zoom) along with other features.</p>
+
+<p>You can setup programmatically the image doing this:</p>
+
+<pre><code>GestureImageView view = new GestureImageView(this);
+view.setImageResource(R.drawable.image);
+view.setAdjustViewBounds(true);
+view.setLayoutParams(params);
+</code></pre>
+
+<p>Then you just need to add the view in your layout, in your case the idea would be to provide these views to your <code>InfiniteGalleryAdapter</code> but I did not find much information about this library.</p>
+
+<p>This class is pretty easy to setup, just integrate it in your project and follow the example in the link.</p>
+
+<p><strong>EDIT</strong>:</p>
+
+<p>The changes must be done in your <code>InfiniteGalleryAdapter</code>, I think you can give it a try by changing your <code>getImageView</code> function this way:</p>
+
+<pre><code>private GestureImageView getImageView() {   
+    GestureImageView i = new GestureImageView(mContext); 
+
+    return i; 
+} 
+</code></pre>
+
+<p>You might also need to modify the <code>try</code> part of your adapter to add the layout parameters:</p>
+
+<pre><code>public View getView(int position, View convertView, ViewGroup parent) { 
+GestureImageView i = getImageView(); 
+
+int itemPos = (position % images.length); 
+LayoutParams params = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);//addition
+
+try { 
+    i.setImageResource(images[itemPos]); 
+    ((BitmapDrawable) i.getDrawable()).setAntiAlias(true);
+    i.setLayoutParams(params); //addition
+} 
+catch (OutOfMemoryError e) { 
+    Log.e("InfiniteGalleryAdapter", "Out of memory creating   imageview. Using empty view.", e); 
+} 
+</code></pre>
+
+<p>For the XML, there is an example in the website where the library is from. In our case the GestureImageView is added programmatically, so it seems you just need to modify a little the XML file by adding the line <code>xmlns:gesture-image="http://schemas.polites.com/android"</code>:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8" ?&gt; 
+ &lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+   xmlns:gesture-image="http://schemas.polites.com/android"
+   android:layout_width="match_parent" 
+   android:layout_height="match_parent" 
+   android:orientation="vertical" 
+   android:background="#FFDAB9"&gt;
+&lt;com.test.demo.InfiniteGallery 
+   android:id="@+id/galleryOne" 
+   android:layout_width="match_parent" 
+   android:layout_height="match_parent" /&gt; 
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>EDIT2</strong>:</p>
+
+<p>Here is what you can try to block the scroll from "burning" the event, replace the original <code>onTouch</code> function from the <code>GestureImageViewTouchListener</code> class by the one below, I just added a check on the motion action:</p>
+
+<pre><code>@Override
+    public boolean onTouch(View v, MotionEvent event) {
+
+        if(event.getAction() != MotionEvent.ACTION_SCROLL){
+            if(!inZoom) {
+
+                if(!tapDetector.onTouchEvent(event)) {
+                    if(event.getPointerCount() == 1 &amp;&amp; flingDetector.onTouchEvent(event)) {
+                        startFling();
+                    }
+
+                    if(event.getAction() == MotionEvent.ACTION_UP) {
+                        handleUp();
+                    }
+                    else if(event.getAction() == MotionEvent.ACTION_DOWN) {
+                        stopAnimations();
+
+                        last.x = event.getX();
+                        last.y = event.getY();
+
+                        if(imageListener != null) {
+                            imageListener.onTouch(last.x, last.y);
+                        }
+
+                        touched = true;
+                    }
+                    else if(event.getAction() == MotionEvent.ACTION_MOVE) {
+                        if(event.getPointerCount() &gt; 1) {
+                            multiTouch = true;
+                            if(initialDistance &gt; 0) {
+
+                                pinchVector.set(event);
+                                pinchVector.calculateLength();
+
+                                float distance = pinchVector.length;
+
+                                if(initialDistance != distance) {
+
+                                    float newScale = (distance / initialDistance) * lastScale;
+
+                                    if(newScale &lt;= maxScale) {
+                                        scaleVector.length *= newScale;
+
+                                        scaleVector.calculateEndPoint();
+
+                                        scaleVector.length /= newScale;
+
+                                        float newX = scaleVector.end.x;
+                                        float newY = scaleVector.end.y;
+
+                                        handleScale(newScale, newX, newY);
+                                    }
+                                }
+                            }
+                            else {
+                                initialDistance = MathUtils.distance(event);
+
+                                MathUtils.midpoint(event, midpoint);
+
+                                scaleVector.setStart(midpoint);
+                                scaleVector.setEnd(next);
+
+                                scaleVector.calculateLength();
+                                scaleVector.calculateAngle();
+
+                                scaleVector.length /= lastScale;
+                            }
+                        }
+                        else {
+                            if(!touched) {
+                                touched = true;
+                                last.x = event.getX();
+                                last.y = event.getY();
+                                next.x = image.getImageX();
+                                next.y = image.getImageY();
+                            }
+                            else if(!multiTouch) {
+                                if(handleDrag(event.getX(), event.getY())) {
+                                    image.redraw();
+                                }
+                            }
+                        }
+                    }
+                }           
+            }
+            return true;
+        } 
+        else {
+            return false;
+        }
+    }
+</code></pre>

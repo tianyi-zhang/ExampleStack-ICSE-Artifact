@@ -1,0 +1,233 @@
+<p>I used Intent servise for this </p>
+
+<p>in my activity class I called When Upload button is clicked</p>
+
+<pre><code>public void uploadImage(View v)
+{
+    // When Image is selected from Gallery
+    if (ImgPath != null &amp;&amp; !ImgPath.isEmpty()) 
+    {
+        Toast.makeText(getApplicationContext(),"Uploading started",Toast.LENGTH_LONG).show();
+    triggerImageUpload();
+    } 
+    else 
+    {
+        Toast.makeText(getApplicationContext(),
+                "You must select image from gallery before you try to upload",Toast.LENGTH_LONG).show();
+    }
+}
+
+public void triggerImageUpload() 
+{    
+   Intent intent = new Intent(this, MyIntentService.class);
+   intent.putExtra("filename", fileName);
+   intent.putExtra("imageid", IMAGE_ID);
+   intent.putExtra("imgPath", ImgPath);
+   this.startService(intent);
+}
+</code></pre>
+
+<p>and code for MyIntentService.class </p>
+
+<pre><code>public class MyIntentService extends IntentService
+{
+   int IMAGE_ID;     
+   NotificationManager notificationManager;
+   Notification myNotification;
+
+  //private Builder builder;     
+  public static final String ACTION_MyIntentService = "com.example.androidintentservice.RESPONSE";
+  public static final String ACTION_MyUpdate = "com.example.androidintentservice.UPDATE";    
+  public static final String EXTRA_KEY_OUT = "EXTRA_OUT";
+  public static final String EXTRA_KEY_UPDATE = "EXTRA_UPDATE";
+
+String extraOut;     
+//boolean status;
+String title;
+String contentText;
+
+// Defines and instantiates an object for handling status updates.
+//private BroadcastNotifier mBroadcaster;    
+//RequestParams params = new RequestParams();
+String filename,imgPath,ticNo;
+private int serverResponseCode;
+
+
+public MyIntentService() 
+{
+    super("MyIntentService");
+}
+
+@Override
+public void onCreate() 
+{
+    super.onCreate();
+    notificationManager = (NotificationManager)getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);     
+}
+
+@Override
+protected void onHandleIntent(Intent intent) 
+{
+    //get input
+    ConnectionDetector cd = new ConnectionDetector(getApplicationContext());
+    Boolean isInternetPresent = cd.isConnectingToInternet();
+    if(isInternetPresent)
+    {
+        filename=intent.getExtras().getString("filename");
+        imgPath=intent.getExtras().getString("imgPath");
+        IMAGE_ID=intent.getExtras().getInt("imageid");
+       // ticNo=intent.getExtras().getString("ticNo");
+        extraOut = filename;
+
+        contentText="Uploading...";
+        title=filename+" Uploading..";
+        generateNotification(title, contentText);
+
+        try 
+        {
+            uploadFile(imgPath,filename);
+        }
+        catch (Exception exception) 
+        {
+            title=filename+"";
+            generateNotification(title, "Upload Failed..Something went wrong at server end");
+        }      
+    }
+    else
+    {
+        title=filename+"";
+        generateNotification(title, "Upload Failed..No Internet Connection");
+    }
+}
+
+public void uploadFile(String sourceFileUri,String fileName) 
+{
+    try
+    {
+        StrictMode.ThreadPolicy policy= new StrictMode.ThreadPolicy.Builder().permitAll().build();
+        StrictMode.setThreadPolicy(policy);
+
+        //fileName = sourceFileUri;
+        HttpURLConnection conn = null;
+        DataOutputStream dos = null;  
+        String lineEnd = "\r\n";
+        String twoHyphens = "--";
+        String boundary = "*****";
+        int bytesRead, bytesAvailable, bufferSize;
+        byte[] buffer;
+        int maxBufferSize = 1 * 1024 * 1024; 
+        File sourceFile = new File(sourceFileUri); 
+
+        if (!sourceFile.isFile()) 
+        {
+            title=fileName+"";
+            generateNotification(title, "Upload Failed..File Not Found");
+            //General.listItem.remove(filename);
+        }
+        else
+        {
+            try
+            {
+                FileInputStream fileInputStream = new FileInputStream(sourceFile);
+                String upLoadServerUri = "http://xx.xxx.xx.xxx/phpwebservice/upload_media.php";
+                URL url = new URL(upLoadServerUri);
+                // Open a HTTP  connection to  the URL
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setDoInput(true); // Allow Inputs
+                conn.setDoOutput(true); // Allow Outputs
+                conn.setUseCaches(false); // Don't use a Cached Copy
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Connection", "Keep-Alive");
+                conn.setRequestProperty("ENCTYPE", "multipart/form-data");
+                conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=" + boundary);
+                conn.setRequestProperty("uploaded_file", fileName); 
+
+                dos = new DataOutputStream(conn.getOutputStream());
+
+                dos.writeBytes(twoHyphens + boundary + lineEnd); 
+                dos.writeBytes("Content-Disposition: form-data; name=\"uploaded_file\";filename=\""+ fileName + "\"" + lineEnd);
+                dos.writeBytes(lineEnd);
+
+                // create a buffer of  maximum size
+                bytesAvailable = fileInputStream.available(); 
+
+                bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                buffer = new byte[bufferSize];
+
+                // read file and write it into form...
+                bytesRead = fileInputStream.read(buffer, 0, bufferSize);  
+
+
+                while (bytesRead &gt; 0) 
+                {
+                    dos.write(buffer, 0, bufferSize);
+                    bytesAvailable = fileInputStream.available();
+                    bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                    bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+                }
+
+                // send multipart form data necesssary after file data...
+                dos.writeBytes(lineEnd);
+                dos.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd);
+
+                // Responses from the server (code and message)
+                serverResponseCode = conn.getResponseCode();
+                String serverResponseMessage = conn.getResponseMessage();
+
+                if(serverResponseCode == 200)
+                {
+                    addToDb();
+                }
+                else
+                {
+                    title=filename+"";
+                    generateNotification(title, "Uploading Failed..Server Not Responding");
+                    }
+
+                //close the streams //
+                fileInputStream.close();
+                dos.flush();
+                dos.close();
+            }
+            catch(Exception e)
+            {
+                title=filename+"";
+                generateNotification(title, "Uploading Failed..Server Not Responding.");
+
+            }
+        }
+    }
+    catch (Exception etx) 
+    {
+        title=filename+"";
+        generateNotification(title, "Uploading Failed..No Internet Connection.");
+    }
+}
+
+public void generateNotification(String title,String contentText){
+     myNotification = new NotificationCompat.Builder(getApplicationContext())
+       .setContentTitle(title)
+       .setContentText(contentText)
+       .setTicker("Notification!")
+       .setWhen(System.currentTimeMillis())        
+       .setAutoCancel(true)
+       .setSmallIcon(R.drawable.upload1)
+       .build();
+
+       notificationManager.notify(IMAGE_ID, myNotification);        
+}
+
+public void sendBroadcastToActivity(String action,String message){
+      Intent intentResponse = new Intent();
+      intentResponse.setAction(action);
+      intentResponse.addCategory(Intent.CATEGORY_DEFAULT);
+      if(action.equalsIgnoreCase(ACTION_MyUpdate)){
+          int progress=Integer.parseInt(message);
+          intentResponse.putExtra(EXTRA_KEY_UPDATE,progress);
+      }else{
+          intentResponse.putExtra(EXTRA_KEY_OUT, message);
+      }
+      sendBroadcast(intentResponse);
+    }    
+}
+</code></pre>

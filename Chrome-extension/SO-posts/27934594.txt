@@ -1,0 +1,88 @@
+<p>I assume that exception is thrown while there is touch event still occurring (streamed down to the native touch  while the Activity is about to <code>onDestroy()</code>. It is ok to mitigate this by catching the exception for the sake of avoiding crash. Activity is about to be destroyed if it has enter this state. </p>
+
+<p>I'm not sure (havent tested), but you could try to prevent any events to be passed to implementation at all, if catching exception does not fit you.</p>
+
+<pre><code>public class ComeUpWithBetterNameSwipeRefreshLayout extends SwipeRefreshLayout {
+
+    private boolean mAcceptEvents;
+
+    public ComeUpWithBetterNameSwipeRefreshLayout(Context context) {
+        super(context);
+    }
+
+    public void setAcceptEvents(boolean mAcceptEvents) {
+        this.mAcceptEvents = mAcceptEvents;
+    }
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        return mAcceptEvents? super.onInterceptTouchEvent(ev) : true;
+    }
+
+    public ComeUpWithBetterNameSwipeRefreshLayout(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mAcceptEvents = true;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        mAcceptEvents = false;
+    }
+}
+</code></pre>
+
+<p>or </p>
+
+<pre><code>@Override
+public void onDestroy() {
+    mSwipeRefreshLayout.setAcceptEvents(false);
+    AppMsg.cancelAll();
+    SuperCardToast.cancelAllSuperCardToasts();
+
+    super.onDestroy();
+}
+</code></pre>
+
+<p><strong>Take 2</strong>:</p>
+
+<p>SwipeRefreshLayout tries to getY() from invalid pointer index, calling <code>findPointerIndex(ev, activePointer)</code> returns <code>-1</code> if it fails to find. Preventing dispatching touch event with invalid pointer less than 0 and pointer index greater or equal than pointer count for that event will probably prevent validation of pointer inside <a href="https://android.googlesource.com/platform/frameworks/base/+/b267554/core/jni/android_view_MotionEvent.cpp">native MotionEvent</a> implementation from throwing IAE.</p>
+
+<pre><code> @Override
+public boolean onInterceptTouchEvent(MotionEvent ev) {
+    if(ev.getAction() == MotionEvent.ACTION_CANCEL) {
+        int pointerCount = MotionEventCompat.getPointerCount(ev);
+        int index = MotionEventCompat.getActionIndex(ev);
+        mActivePointerId = MotionEventCompat.getPointerId(ev, index);
+        index = MotionEventCompat.findPointerIndex(ev,mActivePointerId);
+        if (index &gt; -1 &amp;&amp; index &lt; pointerCount) {
+            super.onInterceptTouchEvent(ev);
+        } else {
+            return true;
+        }
+    }else if(ev.getAction() == MotionEventCompat.ACTION_POINTER_DOWN &amp;&amp; super.onInterceptTouchEvent(ev)) {
+        final int index = MotionEventCompat.getActionIndex(ev);
+        mActivePointerId = MotionEventCompat.getPointerId(ev, index);
+        return false;
+    }else if(ev.getAction() == MotionEventCompat.ACTION_POINTER_UP &amp;&amp; super.onInterceptTouchEvent(ev)){
+        onSecondaryPointerUp(ev);
+        return false;
+    }else if(ev.getAction() == MotionEvent.ACTION_DOWN &amp;&amp; super.onInterceptTouchEvent(ev)){
+        mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+        return false;
+    }
+    return super.onInterceptTouchEvent(ev);
+}
+
+private void onSecondaryPointerUp(MotionEvent ev) {
+    final int pointerIndex = MotionEventCompat.getActionIndex(ev);
+    final int pointerId = MotionEventCompat.getPointerId(ev, pointerIndex);
+    if (pointerId == mActivePointerId) {
+        final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
+        mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
+    }
+}
+</code></pre>

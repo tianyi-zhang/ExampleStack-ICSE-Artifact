@@ -1,0 +1,90 @@
+<p>I was able to get this working by creating an SMS Plugin that combined two previous answers <a href="http://stackoverflow.com/questions/19721772/android-sms-sending-using-phonegap-cordova-3-1">here</a> and <a href="http://stackoverflow.com/questions/20079047/android-kitkat-4-4-hangouts-cannot-handle-sending-sms-intent">here</a>. The only catch is that you have to check for the intent to see if build version is KitKat to do differently than in the past.</p>
+
+<p>Here's my plugin code:</p>
+
+<pre><code>public class SmsPlugin extends CordovaPlugin {
+    public final String ACTION_SEND_SMS = "SendSMS";
+
+    @Override
+    public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
+        if (action.equals(ACTION_SEND_SMS)) {
+            try {
+                String phoneNumber = args.getString(0);
+                String message = args.getString(1);
+                String method = args.getString(2);
+
+                if (method.equalsIgnoreCase("INTENT")) {
+                    invokeSMSIntent(phoneNumber, message);
+                    callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.NO_RESULT));
+                } else {
+                    sendSMS(phoneNumber, message);
+                }
+
+                callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK));
+                return true;
+            } catch (JSONException ex) {
+                callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
+            }
+        }
+        return false;
+    }
+
+    private void invokeSMSIntent(String phoneNumber, String message) {
+        Intent intent;
+        Activity activity = this.cordova.getActivity();
+
+        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.KITKAT) // Android 4.4 and up
+        {
+            String defaultSmsPackageName = Telephony.Sms.getDefaultSmsPackage(activity);
+
+            intent = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(phoneNumber)));
+            intent.putExtra("sms_body", message);
+
+            // Can be null in case that there is no default, then the user would be able to choose any app that supports this intent.
+            if (defaultSmsPackageName != null) {
+                intent.setPackage(defaultSmsPackageName);
+            }
+        } else {
+            intent = new Intent(Intent.ACTION_VIEW);
+            intent.setType("vnd.android-dir/mms-sms");
+            intent.putExtra("address", phoneNumber);
+            intent.putExtra("sms_body", message);
+        }
+
+        activity.startActivity(intent);
+    }
+
+    private void sendSMS(String phoneNumber, String message) {
+        SmsManager manager = SmsManager.getDefault();
+        PendingIntent sentIntent = PendingIntent.getActivity(this.cordova.getActivity(), 0, new Intent(), 0);
+        manager.sendTextMessage(phoneNumber, null, message, sentIntent, null);
+    }
+}
+</code></pre>
+
+<p>And here is how I invoke it from JavaScript:</p>
+
+<pre><code>var sms = function() {
+    message: function (phnum, callback) {
+        if (Ext.os.is.iOS) {
+            cordova.exec(callback, function (err) {
+                callback('The following error occurred: ' + err);
+            }, "Sms", "send", [ {"recipients": [phnum]} ]);
+        } else if (Ext.os.is.Android) {
+            cordova.exec(callback, function (err) {
+                callback('The following error occurred: ' + err);
+            }, "SmsPlugin", "SendSMS", [phnum, "", "INTENT"] );
+        } else {
+            document.location.href = "sms:" + phnum
+        }
+    }
+};
+module.exports = sms;
+</code></pre>
+
+<p>Be sure to add this to you config.xml:</p>
+
+<pre><code>&lt;feature name="SmsPlugin"&gt;
+    &lt;param name="android-package" value="my.plugin.SmsPlugin" /&gt;
+&lt;/feature&gt;
+</code></pre>

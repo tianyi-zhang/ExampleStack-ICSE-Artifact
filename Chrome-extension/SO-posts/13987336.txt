@@ -1,0 +1,63 @@
+<p>Looking in Android source code on what causes this issue gives that flag mStateSaved in <code>FragmentManagerImpl</code> class (instance available in Activity) has value true. It is set to true when the back stack is saved (saveAllState) on call from <code>Activity#onSaveInstanceState</code>.
+Afterwards the calls from ActivityThread don't reset this flag using available reset methods from <code>FragmentManagerImpl#noteStateNotSaved()</code> and <code>dispatch()</code>.</p>
+
+<p>The way I see it there are some available fixes, depending on what your app is doing and using:</p>
+
+<h2>Good ways</h2>
+
+<p>Before anything else: I would advertise <a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">Alex Lockwood article</a>. Then, from what I've done so far:</p>
+
+<ol>
+<li><p>For fragments and activities that don't need to keep any state information, call <a href="http://developer.android.com/reference/android/app/FragmentTransaction.html#commitAllowingStateLoss%28%29">commitAllowStateLoss</a>. Taken from documentation: </p>
+
+<blockquote>
+  <p>Allows the commit to be executed after an activity's state is saved. This is dangerous because the commit can be lost if the activity needs to later be restored from its state, so this should only be used for cases where it is okay for the UI state to change unexpectedly on the user`. I guess this is alright to use if the fragment is showing read-only information. Or even if they do show editable info, use the callbacks methods to retain the edited info.</p>
+</blockquote></li>
+<li><p>Just after the transaction is commit (you just called <a href="http://developer.android.com/reference/android/app/FragmentTransaction.html#commit%28%29"><code>commit()</code></a>), make a call to <a href="http://developer.android.com/reference/android/app/FragmentManager.html#executePendingTransactions%28%29"><code>FragmentManager.executePendingTransactions()</code></a>.</p></li>
+</ol>
+
+<h2>Not recommended ways:</h2>
+
+<ol>
+<li><p>As Ovidiu Latcu mentioned above, don't call <code>super.onSaveInstanceState()</code>. But this means you will lose the whole state of your activity along with fragments state.</p></li>
+<li><p>Override <code>onBackPressed</code> and in there call only <code>finish()</code>. This should be OK if you application doesn't use Fragments API; as in <code>super.onBackPressed</code> there is a call to <code>FragmentManager#popBackStackImmediate()</code>.</p></li>
+<li><p>If you are using both Fragments API and the state of your activity is important/vital, then you could try to call using reflection API <code>FragmentManagerImpl#noteStateNotSaved()</code>. But this is a hack, or one could say it's a workaround. I don't like it, but in my case it's quite acceptable since I have a code from a legacy app that uses deprecated code (<code>TabActivity</code> and implicitly <code>LocalActivityManager</code>).</p></li>
+</ol>
+
+<p>Below is the code that uses reflection:</p>
+
+<pre><code>@Override
+protected void onSaveInstanceState(Bundle outState) {
+    super.onSaveInstanceState(outState);
+    invokeFragmentManagerNoteStateNotSaved();
+}
+
+@SuppressWarnings({ "rawtypes", "unchecked" })
+private void invokeFragmentManagerNoteStateNotSaved() {
+    /**
+     * For post-Honeycomb devices
+     */
+    if (Build.VERSION.SDK_INT &lt; 11) {
+        return;
+    }
+    try {
+        Class cls = getClass();
+        do {
+            cls = cls.getSuperclass();
+        } while (!"Activity".equals(cls.getSimpleName()));
+        Field fragmentMgrField = cls.getDeclaredField("mFragments");
+        fragmentMgrField.setAccessible(true);
+
+        Object fragmentMgr = fragmentMgrField.get(this);
+        cls = fragmentMgr.getClass();
+
+        Method noteStateNotSavedMethod = cls.getDeclaredMethod("noteStateNotSaved", new Class[] {});
+        noteStateNotSavedMethod.invoke(fragmentMgr, new Object[] {});
+        Log.d("DLOutState", "Successful call for noteStateNotSaved!!!");
+    } catch (Exception ex) {
+        Log.e("DLOutState", "Exception on worka FM.noteStateNotSaved", ex);
+    }
+}
+</code></pre>
+
+<p>Cheers!</p>

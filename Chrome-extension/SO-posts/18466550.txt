@@ -1,0 +1,551 @@
+<p>I'm not sure if this is an answer per say, but it solves one of the "niggly" issues I'm having...</p>
+
+<p>I "think" the problem I have is you don't have a source DPI, so it's not possible to convert from one context to another...Let's say you have a image of 200x200, what does that actually mean? </p>
+
+<p>Without the DPI it's meaningless. If the image is 300dpi, then we could use <code>pixels / dpi = inches = 200 / 72 = 0.667 inches</code>. Then we can convert that to pixels @ 72dpi using <code>inches * dpi = 0.667 * 72 = 48</code></p>
+
+<p>Now, the question the becomes, how do I get the DPI of an image.  That's not nearly as easy as it sounds...</p>
+
+<pre><code>import core.ui.UIUtilities;
+import java.io.File;
+import java.io.IOException;
+import java.util.Iterator;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.stream.ImageInputStream;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+public class TestDPI {
+
+    public static final float INCH_PER_MM = 25.4f;
+
+    public static void main(String[] args) {
+        File imageFile = new File("/path/to/your/image");
+        ImageInputStream iis = null;
+        try {
+            iis = ImageIO.createImageInputStream(imageFile);
+            Iterator&lt;ImageReader&gt; readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) {
+                throw new IOException("Bad format, no readers");
+            }
+            ImageReader reader = readers.next();
+            reader.setInput(iis);
+            IIOMetadata meta = reader.getImageMetadata(0);
+
+            Node root = meta.getAsTree("javax_imageio_1.0");
+            NodeList nl = root.getChildNodes();
+            float horizontalPixelSize = 0;
+            float verticalPixelSize = 0;
+            for (int index = 0; index &lt; nl.getLength(); index++) {
+                Node child = nl.item(index);
+                if ("Dimension".equals(child.getNodeName())) {
+                    NodeList dnl = child.getChildNodes();
+                    for (int inner = 0; inner &lt; dnl.getLength(); inner++) {
+                        child = dnl.item(inner);
+                        if ("HorizontalPixelSize".equals(child.getNodeName())) {
+                            horizontalPixelSize = Float.parseFloat(child.getAttributes().getNamedItem("value").getNodeValue());
+                        } else if ("VerticalPixelSize".equals(child.getNodeName())) {
+                            verticalPixelSize = Float.parseFloat(child.getAttributes().getNamedItem("value").getNodeValue());
+                        }
+                    }
+                }
+            }
+            // As "I" understand it.  The horizontalPixelSize and verticalPixelSize
+            // are the number of millimeters per pixel that should be occupied...
+            System.out.println((INCH_PER_MM / horizontalPixelSize) + "x" + (INCH_PER_MM / verticalPixelSize));
+
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        } finally {
+            try {
+                iis.close();
+            } catch (Exception e) {
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><strong>Update with preview example</strong></p>
+
+<p>This example basically uses the images own DPI and a target DPI to produce a "print preview"</p>
+
+<p>My test image is 1667x1609 @ 300dpi</p>
+
+<p>300dpi test...</p>
+
+<ul>
+<li>Original size = 1667x1609</li>
+<li>cmSize = 14.11396110802889x13.622893474996092</li>
+<li>Target (pixel) size = 1667x1609</li>
+</ul>
+
+<p><img src="http://i.stack.imgur.com/ErVF6.png" alt="enter image description here"></p>
+
+<p>72dpi test...</p>
+
+<ul>
+<li>Original size = 1667x1609 </li>
+<li>cmSize = 14.11396110802889x13.622893474996092 </li>
+<li>Target (pixel) size = 400x386</li>
+</ul>
+
+<p><img src="http://i.stack.imgur.com/ofLOw.png" alt="enter image description here"></p>
+
+<pre><code>import static core.ui.ImageUtilities.getScaleFactor;
+import static core.ui.ImageUtilities.getScaleFactorToFit;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.Transparency;
+import java.awt.geom.Line2D;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.stream.ImageInputStream;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+public class TestPrintPreview {
+
+    public static void main(String[] args) {
+        new TestPrintPreview();
+    }
+
+    public TestPrintPreview() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                }
+
+                File imageFile = new File("C:\\hold\\thumbnails\\RentAZilla-300dpi.png");
+
+                JFrame frame = new JFrame("Testing");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new JScrollPane(new PreviewPane(imageFile, 300)));
+                frame.setSize(400, 400);
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    // The size of an A4 sheet in CMs
+    public static final double[] A4_PAPER_SIZE = new double[]{21.0, 29.7};
+    // The number of CMs per Inch
+    public static final double CM_PER_INCH = 0.393700787d;
+    // The number of Inches per CMs
+    public static final double INCH_PER_CM = 2.545d;
+    // The numer of Inches per mm's
+    public static final double INCH_PER_MM = 25.45d;
+
+    public class PreviewPane extends JPanel {
+
+        private BufferedImage img;
+        private float targetDPI;
+
+        private BufferedImage gridBackground;
+
+        public PreviewPane(File imageFile, float outputDPI) {
+            // This determines the output DPI we want...
+            targetDPI = outputDPI;
+            try {
+                // Get the DPI from the image...
+                double[] imgDPI = getDPI(imageFile);
+                // Read the image
+                img = ImageIO.read(imageFile);
+
+                // Output the original size...
+                System.out.println("Original size = " + img.getWidth() + "x" + img.getHeight());
+
+                // Calculate the size of the image in cm's
+                double cmWidth = pixelsToCms(img.getWidth(), imgDPI[0]);
+                double cmHeight = pixelsToCms(img.getHeight(), imgDPI[1]);
+
+                System.out.println("cmSize = " + cmWidth + "x" + cmHeight);
+
+                // Calculate the new image size based on the target DPI and
+                // the cm size of the image...
+                int imgWidth = (int) Math.round(cmsToPixel(cmWidth, targetDPI));
+                int imgHeight = (int) Math.round(cmsToPixel(cmHeight, targetDPI));
+                System.out.println("Target size = " + imgWidth + "x" + imgHeight);
+
+                // Create a scaled instance of the image to fit within the 
+                // target boundries
+                img = getScaledInstanceToFit(img, new Dimension(imgWidth, imgHeight));
+
+            } catch (IOException ex) {
+                Logger.getLogger(TestPrintPreview.class.getName()).log(Level.SEVERE, null, ex);
+            }
+            setBackground(Color.WHITE);
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            // Return the size of the component based on the size of 
+            // an A4 sheet of paper and the target DPI
+            return new Dimension(
+                    (int) Math.round(cmsToPixel(A4_PAPER_SIZE[0], targetDPI)),
+                    (int) Math.round(cmsToPixel(A4_PAPER_SIZE[1], targetDPI)));
+        }
+
+        /**
+         * Generates a grid of 1x1 cm cells.  This is used to allow you
+         * to compare the differences of different DPI and ensure that the
+         * output is what you are expecting...
+         * @return 
+         */
+        protected BufferedImage getGridBackground() {
+            if (gridBackground == null) {
+                // Calculate the width and height we need...
+                int width = (int) Math.round(cmsToPixel(A4_PAPER_SIZE[0], targetDPI));
+                int height = (int) Math.round(cmsToPixel(A4_PAPER_SIZE[1], targetDPI));
+
+                // Create the grid...
+                gridBackground = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g2d = gridBackground.createGraphics();
+                // Calculate the size of each cell (1cm square)
+                double cmAsPixel = cmsToPixel(1, targetDPI);
+                float xPos = 0;
+                float yPos = 0;
+                g2d.setColor(new Color(225, 0, 0, 128));
+                int count = 0;
+                Font font = g2d.getFont();
+                g2d.setFont(font.deriveFont(8f));
+                FontMetrics fm = g2d.getFontMetrics();
+                // Draw the horizontal lines
+                while (xPos &lt; gridBackground.getWidth()) {
+                    g2d.draw(new Line2D.Float(xPos, 0, xPos, gridBackground.getHeight()));
+                    // Add the text markers...
+                    String text = (count++) + "cm";
+                    float x = xPos - fm.stringWidth(text);
+                    g2d.drawString(text, x, fm.getAscent());
+                    xPos += cmAsPixel;
+                }
+                // Draw the vertical lines
+                count = 0;
+                while (yPos &lt; gridBackground.getHeight()) {
+                    g2d.draw(new Line2D.Float(0, yPos, gridBackground.getWidth(), yPos));
+                    // Add the text markers
+                    String text = (count++) + "cm";
+                    float y = (yPos - fm.getHeight()) + fm.getAscent();
+                    g2d.drawString(text, 0, y);
+                    yPos += cmAsPixel;
+                }
+                g2d.dispose();
+            }
+            return gridBackground;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g.create();
+            // Paint the image...
+            g2d.drawImage(img, 0, 0, this);
+            // Paint the grid...
+            g2d.drawImage(getGridBackground(), 0, 0, this);
+            g2d.dispose();
+        }
+    }
+
+    /**
+     * Converts the given pixels to cm's based on the supplied DPI
+     * @param pixels
+     * @param dpi
+     * @return 
+     */
+    public static double pixelsToCms(double pixels, double dpi) {
+        return inchesToCms(pixels / dpi);
+    }
+
+    /**
+     * Converts the given cm's to pixels based on the supplied DPI
+     * @param cms
+     * @param dpi
+     * @return 
+     */
+    public static double cmsToPixel(double cms, double dpi) {
+        return cmToInches(cms) * dpi;
+    }
+
+    /**
+     * Converts the given cm's to inches
+     * @param cms
+     * @return 
+     */
+    public static double cmToInches(double cms) {
+        return cms * CM_PER_INCH;
+    }
+
+    /**
+     * Converts the given inches to cm's 
+     * @param inch
+     * @return 
+     */
+    public static double inchesToCms(double inch) {
+        return inch * INCH_PER_CM;
+    }
+
+    /**
+     * Gets the DPI for the specified image.  This does return the horizontal
+     * and vertical DPI, but you could conceivably use just use one of the values
+     * @param imageFile
+     * @return
+     * @throws IOException 
+     */
+    public double[] getDPI(File imageFile) throws IOException {
+
+        double[] dpi = new double[]{72, 72};
+
+        ImageInputStream iis = null;
+        try {
+            iis = ImageIO.createImageInputStream(imageFile);
+            Iterator&lt;ImageReader&gt; readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) {
+                throw new IOException("Bad format, no readers");
+            }
+            ImageReader reader = readers.next();
+            reader.setInput(iis);
+            IIOMetadata meta = reader.getImageMetadata(0);
+
+            Node root = meta.getAsTree("javax_imageio_1.0");
+            NodeList nl = root.getChildNodes();
+            float horizontalPixelSize = 0;
+            float verticalPixelSize = 0;
+            for (int index = 0; index &lt; nl.getLength(); index++) {
+                Node child = nl.item(index);
+                if ("Dimension".equals(child.getNodeName())) {
+                    NodeList dnl = child.getChildNodes();
+                    for (int inner = 0; inner &lt; dnl.getLength(); inner++) {
+                        child = dnl.item(inner);
+                        if ("HorizontalPixelSize".equals(child.getNodeName())) {
+                            horizontalPixelSize = Float.parseFloat(child.getAttributes().getNamedItem("value").getNodeValue());
+                        } else if ("VerticalPixelSize".equals(child.getNodeName())) {
+                            verticalPixelSize = Float.parseFloat(child.getAttributes().getNamedItem("value").getNodeValue());
+                        }
+                    }
+                }
+            }
+
+            dpi = new double[]{(INCH_PER_MM / horizontalPixelSize), (INCH_PER_MM / verticalPixelSize)};
+        } finally {
+            try {
+                iis.close();
+            } catch (Exception e) {
+            }
+        }
+
+        return dpi;
+    }
+
+    /**
+     * Returns a scaled instance of the image to fit within the specified 
+     * area.  This means that the image is guaranteed to be &lt;= size.width and
+     * &lt;= size.height
+     * @param img
+     * @param size
+     * @return 
+     */
+    public static BufferedImage getScaledInstanceToFit(BufferedImage img, Dimension size) {
+        double scaleFactor = getScaleFactorToFit(img, size);
+        return getScaledInstance(img, scaleFactor);
+    }
+
+    public static double getScaleFactorToFit(BufferedImage img, Dimension size) {
+
+        double dScale = 1;
+        if (img != null) {
+            int imageWidth = img.getWidth();
+            int imageHeight = img.getHeight();
+
+            dScale = getScaleFactorToFit(new Dimension(imageWidth, imageHeight), size);
+        }
+
+        return dScale;
+
+    }
+
+    /**
+     * Returns the required scale factor to fit the original size into the toFit
+     * size.
+     * @param original
+     * @param toFit
+     * @return 
+     */
+    public static double getScaleFactorToFit(Dimension original, Dimension toFit) {
+
+        double dScale = 1d;
+        if (original != null &amp;&amp; toFit != null) {
+            double dScaleWidth = getScaleFactor(original.width, toFit.width);
+            double dScaleHeight = getScaleFactor(original.height, toFit.height);
+
+            dScale = Math.min(dScaleHeight, dScaleWidth);
+        }
+
+        return dScale;
+
+    }
+
+    /**
+     * Returns the scale factor required to go from the master size to the 
+     * target size
+     * @param iMasterSize
+     * @param iTargetSize
+     * @return 
+     */
+    public static double getScaleFactor(int iMasterSize, int iTargetSize) {
+        return (double) iTargetSize / (double) iMasterSize;
+    }
+
+    /**
+     * Returns a scaled instance of the image based on the supplied scale factor.
+     * 
+     * The images width and height are multiplied by the supplied scale factor
+     * @param img
+     * @param dScaleFactor
+     * @return 
+     */
+    protected static BufferedImage getScaledInstance(BufferedImage img, double dScaleFactor) {
+        BufferedImage imgScale = img;
+
+        int iImageWidth = (int) Math.round(img.getWidth() * dScaleFactor);
+        int iImageHeight = (int) Math.round(img.getHeight() * dScaleFactor);
+
+        if (dScaleFactor &lt;= 1.0d) {
+            imgScale = getScaledDownInstance(img, iImageWidth, iImageHeight);
+        } else {
+            imgScale = getScaledUpInstance(img, iImageWidth, iImageHeight);
+        }
+        return imgScale;
+    }
+
+    /**
+     * Scales the specified image down to be less then equal to the target width
+     * and height.
+     * 
+     * The image is scaled using a divide an conquer approach to provide
+     * the best scaling possible
+     * @param img
+     * @param targetWidth
+     * @param targetHeight
+     * @return 
+     */
+    protected static BufferedImage getScaledDownInstance(BufferedImage img,
+            int targetWidth,
+            int targetHeight) {
+
+        int type = (img.getTransparency() == Transparency.OPAQUE)
+                ? BufferedImage.TYPE_INT_RGB : BufferedImage.TYPE_INT_ARGB;
+
+        BufferedImage ret = (BufferedImage) img;
+
+        if (targetHeight &gt; 0 || targetWidth &gt; 0) {
+            int w, h;
+            w = img.getWidth();
+            h = img.getHeight();
+
+            do {
+                if (w &gt; targetWidth) {
+                    w /= 2;
+                    if (w &lt; targetWidth) {
+                        w = targetWidth;
+                    }
+                }
+
+                if (h &gt; targetHeight) {
+                    h /= 2;
+                    if (h &lt; targetHeight) {
+                        h = targetHeight;
+                    }
+                }
+
+                BufferedImage tmp = new BufferedImage(Math.max(w, 1), Math.max(h, 1), type);
+                Graphics2D g2 = tmp.createGraphics();
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                g2.drawImage(ret, 0, 0, w, h, null);
+                g2.dispose();
+
+                ret = tmp;
+            } while (w != targetWidth || h != targetHeight);
+        } else {
+            ret = new BufferedImage(1, 1, type);
+        }
+
+        return ret;
+
+    }
+
+    /**
+    /**
+     * Scales the specified image up
+     * 
+     * The image is scaled using a divide an conquer approach to provide
+     * the best scaling possible
+     * @param img
+     * @param targetWidth
+     * @param targetHeight
+     * @return 
+     */
+    protected static BufferedImage getScaledUpInstance(BufferedImage img,
+            int targetWidth,
+            int targetHeight) {
+
+        int type = BufferedImage.TYPE_INT_ARGB;
+
+        BufferedImage ret = (BufferedImage) img;
+        int w, h;
+        w = img.getWidth();
+        h = img.getHeight();
+
+        do {
+            if (w &lt; targetWidth) {
+                w *= 2;
+                if (w &gt; targetWidth) {
+                    w = targetWidth;
+                }
+            }
+
+            if (h &lt; targetHeight) {
+                h *= 2;
+                if (h &gt; targetHeight) {
+                    h = targetHeight;
+                }
+            }
+
+            BufferedImage tmp = new BufferedImage(w, h, type);
+            Graphics2D g2 = tmp.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g2.drawImage(ret, 0, 0, w, h, null);
+            g2.dispose();
+
+            ret = tmp;
+            tmp = null;
+        } while (w != targetWidth || h != targetHeight);
+        return ret;
+    }
+}
+</code></pre>

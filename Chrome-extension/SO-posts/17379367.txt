@@ -1,0 +1,234 @@
+<p>A service is "bound" when an application component binds to it by calling <code>bindService()</code>. A bound service offers a client-server interface that allows components to interact with the service, send requests, get results, and even do so across processes with interprocess communication (IPC). <strong>A bound service runs only as long as another application component is bound to it</strong>. </p>
+
+<p><a href="http://developer.android.com/guide/components/services.html" rel="nofollow">http://developer.android.com/guide/components/services.html</a></p>
+
+<p>A service will shut down after all <code>bindService()</code> calls have had their corresponding <code>unbindService()</code> calls. If there are no bound clients, then the service will also need stopService() if and only if somebody called startService() on the service.</p>
+
+<p>Drawing from the below link.</p>
+
+<p><a href="http://stackoverflow.com/questions/600207/android-check-if-a-service-is-running">android: check if a service is running</a>.</p>
+
+<pre><code>private void doSendEcho() {
+    if(isMyServiceRunning()) // if service is running
+    {
+    if (mMessengerService != null) {
+        Message msg = Message.obtain(null, MessengerService.MSG_ECHO, 12345, 0);
+        msg.replyTo = mMessenger;
+        try {
+            mMessengerService.send(msg);
+        } catch (RemoteException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+    }
+}
+private boolean isMyServiceRunning() {
+    ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+    for (RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+        if (MessengerService.class.getName().equals(service.service.getClassName())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+@Override
+protected void onStop() {
+super.onStop();
+// Unbind from the service
+    unbindService(mConnection);
+    Log.i("Stopped!",""+isMyServiceRunning()); 
+    Log.i("stopped", "Service Stopped");    
+ }
+</code></pre>
+
+<p>Example:</p>
+
+<p>I tested the below it works fine.</p>
+
+<pre><code>public class MessengerService extends Service {
+
+    public static final int MSG_SAY_HELLO =1;
+    public static final int MSG_SAY_GOODBYE =2;
+
+      ArrayList&lt;Messenger&gt; mClients = new ArrayList&lt;Messenger&gt;();
+
+private final Messenger mMessenger = new Messenger(new TempHandler());
+private class TempHandler extends Handler {
+    @Override
+    public void handleMessage(Message msg) {
+        switch (msg.what) {
+        case MSG_SAY_HELLO:
+            mClients.add(msg.replyTo);
+            Toast.makeText(getApplicationContext(), "Hi, there.", Toast.LENGTH_SHORT).show();
+            break;
+
+        case MSG_SAY_GOODBYE:
+            mClients.add(msg.replyTo);
+
+            break;
+
+        default:
+            super.handleMessage(msg);
+        }
+    }
+
+}
+
+@Override
+public IBinder onBind(Intent intent) {
+    Toast.makeText(getApplicationContext(), "Service bound", Toast.LENGTH_SHORT).show();
+    return mMessenger.getBinder();
+}
+
+@Override
+public void onDestroy() {
+    Log.i("MessengerService", "Service Destroyed...");
+    super.onDestroy();
+}
+}
+</code></pre>
+
+<p>MainAactivity.java</p>
+
+<pre><code>public class MainActivity extends Activity {
+
+boolean mIsBound=false;
+Messenger mService = null;
+private boolean isMyServiceRunning() {
+    ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+    for (RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+        if (MessengerService.class.getName().equals(service.service.getClassName())) {
+            return true;
+        }
+    }
+    return false;
+}
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+
+    Button bind = (Button) findViewById(R.id.button1);
+    bind.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            doBindService();
+        }           
+    });
+
+    Button unbind = (Button) findViewById(R.id.button2);
+    unbind.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            doUnbindService();
+        }
+    });
+}
+
+class TempHandler extends Handler {
+    @Override
+    public void handleMessage(Message msg) {
+        switch (msg.what) {
+            case MessengerService.MSG_SAY_GOODBYE:
+                Toast.makeText(MainActivity.this,"Received from service: " + msg.arg1,1000).show();
+                break;
+            default:
+                super.handleMessage(msg);
+        }
+    }
+}
+
+/**
+ * Target we publish for clients to send messages to IncomingHandler.
+ */
+final Messenger mMessenger = new Messenger(new TempHandler());
+
+/**
+ * Class for interacting with the main interface of the service.
+ */
+private ServiceConnection mConnection = new ServiceConnection() {
+    public void onServiceConnected(ComponentName className,
+            IBinder service) {
+        // This is called when the connection with the service has been
+        // established, giving us the service object we can use to
+        // interact with the service.  We are communicating with our
+        // service through an IDL interface, so get a client-side
+        // representation of that from the raw service object.
+        mService = new Messenger(service);
+      //  mCallbackText.setText("Attached.");
+
+        // We want to monitor the service for as long as we are
+        // connected to it.
+        try {
+            Message msg = Message.obtain(null,
+                    MessengerService.MSG_SAY_HELLO);
+            msg.replyTo = mMessenger;
+            mService.send(msg);
+
+            // Give it some value as an example.
+//            msg = Message.obtain(null,
+//                    MessengerService.MSG_E, this.hashCode(), 0);
+//            mService.send(msg);
+        } catch (RemoteException e) {
+            // In this case the service has crashed before we could even
+            // do anything with it; we can count on soon being
+            // disconnected (and then reconnected if it can be restarted)
+            // so there is no need to do anything here.
+        }
+
+        // As part of the sample, tell the user what happened.
+        Toast.makeText(MainActivity.this, "remote_service_connected",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    public void onServiceDisconnected(ComponentName className) {
+        // This is called when the connection with the service has been
+        // unexpectedly disconnected -- that is, its process crashed.
+        mService = null;
+       // mCallbackText.setText("Disconnected.");
+
+        // As part of the sample, tell the" user what happened.
+        Toast.makeText(MainActivity.this, "remote_service_disconnected",
+                Toast.LENGTH_SHORT).show();
+    }
+};
+
+
+
+void doBindService() {
+    // Establish a connection with the service.  We use an explicit
+    // class name because there is no reason to be able to let other
+    // applications replace our component.
+    bindService(new Intent(MainActivity.this, 
+            MessengerService.class), mConnection, Context.BIND_AUTO_CREATE);
+    mIsBound=true;
+    Toast.makeText(MainActivity.this, "Binding",1000).show();
+}
+
+void doUnbindService() {
+    if (mIsBound) {
+        // If we have received the service, and hence registered with
+        // it, then now is the time to unregister.
+        if (mService != null) {
+            try {
+                Message msg = Message.obtain(null,
+                        MessengerService.MSG_SAY_GOODBYE);
+                msg.replyTo = mMessenger;
+                mService.send(msg);
+            } catch (RemoteException e) {
+                // There is nothing special we need to do if the service
+                // has crashed.
+            }
+        }
+
+        // Detach our existing connection.
+        unbindService(mConnection);
+        mIsBound = false;
+       Toast.makeText(MainActivity.this, "UnBinding"+isMyServiceRunning(),1000).show();
+
+    }
+}
+}
+</code></pre>

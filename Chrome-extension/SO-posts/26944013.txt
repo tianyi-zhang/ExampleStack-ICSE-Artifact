@@ -1,0 +1,86 @@
+<p>The solution by Louth was not enough to get things working for me, as the existing fragments were not getting destroyed. Motivated by <a href="http://stackoverflow.com/a/11710690/2180161">this answer</a>, I found that the solution is to override the <code>getItemId(int position)</code> method of <code>FragmentPagerAdapter</code> to give a new unique ID whenever there has been a change in the expected position of a Fragment.</p>
+
+<h2>Source Code:</h2>
+
+<pre><code>private class MyPagerAdapter extends FragmentPagerAdapter {
+
+    private TextProvider mProvider;
+    private long baseId = 0;
+
+    public MyPagerAdapter(FragmentManager fm, TextProvider provider) {
+        super(fm);
+        this.mProvider = provider;
+    }
+
+    @Override
+    public Fragment getItem(int position) {
+        return MyFragment.newInstance(mProvider.getTextForPosition(position));
+    }
+
+    @Override
+    public int getCount() {
+        return mProvider.getCount();
+    }
+
+
+    //this is called when notifyDataSetChanged() is called
+    @Override
+    public int getItemPosition(Object object) {
+        // refresh all fragments when data set changed
+        return PagerAdapter.POSITION_NONE;
+    }
+
+
+    @Override
+    public long getItemId(int position) {
+        // give an ID different from position when position has been changed
+        return baseId + position;
+    }
+
+    /**
+     * Notify that the position of a fragment has been changed.
+     * Create a new ID for each position to force recreation of the fragment
+     * @param n number of items which have been changed
+     */
+    public void notifyChangeInPosition(int n) {
+        // shift the ID returned by getItemId outside the range of all previous fragments
+        baseId += getCount() + n;
+    }
+}
+</code></pre>
+
+<p>Now, for example if you delete a single tab or make some change to the order, you should call <code>notifyChangeInPosition(1)</code> before calling <code>notifyDataSetChanged()</code>, which will ensure that all the Fragments will be recreated.</p>
+
+<h2>Why this solution works</h2>
+
+<p><strong>Overriding getItemPosition():</strong></p>
+
+<p>When <code>notifyDataSetChanged()</code> is called, the adapter calls the <code>notifyChanged()</code> method of the <code>ViewPager</code> which it is attached to. The <code>ViewPager</code> then checks the value returned by the adapter's <code>getItemPosition()</code> for each item, removing those items which return <code>POSITION_NONE</code> (see the <a href="https://github.com/android/platform_frameworks_support/blob/master/v4/java/android/support/v4/view/ViewPager.java#L847">source code</a>) and then repopulating. </p>
+
+<p><strong>Overriding getItemId():</strong></p>
+
+<p>This is necessary to prevent the adapter from reloading the old fragment when the <code>ViewPager</code> is repopulating. You can easily understand why this works by looking at <a href="https://github.com/android/platform_frameworks_support/blob/master/v4/java/android/support/v4/app/FragmentPagerAdapter.java#L91">the source code</a> for instantiateItem() in <code>FragmentPagerAdapter</code>.</p>
+
+<pre><code>    final long itemId = getItemId(position);
+
+    // Do we already have this fragment?
+    String name = makeFragmentName(container.getId(), itemId);
+    Fragment fragment = mFragmentManager.findFragmentByTag(name);
+    if (fragment != null) {
+        if (DEBUG) Log.v(TAG, "Attaching item #" + itemId + ": f=" + fragment);
+        mCurTransaction.attach(fragment);
+    } else {
+        fragment = getItem(position);
+        if (DEBUG) Log.v(TAG, "Adding item #" + itemId + ": f=" + fragment);
+        mCurTransaction.add(container.getId(), fragment,
+                makeFragmentName(container.getId(), itemId));
+    }
+</code></pre>
+
+<p>As you can see, the <code>getItem()</code> method is only called if the fragment manager finds no existing fragments with the same Id. To me it seems like a bug that the old fragments are still attached even after <code>notifyDataSetChanged()</code> is called, but the documentation for <code>ViewPager</code> does clearly state that:</p>
+
+<blockquote>
+  <p>Note this class is currently under early design and development. The API will likely change in later updates of the compatibility library, requiring changes to the source code of apps when they are compiled against the newer version.</p>
+</blockquote>
+
+<p>So hopefully the workaround given here will not be necessary in a future version of the support library.</p>

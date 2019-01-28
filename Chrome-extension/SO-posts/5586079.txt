@@ -1,0 +1,51 @@
+<p>If it were me, I would prefer using <code>Executor#execute()</code> over <code>Queue#offer()</code>, simply because I'm using everything else from <code>java.util.concurrent</code> already.</p>
+
+<p>Your question is a good one, and it piqued my interest, so I took a look at the source for <code>ThreadPoolExecutor#execute()</code>:</p>
+
+<pre><code>public void execute(Runnable command) {
+    if (command == null)
+        throw new NullPointerException();
+    if (poolSize &gt;= corePoolSize || !addIfUnderCorePoolSize(command)) {
+        if (runState == RUNNING &amp;&amp; workQueue.offer(command)) {
+            if (runState != RUNNING || poolSize == 0)
+                ensureQueuedTaskHandled(command);
+        }
+        else if (!addIfUnderMaximumPoolSize(command))
+            reject(command); // is shutdown or saturated
+    }
+}
+</code></pre>
+
+<p>We can see that execute itself calls <code>offer()</code> on the work queue, but not before doing some nice, tasty pool manipulations if necessary. For that reason, I'd think that it'd be advisable to use <code>execute()</code>; not using it may (although I don't know for certain) cause the pool to operate in a non-optimal way. However, I don't think that using <code>offer()</code> will <em>break</em> the executor - it looks like tasks are pulled off the queue using the following (also from ThreadPoolExecutor):</p>
+
+<pre><code>Runnable getTask() {
+    for (;;) {
+        try {
+            int state = runState;
+            if (state &gt; SHUTDOWN)
+                return null;
+            Runnable r;
+            if (state == SHUTDOWN)  // Help drain queue
+                r = workQueue.poll();
+            else if (poolSize &gt; corePoolSize || allowCoreThreadTimeOut)
+                r = workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS);
+            else
+                r = workQueue.take();
+            if (r != null)
+                return r;
+            if (workerCanExit()) {
+                if (runState &gt;= SHUTDOWN) // Wake up others
+                    interruptIdleWorkers();
+                return null;
+            }
+            // Else retry
+        } catch (InterruptedException ie) {
+            // On interruption, re-check runState
+        }
+    }
+}
+</code></pre>
+
+<p>This <code>getTask()</code> method is just called from within a loop, so if the executor's not shutting down, it'd block until a new task was given to the queue (regardless of from where it came from).</p>
+
+<p><em>Note</em>: Even though I've posted code snippets from source here, we can't rely on them for a definitive answer - we should only be coding to the API. We don't know how the implementation of <code>execute()</code> will change over time.</p>

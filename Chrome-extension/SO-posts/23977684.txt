@@ -1,0 +1,139 @@
+<p>register a BroadcastReceiver in onResume() and override it. remember to unregister it in onPause()</p>
+
+<pre><code>private class WiFiDirectBroadcastReceiver extends android.content.BroadcastReceiver {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        }
+    }
+}
+</code></pre>
+
+<p>then try to call discoverPeers() first</p>
+
+<pre><code>mWifiP2pManager.discoverPeers(Channel mChannel, ActionListener mActionListener);
+</code></pre>
+
+<p>if discoverPeers() does find peers, action WIFI_P2P_PEERS_CHANGED_ACTION will be triggered.</p>
+
+<p>we can call requestPeers() in WIFI_P2P_PEERS_CHANGED_ACTION in the BroadcastReceiver</p>
+
+<pre><code>mWifiP2pManager.requestPeers(Channel mChannel, WifiP2pManager.PeerListListener);
+</code></pre>
+
+<p>so our BroadcastReceiver now looks like this</p>
+
+<pre><code>private class WiFiDirectBroadcastReceiver extends android.content.BroadcastReceiver {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
+            mWifiP2pManager.requestPeers(mChannel , pl);
+        } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        }
+    }
+}
+</code></pre>
+
+<p>to implement <a href="http://developer.android.com/reference/android/net/wifi/p2p/WifiP2pManager.PeerListListener.html" rel="nofollow">WifiP2pManager.PeerListListener</a>, you need to override onPeersAvailable(WifiP2pDeviceList peers)</p>
+
+<p>in onPeersAvailable(), the parameter wifiP2pDeviceList means the peers you discovered</p>
+
+<p>we need a UI object to let us choose which device to connect, so I use spinner here.</p>
+
+<p>also you can use listView or something else.</p>
+
+<pre><code>private List&lt;WifiP2pDevice&gt; mPeers = new ArrayList&lt;WifiP2pDevice&gt;();
+spinnerAdapter = new WiFiPeerListAdapter(this, R.layout.row_devices, mPeers);
+...
+@Override
+public void onPeersAvailable(WifiP2pDeviceList wifiP2pDeviceList) {
+    mPeers.clear();
+    mPeers.addAll(wifiP2pDeviceList.getDeviceList());
+    spinnerAdapter.notifyDataSetChanged();
+}
+</code></pre>
+
+<p>finally we can connect to a device </p>
+
+<pre><code>WifiP2pDevice device = spinnerAdapter.getItem((int) mSpinner.getSelectedItemId());
+WifiP2pConfig config = new WifiP2pConfig();
+config.deviceAddress = device.deviceAddress;
+config.wps.setup = WpsInfo.PBC;
+mWifiP2pManager.connect(mChannel, config, mActionListener);
+</code></pre>
+
+<hr>
+
+<p>after two device connected, BroadcastReceiver action WIFI_P2P_CONNECTION_CHANGED_ACTION will be triggered. so we can do something here.</p>
+
+<p>our BroadcastReceiver now looks like</p>
+
+<pre><code>private class WiFiDirectBroadcastReceiver extends android.content.BroadcastReceiver {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        } else if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
+            mWifiP2pManager.requestPeers(mChannel , pl);
+        } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
+            NetworkInfo networkInfo = intent.getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO);
+            if (networkInfo != null) {
+                Log.d(TAG,networkInfo.toString());
+                if (networkInfo.isConnected()) {
+                    mWifiP2pManager.requestConnectionInfo(mChannel, WifiP2pManager.ConnectionInfoListener);
+                }
+            }
+        } else if (WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION.equals(action)) {
+            //TODO
+        }
+    }
+}
+</code></pre>
+
+<p>btw, the log in action WIFI_P2P_CONNECTION_CHANGED_ACTION will get something like this</p>
+
+<pre><code>NetworkInfo: type: WIFI_P2P[], state: UNKNOWN/IDLE, reason: (unspecified), extra: (none), roaming: false, failover: false, isAvailable: true, simId: 0
+</code></pre>
+
+<p>now we need to implement <a href="http://developer.android.com/reference/android/net/wifi/p2p/WifiP2pManager.ConnectionInfoListener.html" rel="nofollow">WifiP2pManager.ConnectionInfoListener</a> and override its abstract method onConnectionInfoAvailable(WifiP2pInfo info) for requestConnectionInfo()</p>
+
+<pre><code>private WifiP2pInfo p2pInfo;
+@Override
+public void onConnectionInfoAvailable(final WifiP2pInfo info) {
+    p2pInfo = info;
+    mWifiP2pManager.requestGroupInfo(mChannel, WifiP2pManager.GroupInfoListener);
+}
+</code></pre>
+
+<p>again we need to implement WifiP2pManager.GroupInfoListener and override onGroupInfoAvailable(WifiP2pGroup group) </p>
+
+<pre><code>@Override
+public void onGroupInfoAvailable(WifiP2pGroup wifiP2pGroup) {
+    String log;
+    if(wifiP2pGroup.isGroupOwner()) {
+        log = "I am GO";
+    }else{
+        log = "I am not GO";
+    }
+    Log.d(TAG, log);
+}
+</code></pre>
+
+<p>now we almost got every info about these two devices</p>
+
+<p>enjoy it</p>

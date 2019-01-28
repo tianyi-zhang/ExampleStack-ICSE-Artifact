@@ -1,0 +1,159 @@
+<h1>Research into the Source:</h1>
+
+<p>You won't get much from the documentation on <code>developers.android.com</code>, but I dug into the source and found out the following information:</p>
+
+<hr>
+
+<blockquote>
+  <p>A given Android device may support multiple EGLConfig rendering configurations. The available configurations may differ in how may channels of data are present, as well as how many bits are allocated to each channel. Therefore, the first thing GLSurfaceView has to do when starting to render is choose what EGLConfig to use.</p>
+  
+  <p>By default GLSurfaceView chooses a EGLConfig that has an RGB_888 pixel format,
+   with at least a 16-bit depth buffer and no stencil.</p>
+  
+  <p>If you would prefer a different EGLConfig you can override the default behavior by calling one of the setEGLConfigChooser methods.</p>
+</blockquote>
+
+<hr>
+
+<p>Looking at that specific interface for <code>GLSurfaceView.Renderer</code> and the method call for <code>onSurfaceCreated(...)</code>. The source code defines the following:</p>
+
+<pre><code>    /**
+     * Called when the surface is created or recreated.
+     * &lt;p&gt;
+     * Called when the rendering thread
+     * starts and whenever the EGL context is lost. The EGL context will typically
+     * be lost when the Android device awakes after going to sleep.
+     * &lt;p&gt;
+     * Since this method is called at the beginning of rendering, as well as
+     * every time the EGL context is lost, this method is a convenient place to put
+     * code to create resources that need to be created when the rendering
+     * starts, and that need to be recreated when the EGL context is lost.
+     * Textures are an example of a resource that you might want to create
+     * here.
+     * &lt;p&gt;
+     * Note that when the EGL context is lost, all OpenGL resources associated
+     * with that context will be automatically deleted. You do not need to call
+     * the corresponding "glDelete" methods such as glDeleteTextures to
+     * manually delete these lost resources.
+     * &lt;p&gt;
+     * @param gl the GL interface. Use &lt;code&gt;instanceof&lt;/code&gt; to
+     * test if the interface supports GL11 or higher interfaces.
+     * @param config the EGLConfig of the created surface. Can be used
+     * to create matching pbuffers.
+     */
+    void onSurfaceCreated(GL10 gl, EGLConfig config);
+</code></pre>
+
+<hr>
+
+<p>Further down in the source code for <code>GLSurfaceView</code> we see the following interface:</p>
+
+<pre><code>/**
+ * An interface for choosing an EGLConfig configuration from a list of
+ * potential configurations.
+ * &lt;p&gt;
+ * This interface must be implemented by clients wishing to call
+ * {@link GLSurfaceView#setEGLConfigChooser(EGLConfigChooser)}
+ */
+public interface EGLConfigChooser {
+    /**
+     * Choose a configuration from the list. Implementors typically
+     * implement this method by calling
+     * {@link EGL10#eglChooseConfig} and iterating through the results. Please consult the
+     * EGL specification available from The Khronos Group to learn how to call eglChooseConfig.
+     * @param egl the EGL10 for the current display.
+     * @param display the current display.
+     * @return the chosen configuration.
+     */
+    EGLConfig chooseConfig(EGL10 egl, EGLDisplay display);
+}
+</code></pre>
+
+<p>Then an abstract class defines the following:</p>
+
+<pre><code>/**
+ * Choose a configuration with exactly the specified r,g,b,a sizes,
+ * and at least the specified depth and stencil sizes.
+ */
+private abstract class BaseConfigChooser
+        implements EGLConfigChooser {
+
+    public BaseConfigChooser(int[] configSpec) {
+        mConfigSpec = filterConfigSpec(configSpec);
+    }
+
+    public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
+        int[] num_config = new int[1];
+
+        if (!egl.eglChooseConfig(display, mConfigSpec, null, 0,
+                num_config)) {
+            throw new IllegalArgumentException("eglChooseConfig failed");
+        }
+
+        int numConfigs = num_config[0];
+
+        if (numConfigs &lt;= 0) {
+            throw new IllegalArgumentException(
+                    "No configs match configSpec");
+        }
+
+        EGLConfig[] configs = new EGLConfig[numConfigs];
+
+        if (!egl.eglChooseConfig(display, mConfigSpec, configs, numConfigs,
+                num_config)) {
+            throw new IllegalArgumentException("eglChooseConfig#2 failed");
+        }
+        EGLConfig config = chooseConfig(egl, display, configs);
+        if (config == null) {
+            throw new IllegalArgumentException("No config chosen");
+        }
+        return config;
+    }
+
+    abstract EGLConfig chooseConfig(EGL10 egl, EGLDisplay display,
+            EGLConfig[] configs);
+
+    protected int[] mConfigSpec;
+
+    private int[] filterConfigSpec(int[] configSpec) {
+        if (mEGLContextClientVersion != 2 &amp;&amp; mEGLContextClientVersion != 3) {
+            return configSpec;
+        }
+
+        /* We know none of the subclasses define EGL_RENDERABLE_TYPE.
+         * And we know the configSpec is well formed.
+         */
+        int len = configSpec.length;
+        int[] newConfigSpec = new int[len + 2];
+        System.arraycopy(configSpec, 0, newConfigSpec, 0, len-1);
+        newConfigSpec[len-1] = EGL10.EGL_RENDERABLE_TYPE;
+
+        if (mEGLContextClientVersion == 2) {
+            newConfigSpec[len] = EGL14.EGL_OPENGL_ES2_BIT;  /* EGL_OPENGL_ES2_BIT */
+        } else {
+            newConfigSpec[len] = EGLExt.EGL_OPENGL_ES3_BIT_KHR; /* EGL_OPENGL_ES3_BIT_KHR */
+        }
+
+        newConfigSpec[len+1] = EGL10.EGL_NONE;
+        return newConfigSpec;
+
+    }
+}
+</code></pre>
+
+<p>You can see more of the source code here at this link: <a href="https://android.googlesource.com/platform/frameworks/base/+/master/opengl/java/android/opengl/GLSurfaceView.java" rel="nofollow">GLSurfaceView.java</a></p>
+
+<h1>The Point of EGLConfig:</h1>
+
+<p>This is taken from the book <code>OpenGL 3.0 ES Programming</code>.</p>
+
+<blockquote>
+  <p>An EGLconfig contains all the information about a surface made available by EGL. This includes information about the number of colors available, additional buffers associated with the configuration (such as depth and stencil buffers), the type of surfaces (Surface Type Translucent, etc.), and numerous other characteristics. </p>
+  
+  <p>To query a particular list of <code>EGLConfig</code> characteristics we query using the following method:</p>
+</blockquote>
+
+<pre><code>EGLBoolean eglGetConfigAttrib(EGLDisplay display, EGLConfig config, EGLint attribute, EGLint value); 
+</code></pre>
+
+<p>More information on the type of <code>EGLConfig</code>s can be found in the book <code>OpenGL ES 3.0 Programming Guide</code> page 48.</p>

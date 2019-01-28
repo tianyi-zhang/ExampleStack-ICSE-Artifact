@@ -1,0 +1,105 @@
+<p>I have just been able to complete this. Its really simple. You need a AsyncTask since Android 4+ does not allow network stuff on the UI thread. </p>
+
+<p><strong>Step 1</strong></p>
+
+<p>So I created a private AsyncTask class in my Activity class.</p>
+
+<pre><code>public class AutoCompleteHints extends AsyncTask&lt;String, Void, StringBuilder&gt; {
+    private boolean whichPoint;
+    private HttpURLConnection conn = null;
+    private StringBuilder jsonResults = new StringBuilder();
+
+    public AutoCompleteHints(boolean whichPoint) {
+        this.whichPoint = whichPoint;
+    }
+
+    @Override
+    protected StringBuilder doInBackground(String... str) {
+        try {
+            StringBuilder sb = new StringBuilder(
+                    "http://maps.googleapis.com/maps/api/geocode/json?" + "address="
+                            + URLEncoder.encode(str[0], "utf-8") + "&amp;sensor=true");
+
+            URL url = new URL(sb.toString());
+            Log.d("Taxeeta", url.toString() + " Called");
+            conn = (HttpURLConnection) url.openConnection();
+            InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+            // Load the results into a StringBuilder
+            int read;
+            char[] buff = new char[1024];
+            while ((read = in.read(buff)) != -1) {
+                jsonResults.append(buff, 0, read);
+            }
+        } catch (MalformedURLException e) {
+            Log.e("Taxeeta", "Error processing Places API URL", e);
+        } catch (IOException e) {
+            Log.e("Taxeeta", "Error connecting to Places API", e);
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+        return jsonResults;
+    }
+
+    @Override
+    protected void onPostExecute(final StringBuilder result) {
+        Double latitude, longitude;
+        try {
+            // Create a JSON object hierarchy from the results
+            JSONObject jsonObj = new JSONObject(result.toString());
+            JSONObject location = ((JSONObject) jsonObj.getJSONArray("results").get(0))
+                    .getJSONObject("geometry").getJSONObject("location");
+            latitude = location.optDouble("lat");
+            longitude = location.optDouble("lng");
+            Log.d("Taxeeta", "Received Latitude " + latitude + ": Longitude" + longitude);
+            if (whichPoint == PICKUP) {
+                source = new GeoPoint((int) (latitude * 1E6), (int) (longitude * 1E6));
+                startLocation.placeMarker(source);
+                Log.d("Taxeeta", "Source Done");
+            } else if (whichPoint == DROP) {
+                destination = new GeoPoint((int) (latitude * 1E6), (int) (longitude * 1E6));
+                endLocation.placeMarker(destination);
+                Log.d("Taxeeta", "Destination Done");
+            } else
+                Log.e("Taxeeta", "Something messed up here.");
+            // TODO : Path from source to destination
+            adjustZoomAndSpan();
+        } catch (JSONException e) {
+            Log.e("Taxeeta", "Cannot process JSON results", e);
+        }
+    }
+
+}
+</code></pre>
+
+<p><strong>Step 2</strong></p>
+
+<p>Called the AsyncTask onItemClick</p>
+
+<p>In onCreate</p>
+
+<pre><code>fromAutoComplete = new AutoComplete(this, R.layout.fromautocomplete);
+fromAutoComplete.setNotifyOnChange(true);
+fromAddress = (AutoCompleteTextView) findViewById(R.id.fromAddress);
+fromAddress.setAdapter(fromAutoComplete);
+fromAddress.setOnItemClickListener(this);
+</code></pre>
+
+<p>For onItemClick on the autocompletetextView</p>
+
+<pre><code>@Override
+public void onItemClick(AdapterView&lt;?&gt; parent, View view, int position, long id) {
+    Log.e("Taxeeta", parent.getId() + ":" + view.getId() + ":" + id);
+
+    ArrayList&lt;String&gt; resultList = null;
+    String str = (String) parent.getItemAtPosition(position);
+
+    if (view.getId() == R.id.fromautocomplete) 
+        new AutoCompleteHints(PICKUP).execute(str) ;
+    else if (view.getId() == R.id.toautocomplete) 
+        new AutoCompleteHints(DROP).execute(str) ;
+
+}
+</code></pre>

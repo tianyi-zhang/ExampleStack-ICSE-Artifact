@@ -1,0 +1,114 @@
+<p>You are going to have to mess around with the code to get it all working correctly. I don't have google api client hooked up so I can't debug. </p>
+
+<p>You could create a separate class like below</p>
+
+<pre><code>public class BuildFitnessClient {
+    private static boolean mAuthInProgress;
+    private static final String TAG = "BasicHistoryApi";
+    private static final int REQUEST_OAUTH = 1;
+
+    public static GoogleApiClient googleApiClient(final Activity activity, boolean authInProgress) {
+        mAuthInProgress = authInProgress;
+        return new GoogleApiClient.Builder(activity)
+            .addApi(Fitness.HISTORY_API)
+            .addScope(new Scope(Scopes.FITNESS_ACTIVITY_READ_WRITE))
+            .addConnectionCallbacks(
+                new GoogleApiClient.ConnectionCallbacks() {
+                    @Override
+                    public void onConnected(Bundle bundle) {
+                        mCallbacks.connected();
+                    }
+
+                    @Override
+                    public void onConnectionSuspended(int i) {
+
+                        if (i == GoogleApiClient.ConnectionCallbacks.CAUSE_NETWORK_LOST) {
+                            Log.i(TAG, "Connection lost.  Cause: Network Lost.");
+                        }
+                    }
+                }
+            )
+            .addOnConnectionFailedListener(
+                new GoogleApiClient.OnConnectionFailedListener() {
+                    // Called whenever the API client fails to connect.
+                    @Override
+                    public void onConnectionFailed(ConnectionResult result) {
+                        Log.i(TAG, "Connection failed. Cause: " + result.toString());
+                        if (!result.hasResolution()) {
+                            // Show the localized error dialog
+                            GooglePlayServicesUtil.getErrorDialog(result.getErrorCode(),
+                                activity, 0).show();
+                            return;
+                        }
+                        if (!mAuthInProgress) {
+                            try {
+                                Log.i(TAG, "Attempting to resolve failed connection");
+                                mAuthInProgress = true;
+                                result.startResolutionForResult(activity,
+                                    REQUEST_OAUTH);
+                            } catch (IntentSender.SendIntentException e) {
+                                Log.e(TAG,
+                                    "Exception while starting resolution activity", e);
+                            }
+                        }
+                    }
+                }
+            )
+            .build();
+    }
+
+    /**
+     * Interface to communicate to the parent activity (MainActivity.java)
+     */
+    private static MyCallbacks mCallbacks;
+
+
+    public interface MyCallbacks {
+
+        void connected();
+    }
+
+    public void onAttach(Activity activity) {
+        try {
+            mCallbacks = (MyCallbacks) activity;
+        } catch (ClassCastException e) {
+            throw new ClassCastException("Activity must implement Fragment One.");
+        }
+    }
+}
+</code></pre>
+
+<p>Then in your Activity you could call it like:</p>
+
+<pre><code>public class TestingActivity extends AppCompatActivity implements BuildFitnessClient.MyCallbacks {
+    GoogleApiClient mClient;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_testing);
+        new BuildFitnessClient().onAttach(this);
+        mClient = new BuildFitnessClient().googleApiClient(this, true);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        mClient.connect();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (mClient.isConnected()) {
+            mClient.disconnect();
+        }
+    }
+
+    @Override
+    public void connected() {
+        Log.e("Connected", "Connected");
+        new InsertAndVerifyDataTask().execute();
+    }
+}
+</code></pre>

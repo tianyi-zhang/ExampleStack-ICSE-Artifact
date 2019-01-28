@@ -1,0 +1,159 @@
+<p>There are two major ways to upload a file on to server using http methods:</p>
+
+<ol>
+<li><p>Upload a file using <code>PUT</code> method. This allow you to put one file at a time on to server. PUT method is easy to implement but you cannot upload a file from a html form (e.g. uploading form in your web browser) using <code>PUT</code> method.</p></li>
+<li><p>Upload files using <code>POST</code> method. This is more complicated but most web site uses this to upload files on to server. You can do multiple file uploading per request. This is what I am going to talk about.</p></li>
+</ol>
+
+<p>Note: <code>GET</code> is not used for file uploading unless you encode it somehow.</p>
+
+<p>Uploading files using <code>URLConnection</code> is not straight forwards and requires you to prepare your data in "<a href="http://en.wikipedia.org/wiki/MIME#Multipart_messages" rel="nofollow">multipart form</a>". Of course, you shouldn't do it yourself. There are a number of libraries to deal with this for you, e.g. <a href="http://hc.apache.org/httpclient-3.x/" rel="nofollow">HttpClient</a>. If you really want to use <code>URLConnection</code>, I shall refer to previous question on "<a href="http://stackoverflow.com/questions/2793150/how-to-use-java-net-urlconnection-to-fire-and-handle-http-requests">How to use java.net.URLConnection to fire and handle HTTP requests</a>"</p>
+
+<p>Below is the code for uploading your file using HttpClient. It is simplified from HttpClient example code.</p>
+
+<pre><code>import java.io.File;
+
+
+import org.apache.commons.httpclient.HttpClient;
+import org.apache.commons.httpclient.HttpStatus;
+import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.commons.httpclient.methods.multipart.FilePart;
+import org.apache.commons.httpclient.methods.multipart.MultipartRequestEntity;
+import org.apache.commons.httpclient.methods.multipart.Part;
+import org.apache.commons.httpclient.params.HttpMethodParams;
+
+public class MultipartFileUploadApp {
+
+    public static void main(String[] args) {
+        String targetURL = "http://localhost:8080/yourserver/upload";
+        File targetFile = new File("/path/to/your/file.txt");
+
+        PostMethod filePost = new PostMethod(targetURL);
+
+        filePost.getParams().setBooleanParameter(HttpMethodParams.USE_EXPECT_CONTINUE, false);
+
+        try {
+
+            System.out.println("Uploading " + targetFile.getName() + " to " + targetURL);
+
+            // add more parts you want to upload multiple files.
+            Part[] parts = {new FilePart(targetFile.getName(), targetFile)};
+
+            filePost.setRequestEntity(new MultipartRequestEntity(parts, filePost.getParams()));
+
+            HttpClient client = new HttpClient();
+            client.getHttpConnectionManager().getParams().setConnectionTimeout(5000);
+
+            int status = client.executeMethod(filePost);
+
+            if (status == HttpStatus.SC_OK) {
+                System.out.println("Upload complete, response=" + filePost.getResponseBodyAsString());
+            } else {
+                System.out.println("Upload failed, response=" + HttpStatus.getStatusText(status));
+            }
+        } catch (Exception ex) {
+            System.out.println("Error: " + ex.getMessage());
+            ex.printStackTrace();
+        } finally {
+            filePost.releaseConnection();
+        }
+
+
+    }
+}
+</code></pre>
+
+<p>For the server side, you have to parse multipart form request. Of course, there exists libraries to do that for you. Here is the snipplet I am using</p>
+
+<pre><code>import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.Iterator;
+import java.util.List;
+
+import javax.servlet.ServletConfig;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.fileupload.FileItem;
+import org.apache.commons.fileupload.FileUploadException;
+import org.apache.commons.fileupload.disk.DiskFileItemFactory;
+import org.apache.commons.fileupload.servlet.ServletFileUpload;
+
+public class CommonsFileUploadServlet extends HttpServlet {
+
+    private static final String TMP_DIR_PATH = "c:\\tmp";
+    private File tmpDir;
+    private static final String DESTINATION_DIR_PATH = "c:\\tmp\\files";
+    private File destinationDir;
+
+    public void init(ServletConfig config) throws ServletException {
+        super.init(config);
+        tmpDir = new File(TMP_DIR_PATH);
+        if (!tmpDir.isDirectory()) {
+            throw new ServletException(TMP_DIR_PATH + " is not a directory");
+        }
+        //String realPath = getServletContext().getRealPath(DESTINATION_DIR_PATH);
+        destinationDir = new File(DESTINATION_DIR_PATH);
+        if (!destinationDir.isDirectory()) {
+            throw new ServletException(DESTINATION_DIR_PATH + " is not a directory");
+        }
+
+    }
+
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        PrintWriter out = response.getWriter();
+        response.setContentType("text/plain");
+        out.println("&lt;h1&gt;Servlet File Upload Example using Commons File Upload&lt;/h1&gt;");
+        out.println();
+
+        DiskFileItemFactory fileItemFactory = new DiskFileItemFactory();
+        /*
+         *Set the size threshold, above which content will be stored on disk.
+         */
+        fileItemFactory.setSizeThreshold(1 * 1024 * 1024); //1 MB
+        /*
+         * Set the temporary directory to store the uploaded files of size above threshold.
+         */
+        fileItemFactory.setRepository(tmpDir);
+
+        ServletFileUpload uploadHandler = new ServletFileUpload(fileItemFactory);
+        try {
+            /*
+             * Parse the request
+             */
+            List items = uploadHandler.parseRequest(request);
+            out.println("Count : " + items.size());
+            Iterator itr = items.iterator();
+            while (itr.hasNext()) {
+                FileItem item = (FileItem) itr.next();
+                /*
+                 * Handle Form Fields.
+                 */
+                if (item.isFormField()) {
+                    out.println("Field = " + item.getFieldName() + ", Value = " + item.getString());
+                } else {
+                    //Handle Uploaded files.
+                    out.println("Field Name = " + item.getFieldName()
+                            + ", File Name = " + item.getName()
+                            + ", Content type = " + item.getContentType()
+                            + ", File Size = " + item.getSize());
+                    /*
+                     * Write file to the ultimate location.
+                     */
+                    File file = new File(destinationDir, item.getName());
+                    item.write(file);
+                }
+            }
+            out.close();
+        } catch (FileUploadException ex) {
+            log("Error encountered while parsing the request", ex);
+        } catch (Exception ex) {
+            log("Error encountered while uploading file", ex);
+        }
+
+    }
+}
+</code></pre>

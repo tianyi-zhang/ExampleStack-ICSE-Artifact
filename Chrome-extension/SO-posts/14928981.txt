@@ -1,0 +1,168 @@
+<p>The most significant issue is you're blocking the Event Dispatching Thread, meaning that it can't display/update anything while it's blocked.  The same problem applies to JavaFX.</p>
+
+<p>You should, also, never update either from anything other then they respective event queues.</p>
+
+<p>Now, there are any number of ways you might be able to go about this, but <code>SwingWorker</code> is probably the simplest for the time been.</p>
+
+<p><img src="http://i.stack.imgur.com/kRzn0.png" alt="enter image description here"></p>
+
+<p>I apologise, this is the entire exposure to JavaFX I've had...</p>
+
+<pre><code>public class TestJavaFXLoader extends JApplet {
+
+    public static void main(String[] args) {
+        new TestJavaFXLoader();
+    }
+
+    public TestJavaFXLoader() throws HeadlessException {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                Loader loader = new Loader();
+                loader.addPropertyChangeListener(new PropertyChangeListener() {
+                    @Override
+                    public void propertyChange(PropertyChangeEvent evt) {
+                        if (evt.getPropertyName().equals("state") &amp;&amp; evt.getNewValue().equals(SwingWorker.StateValue.DONE)) {
+                            System.out.println("Load main app here :D");
+                        }
+                    }
+                });
+                loader.load();
+            }
+        });
+    }
+
+    public class Loader extends SwingWorker&lt;Object, String&gt; {
+
+        private JWindow splash;
+        private JLabel subMessage;
+
+        public Loader() {
+        }
+
+        protected void loadSplashScreen() {
+            try {
+                splash = new JWindow();
+                JLabel content = new JLabel(new ImageIcon(ImageIO.read(...))));
+                content.setLayout(new GridBagLayout());
+                splash.setContentPane(content);
+
+                GridBagConstraints gbc = new GridBagConstraints();
+                gbc.gridwidth = GridBagConstraints.REMAINDER;
+
+                subMessage = createLabel("");
+
+                splash.add(createLabel("Loading, please wait"), gbc);
+                splash.add(subMessage, gbc);
+                splash.pack();
+                splash.setLocationRelativeTo(null);
+                splash.setVisible(true);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        protected JLabel createLabel(String msg) {
+            JLabel message = new JLabel("Loading, please wait");
+            message.setForeground(Color.CYAN);
+            Font font = message.getFont();
+            message.setFont(font.deriveFont(Font.BOLD, 24));
+            return message;
+        }
+
+        public void load() {
+            if (!EventQueue.isDispatchThread()) {
+                try {
+                    SwingUtilities.invokeAndWait(new Runnable() {
+                        @Override
+                        public void run() {
+                            loadSplashScreen();
+                        }
+                    });
+                } catch (Exception exp) {
+                    exp.printStackTrace();
+                }
+            } else {
+                loadSplashScreen();
+            }
+            execute();
+        }
+
+        @Override
+        protected void done() {
+            splash.dispose();
+        }
+
+        @Override
+        protected void process(List&lt;String&gt; chunks) {
+            subMessage.setText(chunks.get(chunks.size() - 1));
+        }
+
+        @Override
+        protected Object doInBackground() throws Exception {
+
+            publish("Preparing to load application");
+            try {
+                Thread.sleep(2500);
+            } catch (InterruptedException interruptedException) {
+            }
+            publish("Loading JavaFX...");
+
+            runAndWait(new Runnable() {
+                @Override
+                public void run() {
+                    new JFXPanel();
+                }
+            });
+
+            try {
+                Thread.sleep(2500);
+            } catch (InterruptedException interruptedException) {
+            }
+            return null;
+        }
+
+        public void runAndWait(final Runnable run)
+                throws InterruptedException, ExecutionException {
+            if (Platform.isFxApplicationThread()) {
+                try {
+                    run.run();
+                } catch (Exception e) {
+                    throw new ExecutionException(e);
+                }
+            } else {
+                final Lock lock = new ReentrantLock();
+                final Condition condition = lock.newCondition();
+                lock.lock();
+                try {
+                    Platform.runLater(new Runnable() {
+                        @Override
+                        public void run() {
+                            lock.lock();
+                            try {
+                                run.run();
+                            } catch (Throwable e) {
+                                e.printStackTrace();
+                            } finally {
+                                try {
+                                    condition.signal();
+                                } finally {
+                                    lock.unlock();
+                                }
+                            }
+                        }
+                    });
+                    condition.await();
+//                    if (throwableWrapper.t != null) {
+//                        throw new ExecutionException(throwableWrapper.t);
+//                    }
+                } finally {
+                    lock.unlock();
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>I found the <code>runAndWait</code> code <a href="http://www.guigarage.com/2013/01/invokeandwait-for-javafx/" rel="nofollow">here</a></p>

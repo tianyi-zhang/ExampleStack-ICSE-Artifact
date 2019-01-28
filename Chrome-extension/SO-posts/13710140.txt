@@ -1,0 +1,106 @@
+<p>I it figure out reading a lot about image on listview issues, its related to the listview recycling, some related post:</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/4287412/android-listview-asynctask-image-problem">Android Listview AsyncTask image problem</a></li>
+<li><a href="http://stackoverflow.com/questions/4977935/android-listview-image-loading-problem">Android listview image loading problem</a></li>
+</ul>
+
+<p>What I've added is the else statement in the onPostExecute method, if the tag isn't the one setted on tag I cancel it.</p>
+
+<p>The fixed code its</p>
+
+<pre><code>public class Image {
+    private static LruCache&lt;String, Bitmap&gt;     mMemoryCache    = null;
+    private static int                          cacheSize       = 1024 * 1024 * 10;
+
+    private static class AsyncLoader extends AsyncTask&lt;String, Void, Bitmap&gt; {
+        private ImageView   mTarget;
+
+        public AsyncLoader(ImageView target) {
+            this.mTarget = target;
+        }
+
+        @Override
+        protected void onPreExecute() {
+            mTarget.setTag(this);
+        }
+
+        @Override
+        protected Bitmap doInBackground(String...urls) {
+            String url = urls[0];
+
+            Bitmap result = null;
+
+            if (url != null) {
+                result = load(url);
+
+                if (result != null) {
+                    mMemoryCache.put(url, result);
+                }
+            }
+
+            return result;
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap result) {
+            if (mTarget.getTag() == this) {
+                mTarget.setTag(null);
+                if (result != null) mTarget.setImageBitmap(result);
+            } else if (mTarget.getTag() != null) {
+                ((AsyncLoader) mTarget.getTag()).cancel(true);
+                mTarget.setTag(null);
+            }
+        }
+    }
+
+    public static Bitmap load(String urlString) {
+        if (urlString == null || urlString.length() == 0) return null;
+
+        Bitmap bitmap = null;
+        URL url = null;
+
+        try {
+            url = new URL(urlString);
+        } catch (MalformedURLException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setDoInput(true);
+            conn.connect();
+            InputStream is = conn.getInputStream();
+            bitmap = BitmapFactory.decodeStream(is);
+            is.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return bitmap;
+    }
+
+    public static void loadToView(String url, ImageView view) {
+        if (url == null || url.length() == 0) return;
+        if (mMemoryCache == null) {
+            mMemoryCache = new LruCache&lt;String, Bitmap&gt;(cacheSize) {
+                @Override
+                protected int sizeOf(String key, Bitmap bitmap) {
+                    return (bitmap.getRowBytes() * bitmap.getHeight());
+                }
+            };
+        }
+
+        Bitmap bitmap = getBitmapFromMemCache(url);
+        if (bitmap == null) {
+            final AsyncLoader task = (AsyncLoader) new AsyncLoader(view);
+            view.setTag(task);
+            task.execute(url);
+        } else {
+            view.setImageBitmap(bitmap);
+        }
+    }
+}
+</code></pre>
+
+<p>I think google need to fix this or provide a much cleaner workaround, because of the (in my opinion) failure of google on build something where developers only need to care about build their own apps and not to lose their time finding ways to fix the sdk issues</p>

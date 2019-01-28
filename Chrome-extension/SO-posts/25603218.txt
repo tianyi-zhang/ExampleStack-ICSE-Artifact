@@ -1,0 +1,154 @@
+<p>I tried two methods but I found out those methods take too long in my case. I still share what I used.</p>
+
+<p><strong>Method 1: LLJTran for Android</strong></p>
+
+<p>Get the LLJTran from here:
+<a href="https://github.com/bkhall/AndroidMediaUtil" rel="nofollow">https://github.com/bkhall/AndroidMediaUtil</a></p>
+
+<p>The code:</p>
+
+<pre><code>public static boolean rotateJpegFileBaseOnExifWithLLJTran(File imageFile, File outFile){
+    try {
+
+        int operation = 0;
+        int degree = getExifRotateDegree(imageFile.getAbsolutePath());
+        //int degree = 90;
+        switch(degree){
+            case 90:operation = LLJTran.ROT_90;break;
+            case 180:operation = LLJTran.ROT_180;break;
+            case 270:operation = LLJTran.ROT_270;break;
+        }   
+        if (operation == 0){
+            Log.d(TAG, "Image orientation is already correct");
+            return false;
+        }
+
+        OutputStream output = null;
+        LLJTran llj = null;
+        try {   
+            // Transform image
+            llj = new LLJTran(imageFile);
+            llj.read(LLJTran.READ_ALL, false); //don't know why setting second param to true will throw exception...
+            llj.transform(operation, LLJTran.OPT_DEFAULTS
+                    | LLJTran.OPT_XFORM_ORIENTATION);
+
+            // write out file
+            output = new BufferedOutputStream(new FileOutputStream(outFile));
+            llj.save(output, LLJTran.OPT_WRITE_ALL);
+            return true;
+        } catch(Exception e){
+            e.printStackTrace();
+            return false;
+        }finally {
+            if(output != null)output.close();
+            if(llj != null)llj.freeMemory();
+        }
+    } catch (Exception e) {
+        // Unable to rotate image based on EXIF data
+        e.printStackTrace();
+        return false;
+    }
+}
+
+public static int getExifRotateDegree(String imagePath){
+    try {
+        ExifInterface exif;
+        exif = new ExifInterface(imagePath);
+        String orientstring = exif.getAttribute(ExifInterface.TAG_ORIENTATION);
+        int orientation = orientstring != null ? Integer.parseInt(orientstring) : ExifInterface.ORIENTATION_NORMAL;
+        if(orientation == ExifInterface.ORIENTATION_ROTATE_90) 
+            return 90;
+        if(orientation == ExifInterface.ORIENTATION_ROTATE_180) 
+            return 180;
+        if(orientation == ExifInterface.ORIENTATION_ROTATE_270) 
+            return 270;
+    } catch (IOException e) {
+        e.printStackTrace();
+    }       
+    return 0;
+}
+</code></pre>
+
+<p><strong>Method 2: Using libjepg-turbo's jpegtran executable</strong></p>
+
+<p>1 Follow the step describe here:
+<a href="http://stackoverflow.com/a/12296343/1099884">http://stackoverflow.com/a/12296343/1099884</a></p>
+
+<p>Except that you don't need <code>obj/local/armeabi/libjpeg.a</code> on <code>ndk-build</code> because I only want the jpegtran executable but not mess with JNI with <code>libjepg.a</code> .</p>
+
+<p>2 Place the jpegtran executable on asset folder.
+The code:</p>
+
+<pre><code>public static boolean rotateJpegFileBaseOnExifWithJpegTran(Context context, File imageFile, File outFile){
+    try {
+
+        int operation = 0;
+        int degree = getExifRotateDegree(imageFile.getAbsolutePath());
+        //int degree = 90;
+        String exe = prepareJpegTranExe(context);
+        //chmod ,otherwise  premission denied
+        boolean ret = runCommand("chmod 777 "+exe); 
+        if(ret == false){
+            Log.d(TAG, "chmod jpegTran failed");
+            return false;
+        }           
+        //rotate the jpeg with jpegtran
+        ret = runCommand(exe+
+                " -rotate "+degree+" -outfile "+outFile.getAbsolutePath()+" "+imageFile.getAbsolutePath());         
+
+        return ret;         
+    } catch (Exception e) {
+        // Unable to rotate image based on EXIF data
+        e.printStackTrace();
+        return false;
+    }
+}
+
+public static String prepareJpegTranExe(Context context){
+    File exeDir = context.getDir("JpegTran", 0);
+    File exe = new File(exeDir, "jpegtran");
+    if(!exe.exists()){
+        try {
+            InputStream is = context.getAssets().open("jpegtran");
+            FileOutputStream os = new FileOutputStream(exe);
+            int bufferSize = 16384;
+            byte[] buffer = new byte[bufferSize];
+            int count;
+            while ((count=is.read(buffer, 0, bufferSize))!=-1) {
+                os.write(buffer, 0, count);
+            }               
+            is.close();
+            os.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+    return exe.getAbsolutePath();
+}
+
+public static boolean runCommand(String cmd){
+    try{
+        Process process = Runtime.getRuntime().exec(cmd);
+
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream()));
+        int read;
+        char[] buffer = new char[4096];
+        StringBuffer output = new StringBuffer();
+        while ((read = reader.read(buffer)) &gt; 0) {
+            output.append(buffer, 0, read);
+        }
+        reader.close();
+
+        // Waits for the command to finish.
+        process.waitFor();
+
+        return true;            
+    } catch (Exception e) {
+        e.printStackTrace();
+        return false;
+    }
+}
+</code></pre>
+
+<p>Unfortunately, both take too long. It is 16 seconds on my Samsung Galaxy S1!!!! But I found out this app (<a href="https://play.google.com/store/apps/details?id=com.lunohod.jpegtool" rel="nofollow">https://play.google.com/store/apps/details?id=com.lunohod.jpegtool</a>) only take 3-4 seconds. There must be some way to do.</p>

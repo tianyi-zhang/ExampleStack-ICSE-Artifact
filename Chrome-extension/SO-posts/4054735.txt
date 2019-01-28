@@ -1,0 +1,83 @@
+<p>The problem is that <code>Persistence.createEntityManagerFactory("abc")</code> is the "do it yourself" API and doesn't take advantage of the Embedded EJB Container.  You can get a container managed <code>EntityManager</code> in your test case very easily.</p>
+
+<p>Just as with the related jndi/datasource question I recommend you check out the examples in the <a href="http://archive.apache.org/dist/openejb/3.1.3/openejb-examples-3.1.3.zip">examples.zip</a>.  They're all designed to take the struggle out of getting started.</p>
+
+<p>Here's a snippet from the <code>testcase-injection</code> example which shows how you can get an EntityManager and other things from the container for use in a test.</p>
+
+<p>First, add an empty ejb-jar.xml or application-client.xml to your test to turn on scanning for your test code:</p>
+
+<ul>
+<li>src/test/resources/META-INF/application-client.xml</li>
+</ul>
+
+<p>Then, annotate your test case with <code>@org.apache.openejb.api.LocalClient</code> and use the standard JavaEE annotations for the actual injection.</p>
+
+<pre><code>@LocalClient
+public class MoviesTest extends TestCase {
+
+    @EJB
+    private Movies movies;
+
+    @Resource
+    private UserTransaction userTransaction;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    public void setUp() throws Exception {
+        Properties p = new Properties();
+        p.put(Context.INITIAL_CONTEXT_FACTORY, "org.apache.openejb.client.LocalInitialContextFactory");
+        p.put("movieDatabase", "new://Resource?type=DataSource");
+        p.put("movieDatabase.JdbcDriver", "org.hsqldb.jdbcDriver");
+        p.put("movieDatabase.JdbcUrl", "jdbc:hsqldb:mem:moviedb");
+
+        InitialContext initialContext = new InitialContext(p);
+
+        // Here's the fun part
+        initialContext.bind("inject", this);
+    }
+</code></pre>
+
+<p>As <code>movieDatabase</code> is the only DataSource that we've setup, OpenEJB will automatically assign that DataSource to your persistence unit without the need to modify your persistence.xml.  You can even leave the <code>&lt;jta-data-source&gt;</code> or <code>&lt;non-jta-data-source&gt;</code> empty and OpenEJB will still know what to do.</p>
+
+<p>But for the sake of completeness, here's how this particular application has defined the <code>persistence.xml</code></p>
+
+<pre><code>&lt;persistence xmlns="http://java.sun.com/xml/ns/persistence" version="1.0"&gt;
+
+  &lt;persistence-unit name="movie-unit"&gt;
+    &lt;jta-data-source&gt;movieDatabase&lt;/jta-data-source&gt;
+    &lt;non-jta-data-source&gt;movieDatabaseUnmanaged&lt;/non-jta-data-source&gt;
+    &lt;class&gt;org.superbiz.testinjection.Movie&lt;/class&gt;
+
+    &lt;properties&gt;
+      &lt;property name="openjpa.jdbc.SynchronizeMappings" value="buildSchema(ForeignKeys=true)"/&gt;
+    &lt;/properties&gt;
+  &lt;/persistence-unit&gt;
+&lt;/persistence&gt;
+</code></pre>
+
+<p>Then the fun part, using it all together in tests</p>
+
+<pre><code>public void test() throws Exception {
+
+    userTransaction.begin();
+
+    try {
+        entityManager.persist(new Movie("Quentin Tarantino", "Reservoir Dogs", 1992));
+        entityManager.persist(new Movie("Joel Coen", "Fargo", 1996));
+        entityManager.persist(new Movie("Joel Coen", "The Big Lebowski", 1998));
+
+        List&lt;Movie&gt; list = movies.getMovies();
+        assertEquals("List.size()", 3, list.size());
+
+        for (Movie movie : list) {
+            movies.deleteMovie(movie);
+        }
+
+        assertEquals("Movies.getMovies()", 0, movies.getMovies().size());
+
+    } finally {
+        userTransaction.commit();
+    }
+}
+</code></pre>

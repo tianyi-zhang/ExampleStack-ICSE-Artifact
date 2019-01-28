@@ -1,0 +1,98 @@
+<p>One alternative to Reflection is to generate a class file dynamically. This generated class ought to perform the desired action, e.g. invoking the method discovered at runtime, and implements an <code>interface</code> know at compile-time so it’s possible to invoke the generated method non-reflective using that interface. There’s one catch: if applicable, Reflection does the same trick internally. This does not work in special cases, e.g. when invoking a <code>private</code> method as you can’t generate a legal class file invoking it. So in the Reflection implementation there are different types of invocation handlers, using either generated code or native code. You can’t beat that.</p>
+
+<p>But more important is that Reflection does security checks on every invocation. So your generated class will be checked on loading and instantiation only which can be a big win. But alternatively you can invoke <code>setAccessible(true)</code> on a <code>Method</code> instance to turn the security checks of. Then only the minor performance loss of autoboxing and varargs array creation remains.</p>
+
+<p>Since <strong>Java 7</strong> there is an alternative to both, the <code>MethodHandle</code>. The big advantage is that, unlike the other two, it even works in security restricted environments. The access checks for a <code>MethodHandle</code> are performed when acquiring it but not when invoking it. It has the so-called “polymorphic signature” which means you can invoke it with arbitrary argument types without auto-boxing nor array creation. Of course, wrong argument types will create an appropriate <code>RuntimeException</code>.</p>
+
+<p>(<em>Update</em>)
+With <strong>Java 8</strong>, there is the option to use the back-end of the lambda expression and method reference language feature at runtime. This backend does exactly the thing described at the beginning, generating a class dynamically which implements an <code>interface</code> your code may call directly when it is known at compile-time. The exact mechanics is implementation-specific, hence undefined, but you can assume that the implementation will try it’s best to make the invocation as fast as possible. The current implementation of Oracle’s JRE does it perfectly. Not only that this saves you from the burden of generating such an accessor class, it is also capable of doing what you never could do— invoke even <code>private</code> methods via generated code. I have updated the example to include this solution. This example uses a standard <code>interface</code> which already exists and happens to have the desired method signature. If no such matching <code>interface</code> exists, you have to create your own accessor functional interface with a method with the right signature. But, of course, now the example code requires Java 8 to run.</p>
+
+<p>Here is a simple benchmark example:</p>
+
+<pre><code>import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Method;
+import java.util.function.IntBinaryOperator;
+
+public class TestMethodPerf
+{
+  private static final int ITERATIONS = 50_000_000;
+  private static final int WARM_UP = 10;
+
+  public static void main(String... args) throws Throwable
+  {
+ // hold result to prevent too much optimizations
+    final int[] dummy=new int[4];
+
+    Method reflected=TestMethodPerf.class
+      .getDeclaredMethod("myMethod", int.class, int.class);
+    final MethodHandles.Lookup lookup = MethodHandles.lookup();
+    MethodHandle mh=lookup.unreflect(reflected);
+    IntBinaryOperator lambda=(IntBinaryOperator)LambdaMetafactory.metafactory(
+      lookup, "applyAsInt", MethodType.methodType(IntBinaryOperator.class),
+      mh.type(), mh, mh.type()).getTarget().invokeExact();
+
+    for(int i=0; i&lt;WARM_UP; i++)
+    {
+      dummy[0]+=testDirect(dummy[0]);
+      dummy[1]+=testLambda(dummy[1], lambda);
+      dummy[2]+=testMH(dummy[1], mh);
+      dummy[3]+=testReflection(dummy[2], reflected);
+    }
+    long t0=System.nanoTime();
+    dummy[0]+=testDirect(dummy[0]);
+    long t1=System.nanoTime();
+    dummy[1]+=testLambda(dummy[1], lambda);
+    long t2=System.nanoTime();
+    dummy[2]+=testMH(dummy[1], mh);
+    long t3=System.nanoTime();
+    dummy[3]+=testReflection(dummy[2], reflected);
+    long t4=System.nanoTime();
+    System.out.printf("direct: %.2fs, lambda: %.2fs, mh: %.2fs, reflection: %.2fs%n",
+      (t1-t0)*1e-9, (t2-t1)*1e-9, (t3-t2)*1e-9, (t4-t3)*1e-9);
+
+    // do something with the results
+    if(dummy[0]!=dummy[1] || dummy[0]!=dummy[2] || dummy[0]!=dummy[3])
+      throw new AssertionError();
+  }
+
+  private static int testMH(int v, MethodHandle mh) throws Throwable
+  {
+    for(int i=0; i&lt;ITERATIONS; i++)
+      v+=(int)mh.invokeExact(1000, v);
+    return v;
+  }
+
+  private static int testReflection(int v, Method mh) throws Throwable
+  {
+    for(int i=0; i&lt;ITERATIONS; i++)
+      v+=(int)mh.invoke(null, 1000, v);
+    return v;
+  }
+
+  private static int testDirect(int v)
+  {
+    for(int i=0; i&lt;ITERATIONS; i++)
+      v+=myMethod(1000, v);
+    return v;
+  }
+
+  private static int testLambda(int v, IntBinaryOperator accessor)
+  {
+    for(int i=0; i&lt;ITERATIONS; i++)
+      v+=accessor.applyAsInt(1000, v);
+    return v;
+  }
+
+  private static int myMethod(int a, int b)
+  {
+    return a&lt;b? a: b;
+  }
+}
+</code></pre>
+
+<p>Th old program printed in my Java 7 setup: <code>direct: 0,03s, mh: 0,32s, reflection: 1,05s</code> which suggested that <code>MethodHandle</code> was a good alternative. Now, the updated program running under Java 8 on the same machine printed <code>direct: 0,02s, lambda: 0,02s, mh: 0,35s, reflection: 0,40s</code> which clearly shows that Reflection performance has been improved to a degree that might make dealing with <code>MethodHandle</code> unnecessary, unless you use it to do the lambda trick, that clearly outperforms all reflective alternatives, which comes at no surprise, as it is just a direct call (well, almost: one level of indirection). Note that I made the target method <code>private</code> to demonstrate the capability of calling even <code>private</code> methods efficiently.</p>
+
+<p>As always, I have to point at the simplicity of this benchmark and how artificial it is. But I think, the tendency is clearly visible and even more important, the results are convincingly explainable.</p>

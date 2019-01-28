@@ -1,0 +1,94 @@
+<p>This is the code I used to solve this.</p>
+
+<p>It's a slightly amended copy of <code>BeanUtilsBean.describe()</code> which doesn't call the excluded attribute getters; it's the "Roll your own" option from <a href="http://stackoverflow.com/questions/15368116/apache-commons-beanutilsbean-exclude-attributes-from-describe#answer-15372131">ach's answer</a> (the first option has been in use in live code for a couple of years but it's never sat right with me!).</p>
+
+<pre><code>import java.beans.PropertyDescriptor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.beanutils.BeanUtilsBean;
+import org.apache.commons.beanutils.DynaBean;
+import org.apache.commons.beanutils.DynaProperty;
+import org.apache.commons.beanutils.MethodUtils;
+
+public class BeanUtilsBeanExtensions {
+
+    private static final BeanUtilsBean BEAN_UTILS_BEAN = BeanUtilsBean
+                    .getInstance();
+
+    public BeanUtilsBeanExtensions() {
+    }
+
+    /**
+     * Extends BeanUtilsBean.describe() so that it can be given a list of
+     * attributes to exclude. This avoids calling methods which might derive
+     * data which don't happen to be populated when the describe() call is made
+     * (and therefore could throw exceptions) as well as being more efficient
+     * than describing everything then discarding attributes which aren't
+     * required.
+     *
+     * @param bean
+     *            See BeanUtilsBean.describe()
+     * @param excludedAttributeNames
+     *            the attribute names which should not be described.
+     * @return See BeanUtilsBean.describe()
+     */
+    public Map&lt;String, String&gt; describe(Object bean,
+                    Set&lt;String&gt; excludedAttributeNames)
+                    throws IllegalAccessException,
+                    InvocationTargetException, NoSuchMethodException {
+
+        // This method is mostly just a copy/paste from BeanUtilsBean.describe()
+        // The only changes are:
+        // - Removal of reference to the (private) logger
+        // - Addition of Reference to a BeanUtilsBean instance
+        // - Addition of calls to excludedAttributeNames.contains(name)
+        // - Use of generics on the Collections
+        // - Calling of a copy of PropertyUtilsBean.getReadMethod()
+
+        if (bean == null) {
+            return (new java.util.HashMap&lt;String, String&gt;());
+        }
+
+        Map&lt;String, String&gt; description = new HashMap&lt;String, String&gt;();
+        if (bean instanceof DynaBean) {
+            DynaProperty[] descriptors = ((DynaBean) bean).getDynaClass()
+                            .getDynaProperties();
+            for (int i = 0; i &lt; descriptors.length; i++) {
+                String name = descriptors[i].getName();
+                if (!excludedAttributeNames.contains(name)) {
+                    description.put(name,
+                                    BEAN_UTILS_BEAN.getProperty(bean, name));
+                }
+            }
+        }
+        else {
+            PropertyDescriptor[] descriptors = BEAN_UTILS_BEAN
+                            .getPropertyUtils().getPropertyDescriptors(bean);
+            Class&lt;? extends Object&gt; clazz = bean.getClass();
+            for (int i = 0; i &lt; descriptors.length; i++) {
+                String name = descriptors[i].getName();
+                if (!excludedAttributeNames.contains(name)
+                                &amp;&amp; getReadMethod(clazz, descriptors[i]) != null) {
+                    description.put(name,
+                                    BEAN_UTILS_BEAN.getProperty(bean, name));
+                }
+            }
+        }
+        return description;
+    }
+
+    /*
+     * Copy of PropertyUtilsBean.getReadMethod() since that is package-private.
+     */
+    private Method getReadMethod(Class&lt;? extends Object&gt; clazz,
+                    PropertyDescriptor descriptor) {
+        return MethodUtils.getAccessibleMethod(clazz,
+                        descriptor.getReadMethod());
+    }
+
+}
+</code></pre>

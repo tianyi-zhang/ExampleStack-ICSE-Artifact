@@ -1,0 +1,116 @@
+<p>Actually there are quite a few apps, which offer the CROP action in Android 2.x: the standard Gallery, or Flikie Wallpapers just to name a couple.  Why resolving the intents successfully fails, is that Google changed the components which provide the API. In Android 1.x that might have been com.android.gallery, but since (I think) API9/Android 2.3.x the default gallery is provided by Cooliris, so it is something like com.cooliris.gallery, etc.</p>
+
+<p>The correct way to resolve the intent on any phone is (code, which I use):</p>
+
+<pre><code>// this is something to keep our information
+class CropOption
+{
+    CharSequence TITLE;
+    Drawable ICON;
+    Intent CROP_APP;
+}
+
+// we will present the available selection in a list dialog, so we need an adapter
+class CropOptionAdapter extends ArrayAdapter&lt;CropOption&gt;
+{
+    private List&lt;CropOption&gt; _items;
+    private Context _ctx;
+
+    CropOptionAdapter(Context ctx, List&lt;CropOption&gt; items)
+    {
+        super(ctx, R.layout.crop_option, items);
+        _items = items;
+        _ctx = ctx;
+    }
+
+    @Override
+    public View getView( int position, View convertView, ViewGroup parent )
+    {
+        if ( convertView == null )
+            convertView = LayoutInflater.from( _ctx ).inflate( R.layout.crop_option, null );
+
+        CropOption item = _items.get( position );
+        if ( item != null )
+        {
+            ( ( ImageView ) convertView.findViewById( R.id.crop_icon ) ).setImageDrawable( item.ICON );
+            ( ( TextView ) convertView.findViewById( R.id.crop_name ) ).setText( item.TITLE );
+            return convertView;
+        }
+        return null;
+    }
+}
+</code></pre>
+
+<p>The layout for the item should be a horizontal linear layout with an IconView and a TextView.  I will skip it for brevity's sake, by now you most probably know how to do it :-)</p>
+
+<p>Now for the part where we find the intents and present them for selection (this is only the relevant part of the function, onActivityResult):</p>
+
+<pre><code>try
+{
+    final List&lt;CropOption&gt; cropOptions = new ArrayList&lt;CropOption&gt;();
+
+    // this 2 lines are all you need to find the intent!!!
+    Intent intent = new Intent( "com.android.camera.action.CROP" );
+    intent.setType( "image/*" );
+
+    List&lt;ResolveInfo&gt; list = getPackageManager().queryIntentActivities( intent, 0 );
+    if ( list.size() == 0 )
+    {
+        // I tend to put any kind of text to be presented to the user as a resource for easier translation (if it ever comes to that...)
+        Toast.makeText( this, getText( R.string.error_crop_option ), Toast.LENGTH_LONG );
+        // this is the URI returned from the camera, it could be a file or a content URI, the crop app will take any
+        _captureUri = null; // leave the picture there
+        break; // leave this switch case...
+    }
+
+    intent.setData( _captureUri );
+    intent.putExtra( "outputX", 128 );
+    intent.putExtra( "outputY", 128 );
+    intent.putExtra( "aspectX", 1 );
+    intent.putExtra( "aspectY", 1 );
+    intent.putExtra( "scale", true );
+    //intent.putExtra( "", true ); // I seem to have lost the option to have the crop app auto rotate the image, any takers?
+    intent.putExtra( "return-data", true );
+
+    for ( ResolveInfo res : list )
+    {
+        final CropOption co = new CropOption();
+        co.TITLE = getPackageManager().getApplicationLabel( res.activityInfo.applicationInfo );
+        co.ICON = getPackageManager().getApplicationIcon( res.activityInfo.applicationInfo );
+        co.CROP_APP = new Intent( intent );
+        co.CROP_APP.setComponent( new ComponentName( res.activityInfo.packageName, res.activityInfo.name ) );
+        cropOptions.add( co );
+    }
+
+    // set up the chooser dialog
+    CropOptionAdapter adapter = new CropOptionAdapter( this, cropOptions );
+    AlertDialog.Builder builder = new AlertDialog.Builder( this );
+    builder.setTitle( R.string.choose_crop_title );
+    builder.setAdapter( adapter, new DialogInterface.OnClickListener() {
+        public void onClick( DialogInterface dialog, int item )
+        {
+            startActivityForResult( cropOptions.get( item ).CROP_APP, ACTIVITY_CROP );
+        }
+    } );
+    builder.setOnCancelListener( new DialogInterface.OnCancelListener() {
+        @Override
+        public void onCancel( DialogInterface dialog )
+        {
+            // we don't want to keep the capture around if we cancel the crop because we don't want it anymore
+            if ( _captureUri != null )
+            {
+                getContentResolver().delete( _captureUri, null, null );
+                _captureUri = null;
+            }
+        }
+    } );
+    AlertDialog alert = builder.create();
+    alert.show();
+}
+catch ( Exception e )
+{
+    Log.e( TAG, "processing capture", e );
+}
+</code></pre>
+
+<p>And there you have it... Hope that helps, I lost 2 days trying to figure it out...</p>

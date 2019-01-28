@@ -1,0 +1,212 @@
+<p>You could use a proxy combo box model that allows you to filter the results in real time.  The proxy model will use your existing model and filter the results so that the combo box sees only the filtered results...</p>
+
+<p>This is implementation of a <code>ListModel</code> that I use for this purpose...</p>
+
+<pre><code>public class FilteredListModel extends AbstractListModel implements ListDataListener {
+
+    private ListModel peer;
+    private List&lt;Integer&gt; lstFilteredIndicies;
+    private IFilterable filter;
+
+    public FilteredListModel() {
+        lstFilteredIndicies = new ArrayList&lt;Integer&gt;(25);
+    }
+
+    public FilteredListModel(ListModel model) {
+        this();
+        setModel(model);
+    }
+
+    public FilteredListModel(ListModel model, IFilterable filter) {
+        this();
+
+        setModel(model);
+        setFilter(filter);
+    }
+
+    public void setModel(ListModel parent) {
+        if (peer == null || !peer.equals(parent)) {
+            if (peer != null) {
+                fireIntervalRemoved(this, 0, peer.getSize() - 1);
+                peer.removeListDataListener(this);
+            }
+            peer = parent;
+            lstFilteredIndicies.clear();
+            if (peer != null) {
+                peer.addListDataListener(this);
+            }
+            filterModel();
+        }
+    }
+
+    public ListModel getModel() {
+        return peer;
+    }
+
+    public int getSize() {
+        IFilterable filter = getFilter();
+        return filter == null ? getModel() == null ? 0 : getModel().getSize() : lstFilteredIndicies.size();
+    }
+
+    public Object getElementAt(int index) {
+        IFilterable filter = getFilter();
+        ListModel model = getModel();
+        return filter == null ? model == null ? null : model.getElementAt(index) : model.getElementAt(lstFilteredIndicies.get(index));
+    }
+
+    public int indexOf(Object value) {
+        int index = -1;
+        for (int loop = 0; loop &lt; getSize(); loop++) {
+            Object at = getElementAt(loop);
+            if (at == value) {
+                index = loop;
+                break;
+            }
+        }
+        return index;
+    }
+
+    public void intervalAdded(ListDataEvent e) {
+        IFilterable filter = getFilter();
+        ListModel model = getModel();
+
+        if (model != null) {
+            if (filter != null) {
+                int startIndex = Math.min(e.getIndex0(), e.getIndex1());
+                int endIndex = Math.max(e.getIndex0(), e.getIndex1());
+                for (int index = startIndex; index &lt;= endIndex; index++) {
+                    Object value = model.getElementAt(index);
+                    if (filter.include(value)) {
+                        lstFilteredIndicies.add(index);
+                        int modelIndex = lstFilteredIndicies.indexOf(index);
+                        fireIntervalAdded(this, modelIndex, modelIndex);
+                    }
+                }
+            } else {
+                fireIntervalAdded(this, e.getIndex0(), e.getIndex1());
+            }
+        }
+    }
+
+    public void intervalRemoved(ListDataEvent e) {
+        IFilterable filter = getFilter();
+        ListModel model = getModel();
+
+        if (model != null) {
+            if (filter != null) {
+                int startIndex = Math.min(e.getIndex0(), e.getIndex1());
+                int endIndex = Math.max(e.getIndex0(), e.getIndex1());
+                for (int index = startIndex; index &lt;= endIndex; index++) {
+                    if (lstFilteredIndicies.contains(index)) {
+                        int filterIndex = lstFilteredIndicies.indexOf(index);
+                        lstFilteredIndicies.remove(filterIndex);
+                        fireIntervalRemoved(this, filterIndex, filterIndex);
+                    }
+                }
+            } else {
+                fireIntervalRemoved(this, e.getIndex0(), e.getIndex1());
+            }
+        }
+    }
+
+    public void contentsChanged(ListDataEvent e) {
+        filterModel();
+    }
+
+    public void setFilter(IFilterable value) {
+        if (filter == null || !filter.equals(value)) {
+            filter = value;
+            if (getModel() != null) {
+                fireIntervalRemoved(this, 0, getModel().getSize() - 1);
+            }
+            filterModel();
+        }
+    }
+
+    public IFilterable getFilter() {
+        return filter;
+    }
+
+    protected void filterModel() {
+        if (getSize() &gt; 0) {
+            fireIntervalRemoved(this, 0, getSize() - 1);
+        }
+        lstFilteredIndicies.clear();
+
+        IFilterable filter = getFilter();
+        ListModel model = getModel();
+        if (filter != null &amp;&amp; model != null) {
+            for (int index = 0; index &lt; model.getSize(); index++) {
+                Object value = model.getElementAt(index);
+                if (filter.include(value)) {
+                    lstFilteredIndicies.add(index);
+                    fireIntervalAdded(this, getSize() - 1, getSize() - 1);
+                }
+            }
+        }
+    }
+
+    public void updateFilter() {
+
+        IFilterable filter = getFilter();
+        ListModel model = getModel();
+
+        if (filter != null &amp;&amp; model != null) {
+            for (int index = 0; index &lt; model.getSize(); index++) {
+                Object value = model.getElementAt(index);
+                if (filter.include(value)) {
+                    if (!lstFilteredIndicies.contains(index)) {
+                        lstFilteredIndicies.add(index);
+                        fireIntervalAdded(this, getSize() - 1, getSize() - 1);
+                    }
+                } else if (lstFilteredIndicies.contains(index)) {
+                    int oldIndex = lstFilteredIndicies.indexOf(index);
+                    lstFilteredIndicies.remove(oldIndex);
+                    fireIntervalRemoved(this, oldIndex, oldIndex);
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>The filterable interface</p>
+
+<pre><code>public interface IFilterable&lt;O&gt; {
+    public boolean include(O value);    
+}
+</code></pre>
+
+<p>And a <code>ComboBoxModel</code> implementation...</p>
+
+<pre><code>public class FilterableComboBoxModel extends FilteredListModel implements ComboBoxModel {
+
+    private FilterableComboBoxModel(ComboBoxModel model) {
+        super(model);
+    }
+
+    public ComboBoxModel getComboBoxModel() {
+        return (ComboBoxModel) getModel();
+    }
+
+    public void setSelectedItem(Object anItem) {
+        getComboBoxModel().setSelectedItem(anItem);
+    }
+
+    public Object getSelectedItem() {
+        return getComboBoxModel().getSelectedItem();
+    }
+
+}
+</code></pre>
+
+<p>Basically, all you would need to is wrap you model in the filtered model...</p>
+
+<pre><code>ComboBoxModel originalModel = ...;
+FilterableComboBoxModel filteredModel = new FilterableComboBoxModel(origialModel);
+comboBox.setModel(filteredModel(originalModel));
+</code></pre>
+
+<p>From there, you would simply supply an implementation of the <code>IFilterable</code> interface of with the logic that you need and supply that to the filtereredModel.</p>
+
+<p>When a condition arises where you might need to re-filter the model, you can simply call <code>FilterableComboBoxModel#updateFilter</code></p>

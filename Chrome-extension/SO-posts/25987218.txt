@@ -1,0 +1,163 @@
+<p>Yes finally I found the answer with the clue of Michael's Comment above. </p>
+
+<p>Am posting here the working code.</p>
+
+<p>The <strong>Client Side Code</strong> as Follow's,
+From the client side am streaming the audio data to the web socket server. </p>
+
+<pre><code>private int minBufSize;
+private AudioRecord recorder;
+private int sampleRate = 44100;
+private int channelConfig = AudioFormat.CHANNEL_IN_MONO;
+private int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
+
+minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig,
+                audioFormat);
+startStreaming();
+
+public void startStreaming() {
+        Thread streamThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+
+                    byte[] buffer = new byte[minBufSize];
+
+                    recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
+                            sampleRate, channelConfig, audioFormat, minBufSize);
+                    Log.d(TAG, "Recorder initialized");
+
+                    recorder.startRecording();
+
+                    while (status) {
+
+                        // reading data from MIC into buffer
+                        minBufSize = recorder.read(buffer, 0, buffer.length);
+
+                        mConnection.sendBinaryMessage(buffer);
+                        System.out.println("MinBufferSize: " + minBufSize);
+                    }
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Log.e(TAG, "Exception" + e.getMessage());
+                }
+            }
+
+        });
+        streamThread.start();
+    }
+</code></pre>
+
+<p>The <strong>Server Side Code</strong> added implementation as follows, 
+First the server will create the .pcm from the streamed data. Then from that pcm file it will create the wave file by adding header. </p>
+
+<pre><code>  @OnMessage
+  public void onMessage(byte[] data, boolean arg1)
+  {
+    if ((!this.currentCommand.equals("stop")) &amp;&amp; 
+      (this.currentCommand.equals("start")))
+      try {
+        System.out.println("Starting new recording.");
+        FileOutputStream fOut = new FileOutputStream(this.f2, true);
+        fOut.write(data);
+        fOut.close();
+
+        properWAV(this.f2, 111133.0F);
+      }
+      catch (Exception e) {
+        e.printStackTrace();
+      }
+  }
+
+private void properWAV(File fileToConvert, float newRecordingID)
+  {
+    try {
+      long mySubChunk1Size = 16L;
+      int myBitsPerSample = 16;
+      int myFormat = 1;
+      long myChannels = 1L;
+      long mySampleRate = 44100L;
+      long myByteRate = mySampleRate * myChannels * myBitsPerSample / 8L;
+      int myBlockAlign = (int)(myChannels * myBitsPerSample / 8L);
+
+      byte[] clipData = getBytesFromFile(fileToConvert);
+
+      long myDataSize = clipData.length;
+      long myChunk2Size = myDataSize * myChannels * myBitsPerSample / 8L;
+      long myChunkSize = 36L + myChunk2Size;
+
+      OutputStream os = new FileOutputStream(new File("D:/audio/" + newRecordingID + ".wav"));
+      BufferedOutputStream bos = new BufferedOutputStream(os);
+      DataOutputStream outFile = new DataOutputStream(bos);
+
+      outFile.writeBytes("RIFF");
+      outFile.write(intToByteArray((int)myChunkSize), 0, 4);
+      outFile.writeBytes("WAVE");
+      outFile.writeBytes("fmt ");
+      outFile.write(intToByteArray((int)mySubChunk1Size), 0, 4);
+      outFile.write(shortToByteArray((short)myFormat), 0, 2);
+      outFile.write(shortToByteArray((short)(int)myChannels), 0, 2);
+      outFile.write(intToByteArray((int)mySampleRate), 0, 4);
+      outFile.write(intToByteArray((int)myByteRate), 0, 4);
+      outFile.write(shortToByteArray((short)myBlockAlign), 0, 2);
+      outFile.write(shortToByteArray((short)myBitsPerSample), 0, 2);
+      outFile.writeBytes("data");
+      outFile.write(intToByteArray((int)myDataSize), 0, 4);
+      outFile.write(clipData);
+
+      outFile.flush();
+      outFile.close();
+    }
+    catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+
+  private static byte[] intToByteArray(int i)
+  {
+    byte[] b = new byte[4];
+    b[0] = (byte)(i &amp; 0xFF);
+    b[1] = (byte)(i &gt;&gt; 8 &amp; 0xFF);
+    b[2] = (byte)(i &gt;&gt; 16 &amp; 0xFF);
+    b[3] = (byte)(i &gt;&gt; 24 &amp; 0xFF);
+    return b;
+  }
+
+  public static byte[] shortToByteArray(short data)
+  {
+    return new byte[] { (byte)(data &amp; 0xFF), (byte)(data &gt;&gt;&gt; 8 &amp; 0xFF) };
+  }
+
+  public byte[] getBytesFromFile(File file)
+    throws IOException
+  {
+    byte[] buffer = new byte[(int)file.length()];
+    InputStream ios = null;
+    try {
+      ios = new FileInputStream(file);
+      if (ios.read(buffer) == -1)
+        throw new IOException("EOF reached while trying to read the whole file");
+    }
+    finally {
+      try {
+        if (ios != null)
+          ios.close();
+      }
+      catch (IOException localIOException)
+      {
+      }
+    }
+    try
+    {
+      if (ios != null)
+        ios.close();
+    }
+    catch (IOException localIOException1)
+    {
+    }
+    return buffer;
+  }
+</code></pre>
+
+<p>Hope this one saves many of the developer's time.</p>

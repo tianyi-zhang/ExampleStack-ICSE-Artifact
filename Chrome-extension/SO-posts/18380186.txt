@@ -1,0 +1,142 @@
+<p>I have tried to make this work as well. I have found one solution that works for the childViews. It does not animate the actual expanding of the group though, but animates the child cells as they fill the space the expansion leaves behind.</p>
+
+<p>Edit: There is a bug in collapsing, which will make some cells that should not be hidden, become hidden. This is probably related to View-recycling in the listView. I will will update when I have a solution to this.</p>
+
+<p><strong>Animating with layoutAnimation in setOnGroupClickListener</strong></p>
+
+<pre><code>        mResultList.setOnGroupClickListener(new ExpandableListView.OnGroupClickListener() {
+        @Override
+        public boolean onGroupClick(ExpandableListView parent, View v, int groupPosition, long id) {
+            if(mResultList.isGroupExpanded(groupPosition)){
+                mProgAdap.prepareToCollapseGroup(groupPosition);
+                setupLayoutAnimationClose(groupPosition);
+                mResultList.requestLayout();
+            }else{
+                boolean autoScrollToExpandedGroup = false;
+                mResultList.expandGroup(groupPosition,autoScrollToExpandedGroup);
+                setupLayoutAnimation();
+                //*/
+            }
+            //telling the listView we have handled the group click, and don't want the default actions.
+            return true;
+        }
+
+        private void setupLayoutAnimation() {
+            AnimationSet set = new AnimationSet(true);
+            Animation animation = new AlphaAnimation(0.0f, 1.0f);
+            animation.setDuration(50);
+            set.addAnimation(animation);
+
+            animation = new ScaleAnimation(1.0f, 1.0f, 0.0f, 1.0f, 0.5f, 1.0f);
+            animation.setDuration(50);
+            set.addAnimation(animation);
+
+            LayoutAnimationController controller = new LayoutAnimationController(set, 0.75f);
+            mResultList.setLayoutAnimationListener(null);
+            mResultList.setLayoutAnimation(controller);
+        }
+
+        private void setupLayoutAnimationClose(final int groupPosition) {
+            AnimationSet set = new AnimationSet(true);
+            Animation animation = new AlphaAnimation(1.0f, 0.0f);
+            animation.setDuration(50);
+            animation.setFillAfter(true);
+            animation.setFillEnabled(true);
+            set.addAnimation(animation);
+            animation = new ScaleAnimation(1.0f, 1.0f, 1.0f, 0.0f, 0.5f, 0.0f);
+            animation.setDuration(50);
+            animation.setFillAfter(true);
+            animation.setFillEnabled(true);
+            set.addAnimation(animation);
+            set.setFillAfter(true);
+            set.setFillEnabled(true);
+            LayoutAnimationController controller = new LayoutAnimationController(set, 0.75f);
+            controller.setOrder(LayoutAnimationController.ORDER_REVERSE);
+            mResultList.setLayoutAnimationListener(new Animation.AnimationListener() {
+                @Override
+                public void onAnimationStart(Animation animation) {
+
+                }
+
+                @Override
+                public void onAnimationEnd(Animation animation) {
+                    mResultList.collapseGroup(groupPosition);
+                }
+
+                @Override
+                public void onAnimationRepeat(Animation animation) {
+
+                }
+            });
+            mResultList.setLayoutAnimation(controller);
+        }
+    });
+</code></pre>
+
+<p>We need more tweaks to make the animation only apply to the actual children of the expanded/collapsed group. Because we can't overload the correct part in the LayoutAnimationController, we need to create a special ViewGroup class. This is the same technique as in , <a href="http://stackoverflow.com/a/12742452/808796">"Can LayoutAnimationController animate only specified Views"</a>.</p>
+
+<p>In the ExpandableListViewAdapter, we now need some state handling to allow or ignore animation on items in the list.</p>
+
+<pre><code>    @Override
+public void onGroupExpanded(int groupPos){
+    super.onGroupExpanded(groupPos);
+
+    int childCount = getChildrenCount(groupPos);
+    Log.d("EXPLIST","setting children to be expanded:" + childCount);
+
+    for(int j=0; j &lt; getGroupCount(); j++){
+        for(int k=0; k &lt; getChildrenCount(j); k++){
+            GoalServiceCell cell =  (GoalServiceCell)getChild(j,k);
+            cell.expandAnimState = GoalServiceCell.ExpandAnimState.SHOULD_NOT_ANIMATE;
+        }
+    }
+
+    for(int i=0; i &lt; childCount; i++){
+        GoalServiceCell cell =  (GoalServiceCell)getChild(groupPos,i);
+        cell.expandAnimState = GoalServiceCell.ExpandAnimState.SHOULD_START_EXPAND;
+
+    }
+
+}
+
+public void prepareToCollapseGroup(int groupPos){
+    int childCount = getChildrenCount(groupPos);
+    for(int j=0; j &lt; getGroupCount(); j++){
+        for(int k=0; k &lt; getChildrenCount(j); k++){
+            GoalServiceCell cell =  (GoalServiceCell)getChild(j,k);
+            cell.expandAnimState = GoalServiceCell.ExpandAnimState.SHOULD_NOT_ANIMATE;
+        }
+    }
+
+    for(int i=0; i &lt; childCount; i++){
+        GoalServiceCell cell =  (GoalServiceCell)getChild(groupPos,i);
+        cell.expandAnimState = GoalServiceCell.ExpandAnimState.SHOULD_START_COLLAPSIN;
+
+    }
+}
+
+@Override
+public void onGroupCollapsed(int groupPos){
+    super.onGroupCollapsed(groupPos);
+    int childCount = getChildrenCount(groupPos);
+    for(int i=0; i &lt; childCount; i++){
+        GoalServiceCell cell =  (GoalServiceCell)getChild(groupPos,i);
+        cell.expandAnimState = GoalServiceCell.ExpandAnimState.SHOULD_NOT_ANIMATE;
+    }
+
+}
+</code></pre>
+
+<p>And in the ViewHolder of the children.</p>
+
+<pre><code>       void expandOrCollapse(GoalServiceCell cell,int position){
+
+        AnimationAverseRelativeLayout hack = (AnimationAverseRelativeLayout)master;
+        boolean shouldAnim = cell.expandAnimState == GoalServiceCell.ExpandAnimState.SHOULD_START_EXPAND ||
+                             cell.expandAnimState == GoalServiceCell.ExpandAnimState.SHOULD_START_COLLAPSIN;
+        hack.setIfShouldAnimate(shouldAnim);
+
+    }
+</code></pre>
+
+<p>The GroupViews are also contained in a AnimationAverseRelativeLayout. Since I have set "shouldAnimate" to default to false, I don't need to touch them.</p>

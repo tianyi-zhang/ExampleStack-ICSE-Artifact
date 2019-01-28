@@ -1,0 +1,224 @@
+<p>I took miku's answer and jsch example code. I then had to <strong>download multiple files</strong> during the session and <strong>preserve original timestamps</strong>. This is my example code how to do it, probably many people find it usefull. Please ignore filenameHack() function its my own usecase.</p>
+
+<pre><code>package examples;
+
+import com.jcraft.jsch.*;
+import java.io.*;
+import java.util.*;
+
+public class ScpFrom2 {
+
+    public static void main(String[] args) throws Exception {
+        Map&lt;String,String&gt; params = parseParams(args);
+        if (params.isEmpty()) {
+            System.err.println("usage: java ScpFrom2 "
+                    + " user=myid password=mypwd"
+                    + " host=myhost.com port=22"
+                    + " encoding=&lt;ISO-8859-1,UTF-8,...&gt;"
+                    + " \"remotefile1=/some/file.png\""
+                    + " \"localfile1=file.png\""
+                    + " \"remotefile2=/other/file.txt\""
+                    + " \"localfile2=file.txt\""
+
+            );
+            return;
+        }
+
+        // default values
+        if (params.get("port") == null)
+            params.put("port", "22");
+        if (params.get("encoding") == null)
+            params.put("encoding", "ISO-8859-1"); //"UTF-8"
+
+        Session session = null;
+        try {
+            JSch jsch=new JSch();
+            session=jsch.getSession(
+                    params.get("user"),  // myuserid
+                    params.get("host"),  // my.server.com
+                    Integer.parseInt(params.get("port")) // 22
+            );
+            session.setPassword( params.get("password") );
+            session.setConfig("StrictHostKeyChecking", "no"); // do not prompt for server signature
+
+            session.connect();
+
+            // this is exec command and string reply encoding
+            String encoding = params.get("encoding");
+
+            int fileIdx=0;
+            while(true) {
+                fileIdx++;
+
+                String remoteFile = params.get("remotefile"+fileIdx);
+                String localFile = params.get("localfile"+fileIdx);
+                if (remoteFile == null || remoteFile.equals("")
+                        || localFile == null || localFile.equals("") )
+                    break;
+
+                remoteFile = filenameHack(remoteFile);
+                localFile  = filenameHack(localFile);
+
+                try {
+                    downloadFile(session, remoteFile, localFile, encoding);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+
+        } catch(Exception ex) {
+            ex.printStackTrace();
+        } finally {
+            try{ session.disconnect(); } catch(Exception ex){}
+        }
+    }
+
+    private static void downloadFile(Session session, 
+            String remoteFile, String localFile, String encoding) throws Exception {
+        // send exec command: scp -p -f "/some/file.png"
+        // -p = read file timestamps
+        // -f = From remote to local
+        String command = String.format("scp -p -f \"%s\"", remoteFile); 
+        System.console().printf("send command: %s%n", command);
+        Channel channel=session.openChannel("exec");
+        ((ChannelExec)channel).setCommand(command.getBytes(encoding));
+
+        // get I/O streams for remote scp
+        byte[] buf=new byte[32*1024];
+        OutputStream out=channel.getOutputStream();
+        InputStream in=channel.getInputStream();
+
+        channel.connect();
+
+        buf[0]=0; out.write(buf, 0, 1); out.flush(); // send '\0'
+
+        // reply: T&lt;mtime&gt; 0 &lt;atime&gt; 0\n
+        // times are in seconds, since 1970-01-01 00:00:00 UTC 
+        int c=checkAck(in);
+        if(c!='T')
+            throw new IOException("Invalid timestamp reply from server");
+
+        long tsModified = -1; // millis
+        for(int idx=0; ; idx++){
+            in.read(buf, idx, 1);
+            if(tsModified &lt; 0 &amp;&amp; buf[idx]==' ') {
+                tsModified = Long.parseLong(new String(buf, 0, idx))*1000;
+            } else if(buf[idx]=='\n') {
+                break;
+            }
+        }
+
+        buf[0]=0; out.write(buf, 0, 1); out.flush(); // send '\0'
+
+        // reply: C0644 &lt;binary length&gt; &lt;filename&gt;\n
+        // length is given as a text "621873" bytes
+        c=checkAck(in);
+        if(c!='C')
+            throw new IOException("Invalid filename reply from server");
+
+        in.read(buf, 0, 5); // read '0644 ' bytes
+
+        long filesize=-1;
+        for(int idx=0; ; idx++){
+            in.read(buf, idx, 1);
+            if(buf[idx]==' ') {
+                filesize = Long.parseLong(new String(buf, 0, idx));
+                break;
+            }
+        }
+
+        // read remote filename
+        String origFilename=null;
+        for(int idx=0; ; idx++){
+            in.read(buf, idx, 1);
+            if(buf[idx]=='\n') {
+                origFilename=new String(buf, 0, idx, encoding); // UTF-8, ISO-8859-1
+                break;
+            }
+        }
+
+        System.console().printf("size=%d, modified=%d, filename=%s%n"
+                , filesize, tsModified, origFilename);
+
+        buf[0]=0; out.write(buf, 0, 1); out.flush(); // send '\0'
+
+        // read binary data, write to local file
+        FileOutputStream fos = null;
+        try {
+            File file = new File(localFile);
+            fos = new FileOutputStream(file);
+            while(filesize &gt; 0) {
+                int read = Math.min(buf.length, (int)filesize);
+                read=in.read(buf, 0, read);
+                if(read &lt; 0)
+                    throw new IOException("Reading data failed");
+
+                fos.write(buf, 0, read);
+                filesize -= read;
+            }
+            fos.close(); // we must close file before updating timestamp
+            fos = null;
+            if (tsModified &gt; 0)
+                file.setLastModified(tsModified);               
+        } finally {
+            try{ if (fos!=null) fos.close(); } catch(Exception ex){}
+        }
+
+        if(checkAck(in) != 0)
+            return;
+
+        buf[0]=0; out.write(buf, 0, 1); out.flush(); // send '\0'
+        System.out.println("Binary data read");     
+    }
+
+    private static int checkAck(InputStream in) throws IOException {
+        // b may be 0 for success
+        //          1 for error,
+        //          2 for fatal error,
+        //          -1
+        int b=in.read();
+        if(b==0) return b;
+        else if(b==-1) return b;
+        if(b==1 || b==2) {
+            StringBuilder sb=new StringBuilder();
+            int c;
+            do {
+                c=in.read();
+                sb.append((char)c);
+            } while(c!='\n');
+            throw new IOException(sb.toString());
+        }
+        return b;
+    }
+
+
+    /**
+     * Parse key=value pairs to hashmap.
+     * @param args
+     * @return
+     */
+    private static Map&lt;String,String&gt; parseParams(String[] args) throws Exception {
+        Map&lt;String,String&gt; params = new HashMap&lt;String,String&gt;();
+        for(String keyval : args) {
+            int idx = keyval.indexOf('=');
+            params.put(
+                    keyval.substring(0, idx),
+                    keyval.substring(idx+1)
+            );
+        }
+        return params;
+    }
+
+    private static String filenameHack(String filename) {
+        // It's difficult reliably pass unicode input parameters 
+        // from Java dos command line.
+        // This dirty hack is my very own test use case. 
+        if (filename.contains("${filename1}"))
+            filename = filename.replace("${filename1}", "Korilla ABC ÅÄÖ.txt");
+        else if (filename.contains("${filename2}"))
+            filename = filename.replace("${filename2}", "test2 ABC ÅÄÖ.txt");           
+        return filename;
+    }
+
+}
+</code></pre>

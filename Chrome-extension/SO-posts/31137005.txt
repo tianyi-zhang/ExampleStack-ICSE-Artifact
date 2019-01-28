@@ -1,0 +1,653 @@
+<p>What you need it the bitmap and image view reference counting. Android keeps image data in native array, which is not recycling automatically when the vm GC running. Vm part is garbage collected one way and the native part is another way and much later. You app may run out of memory pretty quickly.</p>
+
+<p>Here is set of classes that can help. I think I've got them from android image tutorial and modified a bit for my own convenience.</p>
+
+<pre><code>package com.example.android.streaming.ui.cache;
+
+import android.content.Context;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
+import android.util.AttributeSet;
+import android.widget.ImageView;
+
+/**
+ * Sub-class of ImageView which automatically notifies the drawable when it is
+ * being displayed.
+ */
+public class RecyclingImageView extends ImageView {
+    public RecyclingImageView(Context context) {
+        super(context);
+    }
+
+    public RecyclingImageView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    /**
+     * @see android.widget.ImageView#onDetachedFromWindow()
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+        // This has been detached from Window, so clear the drawable
+        setImageDrawable(null);
+
+        super.onDetachedFromWindow();
+    }
+
+    /**
+     * @see android.widget.ImageView#setImageDrawable(android.graphics.drawable.Drawable)
+     */
+    @Override
+    public void setImageDrawable(Drawable drawable) {
+        // Keep hold of previous Drawable
+        final Drawable previousDrawable = getDrawable();
+
+        // Call super to set new Drawable
+        super.setImageDrawable(drawable);
+
+        // Notify new Drawable that it is being displayed
+        notifyDrawable(drawable, true);
+
+        // Notify old Drawable so it is no longer being displayed
+        notifyDrawable(previousDrawable, false);
+    }
+
+    @Override
+    public void setImageResource(int resId) {
+        // Keep hold of previous Drawable
+        final Drawable previousDrawable = getDrawable();
+        super.setImageResource(resId);
+
+        // Notify new Drawable that it is being displayed
+        final Drawable newDrawable = getDrawable();
+        notifyDrawable(newDrawable, true);
+
+        // Notify old Drawable so it is no longer being displayed
+        notifyDrawable(previousDrawable, false);
+    }
+
+    /**
+     * Notifies the drawable that it's displayed state has changed.
+     * 
+     * @param drawable
+     * @param isDisplayed
+     */
+    private static void notifyDrawable(Drawable drawable, final boolean isDisplayed) {
+        if (drawable != null) {
+            if (drawable instanceof RecyclingBitmapDrawable) {
+                // The drawable is a CountingBitmapDrawable, so notify it
+                ((RecyclingBitmapDrawable) drawable).setIsDisplayed(isDisplayed);
+            } else if (drawable instanceof LayerDrawable) {
+                // The drawable is a LayerDrawable, so recurse on each layer
+                LayerDrawable layerDrawable = (LayerDrawable) drawable;
+                for (int i = 0, z = layerDrawable.getNumberOfLayers(); i &lt; z; i++) {
+                    notifyDrawable(layerDrawable.getDrawable(i), isDisplayed);
+                }
+            }
+        }
+    }
+
+}
+</code></pre>
+
+<p>And here is another one, a bitmap itself.</p>
+
+<pre><code>package com.example.android.streaming.ui.cache;
+
+import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
+import android.util.Log;
+
+import com.example.android.streaming.StreamingApp;
+import com.vg.hangwith.BuildConfig;
+
+/**
+ * A BitmapDrawable that keeps track of whether it is being displayed or cached.
+ * When the drawable is no longer being displayed or cached,
+ * {@link Bitmap#recycle() recycle()} will be called on this drawable's bitmap.
+ */
+public class RecyclingBitmapDrawable extends BitmapDrawable {
+    private int cacheRefCount = 0;
+    private int displayRefCount = 0;
+
+    private boolean hasBeenDisplayed;
+
+    public RecyclingBitmapDrawable(Resources res, Bitmap bitmap) {
+        super(res, bitmap);
+    }
+
+    /**
+     * Notify the drawable that the displayed state has changed. Internally a
+     * count is kept so that the drawable knows when it is no longer being
+     * displayed.
+     * 
+     * @param isDisplayed
+     *            - Whether the drawable is being displayed or not
+     */
+    public void setIsDisplayed(boolean isDisplayed) {
+        synchronized (this) {
+            if (isDisplayed) {
+                displayRefCount++;
+                hasBeenDisplayed = true;
+            } else {
+                displayRefCount--;
+            }
+        }
+
+        // Check to see if recycle() can be called
+        checkState();
+    }
+
+    /**
+     * Notify the drawable that the cache state has changed. Internally a count
+     * is kept so that the drawable knows when it is no longer being cached.
+     * 
+     * @param isCached
+     *            - Whether the drawable is being cached or not
+     */
+    public void setIsCached(boolean isCached) {
+        synchronized (this) {
+            if (isCached) {
+                cacheRefCount++;
+            } else {
+                cacheRefCount--;
+            }
+        }
+
+        // Check to see if recycle() can be called
+        checkState();
+    }
+
+    private synchronized void checkState() {
+        // If the drawable cache and display ref counts = 0, and this drawable
+        // has been displayed, then recycle
+        if (cacheRefCount &lt;= 0 &amp;&amp; displayRefCount &lt;= 0 &amp;&amp; hasBeenDisplayed &amp;&amp; hasValidBitmap()) {
+            if (BuildConfig.DEBUG)
+                Log.d(StreamingApp.TAG, "No longer being used or cached so recycling. " + toString());
+            getBitmap().recycle();
+        }
+    }
+
+    private synchronized boolean hasValidBitmap() {
+        Bitmap bitmap = getBitmap();
+        return bitmap != null &amp;&amp; !bitmap.isRecycled();
+    }
+
+}
+</code></pre>
+
+<p>Now, iun your activity, whatever it does, if it needs to present recyclable image, you add this in xml res:</p>
+
+<pre><code>&lt;com.example.android.streaming.ui.cache.RecyclingImageView
+        android:id="@+id/ad_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_centerInParent="true"
+        android:background="@drawable/bkgd_whitegradient"
+        android:contentDescription="@string/dummy_desc"
+        android:padding="20dip"/&gt;
+</code></pre>
+
+<p>This is just an example, id, background, can be whatever you need.</p>
+
+<pre><code>    final RecyclingImageView adImage = (RecyclingImageView) findViewById(R.id.ad_image);
+    adImage.setImageDrawable(new RecyclingBitmapDrawable(getResources(), getBitmap(this)));
+    adImage.setVisibility(View.VISIBLE);
+</code></pre>
+
+<p>Note the getBitmap(), this is an example. It is you who should implement it in a way you need. It returns Bitmap instance. In your case, this Bitmap will be created out of array of bytes you've received from your camera. Let's try to do it here too.</p>
+
+<p>Next, I have a class for managing avatars in my app (long list of users is a good example). It has number of useful static methods, so you may not need to create it.</p>
+
+<pre><code>package com.example.android.streaming.ui.cache;
+
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+import org.json.JSONObject;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.os.AsyncTask;
+import android.util.Log;
+import android.util.LruCache;
+
+import com.example.android.streaming.StreamingApp;
+import com.example.android.streaming.datamodel.Broadcast;
+import com.example.android.streaming.datamodel.Channel;
+import com.facebook.model.GraphUser;
+import com.parse.ParseFile;
+import com.parse.ParseUser;
+import com.vg.hangwith.BuildConfig;
+import com.vg.hangwith.R;
+
+public class AvatarCache {
+    private Map&lt;String, LoadImageTask&gt; tasks = new HashMap&lt;String, AvatarCache.LoadImageTask&gt;();
+    private LruCache&lt;String, RecyclingBitmapDrawable&gt; memoryCache;
+    public final static int AVATAR_BOUNDS = 100;
+
+    private String cacheDir;
+    private Context context;
+
+    public synchronized void addTask(String tag, LoadImageTask task) {
+        tasks.put(tag, task);
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Added avatar load task for tag " + tag);
+    }
+
+    public synchronized void removeTask(String tag) {
+        tasks.remove(tag);
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Removed avatar load task for tag " + tag);
+    }
+
+    public synchronized void cancelTasks(int keepLastItems) {
+        int count = 0;
+        Iterator&lt;Map.Entry&lt;String, LoadImageTask&gt;&gt; iter = tasks.entrySet().iterator();
+        while (iter.hasNext() &amp;&amp; tasks.size() &gt; keepLastItems) {
+            Map.Entry&lt;String, LoadImageTask&gt; entry = iter.next();
+            entry.getValue().cancel(true);
+            iter.remove();
+            count++;
+        }
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Canceled " + count + " avatar load tasks");
+    }
+
+    public void cancelTasks() {
+        cancelTasks(0);
+    }
+
+    public final static Bitmap downscaleAvatar(Bitmap bitmap) {
+        if (bitmap.getWidth() &gt; AVATAR_BOUNDS &amp;&amp; bitmap.getHeight() &gt; AVATAR_BOUNDS) {
+            int height = (int) Math.floor(bitmap.getHeight() / ((1.0f * bitmap.getWidth()) / AVATAR_BOUNDS));
+            Bitmap scaled = Bitmap.createScaledBitmap(bitmap, AVATAR_BOUNDS, height, false);
+            bitmap.recycle();
+            bitmap = null;
+            return scaled;
+        } else {
+            return bitmap;
+        }
+    }
+
+    public final static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        // Raw height and width of image
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height &gt; reqHeight || width &gt; reqWidth) {
+            // Calculate ratios of height and width to requested height and width
+            final int heightRatio = Math.round((float) height / (float) reqHeight);
+            final int widthRatio = Math.round((float) width / (float) reqWidth);
+
+            // Choose the smallest ratio as inSampleSize value, this will guarantee
+            // a final image with both dimensions larger than or equal to the
+            // requested height and width.
+            inSampleSize = heightRatio &lt; widthRatio ? heightRatio : widthRatio;
+        }
+
+        return inSampleSize;
+    }
+
+    public class LoadImageTask extends AsyncTask&lt;Void, Void, RecyclingBitmapDrawable&gt; {
+        protected RecyclingImageView image;
+        protected String url, tag;
+        protected boolean avatar;
+
+        public LoadImageTask(String url, String tag, boolean avatar, RecyclingImageView image) {
+            super();
+            this.url = url;
+            this.tag = tag;
+            this.image = image;
+            this.avatar = avatar;
+            image.setTag(R.string.tag_key, tag);
+            addTask(tag, this);
+        }
+
+        @Override
+        protected RecyclingBitmapDrawable doInBackground(Void... dummy) {
+            if (isCancelled() || !isSameImage())
+                return null;
+            RecyclingBitmapDrawable drawable = getAvatarFromMemCache(tag);
+            if (drawable == null) {
+                drawable = getAvatarFromDiskCache(tag);
+                if (drawable == null) {
+                    try {
+                        if (BuildConfig.DEBUG)
+                            Log.d(StreamingApp.TAG, "Loading avatar " + url);
+
+                        /* First decode bounds to check the image size. */
+                        BitmapFactory.Options options = new BitmapFactory.Options();
+
+                        /* Calculate if the avatar should be down scaled. */
+                        if (avatar) {
+                            options.inJustDecodeBounds = true;
+                            BitmapFactory.decodeStream(new URL(url).openConnection().getInputStream(), null, options);
+                            options.inSampleSize = calculateInSampleSize(options, AVATAR_BOUNDS, AVATAR_BOUNDS);
+                        }
+                        options.inJustDecodeBounds = false;
+
+                        /* Download down scaled avatar. */
+                        Bitmap bitmap = BitmapFactory.decodeStream(new URL(url).openConnection().getInputStream(), null, options);
+                        if (bitmap != null) {
+                            drawable = new RecyclingBitmapDrawable(context.getResources(), bitmap);
+                            if (drawable != null) {
+                                addAvatarToDiskCache(tag, url, drawable);
+                                addAvatarToMemoryCache(tag, drawable);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.w(StreamingApp.TAG, "Failed to load and save avatar image. " + e.getMessage());
+                    }
+                } else {
+                    addAvatarToMemoryCache(tag, drawable);
+                }
+            }
+            return drawable;
+        }
+
+        private synchronized boolean isSameImage() {
+            // In case that the same image is reused for different avatar (during scroll), this
+            // function will return false.
+            Object imageTag = image.getTag(R.string.tag_key);
+            return imageTag != null &amp;&amp; imageTag.equals(tag);
+        }
+
+        private void finishedWithResult(RecyclingBitmapDrawable result) {
+            if (result != null &amp;&amp; isSameImage())
+                image.setImageDrawable(result);
+            removeTask(tag);
+        }
+
+        @Override
+        protected void onPostExecute(RecyclingBitmapDrawable result) {
+            finishedWithResult(result);
+            super.onPostExecute(result);
+        }
+
+        @Override
+        protected void onCancelled(RecyclingBitmapDrawable result) {
+            finishedWithResult(result);
+            super.onCancelled();
+        }
+
+        @Override
+        protected void onCancelled() {
+            finishedWithResult(null);
+            super.onCancelled();
+        }
+    }
+
+    public AvatarCache(Context context) {
+        super();
+
+        // Get max available VM memory, exceeding this amount will throw an
+        // OutOfMemory exception. Stored in kilobytes as LruCache takes an
+        // int in its constructor.
+        final int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
+
+        // Use 1/10th of the available memory for this memory cache. With small avatars like
+        // we have this is enough to keep ~100 avatars in cache.
+        final int cacheSize = maxMemory / 10;
+
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Init avatar cache, size: " + cacheSize + ", max mem size: " + maxMemory);
+
+        memoryCache = new LruCache&lt;String, RecyclingBitmapDrawable&gt;(cacheSize) {
+            @Override
+            protected int sizeOf(String key, RecyclingBitmapDrawable drawable) {
+                // The cache size will be measured in kilobytes rather than
+                // number of items.
+                Bitmap bitmap = drawable.getBitmap();
+                int bitmapSize = bitmap != null ? bitmap.getByteCount() / 1024 : 0;
+                return bitmapSize == 0 ? 1 : bitmapSize;
+            }
+
+            @Override
+            protected void entryRemoved(boolean evicted, String key, RecyclingBitmapDrawable oldValue,
+                    RecyclingBitmapDrawable newValue) {
+                // The removed entry is a recycling drawable, so notify it.
+                // that it has been removed from the memory cache
+                oldValue.setIsCached(false);
+            }
+        };
+
+        this.cacheDir = context.getCacheDir().getAbsolutePath();
+        this.context = context;
+    }
+
+    public void flush() {
+        int oldSize = memoryCache.size();
+        memoryCache.evictAll();
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Flush avatar cache, flushed " + (oldSize - memoryCache.size()) + " new size "
+                    + memoryCache.size());
+        cancelTasks();
+    }
+
+    public void addAvatarToMemoryCache(String key, RecyclingBitmapDrawable drawable) {
+        if (getAvatarFromMemCache(key) == null) {
+            drawable.setIsCached(true);
+            memoryCache.put(key, drawable);
+            if (BuildConfig.DEBUG)
+                Log.d(StreamingApp.TAG, "Add to avatar cache, size: " + memoryCache.size());
+        }
+    }
+
+    public RecyclingBitmapDrawable getAvatarFromMemCache(String key) {
+        return memoryCache.get(key);
+    }
+
+    public void addAvatarToDiskCache(String name, String url, RecyclingBitmapDrawable drawable) throws IOException {
+        if (drawable == null)
+            return;
+        File dir = new File(cacheDir);
+        if (!dir.exists())
+            dir.mkdirs();
+        File file = new File(dir, name);
+        Bitmap bitmap = drawable.getBitmap();
+        if (!file.exists() &amp;&amp; bitmap != null) {
+            OutputStream out = new BufferedOutputStream(new FileOutputStream(file));
+            drawable.getBitmap().compress(Bitmap.CompressFormat.PNG, 85, out);
+            out.flush();
+            out.close();
+        }
+    }
+
+    /*
+     * Update avatar from the network if older than this.
+     */
+    public static final int AVATAR_MAX_AGE_DAYS = 7;
+
+    public RecyclingBitmapDrawable getAvatarFromDiskCache(String name) {
+        File file = new File(cacheDir, name);
+
+        /* Check if cached bitmap is old. */
+        if ((System.currentTimeMillis() - file.lastModified()) &gt; AVATAR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000)
+            return null;
+        try {
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getCanonicalPath());
+            if (bitmap != null) {
+                //                Log.w(App.TAG, "Loaded " + (bitmap.getByteCount() / 1024.0f) + "K bitmap " + name + " w: "
+                //                        + bitmap.getWidth() + " h: " + bitmap.getHeight());
+                return new RecyclingBitmapDrawable(context.getResources(), bitmap);
+            }
+        } catch (Exception e) {
+            Log.w(StreamingApp.TAG, "Failed to decode avatar image " + name + ". " + e.getMessage());
+        }
+        return null;
+    }
+
+    public static boolean isValidURL(String url) {
+        try {
+            new URL(url);
+            return true;
+        } catch (Exception e) {
+        }
+        return false;
+    }
+
+    public void loadUrlAvatar(String url, String name, RecyclingImageView image, int placeholder, boolean checkDiskCache) {
+        RecyclingBitmapDrawable drawable = getAvatarFromMemCache(name);
+        if (drawable == null &amp;&amp; checkDiskCache) {
+            drawable = getAvatarFromDiskCache(name);
+            if (drawable != null)
+                addAvatarToMemoryCache(name, drawable);
+        }
+        if (drawable == null) {
+            image.setImageResource(placeholder);
+            if (url != null &amp;&amp; isValidURL(url))
+                new LoadImageTask(url, name, true, image).execute();
+        } else {
+            image.setImageDrawable(drawable);
+        }
+    }
+
+    public static String getUserAvatarURL(ParseUser user) {
+        if (user == null)
+            return null;
+        if (user.get("avatar") == null || user.get("avatar") == JSONObject.NULL)
+            return user.getString("avatar_url");
+        if (user.get("avatar") instanceof JSONObject)
+            Log.w(StreamingApp.TAG, "JSONObject found instead of ParseFile: " + ((JSONObject) user.get("avatar")).toString());
+        return ((ParseFile) user.get("avatar")).getUrl();
+    }
+
+    public static String getUserAvatarURL(GraphUser user) {
+        return "http://graph.facebook.com/" + user.getId() + "/picture";
+    }
+
+    public static String getBroadcastAvatarURL(Broadcast broadcast) {
+        if (broadcast.getThumbnail() == null)
+            return null;
+        return broadcast.getThumbnail().getUrl();
+    }
+
+    public void loadUserAvatar(ParseUser user, RecyclingImageView image, int placeholder, boolean checkDiskCache) {
+        if (user != null)
+            loadUrlAvatar(getUserAvatarURL(user), user.getUsername(), image, placeholder, checkDiskCache);
+    }
+
+    public void loadUserAvatar(GraphUser user, RecyclingImageView image, int placeholder, boolean checkDiskCache) {
+        if (user != null)
+            loadUrlAvatar(getUserAvatarURL(user), user.getId(), image, placeholder, checkDiskCache);
+    }
+
+    public void loadBroadcastAvatar(Broadcast broadcast, RecyclingImageView image, int placeholder,
+            boolean checkDiskCache) {
+        if (broadcast != null)
+            loadUrlAvatar(getBroadcastAvatarURL(broadcast), broadcast.getObjectId(), image, placeholder, checkDiskCache);
+    }
+
+    public void clearUserAvatar(ParseUser user) {
+        File file = new File(cacheDir, user.getUsername());
+        if (file.exists())
+            file.delete();
+        memoryCache.remove(user.getUsername());
+        if (BuildConfig.DEBUG)
+            Log.d(StreamingApp.TAG, "Remove avatar from cache, size: " + memoryCache.size());
+    }
+
+    public static String getChannelImageURL(Channel channel, boolean small, boolean ageRestricted) {
+        if (ageRestricted) {
+            if (small &amp;&amp; channel.getSmallRestrictedState() != null)
+                return channel.getSmallRestrictedState().getUrl();
+            else if (!small &amp;&amp; channel.getLargeRestrictedState() != null)
+                return channel.getLargeRestrictedState().getUrl();
+        } else {
+            if (small &amp;&amp; channel.getSmallEmptyState() != null)
+                return channel.getSmallEmptyState().getUrl();
+            else if (!small &amp;&amp; channel.getLargeEmptyState() != null)
+                return channel.getLargeEmptyState().getUrl();
+        }
+        return null;
+    }
+
+    public static final String channelImageCacheName(Channel channel, boolean small, boolean ageRestricted) {
+        return channel.getObjectId() + "-" + (ageRestricted ? "age" : "empty") + "-" + (small ? "small" : "large");
+    }
+
+    public boolean loadChannelImage(Channel channel, RecyclingImageView image, boolean checkDiskCache, boolean small,
+            boolean ageRestricted) {
+        boolean result = false;
+
+        if (channel == null)
+            return false;
+
+        String name = channelImageCacheName(channel, small, ageRestricted);
+        RecyclingBitmapDrawable drawable = getAvatarFromMemCache(name);
+        if (drawable == null &amp;&amp; checkDiskCache) {
+            drawable = getAvatarFromDiskCache(name);
+            if (drawable != null)
+                addAvatarToMemoryCache(name, drawable);
+        }
+
+        if (drawable == null) {
+            String url = getChannelImageURL(channel, small, ageRestricted);
+            result = url != null &amp;&amp; isValidURL(url);
+            if (result)
+                new LoadImageTask(url, name, false, image).execute();
+        } else {
+            image.setImageDrawable(drawable);
+            result = true;
+        }
+        return result;
+    }
+
+    public void loadUrlImage(String url, RecyclingImageView image, String name, boolean checkDiskCache) {
+        RecyclingBitmapDrawable drawable = getAvatarFromMemCache(name);
+        if (drawable == null &amp;&amp; checkDiskCache) {
+            drawable = getAvatarFromDiskCache(name);
+            if (drawable != null)
+                addAvatarToMemoryCache(name, drawable);
+        }
+        if (drawable == null) {
+            if (url != null &amp;&amp; isValidURL(url))
+                new LoadImageTask(url, name, false, image).execute();
+        } else {
+            image.setImageDrawable(drawable);
+        }
+    }
+}
+</code></pre>
+
+<p>Note, it uses Parse framework at some places. Just ignore it.</p>
+
+<p>In this example, AvatarCache is loading image by url in doInBackground() function. As you can see it gets an input stream of out url. You can  modify it to feed it some different input stream that you use for loading your image. Then you also need to modify loadUrlImage(). In other words, just remove the url thing.</p>
+
+<p>And this is how you can use it with Uri. Modify it for using input stream or array of bytes. Just use appropriate BitmapFactory.decodeSomething() method.</p>
+
+<pre><code>public Bitmap getBitmap(Uri uri) {
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        AssetFileDescriptor fd = null;
+        Bitmap b = null;
+        try {
+            fd = getContentResolver().openAssetFileDescriptor(uri, "r");
+            if (fd != null) {
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeFileDescriptor(fd.getFileDescriptor(), null, options);
+                options.inSampleSize = AvatarCache.calculateInSampleSize(options, AvatarCache.AVATAR_BOUNDS, AvatarCache.AVATAR_BOUNDS);
+                options.inJustDecodeBounds = false;
+                b = BitmapFactory.decodeFileDescriptor(fd.getFileDescriptor(), null, options);
+                try {
+                    fd.close();
+                } catch (IOException e) {
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return b;
+
+}
+</code></pre>

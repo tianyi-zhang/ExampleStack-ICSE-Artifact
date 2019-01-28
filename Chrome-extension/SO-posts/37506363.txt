@@ -1,0 +1,122 @@
+<p>this is not very elegant, but may work.</p>
+
+<ol>
+<li>copy openjdk BufferedReader source into another package (JVM won't let your classloader override any default Java class). You can get it from here -- <a href="http://grepcode.com/file_/repository.grepcode.com/java/root/jdk/openjdk/6-b14/java/io/BufferedReader.java/?v=source" rel="nofollow">http://grepcode.com/file_/repository.grepcode.com/java/root/jdk/openjdk/6-b14/java/io/BufferedReader.java/?v=source</a></li>
+<li>create a subclass that extends from this BufferedReader copy, create the constructors and override readLine(). Copy the original readLine() implementation and paste as the overriden readLine()</li>
+<li>change all attributes and methods from the superclass (BufferedReeader) that are blocking the compilation from private to protected</li>
+<li>replace all mentions to \n and ]r in the subclass readLine() to \t instead (so you're gonna split by tab)</li>
+</ol>
+
+<p>voilà :-)</p>
+
+<p>this is how it will look like in the end</p>
+
+<pre><code>import java.io.IOException;
+import java.io.Reader;
+
+public class MyBufferedReader extends BufferedReader {
+
+    /**
+     * 
+     * @param in
+     */
+    public MyBufferedReader(Reader in) {
+        super(in);
+
+    }
+
+    @Override
+    String readLine(boolean ignoreLF) throws IOException {
+        StringBuffer s = null;
+        int startChar;
+
+        synchronized (lock) {
+            ensureOpen();
+            boolean omitLF = ignoreLF || skipLF;
+
+        bufferLoop:
+            for (;;) {
+
+                if (nextChar &gt;= nChars)
+                    fill();
+                if (nextChar &gt;= nChars) { /* EOF */
+                    if (s != null &amp;&amp; s.length() &gt; 0)
+                        return s.toString();
+                    else
+                        return null;
+                }
+                boolean eol = false;
+                char c = 0;
+                int i;
+
+                /* Skip a leftover '\n', if necessary */
+                if (omitLF &amp;&amp; (cb[nextChar] == '\t'))
+                    nextChar++;
+                skipLF = false;
+                omitLF = false;
+
+            charLoop:
+                for (i = nextChar; i &lt; nChars; i++) {
+                    c = cb[i];
+                    if (c == '\t') {
+                        eol = true;
+                        break charLoop;
+                    }
+                }
+
+                startChar = nextChar;
+                nextChar = i;
+
+                if (eol) {
+                    String str;
+                    if (s == null) {
+                        str = new String(cb, startChar, i - startChar);
+                    } else {
+                        s.append(cb, startChar, i - startChar);
+                        str = s.toString();
+                    }
+                    nextChar++;
+                    if (c == '\t') {
+                        skipLF = true;
+                    }
+                    return str;
+                }
+
+                if (s == null)
+                    s = new StringBuffer(defaultExpectedLineLength);
+                s.append(cb, startChar, i - startChar);
+            }
+        }
+    }
+
+}
+</code></pre>
+
+<p>you can use it like this</p>
+
+<pre><code>    MyBufferedReader my = new MyBufferedReader(new InputStreamReader(Main.class.getResourceAsStream("fileWithTabs.txt")));
+    String line = null;
+    while((line = my.readLine())!=null) {
+        System.out.println(line);
+    }
+    my.close();
+</code></pre>
+
+<p>for an input like this</p>
+
+<pre><code>some string some other string
+some third string after a newline   some forth  
+and so on
+</code></pre>
+
+<p>result is</p>
+
+<pre><code>some string
+some other string
+some third string after a newline
+some forth
+
+and so on
+</code></pre>
+
+<p>however, looks like a very very cumbersome solution, so I really would like to see other clever answers here</p>

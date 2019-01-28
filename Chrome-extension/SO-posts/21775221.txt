@@ -1,0 +1,75 @@
+<p>It's not a general solution to your problem, but opening a PDF in QuickOffice works for me with the following code (based on your sample):</p>
+
+<pre><code>@Override
+public AssetFileDescriptor openAssetFile(Uri uri, String mode) throws FileNotFoundException {
+    try {
+        byte[] data = getData(uri);
+        long size = data.length;
+        ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
+        new TransferThread(new ByteArrayInputStream(data), new AutoCloseOutputStream(pipe[1])).start();
+        return new AssetFileDescriptor(pipe[0], 0, size);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    return null;
+};
+
+private byte[] getData(Uri uri) throws IOException {
+    AssetManager assets = getContext().getResources().getAssets();
+    InputStream is = assets.open(uri.getLastPathSegment());
+    ByteArrayOutputStream os = new ByteArrayOutputStream();
+    copy(is, os);
+    return os.toByteArray();
+}
+
+private void copy(InputStream in, OutputStream out) throws IOException {
+    byte[] buf = new byte[1024];
+    int len;
+    while ((len = in.read(buf)) &gt; 0) {
+        out.write(buf, 0, len);
+    }
+    in.close();
+    out.flush();
+    out.close();
+}
+
+@Override
+public Cursor query(Uri url, String[] projection, String selection, String[] selectionArgs, String sort) {
+    if (projection == null) {
+        projection = new String[] { OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE };
+    }
+
+    String[] cols = new String[projection.length];
+    Object[] values = new Object[projection.length];
+    int i = 0;
+    for (String col : projection) {
+        if (OpenableColumns.DISPLAY_NAME.equals(col)) {
+            cols[i] = OpenableColumns.DISPLAY_NAME;
+            values[i++] = url.getLastPathSegment();
+        }
+        else if (OpenableColumns.SIZE.equals(col)) {
+            cols[i] = OpenableColumns.SIZE;
+            values[i++] = AssetFileDescriptor.UNKNOWN_LENGTH;
+        }
+    }
+
+    cols = copyOf(cols, i);
+    values = copyOf(values, i);
+
+    final MatrixCursor cursor = new MatrixCursor(cols, 1);
+    cursor.addRow(values);
+    return cursor;
+}
+
+private String[] copyOf(String[] original, int newLength) {
+    final String[] result = new String[newLength];
+    System.arraycopy(original, 0, result, 0, newLength);
+    return result;
+}
+
+private Object[] copyOf(Object[] original, int newLength) {
+    final Object[] result = new Object[newLength];
+    System.arraycopy(original, 0, result, 0, newLength);
+    return result;
+}
+</code></pre>

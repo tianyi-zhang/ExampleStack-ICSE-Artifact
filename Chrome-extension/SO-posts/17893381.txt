@@ -1,0 +1,65 @@
+<p>I think Rex Kerr's solution has 2 bugs.</p>
+
+<ul>
+<li>First, it will truncate to limit+1 if a non-ASCII character is just before the limit. Truncating "123456789á1" will result in "123456789á" which is represented in 11 characters in UTF-8.</li>
+<li>Second, I think he misinterpreted the UTF standard. <a href="https://en.wikipedia.org/wiki/UTF-8#Description" rel="nofollow">https://en.wikipedia.org/wiki/UTF-8#Description</a> shows that a 110xxxxx at the beginning of a UTF sequence tells us that the representation is 2 characters long (as opposed to 3). That's the reason his implementation usually doesn't use up all available space (as Nissim Avitan noted).</li>
+</ul>
+
+<p>Please find my corrected version below:</p>
+
+<pre><code>public String cut(String s, int charLimit) throws UnsupportedEncodingException {
+    byte[] utf8 = s.getBytes("UTF-8");
+    if (utf8.length &lt;= charLimit) {
+        return s;
+    }
+    int n16 = 0;
+    boolean extraLong = false;
+    int i = 0;
+    while (i &lt; charLimit) {
+        // Unicode characters above U+FFFF need 2 words in utf16
+        extraLong = ((utf8[i] &amp; 0xF0) == 0xF0);
+        if ((utf8[i] &amp; 0x80) == 0) {
+            i += 1;
+        } else {
+            int b = utf8[i];
+            while ((b &amp; 0x80) &gt; 0) {
+                ++i;
+                b = b &lt;&lt; 1;
+            }
+        }
+        if (i &lt;= charLimit) {
+            n16 += (extraLong) ? 2 : 1;
+        }
+    }
+    return s.substring(0, n16);
+}
+</code></pre>
+
+<p>I still thought this was far from effective. So if you don't really need the String representation of the result and the byte array will do, you can use this:</p>
+
+<pre><code>private byte[] cutToBytes(String s, int charLimit) throws UnsupportedEncodingException {
+    byte[] utf8 = s.getBytes("UTF-8");
+    if (utf8.length &lt;= charLimit) {
+        return utf8;
+    }
+    if ((utf8[charLimit] &amp; 0x80) == 0) {
+        // the limit doesn't cut an UTF-8 sequence
+        return Arrays.copyOf(utf8, charLimit);
+    }
+    int i = 0;
+    while ((utf8[charLimit-i-1] &amp; 0x80) &gt; 0 &amp;&amp; (utf8[charLimit-i-1] &amp; 0x40) == 0) {
+        ++i;
+    }
+    if ((utf8[charLimit-i-1] &amp; 0x80) &gt; 0) {
+        // we have to skip the starter UTF-8 byte
+        return Arrays.copyOf(utf8, charLimit-i-1);
+    } else {
+        // we passed all UTF-8 bytes
+        return Arrays.copyOf(utf8, charLimit-i);
+    }
+}
+</code></pre>
+
+<p>Funny thing is that with a realistic 20-500 byte limit they perform pretty much the same <strong>IF</strong> you create a string from the byte array again.</p>
+
+<p>Please note that both methods assume a valid utf-8 input which is a valid assumption after using Java's getBytes() function.</p>

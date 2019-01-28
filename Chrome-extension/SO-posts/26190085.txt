@@ -1,0 +1,217 @@
+<p>Here is a Junit Test testing the expected output and a Jericho based SourceTextExtractor that makes the JUnit Test work which is based on the original Jericho TextExtractor source code.</p>
+
+<pre><code>@Test
+public void testTextExtract() {
+    // https://github.com/paepcke/CorEx/blob/master/src/extraction/HTMLUtils.java
+    String htmls[] = {
+            "&lt;!DOCTYPE html&gt;\n" + "&lt;html&gt;\n" + "&lt;body&gt;\n" + "\n"
+                    + "&lt;h1&gt;My First Heading&lt;/h1&gt;\n" + "\n"
+                    + "&lt;p&gt;My first paragraph.&lt;/p&gt;\n" + "\n" + "&lt;/body&gt;\n" + "&lt;/html&gt;",
+            "&lt;html&gt;\n"
+                    + "&lt;body&gt;\n"
+                    + "\n"
+                    + "&lt;div id=\"myDiv\" name=\"myDiv\" title=\"Example Div Element\"&gt;\n"
+                    + "  &lt;h5&gt;Subtitle&lt;/h5&gt;\n"
+                    + "  &lt;p&gt;This paragraph would be your content paragraph...&lt;/p&gt;\n"
+                    + "  &lt;p&gt;Here's another content article right here.&lt;/p&gt;\n"
+                    + "&lt;/div&gt;" + "\n" + "Text at end of body&lt;/body&gt;\n" + "&lt;/html&gt;" };
+    int expectedSize[] = { 2, 4 };
+    String expectedInfo[][]={
+        { 
+            "line 5 col 5 to  line 5 col 21: My First Heading",
+            "line 7 col 4 to  line 7 col 23: My first paragraph."
+        },
+        { 
+            "line 5 col 7 to  line 5 col 15: Subtitle",
+            "line 6 col 6 to  line 6 col 55: This paragraph would be your content paragraph...",
+            "line 7 col 6 to  line 7 col 48: Here's another content article right here.",
+            "line 8 col 7 to  line 9 col 20: Text at end of body"
+        }
+    };
+    int i = 0;
+    for (String html : htmls) {
+        SourceTextExtractor extractor=new SourceTextExtractor();
+        List&lt;TextResult&gt; textParts = extractor.extractTextSegments(html);
+        // List&lt;String&gt; textParts = HTMLCleanerTextExtractor.extractText(html);
+        int j=0;
+        for (TextResult textPart : textParts) {
+            System.out.println(textPart.getInfo());
+            assertTrue(textPart.getInfo().startsWith(expectedInfo[i][j]));
+            j++;
+        }
+        assertEquals(expectedSize[i], textParts.size());
+        i++;
+    }
+}
+</code></pre>
+
+<p>This is an adapted TextExtractor see
+<a href="http://grepcode.com/file_/repo1.maven.org/maven2/net.htmlparser.jericho/jericho-html/3.3/net/htmlparser/jericho/TextExtractor.java/?v=source" rel="nofollow">http://grepcode.com/file_/repo1.maven.org/maven2/net.htmlparser.jericho/jericho-html/3.3/net/htmlparser/jericho/TextExtractor.java/?v=source</a></p>
+
+<pre><code>/**
+ * TextExtractor that makes source line and col references available
+ * http://grepcode.com/file_/repo1.maven.org/maven2/net.htmlparser.jericho/jericho-html/3.3/net/htmlparser/jericho/TextExtractor.java/?v=source
+ */
+public class SourceTextExtractor {
+
+    public static class TextResult {
+        private String text;
+        private Source root;
+        private Segment segment;
+        private int line;
+        private int col;
+
+        /**
+         * get a textResult
+         * @param root
+         * @param segment
+         */
+        public TextResult(Source root,Segment segment) {
+            this.root=root;
+            this.segment=segment;
+            final StringBuilder sb=new StringBuilder(segment.length());
+            sb.append(segment);
+            setText(CharacterReference.decodeCollapseWhiteSpace(sb));
+            int spos = segment.getBegin();  
+            line=root.getRow(spos);
+            col=root.getColumn(spos);
+
+        }
+
+        /**
+         * gets info about this TextResult
+         * @return
+         */
+        public String getInfo() {
+            int epos=segment.getEnd();
+
+            String result=
+                    " line "+   line+" col "+col+
+                    " to "+
+                    " line "+   root.getRow(epos)+" col "+root.getColumn(epos)+
+                    ":"+getText();
+            return result;
+        }
+
+        /**
+         * @return the text
+         */
+        public String getText() {
+            return text;
+        }
+
+        /**
+         * @param text the text to set
+         */
+        public void setText(String text) {
+            this.text = text;
+        }
+
+        public int getLine() {
+            return line;
+        }
+
+        public int getCol() {
+            return col;
+        }
+
+    }
+
+    /**
+     * extract textSegments from the given html
+     * @param html
+     * @return
+     */
+    public List&lt;TextResult&gt; extractTextSegments(String html) {
+        Source htmlSource=new Source(html);
+        List&lt;TextResult&gt; result = extractTextSegments(htmlSource);
+        return result;
+    }
+
+    /**
+     * get the TextSegments from the given root segment
+     * @param root
+     * @return
+     */
+    public List&lt;TextResult&gt; extractTextSegments(Source root) {
+        List&lt;TextResult&gt; result=new ArrayList&lt;TextResult&gt;();
+        for (NodeIterator nodeIterator=new NodeIterator(root); nodeIterator.hasNext();) {
+            Segment segment=nodeIterator.next();
+            if (segment instanceof Tag) {
+                final Tag tag=(Tag)segment;
+                if (tag.getTagType().isServerTag()) {
+                    // elementContainsMarkup should be made into a TagType property one day.
+                    // for the time being assume all server element content is code, although this is not true for some Mason elements.
+                    final boolean elementContainsMarkup=false;
+                    if (!elementContainsMarkup) {
+                        final net.htmlparser.jericho.Element element=tag.getElement();
+                        if (element!=null &amp;&amp; element.getEnd()&gt;tag.getEnd()) nodeIterator.skipToPos(element.getEnd());
+                    }
+                    continue;
+                }
+                if (tag.getTagType()==StartTagType.NORMAL) {
+                    final StartTag startTag=(StartTag)tag;
+                    if (tag.name==HTMLElementName.SCRIPT || tag.name==HTMLElementName.STYLE ||  (!HTMLElements.getElementNames().contains(tag.name))) {
+                        nodeIterator.skipToPos(startTag.getElement().getEnd());
+                        continue;
+                    }
+
+                }
+                // Treat both start and end tags not belonging to inline-level elements as whitespace:
+                if (tag.getName()==HTMLElementName.BR || !HTMLElements.getInlineLevelElementNames().contains(tag.getName())) {
+                    // sb.append(' ');
+                }
+            } else {
+                if (!segment.isWhiteSpace())
+                    result.add(new TextResult(root,segment));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * extract the text from the given segment
+     * @param segment
+     * @return
+     */
+    public String extractText(net.htmlparser.jericho.Segment pSegment) {
+
+        // http://grepcode.com/file_/repo1.maven.org/maven2/net.htmlparser.jericho/jericho-html/3.3/net/htmlparser/jericho/TextExtractor.java/?v=source
+        // this would call the code above
+        // String result=segment.getTextExtractor().toString();
+        final StringBuilder sb=new StringBuilder(pSegment.length());
+        for (NodeIterator nodeIterator=new NodeIterator(pSegment); nodeIterator.hasNext();) {
+            Segment segment=nodeIterator.next();
+            if (segment instanceof Tag) {
+                final Tag tag=(Tag)segment;
+                if (tag.getTagType().isServerTag()) {
+                    // elementContainsMarkup should be made into a TagType property one day.
+                    // for the time being assume all server element content is code, although this is not true for some Mason elements.
+                    final boolean elementContainsMarkup=false;
+                    if (!elementContainsMarkup) {
+                        final net.htmlparser.jericho.Element element=tag.getElement();
+                        if (element!=null &amp;&amp; element.getEnd()&gt;tag.getEnd()) nodeIterator.skipToPos(element.getEnd());
+                    }
+                    continue;
+                }
+                if (tag.getTagType()==StartTagType.NORMAL) {
+                    final StartTag startTag=(StartTag)tag;
+                    if (tag.name==HTMLElementName.SCRIPT || tag.name==HTMLElementName.STYLE ||  (!HTMLElements.getElementNames().contains(tag.name))) {
+                        nodeIterator.skipToPos(startTag.getElement().getEnd());
+                        continue;
+                    }
+
+                }
+                // Treat both start and end tags not belonging to inline-level elements as whitespace:
+                if (tag.getName()==HTMLElementName.BR || !HTMLElements.getInlineLevelElementNames().contains(tag.getName())) {
+                    sb.append(' ');
+                }
+            } else {
+                sb.append(segment);
+            }
+        }
+        final String result=net.htmlparser.jericho.CharacterReference.decodeCollapseWhiteSpace(sb);
+        return result;
+    }
+}
+</code></pre>

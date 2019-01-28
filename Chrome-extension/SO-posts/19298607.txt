@@ -1,0 +1,99 @@
+<p>So for the long answer on how i got this to work. Here is how i was able to use my ROW_NUMBER() windowing function in hibernate. </p>
+
+<p>I don't know if anyone else will be looking to do something similar and the answer i have is only partial. The update that i gave allowed the partition by to be called correctly in the query to the database, but i could not use the rank value to limit the results. The below code changes that i made allowed me to use the rank value in the query.</p>
+
+<p><strong>Known Limitations</strong></p>
+
+<ol>
+<li>The rank is coded in as 1, i did not provide a way to change the number other than to change it in the code and recompile the src.</li>
+<li>This only works with setMaxResults. Because you can't use the rank value in the WHERE part of the same query, you need to wrap it and use it on another query. I needed limit on the queries i am running, so this works fine for me.</li>
+<li>You can only use one partition by. I don't know why someone would use more than one, but i thought i would just put that out there.</li>
+<li>partition needs to be all lower case. if not it won't be matched.</li>
+<li>The "as" to name the alias is all lower case. Not sure if it will ever be upper case. If it is the indexOf will not catch it. </li>
+</ol>
+
+<p>In the Oracle10gDialectExtended class mentioned above you need to add two more methods</p>
+
+<pre><code>/**
+ * I need to override the getLimitString so that i can append the partition
+ * by column on the end. If partition is not found in the string then it
+ * will not be added.
+ */
+@Override
+public String getLimitString(String sql, boolean hasOffset) {
+    // LOG.info("Using our getLimitString value");
+    sql = sql.trim();
+    String forUpdateClause = null;
+    boolean isForUpdate = false;
+    final int forUpdateIndex = sql.toLowerCase().lastIndexOf( "for update") ;
+    if ( forUpdateIndex &gt; -1 ) {
+        // save 'for update ...' and then remove it
+        forUpdateClause = sql.substring( forUpdateIndex );
+        sql = sql.substring( 0, forUpdateIndex-1 );
+        isForUpdate = true;
+    }
+    String rank = "";
+    if (sql.contains("partition")) {
+        rank = findRank(sql);
+
+    }
+    StringBuilder pagingSelect = new StringBuilder( sql.length() + 100 );
+    if (hasOffset) {
+        pagingSelect.append("select * from ( select row_.*, rownum rownum_ from ( ");
+    }
+    else {
+        pagingSelect.append("select * from ( ");
+    }
+    pagingSelect.append(sql);
+    if (hasOffset) {
+        pagingSelect.append(" ) row_ where rownum &lt;= ? ");
+        pagingSelect.append(rank);
+        pagingSelect.append(") where rownum_ &gt; ?");
+    }
+    else {
+        pagingSelect.append(" ) where rownum &lt;= ?");
+        pagingSelect.append(rank);
+    }
+
+    if ( isForUpdate ) {
+        pagingSelect.append( " " );
+        pagingSelect.append( forUpdateClause );
+    }
+
+    return pagingSelect.toString();
+}
+
+/**
+ * Take our sql query find the partition line and pull off the hibernate
+ * generated alias name.
+ * 
+ * @param sql
+ * @return String - sql with rank limit
+ */
+private String addRank(String sql) {
+    int partition = sql.indexOf("partition");
+    String rank = "";
+    if (partition != -1) {
+        int start = partition;
+        int end = sql.indexOf(',', start);
+        String aliasName = end == -1 ? sql.substring(start) : sql
+                .substring(start, end);
+        int last = aliasName.indexOf("as");
+        if (last != -1) {
+           rank = " AND "+aliasName.substring(last + 2)+ " = 1";
+        }
+    }
+    return rank;
+}
+</code></pre>
+
+<p>With those changes i was able to use my rank value without changing anything else in my Criteria query.
+The output query looks similar to this:</p>
+
+<pre><code>SELECT * FROM (SELECT ...
+    ROW_NUMBER() over(partition BY this_.ENTRY_NUMBER ORDER BY this_.ENTRY_DATE DESC) AS formula1_22_,
+... ) 
+WHERE rownum &lt;= 250 AND formula1_22_ =1
+</code></pre>
+
+<p><strong>Updated:</strong> Changes were made because i had not tested the offset query. The rank was being added to the wrong part of the query. It was easier to take the original getLimitString query and add in the rank =1 value where appropriate.</p>

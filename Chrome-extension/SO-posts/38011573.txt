@@ -1,0 +1,489 @@
+<blockquote>
+  <p>Well, Here I'm going to write a tutorial for you about capturing an
+  image using <a href="https://developer.android.com/guide/topics/media/camera.html" rel="nofollow">Camera</a> by enabling some common features of camera.</p>
+</blockquote>
+
+<p>Step 1 : Create a preview class</p>
+
+<pre><code>/**
+ * A basic Camera preview class
+ */
+public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
+    private static final String TAG = "CameraPreview";
+    private SurfaceHolder mHolder;
+    private Camera mCamera;
+
+    public CameraPreview(Context context, Camera camera) {
+        super(context);
+        mCamera = camera;
+
+        // Install a SurfaceHolder.Callback so we get notified when the
+        // underlying surface is created and destroyed.
+        mHolder = getHolder();
+        mHolder.addCallback(this);
+        // deprecated setting, but required on Android versions prior to 3.0
+        mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+        // The Surface has been created, now tell the camera where to draw the preview.
+        try {
+            mCamera.setPreviewDisplay(holder);
+            mCamera.startPreview();
+        } catch (IOException e) {
+            Log.d(TAG, "Error setting camera preview: " + e.getMessage());
+        }
+    }
+
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // empty. Take care of releasing the Camera preview in your activity.
+    }
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+        // If your preview can change or rotate, take care of those events here.
+        // Make sure to stop the preview before resizing or reformatting it.
+
+        if (mHolder.getSurface() == null) {
+            // preview surface does not exist
+            return;
+        }
+
+        // stop preview before making changes
+        try {
+            mCamera.stopPreview();
+        } catch (Exception e) {
+            // ignore: tried to stop a non-existent preview
+        }
+
+        // set preview size and make any resize, rotate or
+        // reformatting changes here
+
+        // start preview with new settings
+        startPreview();
+    }
+
+    public void resetCamera(Camera camera) {
+        mCamera = camera;
+    }
+
+    public void startPreview() {
+        try {
+            mCamera.setPreviewDisplay(mHolder);
+            mCamera.startPreview();
+        } catch (Exception e) {
+            Log.d(TAG, "Error starting camera preview: " + e.getMessage());
+        }
+    }
+}
+</code></pre>
+
+<p>Step 2 : Use <code>FrameLayout</code> to hold the preview.</p>
+
+<pre><code> &lt;FrameLayout
+        android:id="@+id/cameraPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/&gt;
+</code></pre>
+
+<p>Step 3 : Get the <code>camera</code> and send to the preview class. you may need to set the parameters that you need prior passing the camera.</p>
+
+<pre><code>   /**
+     * Create our Preview view and set it as the content of UI.
+     */
+    private void initCameraPreview(final int cameraId, final boolean createPreview) {
+        mCamera = getCameraInstance(cameraId);
+        setupCameraParameters(cameraId);
+
+        if (createPreview) {
+            mPreview = new CameraPreview(this, mCamera);
+            mPreviewHolder.addView(mPreview);
+        }
+        mReadyToCapture = true;
+    }
+
+
+
+   /**
+     * A safe way to get an instance of the Camera object.
+     */
+    private Camera getCameraInstance(int cameraId) {
+        Camera c = null;
+        try {
+            c = Camera.open(cameraId); // attempt to get a Camera instance
+        } catch (Exception e) {
+            e.printStackTrace();
+            // Camera is not available (in use or does not exist)
+        }
+        return c; // returns null if camera is unavailable
+    }
+
+
+   /**
+     * Measure and Setup the camera parameters.
+     */
+    private void setupCameraParameters(int cameraId) {
+        boolean hasFlash;
+
+        Camera.Parameters parameters = mCamera.getParameters();
+
+        mPreviewSize = determineBestPreviewSize(parameters);
+        parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
+
+        Camera.Size bestPictureSize = determineBestPictureSize(parameters);
+        parameters.setPictureSize(bestPictureSize.width, bestPictureSize.height);
+
+        hasFlash = Util.hasSystemFeature(this, PackageManager.FEATURE_CAMERA_FLASH);
+        if (mCurrentCameraId == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            hasFlash = Util.hasFrontCameraFlash(parameters);
+        } else {
+            parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+        }
+        if (hasFlash)
+            parameters.setFlashMode(mFlashMode);
+
+        int[] orientations = Util.getCameraDisplayOrientation(this, cameraId);
+
+        mDisplayOrientation = orientations[0];
+        mLayoutOrientation = orientations[1];
+
+        mCamera.setDisplayOrientation(mDisplayOrientation);
+
+        mCamera.setParameters(parameters);
+    }
+
+    private Camera.Size determineBestPreviewSize(Camera.Parameters parameters) {
+        List&lt;Camera.Size&gt; sizes = parameters.getSupportedPreviewSizes();
+        return determineBestSize(sizes);
+    }
+
+    private Camera.Size determineBestPictureSize(Camera.Parameters parameters) {
+        List&lt;Camera.Size&gt; sizes = parameters.getSupportedPictureSizes();
+        return determineBestSize(sizes);
+    }
+
+    private Camera.Size determineBestSize(List&lt;Camera.Size&gt; sizes) {
+        Camera.Size bestSize = null;
+
+        for (Camera.Size currentSize : sizes) {
+            boolean isDesiredRatio = (currentSize.width / 4) == (currentSize.height / 3);
+            boolean isBetterSize = (bestSize == null || currentSize.width &gt; bestSize.width);
+            boolean isInBounds = currentSize.width &lt;= PICTURE_SIZE_MAX_WIDTH;
+            if (isDesiredRatio &amp;&amp; isInBounds &amp;&amp; isBetterSize) {
+                bestSize = currentSize;
+            }
+        }
+
+        if (bestSize == null) {
+            return sizes.get(0);
+        }
+
+        return bestSize;
+    }
+</code></pre>
+
+<p>Step 4 : Writing method for swapping camera</p>
+
+<pre><code>   /**
+     * Swapping between system cameras
+     */
+    private void swapCamera() {
+
+        if (!(Camera.getNumberOfCameras() &gt; 1)) {
+         /* No front facing camera to switch.*/
+            return;
+        }
+
+        mReadyToCapture = false;
+
+        mCamera.stopPreview();
+        releaseCamera(false);
+
+        if (mCurrentCameraId == Camera.CameraInfo.CAMERA_FACING_BACK)
+            mCurrentCameraId = Camera.CameraInfo.CAMERA_FACING_FRONT;
+        else
+            mCurrentCameraId = Camera.CameraInfo.CAMERA_FACING_BACK;
+
+        initCameraPreview(mCurrentCameraId, false);
+        mPreview.resetCamera(mCamera);
+        mPreview.startPreview();
+    }
+</code></pre>
+
+<p>Step 5 : Method for toggling flash</p>
+
+<pre><code>   /**
+     * Toggling camera flash to ON/OFF
+     */
+    private void toggleFlash() {
+
+        if (Util.hasSystemFeature(this, PackageManager.FEATURE_CAMERA_FLASH)) {
+
+            Camera.Parameters parameters = mCamera.getParameters();
+
+
+            if (mCurrentCameraId == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                if (!Util.hasFrontCameraFlash(parameters)) {
+
+                 /* Front facing camera doesn\'t supported flash. */
+
+                    return;
+                }
+            }
+
+            mReadyToCapture = false;
+
+            if (Camera.Parameters.FLASH_MODE_ON.equals(parameters.getFlashMode())) {
+                mFlashMode = Camera.Parameters.FLASH_MODE_OFF;
+
+            } else {
+                mFlashMode = Camera.Parameters.FLASH_MODE_ON;
+
+            }
+            mCameraHandler.post(new Runnable() {
+                @Override
+                public void run() {
+
+                    mCamera.stopPreview();
+                    releaseCamera(false);
+
+                    initCameraPreview(mCurrentCameraId, false);
+
+                    mPreview.resetCamera(mCamera);
+                    mPreview.startPreview();
+                }
+            });
+
+        } else {
+            /* warning_no_flash */
+        }
+
+    }
+</code></pre>
+
+<p>Step 6: Methods for handling camera during the states changes of a screen</p>
+
+<pre><code>   /**
+     * Release the camera for other applications
+     */
+    private void releaseCamera(boolean remove) {
+        if (mCamera != null) {
+            if (remove)
+                mPreview.getHolder().removeCallback(mPreview);
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+</code></pre>
+
+<p>Step 7: Utility classes.</p>
+
+<pre><code>   /**
+     * Check whether the given feature available in s/m
+     *
+     * @return Returns true if the devices supports the feature, else
+     * false.
+     */
+    public static boolean hasSystemFeature(Context context, String feature) {
+        return context.getPackageManager().hasSystemFeature(feature);
+    }
+
+   /**
+     * Check whether front camera flash feature available in s/m
+     */
+    public static boolean hasFrontCameraFlash(Camera.Parameters cameraParameters) {
+        boolean result = true;
+        if (cameraParameters.getFlashMode() == null) {
+            result = false;
+        }
+        List&lt;String&gt; supportedFlashModes = cameraParameters.getSupportedFlashModes();
+        if (supportedFlashModes == null || supportedFlashModes.isEmpty()
+                || supportedFlashModes.size() == 1 &amp;&amp;
+                supportedFlashModes.get(0).equals(Camera.Parameters.FLASH_MODE_OFF)) {
+            result = false;
+        }
+        return result;
+    }
+
+   /**
+     * Showing camera in the same orientation as the display
+     */
+    public static int[] getCameraDisplayOrientation(Activity activity,
+                                                    int cameraId) {
+        Camera.CameraInfo info =
+                new Camera.CameraInfo();
+        Camera.getCameraInfo(cameraId, info);
+        int rotation = activity.getWindowManager().getDefaultDisplay()
+                .getRotation();
+        int degrees = 0;
+        switch (rotation) {
+            case Surface.ROTATION_0:
+                degrees = 0;
+                break;
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+        }
+
+        int result;
+        if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            result = (info.orientation + degrees) % 360;
+            result = (360 - result) % 360;  // compensate the mirror
+        } else {  // back-facing
+            result = (info.orientation - degrees + 360) % 360;
+        }
+        return new int[]{result, degrees};
+    }
+</code></pre>
+
+<p>Step 8: Capturing</p>
+
+<pre><code>  // Get an image from the camera
+ if (null != mCamera &amp;&amp; mReadyToCapture) {
+     mCameraOrientationListener.rememberOrientation();
+     mCamera.takePicture(mShutter, null, mPicture)
+    }
+
+   /**
+     * Camera shutter sound callback,
+     * used to enable sound while capture
+     */
+    private Camera.ShutterCallback mShutter = new Camera.ShutterCallback() {
+        @Override
+        public void onShutter() {
+
+        }
+    };
+
+    /**
+     * Camera picture callback
+     */
+    private Camera.PictureCallback mPicture = new Camera.PictureCallback() {
+        @Override
+        public void onPictureTaken(byte[] data, Camera camera) {
+            mReadyToCapture = false;
+
+
+            Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+
+            int rotation = ((mCurrentCameraId == Camera.CameraInfo.CAMERA_FACING_BACK ? mDisplayOrientation :
+                    ((360 - mDisplayOrientation) % 360)) + mCameraOrientationListener.getRememberedOrientation()
+                    + mLayoutOrientation) % 360;
+
+            if (rotation != 0) {
+                Matrix matrix = new Matrix();
+                matrix.postRotate(rotation);
+                bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, false);
+            }
+
+
+        }
+    };
+</code></pre>
+
+<p>Step 9: Camera orientation listener for handling image rotation</p>
+
+<pre><code>/**
+ * Orientation listener to remember the device's orientation when the user presses
+ * the shutter button.
+ * &lt;p/&gt;
+ * The orientation will be normalized to return it in steps of 90 degrees
+ * (0, 90, 180, 270).
+ */
+public class CameraOrientationListener extends OrientationEventListener {
+    private int currentNormalizedOrientation;
+    private int rememberedNormalizedOrientation;
+
+    public CameraOrientationListener(Context context) {
+        super(context, SensorManager.SENSOR_DELAY_NORMAL);
+    }
+
+    @Override
+    public void onOrientationChanged(int orientation) {
+        if (orientation != ORIENTATION_UNKNOWN) {
+            currentNormalizedOrientation = normalize(orientation);
+        }
+    }
+
+    private int normalize(int degrees) {
+        if (degrees &gt; 315 || degrees &lt;= 45) {
+            return 0;
+        }
+
+        if (degrees &gt; 45 &amp;&amp; degrees &lt;= 135) {
+            return 90;
+        }
+
+        if (degrees &gt; 135 &amp;&amp; degrees &lt;= 225) {
+            return 180;
+        }
+
+        if (degrees &gt; 225 &amp;&amp; degrees &lt;= 315) {
+            return 270;
+        }
+
+        throw new RuntimeException("The physics as we know them are no more. Watch out for anomalies.");
+    }
+
+    public void rememberOrientation() {
+        rememberedNormalizedOrientation = currentNormalizedOrientation;
+    }
+
+    public int getRememberedOrientation() {
+        return rememberedNormalizedOrientation;
+    }
+}
+</code></pre>
+
+<p>Step 10: States handling</p>
+
+<pre><code>   @Override
+    public void onPause() {
+        super.onPause();
+        mReadyToCapture = false;
+        releaseCamera(true);
+    }
+
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        removePreview();
+        mReadyToCapture = false;
+        smoothCameraLoading();
+    }
+
+   private void removePreview() {
+        mPreviewHolder.removeAllViews();
+    }
+
+   private void smoothCameraLoading() {
+        mCameraHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                initCameraPreview(mCurrentCameraId, true);
+            }
+        });
+    }
+</code></pre>
+
+<p>Step 11: Instance variable used</p>
+
+<pre><code>    private String mFlashMode = Camera.Parameters.FLASH_MODE_OFF;
+    private int mCurrentCameraId = Camera.CameraInfo.CAMERA_FACING_BACK;
+    private int mDisplayOrientation;
+    private int mLayoutOrientation;
+    private boolean mReadyToCapture = false;
+    private Camera.Size mPreviewSize;
+    private FrameLayout mPreviewHolder;
+    private Camera mCamera;
+    private CameraPreview mPreview;
+    private Handler mCameraHandler;
+    private CameraOrientationListener mCameraOrientationListener;
+    private FrameLayout mRootView;
+</code></pre>

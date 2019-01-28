@@ -1,0 +1,164 @@
+<p>Short Answer: Yes, the SSL certificate is causing the problem. Solution for self-signed and out-of-order certificates below.</p>
+
+<p><em>NOTE</em>: I'm pretty sure this doesn't take away from security, but I'm also not sure if the order of the SSL certificates is super important. So take this with a grain of salt. I definitely plan on taking this out once the live environment is up and running, so I wouldn't recommend keeping this code in your app unless your environment is completely controlled and all hosts that you will be connecting to are known.</p>
+
+<p>Step 1: Out of order certificates.
+Need to define a custom TrustManager that will handle bad certificates for you.
+(I found a reference to this solution online somwhere, but I can't find the link now).</p>
+
+<pre><code>/**
+ * Created by Nevuroth on 1/19/15.
+ */
+public class CustomX509TrustManager implements X509TrustManager{
+
+private X509TrustManager defaultManager = null;
+
+/**
+ * Custom constructor for the x509 trust manager. This workaround won't take away from security, but it will drop and accept the self signed cert for our test server at the
+ * end of the cert chain, as well as allowing
+ *
+ * @param keyStore
+ * @throws NoSuchAlgorithmException
+ * @throws KeyStoreException
+ */
+public CustomX509TrustManager(KeyStore keyStore) throws NoSuchAlgorithmException, KeyStoreException{
+    super();
+    TrustManagerFactory factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+    factory.init(keyStore);
+    TrustManager[] trustManagers = factory.getTrustManagers();
+    if(trustManagers.length ==0){
+        throw new NoSuchAlgorithmException("Failed to find Default trust managers");
+    }
+
+    this.defaultManager = (X509TrustManager) trustManagers[0];
+
+}
+
+
+//we just want the standard functionality for x509
+@Override
+public void checkClientTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException {
+    defaultManager.checkClientTrusted(x509Certificates, s);
+}
+
+/**
+ *  Here's where the magic happens, we're going to be compensating for out of order certificates in the X509 header
+ *  as well as compensating for self-signed certificates (kind of), by passing the certificate before it in the chain
+ *  to the chekc servertrusted method
+ *  This won't compensate for purely self-signed certs.... but you can do so by adding it to the accepted issuers method.
+ * @param x509Certificates
+ * @param s
+ * @throws CertificateException
+ */
+
+@Override
+public void checkServerTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException {
+
+    //Clean the certificates and make sure they are in the proper order.
+    int chainln = x509Certificates.length;
+    if(x509Certificates.length &gt; 1){
+        //Clean the chains by matching issuer and subject fields until we can't continue
+        int index;
+        boolean foundNext;
+        for(index=0; index &lt; x509Certificates.length; ++index){
+            foundNext = false;
+            for(int nextIndex = index + 1; nextIndex &lt; x509Certificates.length; ++nextIndex){
+                //look for the next certificate in the chain.
+                if(x509Certificates[index].getIssuerDN().equals(x509Certificates[nextIndex].getSubjectDN())){
+                    foundNext = true;
+                    //exchange certificates so that 0 through index+1 are in proper order.
+                    if(nextIndex != index+1){
+                        X509Certificate tempCert = x509Certificates[nextIndex];
+                        x509Certificates[nextIndex] = x509Certificates[index+1];
+                        x509Certificates[index+1] = tempCert;
+                    }
+                    break;
+                }
+
+            }
+
+            if(!foundNext){
+                break;
+            }
+
+        }
+
+        //if the cert is self signed and if it is expired, if so we drop it and pass the rest to checkServerTrusted, hoping we may have a similar bu unexpired trusted root.
+        chainln = index +1;
+        X509Certificate lastCert = x509Certificates[chainln - 1];
+        Date now = new Date();
+        if(lastCert.getSubjectDN().equals(lastCert.getIssuerDN()) &amp;&amp; now.after(lastCert.getNotAfter())){
+            --chainln;
+        }
+    }
+
+    defaultManager.checkServerTrusted(x509Certificates, s);
+
+}
+
+//you can add an accepted issuer
+@Override
+public X509Certificate[] getAcceptedIssuers() {
+    return this.defaultManager.getAcceptedIssuers();
+}
+}
+</code></pre>
+
+<p>Step 2: Create a custom SSLSocketFactory that will implement our new trust manager.</p>
+
+<pre><code>/**
+ * Created by Nevuroth on 1/19/15.
+ */
+    public class CustomSSLSocketFactory extends SSLSocketFactory {
+SSLContext sslContext = SSLContext.getInstance("TLS");
+
+
+public CustomSSLSocketFactory(KeyStore truststore) throws NoSuchAlgorithmException, KeyManagementException, UnrecoverableKeyException, KeyStoreException {
+    super(truststore);
+
+    TrustManager tm = new CustomX509TrustManager(truststore);
+
+    sslContext.init(null, new TrustManager[]{tm}, null);
+
+}
+
+@Override
+public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException {
+    return sslContext.getSocketFactory().createSocket(socket, host, port,autoClose);
+}
+
+@Override
+public Socket createSocket() throws IOException{
+    return sslContext.getSocketFactory().createSocket();
+}
+}
+</code></pre>
+
+<p>Step 3: Implement a new HTTPClient that uses the custom SSLSocketFactory that we just created. Use this when defining your HTTPClient for https connections.</p>
+
+<pre><code>public HttpClient getNewHttpClient(){
+    try{
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+
+        SSLSocketFactory sf = new CustomSSLSocketFactory(trustStore);
+        //sf.setHostnameVerifier(SSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER);
+
+        HttpParams params = new BasicHttpParams();
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+
+        SchemeRegistry registry = new SchemeRegistry();
+        registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(),80));
+        registry.register(new Scheme("https", sf,443));
+
+        ClientConnectionManager ccm = new ThreadSafeClientConnManager(params,registry);
+
+        return new DefaultHttpClient(ccm, params);
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        //if we get an error here then we need to return something or a fatal network error will occur.
+        return new DefaultHttpClient();
+    }
+}
+</code></pre>

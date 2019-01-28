@@ -1,0 +1,226 @@
+<p>I'm not entirely sure why creating a new <code>LoggingEvent</code> is so onerous. This seems to work for me:</p>
+
+<pre><code>package test.logging;
+
+import org.apache.log4j.DailyRollingFileAppender;
+import org.apache.log4j.spi.LoggingEvent;
+
+public class MyDailyRollingFileAppender extends DailyRollingFileAppender {
+
+    @Override
+    protected void subAppend(LoggingEvent event) {
+        String modifiedMessage = String.format("**** Message modified by MyDailyRollingFileAppender ****\n\n%s\n\n**** Finished modified message ****", event.getMessage());
+        LoggingEvent modifiedEvent = new LoggingEvent(event.getFQNOfLoggerClass(), event.getLogger(), event.getTimeStamp(), event.getLevel(), modifiedMessage,
+                                                      event.getThreadName(), event.getThrowableInformation(), event.getNDC(), event.getLocationInformation(),
+                                                      event.getProperties());
+
+        super.subAppend(modifiedEvent);
+    }
+
+}
+</code></pre>
+
+<p>With this test:</p>
+
+<pre><code>package test;
+
+import org.apache.log4j.Logger;
+
+public class TestLogging {
+
+    public static void main(String[] args) {
+        Logger log = Logger.getLogger(TestLogging.class);
+        log.info("I am testing my logging");
+        log.info("Here is an exception", new Exception());
+    }
+
+}
+</code></pre>
+
+<p>and this configuration:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8" ?&gt;
+&lt;!DOCTYPE log4j:configuration SYSTEM "log4j.dtd"&gt;
+
+&lt;log4j:configuration xmlns:log4j="http://jakarta.apache.org/log4j/"&gt;
+
+    &lt;appender name="MyDailyRollingFileAppender" class="test.logging.MyDailyRollingFileAppender"&gt;
+        &lt;param name="Append" value="true"/&gt;
+        &lt;param name="datePattern" value="'.'yyyy-MM-dd"/&gt;
+        &lt;param name="File" value="mine.log"/&gt;
+        &lt;layout class="org.apache.log4j.PatternLayout"&gt;
+            &lt;param name="ConversionPattern" value="%d %-5p (%x) [%t] %c{1} - %m%n" /&gt;
+        &lt;/layout&gt;
+    &lt;/appender&gt;
+
+    &lt;root&gt;
+        &lt;priority value="debug"/&gt;
+        &lt;appender-ref ref="MyDailyRollingFileAppender"/&gt;
+    &lt;/root&gt;
+
+&lt;/log4j:configuration&gt;
+</code></pre>
+
+<p>I am getting the following output:</p>
+
+<pre><code>2011-10-14 10:09:09,322 INFO  () [main] TestLogging - **** Message modified by MyDailyRollingFileAppender ****
+
+I am testing my logging
+
+**** Finished modified message ****
+2011-10-14 10:09:09,333 INFO  () [main] TestLogging - **** Message modified by MyDailyRollingFileAppender ****
+
+Here is an exception
+
+**** Finished modified message ****
+java.lang.Exception
+    at test.TestLogging.main(TestLogging.java:10)
+    at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+    at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:39)
+    at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:25)
+    at java.lang.reflect.Method.invoke(Method.java:597)
+    at com.intellij.rt.execution.application.AppMain.main(AppMain.java:120)
+</code></pre>
+
+<p>Although I have done something similar to this, I used a slightly different approach. Instead of writing subclasses of each type of <code>Appender</code> I wanted to use, I created an <code>Appender</code> which wraps other <code>Appender</code> objects, and modifies the message before sending to the wrapped <code>Appender</code>s.  Something like this:</p>
+
+<pre><code>package test.logging;
+
+import org.apache.log4j.Appender;
+import org.apache.log4j.AppenderSkeleton;
+import org.apache.log4j.spi.AppenderAttachable;
+import org.apache.log4j.spi.LoggingEvent;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
+
+public class MyAppenderWrapper extends AppenderSkeleton implements AppenderAttachable {
+
+    private final List&lt;Appender&gt; appenders = new ArrayList&lt;Appender&gt;();
+
+    public void close() {
+        synchronized (appenders) {
+            for (Appender appender : appenders) {
+                appender.close();
+            }
+        }
+    }
+
+    public boolean requiresLayout() {
+        return false;
+    }
+
+    public void addAppender(Appender appender) {
+        synchronized (appenders) {
+            appenders.add(appender);
+        }
+    }
+
+    public Enumeration getAllAppenders() {
+        return Collections.enumeration(appenders);
+    }
+
+    public Appender getAppender(String name) {
+        synchronized (appenders) {
+            for (Appender appender : appenders) {
+                if (appender.getName().equals(name)) {
+                    return appender;
+                }
+            }
+        }
+        return null;
+    }
+
+    public boolean isAttached(Appender appender) {
+        synchronized (appenders) {
+            for (Appender wrapped : appenders) {
+                if (wrapped.equals(appender)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    public void removeAllAppenders() {
+        synchronized (appenders) {
+            appenders.clear();
+        }
+    }
+
+    public void removeAppender(Appender appender) {
+        synchronized (appenders) {
+            for (Iterator&lt;Appender&gt; i = appenders.iterator(); i.hasNext(); ) {
+                if (i.next().equals(appender)) {
+                    i.remove();
+                }
+            }
+        }
+    }
+
+    public void removeAppender(String name) {
+        synchronized (appenders) {
+            for (Iterator&lt;Appender&gt; i = appenders.iterator(); i.hasNext(); ) {
+                if (i.next().getName().equals(name)) {
+                    i.remove();
+                }
+            }
+        }
+    }
+
+    @Override
+    protected void append(LoggingEvent event) {
+        String modifiedMessage = String.format("**** Message modified by MyAppenderWrapper ****\n\n%s\n\n**** Finished modified message ****", event.getMessage());
+        LoggingEvent modifiedEvent = new LoggingEvent(event.getFQNOfLoggerClass(), event.getLogger(), event.getTimeStamp(), event.getLevel(), modifiedMessage,
+                                                      event.getThreadName(), event.getThrowableInformation(), event.getNDC(), event.getLocationInformation(),
+                                                      event.getProperties());
+
+        synchronized (appenders) {
+            for (Appender appender : appenders) {
+                appender.doAppend(modifiedEvent);
+            }
+        }
+    }
+
+}
+</code></pre>
+
+<p>Which you could configure like:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8" ?&gt;
+&lt;!DOCTYPE log4j:configuration SYSTEM "log4j.dtd"&gt;
+
+&lt;log4j:configuration xmlns:log4j="http://jakarta.apache.org/log4j/"&gt;
+
+    &lt;appender name="StdOut" class="org.apache.log4j.ConsoleAppender"&gt;
+        &lt;layout class="org.apache.log4j.PatternLayout"&gt;
+            &lt;param name="ConversionPattern" value="%d %-5p (%x) [%t] %c{1} - %m%n" /&gt;
+        &lt;/layout&gt;
+    &lt;/appender&gt;
+
+    &lt;appender name="FileAppender" class="org.apache.log4j.DailyRollingFileAppender"&gt;
+        &lt;param name="Append" value="true"/&gt;
+        &lt;param name="datePattern" value="'.'yyyy-MM-dd"/&gt;
+        &lt;param name="File" value="mine.log"/&gt;
+        &lt;layout class="org.apache.log4j.PatternLayout"&gt;
+            &lt;param name="ConversionPattern" value="%d %-5p (%x) [%t] %c{1} - %m%n" /&gt;
+        &lt;/layout&gt;
+    &lt;/appender&gt;
+
+    &lt;appender name="AppenderWrapper" class="test.logging.MyAppenderWrapper"&gt;
+        &lt;appender-ref ref="StdOut"/&gt;
+        &lt;appender-ref ref="FileAppender"/&gt;
+    &lt;/appender&gt;
+
+    &lt;root&gt;
+        &lt;priority value="debug"/&gt;
+        &lt;appender-ref ref="AppenderWrapper"/&gt;
+    &lt;/root&gt;
+
+&lt;/log4j:configuration&gt;
+</code></pre>
+
+<p>That way the message is still sent to the original appenders but with the modified message.</p>

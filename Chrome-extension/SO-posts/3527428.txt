@@ -1,0 +1,92 @@
+<p>****UPDATE 1 (2012)****</p>
+
+<p>OK, I've finally gotten around to cleaning up the code snippet below.  I stuck it into it's own github project and even added tests.</p>
+
+<p><a href="https://github.com/ddopson/java-class-enumerator" rel="nofollow">https://github.com/ddopson/java-class-enumerator</a></p>
+
+<p>****UPDATE 2 (2016)****</p>
+
+<p>For an even more robust and feature-rich classpath scanner, see <a href="https://github.com/lukehutch/fast-classpath-scanner/wiki" rel="nofollow">https://github.com/lukehutch/fast-classpath-scanner/wiki</a>. I'd recommend first reading my code snippet to gain a high level understanding, then using lukehutch's tool for production purposes.</p>
+
+<p>****Original Post (2010)****</p>
+
+<p>Strictly speaking, it isn't possible to list the classes in a <em>package</em>.  This is because a package is really nothing more than a namespace (eg com.epicapplications.foo.bar), and any jar-file in the classpath could potentially add classes into a package.  Even worse, the classloader will load classes on demand, and part of the classpath might be on the other side of a network connection.</p>
+
+<p>It is possible to solve a more restrictive problem.  eg, all classes in a JAR file, or all classes that a JAR file defines within a particular package.  This is the more common scenario anyways.</p>
+
+<p>Unfortunately, there isn't any framework code to make this task easy.  You have to scan the filesystem in a manner similar to how the ClassLoader would look for class definitions.</p>
+
+<p>There are a lot of samples on the web for class files in plain-old-directories.  Most of us these days work with JAR files.</p>
+
+<p>To get things working with JAR files, try this...</p>
+
+<pre><code>private static ArrayList&lt;Class&lt;?&gt;&gt; getClassesForPackage(Package pkg) {
+    String pkgname = pkg.getName();
+    ArrayList&lt;Class&lt;?&gt;&gt; classes = new ArrayList&lt;Class&lt;?&gt;&gt;();
+    // Get a File object for the package
+    File directory = null;
+    String fullPath;
+    String relPath = pkgname.replace('.', '/');
+    System.out.println("ClassDiscovery: Package: " + pkgname + " becomes Path:" + relPath);
+    URL resource = ClassLoader.getSystemClassLoader().getResource(relPath);
+    System.out.println("ClassDiscovery: Resource = " + resource);
+    if (resource == null) {
+        throw new RuntimeException("No resource for " + relPath);
+    }
+    fullPath = resource.getFile();
+    System.out.println("ClassDiscovery: FullPath = " + resource);
+
+    try {
+        directory = new File(resource.toURI());
+    } catch (URISyntaxException e) {
+        throw new RuntimeException(pkgname + " (" + resource + ") does not appear to be a valid URL / URI.  Strange, since we got it from the system...", e);
+    } catch (IllegalArgumentException e) {
+        directory = null;
+    }
+    System.out.println("ClassDiscovery: Directory = " + directory);
+
+    if (directory != null &amp;&amp; directory.exists()) {
+        // Get the list of the files contained in the package
+        String[] files = directory.list();
+        for (int i = 0; i &lt; files.length; i++) {
+            // we are only interested in .class files
+            if (files[i].endsWith(".class")) {
+                // removes the .class extension
+                String className = pkgname + '.' + files[i].substring(0, files[i].length() - 6);
+                System.out.println("ClassDiscovery: className = " + className);
+                try {
+                    classes.add(Class.forName(className));
+                } 
+                catch (ClassNotFoundException e) {
+                    throw new RuntimeException("ClassNotFoundException loading " + className);
+                }
+            }
+        }
+    }
+    else {
+        try {
+            String jarPath = fullPath.replaceFirst("[.]jar[!].*", ".jar").replaceFirst("file:", "");
+            JarFile jarFile = new JarFile(jarPath);         
+            Enumeration&lt;JarEntry&gt; entries = jarFile.entries();
+            while(entries.hasMoreElements()) {
+                JarEntry entry = entries.nextElement();
+                String entryName = entry.getName();
+                if(entryName.startsWith(relPath) &amp;&amp; entryName.length() &gt; (relPath.length() + "/".length())) {
+                    System.out.println("ClassDiscovery: JarEntry: " + entryName);
+                    String className = entryName.replace('/', '.').replace('\\', '.').replace(".class", "");
+                    System.out.println("ClassDiscovery: className = " + className);
+                    try {
+                        classes.add(Class.forName(className));
+                    } 
+                    catch (ClassNotFoundException e) {
+                        throw new RuntimeException("ClassNotFoundException loading " + className);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(pkgname + " (" + directory + ") does not appear to be a valid package", e);
+        }
+    }
+    return classes;
+}
+</code></pre>

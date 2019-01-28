@@ -1,0 +1,439 @@
+<p>The <code>FrameLayout</code> documentation states the following:</p>
+
+<blockquote>
+  <p>FrameLayout is designed to block out an area on the screen to display
+  a single item. Generally, FrameLayout should be used to hold a single
+  child view, because it can be difficult to organize child views in a
+  way that's scalable to different screen sizes without the children
+  overlapping each other.</p>
+</blockquote>
+
+<p>This was reason for me to drop the <code>FrameLayout</code>. </p>
+
+<p>Then I started searching for a different <code>ViewGroup</code> which supports positioning elements by x / y and the ability to provide a gravity. </p>
+
+<p>The <code>AbsoluteLayout</code> only supports positioning by x / y (and also is deprecated).</p>
+
+<p>The <code>RelativeLayout</code> does extra measuring which (in my case) means bad performance.</p>
+
+<p>So I ended up creating my own <code>ViewGroup</code>, which is basically a merge of the <code>FrameLayout</code>'s gravity, and the <code>AbsoluteLayout</code>'s x/y:</p>
+
+<pre><code>package com.example.common.widget;
+
+import java.util.ArrayList;
+
+import android.content.Context;
+import android.content.res.TypedArray;
+import android.util.AttributeSet;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+
+public class FixedLayout extends ViewGroup
+{
+    private static final int DEFAULT_CHILD_GRAVITY = Gravity.TOP;
+
+    private final ArrayList&lt;View&gt; mMatchParentChildren = new ArrayList&lt;View&gt;();
+
+    public FixedLayout(Context context)
+    {
+        super(context);
+    }
+
+    public FixedLayout(Context context, AttributeSet attrs)
+    {
+        super(context, attrs);
+    }
+
+    public FixedLayout(Context context, AttributeSet attrs, int defStyle)
+    {
+        super(context, attrs, defStyle);
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec)
+    {
+        int count = getChildCount();
+
+        final boolean measureMatchParentChildren =
+                MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.EXACTLY
+                        || MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.EXACTLY;
+        mMatchParentChildren.clear();
+
+        int maxHeight = 0;
+        int maxWidth = 0;
+        int childState = 0;
+
+        // Find rightmost and bottom-most child
+        for (int i = 0; i &lt; count; i++) {
+            View child = getChildAt(i);
+            if (child.getVisibility() != GONE) {
+                measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, 0);
+                final LayoutParams lp = (LayoutParams)child.getLayoutParams();
+                maxWidth =
+                        Math.max(maxWidth, child.getMeasuredWidth() + lp.leftMargin
+                                + lp.rightMargin);
+                maxHeight =
+                        Math.max(maxHeight, child.getMeasuredHeight() + lp.topMargin
+                                + lp.bottomMargin);
+                childState = childState | getChildMeasuredState(child);
+                if (measureMatchParentChildren) {
+                    if (lp.width == LayoutParams.MATCH_PARENT
+                            || lp.height == LayoutParams.MATCH_PARENT) {
+                        mMatchParentChildren.add(child);
+                    }
+                }
+            }
+        }
+
+        // Account for padding too
+        maxWidth += getPaddingLeft() + getPaddingRight();
+        maxHeight += getPaddingTop() + getPaddingBottom();
+
+        // Check against minimum height and width
+        maxHeight = Math.max(maxHeight, getSuggestedMinimumHeight());
+        maxWidth = Math.max(maxWidth, getSuggestedMinimumWidth());
+
+        setMeasuredDimension(
+                getResolvedSizeAndState(maxWidth, widthMeasureSpec, childState),
+                getResolvedSizeAndState(maxHeight, heightMeasureSpec,
+                        childState &lt;&lt; MEASURED_HEIGHT_STATE_SHIFT));
+
+        for (int i = 0; i &lt; mMatchParentChildren.size(); i++) {
+            final View child = mMatchParentChildren.get(i);
+
+            final LayoutParams lp = (LayoutParams)child.getLayoutParams();
+            int childWidthMeasureSpec;
+            int childHeightMeasureSpec;
+
+            if (lp.width == LayoutParams.MATCH_PARENT) {
+                childWidthMeasureSpec =
+                        MeasureSpec.makeMeasureSpec(getMeasuredWidth() - getPaddingLeft()
+                                - getPaddingRight() - lp.leftMargin - lp.rightMargin - lp.x,
+                                MeasureSpec.EXACTLY);
+            }
+            else {
+                childWidthMeasureSpec =
+                        getChildMeasureSpec(widthMeasureSpec, getPaddingLeft() + getPaddingRight()
+                                + lp.leftMargin + lp.rightMargin + lp.x, lp.width);
+            }
+
+            if (lp.height == LayoutParams.MATCH_PARENT) {
+                childHeightMeasureSpec =
+                        MeasureSpec.makeMeasureSpec(getMeasuredHeight() - getPaddingTop()
+                                - getPaddingBottom() - lp.topMargin - lp.bottomMargin - lp.y,
+                                MeasureSpec.EXACTLY);
+            }
+            else {
+                childHeightMeasureSpec =
+                        getChildMeasureSpec(heightMeasureSpec, getPaddingTop() + getPaddingBottom()
+                                + lp.topMargin + lp.bottomMargin + lp.y, lp.height);
+            }
+
+            child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+        }
+    }
+
+    /**
+     * Returns a set of layout parameters with a width of
+     * {@link android.view.ViewGroup.LayoutParams#WRAP_CONTENT}, a height of
+     * {@link android.view.ViewGroup.LayoutParams#WRAP_CONTENT} and with the coordinates (0, 0).
+     */
+    @Override
+    protected ViewGroup.LayoutParams generateDefaultLayoutParams()
+    {
+        return new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, 0, 0);
+    }
+
+    /**
+     * Ask one of the children of this view to measure itself, taking into account both the
+     * MeasureSpec requirements for this view and its padding and margins. The child must have
+     * MarginLayoutParams The heavy lifting is done in getChildMeasureSpec.
+     * 
+     * @param child
+     *            The child to measure
+     * @param parentWidthMeasureSpec
+     *            The width requirements for this view
+     * @param widthUsed
+     *            Extra space that has been used up by the parent horizontally (possibly by other
+     *            children of the parent)
+     * @param parentHeightMeasureSpec
+     *            The height requirements for this view
+     * @param heightUsed
+     *            Extra space that has been used up by the parent vertically (possibly by other
+     *            children of the parent)
+     */
+    @Override
+    protected void measureChildWithMargins(View child, int parentWidthMeasureSpec, int widthUsed,
+            int parentHeightMeasureSpec, int heightUsed)
+    {
+        final LayoutParams lp = (LayoutParams)child.getLayoutParams();
+
+        final int childWidthMeasureSpec =
+                getChildMeasureSpec(parentWidthMeasureSpec, getPaddingLeft() + getPaddingRight()
+                        + lp.leftMargin + lp.rightMargin + lp.x + widthUsed, lp.width);
+        final int childHeightMeasureSpec =
+                getChildMeasureSpec(parentHeightMeasureSpec, getPaddingTop() + getPaddingBottom()
+                        + lp.topMargin + lp.bottomMargin + lp.y + heightUsed, lp.height);
+
+        child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom)
+    {
+        int count = getChildCount();
+
+        final int parentLeft = getPaddingLeft();
+        final int parentRight = right - left - getPaddingRight();
+
+        final int parentTop = getPaddingTop();
+        final int parentBottom = bottom - top - getPaddingBottom();
+
+        for (int i = 0; i &lt; count; i++) {
+            View child = getChildAt(i);
+            if (child.getVisibility() != GONE) {
+                final LayoutParams lp = (LayoutParams)child.getLayoutParams();
+
+                final int width = child.getMeasuredWidth();
+                final int height = child.getMeasuredHeight();
+
+                int childLeft;
+                int childTop;
+
+                int gravity = lp.gravity;
+                if (gravity == -1) {
+                    gravity = DEFAULT_CHILD_GRAVITY;
+                }
+
+                final int horizontalGravity = gravity &amp; Gravity.HORIZONTAL_GRAVITY_MASK;
+                final int verticalGravity = gravity &amp; Gravity.VERTICAL_GRAVITY_MASK;
+
+                switch (horizontalGravity) {
+                    case Gravity.LEFT:
+                        childLeft = parentLeft + lp.x;
+                        break;
+                    case Gravity.CENTER_HORIZONTAL:
+                        childLeft = parentLeft + (parentRight - parentLeft - width) / 2 + lp.x;
+                        break;
+                    case Gravity.RIGHT:
+                        childLeft = parentRight - width - lp.x;
+                        break;
+                    default:
+                        childLeft = parentLeft + lp.x;
+                }
+
+                switch (verticalGravity) {
+                    case Gravity.TOP:
+                        childTop = parentTop + lp.y;
+                        break;
+                    case Gravity.CENTER_VERTICAL:
+                        childTop = parentTop + (parentBottom - parentTop - height) / 2 + lp.y;
+                        break;
+                    case Gravity.BOTTOM:
+                        childTop = parentBottom - height - lp.y;
+                        break;
+                    default:
+                        childTop = parentTop + lp.y;
+                }
+
+                child.layout(childLeft, childTop, childLeft + width, childTop + height);
+            }
+        }
+    }
+
+    @Override
+    public ViewGroup.LayoutParams generateLayoutParams(AttributeSet attrs)
+    {
+        return new FixedLayout.LayoutParams(getContext(), attrs);
+    }
+
+    // Override to allow type-checking of LayoutParams.
+    @Override
+    protected boolean checkLayoutParams(ViewGroup.LayoutParams p)
+    {
+        return p instanceof FixedLayout.LayoutParams;
+    }
+
+    @Override
+    protected ViewGroup.LayoutParams generateLayoutParams(ViewGroup.LayoutParams p)
+    {
+        return new LayoutParams(p);
+    }
+
+    @Override
+    public boolean shouldDelayChildPressedState()
+    {
+        return false;
+    }
+
+    /**
+     * Return only the state bits of {@link #getMeasuredWidthAndState()} and
+     * {@link #getMeasuredHeightAndState()} of a child view, combined into one integer. The width
+     * component is in the regular bits {@link #MEASURED_STATE_MASK} and the height component is at
+     * the shifted bits {@link #MEASURED_HEIGHT_STATE_SHIFT}&gt;&gt;{@link #MEASURED_STATE_MASK}.
+     */
+    public final int getChildMeasuredState(View child)
+    {
+        return (child.getMeasuredWidth() &amp; MEASURED_STATE_MASK)
+                | ((child.getMeasuredHeight() &gt;&gt; MEASURED_HEIGHT_STATE_SHIFT) &amp; (MEASURED_STATE_MASK &gt;&gt; MEASURED_HEIGHT_STATE_SHIFT));
+    }
+
+    /**
+     * Utility to reconcile a desired size and state, with constraints imposed by a MeasureSpec.
+     * Will take the desired size, unless a different size is imposed by the constraints. The
+     * returned value is a compound integer, with the resolved size in the
+     * {@link #MEASURED_SIZE_MASK} bits and optionally the bit {@link #MEASURED_STATE_TOO_SMALL} set
+     * if the resulting size is smaller than the size the view wants to be.
+     * 
+     * @param size
+     *            How big the view wants to be
+     * @param measureSpec
+     *            Constraints imposed by the parent
+     * @return Size information bit mask as defined by {@link #MEASURED_SIZE_MASK} and
+     *         {@link #MEASURED_STATE_TOO_SMALL}.
+     */
+    public static int getResolvedSizeAndState(int size, int measureSpec, int childMeasuredState)
+    {
+        int result = size;
+        int specMode = MeasureSpec.getMode(measureSpec);
+        int specSize = MeasureSpec.getSize(measureSpec);
+        switch (specMode) {
+            case MeasureSpec.UNSPECIFIED:
+                result = size;
+                break;
+            case MeasureSpec.AT_MOST:
+                if (specSize &lt; size) {
+                    result = specSize | MEASURED_STATE_TOO_SMALL;
+                }
+                else {
+                    result = size;
+                }
+                break;
+            case MeasureSpec.EXACTLY:
+                result = specSize;
+                break;
+        }
+        return result | (childMeasuredState &amp; MEASURED_STATE_MASK);
+    }
+
+    /**
+     * Per-child layout information associated with AbsoluteLayout. See
+     * {@link android.R.styleable#AbsoluteLayout_Layout Absolute Layout Attributes} for a list of
+     * all child view attributes that this class supports.
+     */
+    public static class LayoutParams extends ViewGroup.MarginLayoutParams
+    {
+        /**
+         * The horizontal, or X, location of the child within the view group.
+         */
+        public int x;
+
+        /**
+         * The vertical, or Y, location of the child within the view group.
+         */
+        public int y;
+
+        /**
+         * The gravity to apply with the View to which these layout parameters are associated.
+         * 
+         * @see android.view.Gravity
+         */
+        public int gravity = -1;
+
+        /**
+         * Creates a new set of layout parameters with the specified width, height and location.
+         * 
+         * @param width
+         *            the width, either {@link #MATCH_PARENT}, {@link #WRAP_CONTENT} or a fixed size
+         *            in pixels
+         * @param height
+         *            the height, either {@link #MATCH_PARENT}, {@link #WRAP_CONTENT} or a fixed
+         *            size in pixels
+         */
+        public LayoutParams(int width, int height)
+        {
+            super(width, height);
+        }
+
+        /**
+         * Creates a new set of layout parameters with the specified width, height and location.
+         * 
+         * @param width
+         *            the width, either {@link #MATCH_PARENT}, {@link #WRAP_CONTENT} or a fixed size
+         *            in pixels
+         * @param height
+         *            the height, either {@link #MATCH_PARENT}, {@link #WRAP_CONTENT} or a fixed
+         *            size in pixels
+         * @param x
+         *            the X location of the child
+         * @param y
+         *            the Y location of the child
+         */
+        public LayoutParams(int width, int height, int x, int y)
+        {
+            super(width, height);
+            this.x = x;
+            this.y = y;
+        }
+
+        /**
+         * Creates a new set of layout parameters. The values are extracted from the supplied
+         * attributes set and context. The XML attributes mapped to this set of layout parameters
+         * are:
+         * 
+         * &lt;ul&gt;
+         * &lt;li&gt;&lt;code&gt;layout_x&lt;/code&gt;: the X location of the child&lt;/li&gt;
+         * &lt;li&gt;&lt;code&gt;layout_y&lt;/code&gt;: the Y location of the child&lt;/li&gt;
+         * &lt;li&gt;All the XML attributes from {@link android.view.ViewGroup.LayoutParams}&lt;/li&gt;
+         * &lt;/ul&gt;
+         * 
+         * @param c
+         *            the application environment
+         * @param attrs
+         *            the set of attributes from which to extract the layout parameters values
+         */
+        public LayoutParams(Context c, AttributeSet attrs)
+        {
+            super(c, attrs);
+            TypedArray a =
+                    c.obtainStyledAttributes(attrs,
+                            com.example.common.R.styleable.FixedLayout_Layout);
+            gravity =
+                    a.getInt(com.example.common.R.styleable.FixedLayout_Layout_layout_gravity,
+                            -1);
+            x =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_x, 0);
+            y =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_y, 0);
+            topMargin =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_marginTop,
+                            0);
+            leftMargin =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_marginLeft,
+                            0);
+            bottomMargin =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_marginBottom,
+                            0);
+            rightMargin =
+                    a.getDimensionPixelOffset(
+                            com.example.common.R.styleable.FixedLayout_Layout_layout_marginRight,
+                            0);
+            a.recycle();
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        public LayoutParams(ViewGroup.LayoutParams source)
+        {
+            super(source);
+        }
+    }
+}
+</code></pre>

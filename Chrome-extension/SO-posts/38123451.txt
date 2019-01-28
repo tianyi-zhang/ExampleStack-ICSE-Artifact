@@ -1,0 +1,115 @@
+<p>Thanks to the suggestion from Mr Frank I've managed to pinpoint the culprit. <strong>The problem occurs when the user signs in with Google while being already signed in anonymously</strong> (which I didn't take into account). So a workaround would be to sign out the anonymous user (<code>FirebaseAuth.getInstance().sign_out()</code>) before trying to sign in with Google, although I believe it's still undesired behavior, because it makes linking accounts problematic.</p>
+
+<p>Here's an example to reproduce the problem:</p>
+
+<pre><code>public class TestAuthGoogle extends AppCompatActivity implements GoogleApiClient.OnConnectionFailedListener {
+
+    static private final String TAG = TestAuthGoogle.class.getSimpleName();
+    private GoogleApiClient mGoogleApiClient;
+    public static final int RC_SIGN_IN = 9001;
+    private Handler mHandler = new Handler();
+
+    @Override
+    public void onStart() {
+        super.onStart();
+
+        signInAnonymously();
+
+        mHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                signInGoogle();
+            }
+        },5000);
+    }
+
+
+    void signInAnonymously() {
+        FirebaseAuth.getInstance().signInAnonymously()
+                .addOnCompleteListener(this, new OnCompleteListener&lt;AuthResult&gt;() {
+                    @Override
+                    public void onComplete(@NonNull Task&lt;AuthResult&gt; task) {
+                        Log.d(TAG, "signInAnonymously:onComplete:" + task.isSuccessful());
+                        if (!task.isSuccessful()) {
+                            Log.w(TAG, "signInAnonymously", task.getException());
+                        }
+                    }
+                });
+    }
+
+    void signInGoogle() {
+        GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(getString(R.string.my_web_client_id))
+                .requestEmail()
+                .build();
+
+        mGoogleApiClient = new GoogleApiClient.Builder(TestAuthGoogle.this)
+                .enableAutoManage(TestAuthGoogle.this, TestAuthGoogle.this)
+                .addApi(Auth.GOOGLE_SIGN_IN_API, gso)
+                .build();
+
+        Intent signInIntent = Auth.GoogleSignInApi.getSignInIntent(mGoogleApiClient);
+        startActivityForResult(signInIntent, RC_SIGN_IN);
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RC_SIGN_IN) {
+            GoogleSignInResult result = Auth.GoogleSignInApi.getSignInResultFromIntent(data);
+            if (result.isSuccess()) {
+                GoogleSignInAccount account = result.getSignInAccount();
+                firebaseAuthWithGoogle(account);
+                Log.d(TAG,"Authenticated");
+            } else {
+                Log.d(TAG,"Authentication failed");
+            }
+        }
+    }
+
+    private void firebaseAuthWithGoogle(GoogleSignInAccount acct) {
+        Log.d(TAG, "firebaseAuthWithGoogle:" + acct.getId());
+        AuthCredential credential = GoogleAuthProvider.getCredential(acct.getIdToken(), null);
+        FirebaseAuth.getInstance().signInWithCredential(credential)
+                .addOnCompleteListener(this, new OnCompleteListener&lt;AuthResult&gt;() {
+                    @Override
+                    public void onComplete(@NonNull Task&lt;AuthResult&gt; task) {
+                        Log.d(TAG, "signInWithCredential:onComplete:" + task.isSuccessful());
+                        if (task.isSuccessful()) {
+                            Log.d(TAG,"Signed in");
+                            mHandler.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    readFromDatabase();
+                                }
+                            },5000);
+                        } else {
+                            Log.w(TAG, "signInWithCredential: " + task.getException().getMessage());
+                        }
+                    }
+                });
+    }
+
+    void readFromDatabase() {
+        Log.d(TAG,"read from db");
+        DatabaseReference uRef = FirebaseDatabase.getInstance().getReference("users");
+        uRef.child(FirebaseAuth.getInstance().getCurrentUser().getUid()).addListenerForSingleValueEvent(
+                new ValueEventListener() {
+                    @Override
+                    public void onDataChange(DataSnapshot data) {
+                        Log.d(TAG, "fb onDataChange: " + data.getValue());
+                    }
+                    @Override
+                    public void onCancelled(DatabaseError error) {
+                        Log.w(TAG, "fb onCancelled: " + error.getMessage());
+                    }
+                });
+    }
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+        Log.d(TAG,"onConnectionFailed");
+    }
+
+}
+</code></pre>

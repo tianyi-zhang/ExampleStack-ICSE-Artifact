@@ -1,0 +1,116 @@
+<p>There is a known bug on version <strong>Android 4.4.2</strong> that is caused when accessing HTTPS using <strong>TLSv1.x</strong> protocol. Handshake fails because TLS is not supported so <strong>HttpsURLConnection</strong> falls back to <strong>SSLv3</strong> protocol causing the error to happen on handshake. I haven't find a work around that doesn't involve reimplementing the <strong>HttpsURLConnection</strong>'s TrustManagers to prevent the error or connecting insecurely.</p>
+
+<p>This is what I did:</p>
+
+<p>Feed a Custom trust manager to the your SSLContext:</p>
+
+<pre><code>// Trust manager that recognizes you acceptance criteria, that being ignoring handshake errors
+        ResourceTrustManager trustManager = new ResourceTrustManager(sslKeyStores);
+        TrustManager[] trustManagers = {trustManager};
+        // use: org.apache.http.conn.ssl.AllowAllHostnameVerifier, this can be optional depending on your case.
+        AllowAllHostnameVerifier resourceHostNameVerifier = new AllowAllHostnameVerifier(); 
+
+        // Install the trust manager and host name verifier
+        try {
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, trustManagers, new java.security.SecureRandom());
+            HttpsURLConnection
+                    .setDefaultSSLSocketFactory(sc.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier(resourceHostNameVerifier);
+        } catch (Exception e) {
+            Log.e(TAG, "Invalid algorithm used while setting trust store:" +e.getMessage());
+            throw e;
+        }
+</code></pre>
+
+<p>To implement your trust manager just overwrite:</p>
+
+<ul>
+<li>public void checkClientTrusted</li>
+<li>public void checkServerTrusted</li>
+</ul>
+
+<p>Mine uses local keystores to try to authorize the cert:</p>
+
+<pre><code>public class ResourceTrustManager implements X509TrustManager {
+
+private static final String TAG = ResourceTrustManager.class.getName();
+protected ArrayList&lt;X509TrustManager&gt; x509TrustManagers = new ArrayList&lt;X509TrustManager&gt;();
+
+public ResourceTrustManager(Collection&lt;KeyStore&gt; additionalkeyStores) {
+    final List&lt;TrustManagerFactory&gt; factories = new ArrayList&lt;TrustManagerFactory&gt;();
+
+    try {
+        /**
+         * Consolidates central and aditional keystore to be used as trust managers
+         */
+        final TrustManagerFactory original = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        original.init((KeyStore) null);
+        factories.add(original);
+
+        if(additionalkeyStores != null ) {
+            for (KeyStore keyStore : additionalkeyStores) {
+                final TrustManagerFactory additionalCerts = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                additionalCerts.init(keyStore);
+                factories.add(additionalCerts);
+            }
+        }
+
+    } catch (Exception e) {
+        throw new RuntimeException(e);
+    }
+
+    for (TrustManagerFactory tmf : factories) {
+        for (TrustManager tm : tmf.getTrustManagers()) {
+            if (tm instanceof X509TrustManager) {
+                x509TrustManagers.add((X509TrustManager) tm);
+            }
+        }
+    }
+
+    ResourceAssert.hasLength(x509TrustManagers, "Could not initialize with no trust managers");
+
+}
+
+public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+    // The default Trustmanager with default keystore
+    final X509TrustManager defaultX509TrustManager = x509TrustManagers.get(0);
+    defaultX509TrustManager.checkClientTrusted(chain, authType);
+
+}
+
+public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+    for( X509TrustManager tm : x509TrustManagers ) {
+        try {
+            tm.checkServerTrusted(chain,authType);
+            return;
+        } catch( CertificateException e ) {
+            StringBuilder issuers = new StringBuilder();
+
+            if(chain != null){
+                for(X509Certificate cert :chain){
+                    issuers.append( " " +cert.getIssuerDN().getName() );
+                }
+            }
+
+            Log.e(TAG, "Untrusted host, connection is not secure "+ issuers + "\n\n" + e.getMessage());
+        }
+    }
+
+}
+
+public X509Certificate[] getAcceptedIssuers() {
+    final ArrayList&lt;X509Certificate&gt; list = new ArrayList&lt;X509Certificate&gt;();
+
+    for( X509TrustManager tm : x509TrustManagers ) {
+        list.addAll(Arrays.asList(tm.getAcceptedIssuers()));
+    }
+
+    return list.toArray(new X509Certificate[list.size()]);
+}
+
+
+}
+</code></pre>
+
+<p>This is not elegant at all, but gets the job done.</p>

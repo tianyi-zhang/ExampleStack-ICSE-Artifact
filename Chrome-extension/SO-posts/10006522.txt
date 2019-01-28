@@ -1,0 +1,106 @@
+<p>Ok, so it required a bit of hackery, but I was able to figure something out...</p>
+
+<p>The subreport.getExpression().getText() returns the expression field of the subreport widget thing in the master report, and is a string that looks something like this</p>
+
+<pre><code>$P{SUBREPORT_DIR} + "/report_sub1.jasper"
+</code></pre>
+
+<p>So I was able to pull it apart to get the name using the following. Its not ideal, but it should hold up.</p>
+
+<pre><code>JRElementsVisitor.visitReport(jasperReport, new JRVisitor(){
+
+  // ** snip other overrides **
+
+  @Override
+  public void visitSubreport(JRSubreport subreport){
+    String expression = subreport.getExpression().getText().replace(".jasper", ".jrxml");
+    StringTokenizer st = new StringTokenizer(expression, "\"/");
+    String subreportName = null;
+    while(st.hasMoreTokens())
+      subreportName = st.nextToken();
+    compileReport(subreportName);
+  }
+}
+</code></pre>
+
+<p><strong>EDIT:</strong></p>
+
+<p>Here is my whole compileReport method, demonstrating how to recursively compile subreports of subreports etc. Not perfect, but good enough for my app. All compiled *.jasper files are saved back onto disk in the same location as the uncompiled *.jrxml files were picked up, but this wouldn't be hard to change. The compiled main report object is passed back incase you want to run it or whatever.</p>
+
+<p>Remember that this code is 9 months old at the time of this edit, and newer versions of Jasper Reports may now have an inbuild functions for this kind of thing.</p>
+
+<pre><code>private static final String reportsPath = "someplace/nice/";
+private ArrayList&lt;String&gt;   completedSubReports = new ArrayList&lt;String&gt;(30);
+private Throwable           subReportException  = null;
+
+/**
+ * Recursively compile report and subreports
+ */
+public JasperReport compileReport(String reportName) throws Throwable{
+  JasperDesign jasperDesign = JRXmlLoader.load(reportsPath + reportName + ".jrxml");
+  JasperReport jasperReport = JasperCompileManager.compileReport(jasperDesign);
+  JRSaver.saveObject(jasperReport, reportsPath + reportName + ".jasper");
+  toLog("Saving compiled report to: " + reportsPath + reportName + ".jasper");
+  //Compile sub reports
+  JRElementsVisitor.visitReport(jasperReport, new JRVisitor(){
+    @Override
+    public void visitBreak(JRBreak breakElement){}
+
+    @Override
+    public void visitChart(JRChart chart){}
+
+    @Override
+    public void visitCrosstab(JRCrosstab crosstab){}
+
+    @Override
+    public void visitElementGroup(JRElementGroup elementGroup){}
+
+    @Override
+    public void visitEllipse(JREllipse ellipse){}
+
+    @Override
+    public void visitFrame(JRFrame frame){}
+
+    @Override
+    public void visitImage(JRImage image){}
+
+    @Override
+    public void visitLine(JRLine line){}
+
+    @Override
+    public void visitRectangle(JRRectangle rectangle){}
+
+    @Override
+    public void visitStaticText(JRStaticText staticText){}
+
+    @Override
+    public void visitSubreport(JRSubreport subreport){
+      try{
+        String expression = subreport.getExpression().getText().replace(".jasper", "");
+        StringTokenizer st = new StringTokenizer(expression, "\"/");
+        String subReportName = null;
+        while(st.hasMoreTokens())
+          subReportName = st.nextToken();
+        //Sometimes the same subreport can be used multiple times, but
+        //there is no need to compile multiple times
+        if(completedSubReports.contains(subReportName)) return;
+        completedSubReports.add(subReportName);
+        compileReport(subReportName);
+      }
+      catch(Throwable e){
+        subReportException = e;
+      }
+    }
+    @Override
+    public void visitTextField(JRTextField textField){}
+
+    @Override
+    public void visitComponentElement(JRComponentElement componentElement){}
+
+    @Override
+    public void visitGenericElement(JRGenericElement element){}
+  });
+  if(subReportException != null) throw new RuntimeException(subReportException);
+  return jasperReport;
+}
+</code></pre>

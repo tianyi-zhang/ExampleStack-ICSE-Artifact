@@ -1,0 +1,259 @@
+<p>We're still working on a canonical answer for this, but the basic idea is that you let the resource system change what views you're showing in which situation. So your activity sets its content view to, say, <code>R.layout.root_view</code>. The tablet version of that layout (we put it in <code>res/layout-sw600dp</code>) can be tied to different views, which might inject different presenters, and so on. </p>
+
+<p>For cases where you need to make a runtime decision, define a boolean resource in <code>values/bools .xml</code></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+  &lt;bool name="show_tablet_ui"&gt;false&lt;/bool&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p>and <code>values-sw600dp/bools.xml</code></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+  &lt;bool name="show_tablet_ui"&gt;true&lt;/bool&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p>Expose it to the rest of the app via dagger. Use this binding annotation:</p>
+
+<pre><code>/**
+ * Whether we should show a tablet UI.
+ */
+@Retention(RUNTIME) @Qualifier
+public @interface ShowTabletUi {
+  int ID = R.bool.show_tablet_ui;
+}
+</code></pre>
+
+<p>and a provider method like:</p>
+
+<pre><code>/** 
+ * Singleton because there's no reason to read it from resources again, 
+ * it won't change. 
+ */
+@Provides @ShowTabletUi @Singleton boolean showTabletUi(Resources resources) {
+  return resources.getBoolean(ShowTabletUi.ID);
+}
+</code></pre>
+
+<p>But wait there's more! Suppose you want to have a single screen / blueprint definition that manufactures different modules for different form factors. We've started using an annotation scheme to simplify that kind of thing. Instead of making our screen classes all implement <code>BluePrint</code>, we've started using some annotations to declare their interface class. In that world here's how a screen can selectively choose what modules to use for tablet or mobile.</p>
+
+<pre><code>@Layout(R.layout.some_view) @WithModuleFactory(SomeScreen.ModuleFactory.class)
+public class SomeScreen {
+  public static class ModuleFactory extends ResponsiveModuleFactory&lt;HomeScreen&gt; {
+  @Override protected Object createTabletModule(HomeScreen screen) {
+    return new TabletModule();
+  }
+
+  @Override protected Object createMobileModule(HomeScreen screen) {
+    return new MobileModule();
+  }
+}
+</code></pre>
+
+<p>Magic, right? Here's what's behind the curtain. First, a <code>ModuleFactory</code> is some static class that is given access to the screen <em>and the resources</em> and spits out a dagger module. </p>
+
+<pre><code>public abstract class ModuleFactory&lt;T&gt; {
+  final Blueprint createBlueprint(final Resources resources, final MortarScreen screen) {
+    return new Blueprint() {
+      @Override public String getMortarScopeName() {
+        return screen.getName();
+      }
+
+      @Override public Object getDaggerModule() {
+        return ModuleFactory.this.createDaggerModule(resources, (T) screen);
+      }
+    };
+  }
+
+  protected abstract Object createDaggerModule(Resources resources, T screen);
+}
+</code></pre>
+
+<p>Our trixie <code>ResponsiveModuleFactory</code> subclass looks like this. (Remember how <code>ShowTabletUi.java</code> defined the resource id as a constant? This is why.)</p>
+
+<pre><code>public abstract class ResponsiveModuleFactory&lt;T&gt; extends ModuleFactory&lt;T&gt; {
+
+  @Override protected final Object createDaggerModule(Resources resources, T screen) {
+    boolean showTabletUi = resources.getBoolean(ShowTabletUi.ID);
+    return showTabletUi ? createTabletModule(screen) : createMobileModule(screen);
+  }
+
+  protected abstract Object createTabletModule(T screen);
+
+  protected abstract Object createMobileModule(T screen);
+}
+</code></pre>
+
+<p>To make all this go, we have a ScreenScoper class (below). In the Mortar sample code, you'd make the ScreenConductor use one of these to create and destroy scopes. Sooner or later (soon I hope) Mortar and/or its samples will be updated to include this stuff. </p>
+
+<pre><code>package mortar;
+
+import android.content.Context;
+import android.content.res.Resources;
+import com.squareup.util.Objects;
+import dagger.Module;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import static java.lang.String.format;
+
+/**
+ * Creates {@link MortarScope}s for screens that may be annotated with {@link WithModuleFactory},
+ * {@link WithModule} or {@link Module}.
+ */
+public class ScreenScoper {
+  private static final ModuleFactory NO_FACTORY = new ModuleFactory() {
+    @Override protected Object createDaggerModule(Resources resources, Object screen) {
+      throw new UnsupportedOperationException();
+    }
+  };
+
+  private final Map&lt;Class, ModuleFactory&gt; moduleFactoryCache = new LinkedHashMap&lt;&gt;();
+
+  public MortarScope getScreenScope(Context context, final MortarScreen screen) {
+    MortarScope parentScope = Mortar.getScope(context);
+    return getScreenScope(context.getResources(), parentScope, screen);
+  }
+
+  /**
+   * Finds or creates the scope for the given screen, honoring its optoinal {@link
+   * WithModuleFactory} or {@link WithModule} annotation. Note the scopes are also created
+   * for unannotated screens.
+   */
+  public MortarScope getScreenScope(Resources resources, MortarScope parentScope,
+      final MortarScreen screen) {
+    ModuleFactory moduleFactory = getModuleFactory(screen);
+    MortarScope childScope;
+    if (moduleFactory != NO_FACTORY) {
+      Blueprint blueprint = moduleFactory.createBlueprint(resources, screen);
+      childScope = parentScope.requireChild(blueprint);
+    } else {
+      // We need every screen to have a scope, so that anything it injects is scoped.  We need
+      // this even if the screen doesn't declare a module, because Dagger allows injection of
+      // objects that are annotated even if they don't appear in a module.
+      Blueprint blueprint = new Blueprint() {
+        @Override public String getMortarScopeName() {
+          return screen.getName();
+        }
+
+        @Override public Object getDaggerModule() {
+          return null;
+        }
+      };
+      childScope = parentScope.requireChild(blueprint);
+    }
+    return childScope;
+  }
+
+  private ModuleFactory getModuleFactory(MortarScreen screen) {
+    Class&lt;?&gt; screenType = Objects.getClass(screen);
+    ModuleFactory moduleFactory = moduleFactoryCache.get(screenType);
+
+    if (moduleFactory != null) return moduleFactory;
+
+    WithModule withModule = screenType.getAnnotation(WithModule.class);
+    if (withModule != null) {
+      Class&lt;?&gt; moduleClass = withModule.value();
+
+      Constructor&lt;?&gt;[] constructors = moduleClass.getDeclaredConstructors();
+
+      if (constructors.length != 1) {
+        throw new IllegalArgumentException(
+            format("Module %s for screen %s should have exactly one public constructor",
+                moduleClass.getName(), screen.getName()));
+      }
+
+      Constructor constructor = constructors[0];
+
+      Class[] parameters = constructor.getParameterTypes();
+
+      if (parameters.length &gt; 1) {
+        throw new IllegalArgumentException(
+            format("Module %s for screen %s should have 0 or 1 parameter", moduleClass.getName(),
+                screen.getName()));
+      }
+
+      Class screenParameter;
+      if (parameters.length == 1) {
+        screenParameter = parameters[0];
+        if (!screenParameter.isInstance(screen)) {
+          throw new IllegalArgumentException(format("Module %s for screen %s should have a "
+                  + "constructor parameter that is a super class of %s", moduleClass.getName(),
+              screen.getName(), screen.getClass().getName()));
+        }
+      } else {
+        screenParameter = null;
+      }
+
+      try {
+        if (screenParameter == null) {
+          moduleFactory = new NoArgsFactory(constructor);
+        } else {
+          moduleFactory = new SingleArgFactory(constructor);
+        }
+      } catch (Exception e) {
+        throw new RuntimeException(
+            format("Failed to instantiate module %s for screen %s", moduleClass.getName(),
+                screen.getName()), e);
+      }
+    }
+
+    if (moduleFactory == null) {
+      WithModuleFactory withModuleFactory = screenType.getAnnotation(WithModuleFactory.class);
+      if (withModuleFactory != null) {
+        Class&lt;? extends ModuleFactory&gt; mfClass = withModuleFactory.value();
+
+        try {
+          moduleFactory = mfClass.newInstance();
+        } catch (Exception e) {
+          throw new RuntimeException(format("Failed to instantiate module factory %s for screen %s",
+              withModuleFactory.value().getName(), screen.getName()), e);
+        }
+      }
+    }
+
+    if (moduleFactory == null) moduleFactory = NO_FACTORY;
+
+    moduleFactoryCache.put(screenType, moduleFactory);
+
+    return moduleFactory;
+  }
+
+  private static class NoArgsFactory extends ModuleFactory&lt;Object&gt; {
+    final Constructor moduleConstructor;
+
+    private NoArgsFactory(Constructor moduleConstructor) {
+      this.moduleConstructor = moduleConstructor;
+    }
+
+    @Override protected Object createDaggerModule(Resources resources, Object ignored) {
+      try {
+        return moduleConstructor.newInstance();
+      } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+        throw new RuntimeException(e);
+      }
+    }
+  }
+
+  private static class SingleArgFactory extends ModuleFactory {
+    final Constructor moduleConstructor;
+
+    public SingleArgFactory(Constructor moduleConstructor) {
+      this.moduleConstructor = moduleConstructor;
+    }
+
+    @Override protected Object createDaggerModule(Resources resources, Object screen) {
+      try {
+        return moduleConstructor.newInstance(screen);
+      } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+        throw new RuntimeException(e);
+      }
+    }
+  }
+}
+</code></pre>

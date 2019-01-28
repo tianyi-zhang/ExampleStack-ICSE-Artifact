@@ -1,0 +1,109 @@
+<p>I had to do that last week so hopefully I will be able to answer you right away.</p>
+
+<h2>Flying Saucer</h2>
+
+<p>The easiest way is to add the image you want as markup in your HTML template before rendering with Flying Saucer. Within Flying Saucer you will have to implement a <code>ReplacedElementFactory</code> so that you can replace any markup before rendering with the image data.</p>
+
+<pre><code>/**
+ * Replaced element in order to replace elements like 
+ * &lt;tt&gt;&amp;lt;div class="media" data-src="image.png" /&gt;&lt;/tt&gt; with the real
+ * media content.
+ */
+public class MediaReplacedElementFactory implements ReplacedElementFactory {
+    private final ReplacedElementFactory superFactory;
+
+    public MediaReplacedElementFactory(ReplacedElementFactory superFactory) {
+        this.superFactory = superFactory;
+    }
+
+    @Override
+    public ReplacedElement createReplacedElement(LayoutContext layoutContext, BlockBox blockBox, UserAgentCallback userAgentCallback, int cssWidth, int cssHeight) {
+        Element element = blockBox.getElement();
+        if (element == null) {
+            return null;
+        }
+        String nodeName = element.getNodeName();
+        String className = element.getAttribute("class");
+        // Replace any &lt;div class="media" data-src="image.png" /&gt; with the
+        // binary data of `image.png` into the PDF.
+        if ("div".equals(nodeName) &amp;&amp; "media".equals(className)) {
+            if (!element.hasAttribute("data-src")) {
+                throw new RuntimeException("An element with class `media` is missing a `data-src` attribute indicating the media file.");
+            }
+            InputStream input = null;
+            try {
+                input = new FileInputStream("/base/folder/" + element.getAttribute("data-src"));
+                final byte[] bytes = IOUtils.toByteArray(input);
+                final Image image = Image.getInstance(bytes);
+                final FSImage fsImage = new ITextFSImage(image);
+                if (fsImage != null) {
+                    if ((cssWidth != -1) || (cssHeight != -1)) {
+                        fsImage.scale(cssWidth, cssHeight);
+                    }
+                    return new ITextImageElement(fsImage);
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("There was a problem trying to read a template embedded graphic.", e);
+            } finally {
+                IOUtils.closeQuietly(input);
+            }
+        }
+        return this.superFactory.createReplacedElement(layoutContext, blockBox, userAgentCallback, cssWidth, cssHeight);
+    }
+
+    @Override
+    public void reset() {
+        this.superFactory.reset();
+    }
+
+    @Override
+    public void remove(Element e) {
+        this.superFactory.remove(e);
+    }
+
+    @Override
+    public void setFormSubmissionListener(FormSubmissionListener listener) {
+        this.superFactory.setFormSubmissionListener(listener);
+    }
+}
+</code></pre>
+
+<p>You will notice that I have hardcoded here <code>/base/folder</code> which is the folder where the HTML file is located as it will be the root url for Flying Saucer for resolving medias. You may change it to the correct location, coming from anywhere you want (Properties for example).</p>
+
+<h1>HTML</h1>
+
+<p>Within your HTML markup you indicate somewhere a <code>&lt;div class="media" data-src="somefile.png" /&gt;</code> like so:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" 
+   "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"&gt;
+&lt;html xmlns="http://www.w3.org/1999/xhtml"&gt;
+    &lt;head&gt;
+        &lt;title&gt;My document&lt;/title&gt;
+        &lt;style type="text/css"&gt;
+        #logo { /* something if needed */ }
+        &lt;/style&gt;
+    &lt;/head&gt;
+    &lt;body&gt;
+        &lt;!-- Header --&gt;
+        &lt;div id="logo" class="media" data-src="media/logo.png" style="width: 177px; height: 60px" /&gt;
+        ...
+    &lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+
+<h1>Rendering</h1>
+
+<p>And finally you just need to indicate your <code>ReplacedElementFactory</code> to Flying-Saucer when rendering:</p>
+
+<pre><code>String content = loadHtml();
+ITextRenderer renderer = new ITextRenderer();
+renderer.getSharedContext().setReplacedElementFactory(new MediaReplacedElementFactory(renderer.getSharedContext().getReplacedElementFactory()));
+renderer.setDocumentFromString(content.toString());
+renderer.layout();
+final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+renderer.createPDF(baos);
+// baos.toByteArray();
+</code></pre>
+
+<p>I have been using Freemarker to generate the HTML from a template and then feeding the result to FlyingSaucer with great success. This is a pretty neat library.</p>

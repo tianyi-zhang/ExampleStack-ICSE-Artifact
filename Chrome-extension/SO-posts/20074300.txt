@@ -1,0 +1,204 @@
+<p><strong>Working Solution:</strong> </p>
+
+<p>Finally I found a working solution with your help. Thanks for this. Following all needed Files if someone other is interested in a java configured spring security:</p>
+
+<p><strong>Login JSP:</strong></p>
+
+<pre><code>&lt;div class="login-container"&gt;
+&lt;form class="form-signin navbar navbar-default" method="POST" action="&lt;c:url value='/login/process-login'/&gt;"&gt;
+    &lt;div class="form-signin-img"&gt;
+        &lt;span class="form-signin-img-helper"&gt;&lt;/span&gt;
+        &lt;img src="&lt;c:url value='/img/itensis_logo.gif'/&gt;" /&gt;
+    &lt;/div&gt;
+    &lt;h2 class="form-signin-heading"&gt;${msg_heading}&lt;/h2&gt;
+    &lt;c:if test="${error == true}"&gt;
+        &lt;div class="alert alert-danger"&gt;
+            &lt;button type="button" class="close close-box"&gt;&amp;times;&lt;/button&gt;
+            &lt;p&gt;${msg_error}&lt;/p&gt;
+        &lt;/div&gt;
+    &lt;/c:if&gt;
+    &lt;input type="text" name="security_username" id="security_username" class="form-control" placeholder="${msg_username}" required autofocus&gt;
+    &lt;input type="password" name="security_password" id="security_password" class="form-control" placeholder="${msg_password}" required&gt;
+
+    &lt;label class="checkbox"&gt; 
+        &lt;input type="checkbox" name="remember_me_checkbox"&gt; ${msg_rememberMe}
+    &lt;/label&gt; 
+    &lt;button class="btn btn-lg btn-primary btn-block" type="submit"&gt;
+        &lt;i class="fa fa-sign-in fa-lg"&gt;&lt;/i&gt;
+        &lt;span&gt;${msg_login}&lt;/span&gt;
+    &lt;/button&gt;
+&lt;/form&gt;
+</code></pre>
+
+<p></p>
+
+<p><strong>SecurityConfig.java</strong></p>
+
+<pre><code>@Configuration
+@EnableWebSecurity
+@EnableGlobalMethodSecurity(securedEnabled=true, prePostEnabled=true)
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    @Autowired private UserDetailsService userDetailService;
+    @Autowired private DataSource dataSource;
+
+    @Override
+    public void configure(WebSecurity web) throws Exception {
+        web
+            .ignoring()
+                .antMatchers("/js/**","/css/**","/img/**","/webjars/**","/pages/**");
+    }
+
+    @Override
+    public void configure(AuthenticationManagerBuilder auth) throws Exception {
+        ShaPasswordEncoder shaPasswordEncoder = new ShaPasswordEncoder(256);
+        auth
+          .jdbcAuthentication()
+              .dataSource(dataSource)
+              .usersByUsernameQuery(getUserQuery())
+              .authoritiesByUsernameQuery(getAuthoritiesQuery())
+              .passwordEncoder(shaPasswordEncoder);
+    }
+
+    @Bean 
+    @Override
+    public AuthenticationManager authenticationManagerBean() throws Exception {
+         return super.authenticationManagerBean();
+    }
+
+    @Override
+    public void configure(HttpSecurity http) throws Exception {
+        http
+        .authorizeRequests()
+            .anyRequest().hasAuthority("BASIC_PERMISSION")
+            .and()
+        .formLogin()
+            .loginPage("/login/login")
+            .defaultSuccessUrl("/login/success-login", true)
+            .failureUrl("/login/error-login")
+            .loginProcessingUrl("/login/process-login")
+            .usernameParameter("security_username")
+            .passwordParameter("security_password")
+            .permitAll() 
+            .and()
+        .logout()
+            .logoutSuccessUrl("/login/login")
+            .logoutUrl("/login/logout")
+            .permitAll()
+            .and()
+        .rememberMe()
+            .key("your_key")
+            .rememberMeServices(rememberMeServices())
+            .and()
+        .csrf()
+            .disable();
+    }
+
+    @Bean
+    public RememberMeServices rememberMeServices() {
+        // Key must be equal to rememberMe().key() 
+        TokenBasedRememberMeServices rememberMeServices = new TokenBasedRememberMeServices("your_key", userDetailService);
+        rememberMeServices.setCookieName("remember_me_cookie");
+        rememberMeServices.setParameter("remember_me_checkbox");
+        rememberMeServices.setTokenValiditySeconds(2678400); // 1month
+        return rememberMeServices;
+    }
+
+    @Bean
+    public UserDetailsService userDetailService() {
+        return new SecurityUserDetailService();
+    }
+
+    private String getUserQuery() {
+        return "SELECT username as username, password as password, active as enabled "
+                + "FROM employee "
+                + "WHERE username = ?";
+    }
+
+    private String getAuthoritiesQuery() {
+        return "SELECT DISTINCT employee.username as username, permission.name as authority "
+                + "FROM employee, employee_role, role, role_permission, permission "
+                + "WHERE employee.id = employee_role.employee_id "
+                + "AND role.id = employee_role.role_id "
+                + "AND role.id = role_permission.role_id "
+                + "AND permission.id = role_permission.permission_id "
+                + "AND employee.username = ? "
+                + "AND employee.active = 1";
+    }
+}
+</code></pre>
+
+<p><strong>LoginController.java</strong></p>
+
+<pre><code>@Controller
+@RequestMapping("/login")
+public class LoginController {
+
+    @RequestMapping(value={"/login"}, method=RequestMethod.GET)
+    public ModelAndView showLoginPage() {
+        return new ModelAndView("loginForm");
+    }
+
+    @RequestMapping(value="/success-login", method=RequestMethod.GET)  
+    public String successLogin() {  
+        return "forward:/dashboard/dashboard";
+    } 
+
+    @RequestMapping(value="/error-login", method=RequestMethod.GET)  
+    public ModelAndView invalidLogin() {  
+        ModelAndView modelAndView = new ModelAndView("loginForm");  
+        modelAndView.addObject("error", true);  
+        return modelAndView;  
+    }  
+
+    @RequestMapping(value="/logout", method=RequestMethod.POST)  
+    public ModelAndView logout() {  
+        return new ModelAndView("dashboardForm");
+    }  
+}
+</code></pre>
+
+<hr>
+
+<p><strong>Update 1: SecurityUserDetailService</strong></p>
+
+<pre><code>@Service
+@Transactional
+public class SecurityUserDetailService implements UserDetailsService {
+
+    @Autowired private EmployeeService employeeService;
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        try {
+            Employee loggedInEmployee = employeeService.findEmployeeByUsername(username);
+            List&lt;GrantedAuthority&gt; authorities = getAuthorities(loggedInEmployee);
+            boolean enabled = true;
+            boolean accountNonExpired = true;
+            boolean credentialsNonExpired = true;
+            boolean accountNonLocked = true;
+            return new User(
+                    loggedInEmployee.getUsername(),
+                    loggedInEmployee.getPassword().toLowerCase(),
+                    enabled,
+                    accountNonExpired,
+                    credentialsNonExpired,
+                    accountNonLocked,
+                    authorities);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static List&lt;GrantedAuthority&gt; getAuthorities(Employee employee) {
+        List&lt;GrantedAuthority&gt; authorities = new ArrayList&lt;GrantedAuthority&gt;();
+        for (Role role : employee.getRoles()) {
+            for (Permission permission : role.getPermissions()) {
+                authorities.add(new SimpleGrantedAuthority(permission.getName()));
+            }
+        }
+        return authorities;
+    }
+
+}
+</code></pre>

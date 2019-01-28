@@ -1,0 +1,201 @@
+<p>The problem is that Jetty's <code>AnnotationConfiguration</code> class does not scan non-jar resources on the classpath (except under WEB-INF/classes). </p>
+
+<p>It finds my <code>WebApplicationInitializer</code>'s if I register a subclass of <code>AnnotationConfiguration</code> which overrides <code>configure(WebAppContext)</code> to scan the host classpath in addition to the container and web-inf locations.</p>
+
+<p>Most of the sub-class is (sadly) copy-paste from the parent. It includes: </p>
+
+<ul>
+<li>an extra parse call (<code>parseHostClassPath</code>) at the end of the configure method; </li>
+<li>the <code>parseHostClassPath</code> method which is largely copy-paste from
+<code>AnnotationConfiguration</code>'s <code>parseWebInfClasses</code>; </li>
+<li>the <code>getHostClassPathResource</code> method which grabs the first non-jar URL
+from the classloader (which, for me at least, is the file url to my
+classpath in eclipse).</li>
+</ul>
+
+<p>I am using slightly different versions of Jetty (8.1.7.v20120910) and Spring (3.1.2_RELEASE), but I imagine the same solution will work.</p>
+
+<p><em>Edit: I created a working sample project in github with some modifications (the code below works fine from Eclipse but not when running in a shaded jar) - <a href="https://github.com/steveliles/jetty-embedded-spring-mvc-noxml">https://github.com/steveliles/jetty-embedded-spring-mvc-noxml</a></em></p>
+
+<p>In the OP's JettyServer class the necessary change would replace line 15 with:</p>
+
+<pre><code>webAppContext.setConfigurations (new Configuration []
+{
+        new AnnotationConfiguration() 
+        {
+            @Override
+            public void configure(WebAppContext context) throws Exception
+            {
+                boolean metadataComplete = context.getMetaData().isMetaDataComplete();
+                context.addDecorator(new AnnotationDecorator(context));   
+
+                AnnotationParser parser = null;
+                if (!metadataComplete)
+                {
+                    if (context.getServletContext().getEffectiveMajorVersion() &gt;= 3 || context.isConfigurationDiscovered())
+                    {
+                        parser = createAnnotationParser();
+                        parser.registerAnnotationHandler("javax.servlet.annotation.WebServlet", new WebServletAnnotationHandler(context));
+                        parser.registerAnnotationHandler("javax.servlet.annotation.WebFilter", new WebFilterAnnotationHandler(context));
+                        parser.registerAnnotationHandler("javax.servlet.annotation.WebListener", new WebListenerAnnotationHandler(context));
+                    }
+                }
+
+                List&lt;ServletContainerInitializer&gt; nonExcludedInitializers = getNonExcludedInitializers(context);
+                parser = registerServletContainerInitializerAnnotationHandlers(context, parser, nonExcludedInitializers);
+
+                if (parser != null)
+                {
+                    parseContainerPath(context, parser);
+                    parseWebInfClasses(context, parser);
+                    parseWebInfLib (context, parser);
+                    parseHostClassPath(context, parser);
+                }                  
+            }
+
+            private void parseHostClassPath(final WebAppContext context, AnnotationParser parser) throws Exception
+            {
+                clearAnnotationList(parser.getAnnotationHandlers());
+                Resource resource = getHostClassPathResource(getClass().getClassLoader());                  
+                if (resource == null)
+                    return;
+
+                parser.parse(resource, new ClassNameResolver()
+                {
+                    public boolean isExcluded (String name)
+                    {           
+                        if (context.isSystemClass(name)) return true;                           
+                        if (context.isServerClass(name)) return false;
+                        return false;
+                    }
+
+                    public boolean shouldOverride (String name)
+                    {
+                        //looking at webapp classpath, found already-parsed class of same name - did it come from system or duplicate in webapp?
+                        if (context.isParentLoaderPriority())
+                            return false;
+                        return true;
+                    }
+                });
+
+                //TODO - where to set the annotations discovered from WEB-INF/classes?    
+                List&lt;DiscoveredAnnotation&gt; annotations = new ArrayList&lt;DiscoveredAnnotation&gt;();
+                gatherAnnotations(annotations, parser.getAnnotationHandlers());                 
+                context.getMetaData().addDiscoveredAnnotations (annotations);
+            }
+
+            private Resource getHostClassPathResource(ClassLoader loader) throws IOException
+            {
+                if (loader instanceof URLClassLoader)
+                {
+                    URL[] urls = ((URLClassLoader)loader).getURLs();
+                    for (URL url : urls)
+                        if (url.getProtocol().startsWith("file"))
+                            return Resource.newResource(url);
+                }
+                return null;                    
+            }
+        },
+    });
+</code></pre>
+
+<p><em>Update</em>: Jetty 8.1.8 introduces internal changes that are incompatible with the code above. For 8.1.8 the following seems to work:</p>
+
+<pre><code>webAppContext.setConfigurations (new Configuration []
+    {
+        // This is necessary because Jetty out-of-the-box does not scan
+        // the classpath of your project in Eclipse, so it doesn't find
+        // your WebAppInitializer.
+        new AnnotationConfiguration() 
+        {
+            @Override
+            public void configure(WebAppContext context) throws Exception {
+                   boolean metadataComplete = context.getMetaData().isMetaDataComplete();
+                   context.addDecorator(new AnnotationDecorator(context));   
+
+
+                   //Even if metadata is complete, we still need to scan for ServletContainerInitializers - if there are any
+                   AnnotationParser parser = null;
+                   if (!metadataComplete)
+                   {
+                       //If metadata isn't complete, if this is a servlet 3 webapp or isConfigDiscovered is true, we need to search for annotations
+                       if (context.getServletContext().getEffectiveMajorVersion() &gt;= 3 || context.isConfigurationDiscovered())
+                       {
+                           _discoverableAnnotationHandlers.add(new WebServletAnnotationHandler(context));
+                           _discoverableAnnotationHandlers.add(new WebFilterAnnotationHandler(context));
+                           _discoverableAnnotationHandlers.add(new WebListenerAnnotationHandler(context));
+                       }
+                   }
+
+                   //Regardless of metadata, if there are any ServletContainerInitializers with @HandlesTypes, then we need to scan all the
+                   //classes so we can call their onStartup() methods correctly
+                   createServletContainerInitializerAnnotationHandlers(context, getNonExcludedInitializers(context));
+
+                   if (!_discoverableAnnotationHandlers.isEmpty() || _classInheritanceHandler != null || !_containerInitializerAnnotationHandlers.isEmpty())
+                   {           
+                       parser = createAnnotationParser();
+
+                       parse(context, parser);
+
+                       for (DiscoverableAnnotationHandler h:_discoverableAnnotationHandlers)
+                           context.getMetaData().addDiscoveredAnnotations(((AbstractDiscoverableAnnotationHandler)h).getAnnotationList());      
+                   }
+
+            }
+
+            private void parse(final WebAppContext context, AnnotationParser parser) throws Exception
+            {                   
+                List&lt;Resource&gt; _resources = getResources(getClass().getClassLoader());
+
+                for (Resource _resource : _resources)
+                {
+                    if (_resource == null)
+                        return;
+
+                    parser.clearHandlers();
+                    for (DiscoverableAnnotationHandler h:_discoverableAnnotationHandlers)
+                    {
+                        if (h instanceof AbstractDiscoverableAnnotationHandler)
+                            ((AbstractDiscoverableAnnotationHandler)h).setResource(null); //
+                    }
+                    parser.registerHandlers(_discoverableAnnotationHandlers);
+                    parser.registerHandler(_classInheritanceHandler);
+                    parser.registerHandlers(_containerInitializerAnnotationHandlers);
+
+                    parser.parse(_resource, 
+                                 new ClassNameResolver()
+                    {
+                        public boolean isExcluded (String name)
+                        {
+                            if (context.isSystemClass(name)) return true;
+                            if (context.isServerClass(name)) return false;
+                            return false;
+                        }
+
+                        public boolean shouldOverride (String name)
+                        {
+                            //looking at webapp classpath, found already-parsed class of same name - did it come from system or duplicate in webapp?
+                            if (context.isParentLoaderPriority())
+                                return false;
+                            return true;
+                        }
+                    });
+                }
+            }
+
+            private List&lt;Resource&gt; getResources(ClassLoader aLoader) throws IOException
+            {
+                if (aLoader instanceof URLClassLoader)
+                {
+                    List&lt;Resource&gt; _result = new ArrayList&lt;Resource&gt;();
+                    URL[] _urls = ((URLClassLoader)aLoader).getURLs();                      
+                    for (URL _url : _urls)
+                        _result.add(Resource.newResource(_url));
+
+                    return _result;
+                }
+                return Collections.emptyList();                 
+            }
+        }
+    });
+</code></pre>

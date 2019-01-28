@@ -1,0 +1,125 @@
+<p>I extended ServletRequestDataBinder and ServletModelAttributeMethodProcessor to solve the problem.</p>
+
+<p>Consider that your domain object may already be annotated with @JsonProperty or @XmlElement for serialization.  This example assumes this is the case.  But you could also create your own custom annotation for this purpose e.g. @MyParamMapping.</p>
+
+<p>An example of your annotated domain class is:</p>
+
+<pre><code>public class RequestParams {
+
+    @XmlElement(name = "my-val-1" )
+    @JsonProperty(value = "my-val-1")
+    private String myVal1;
+
+    @XmlElement(name = "my-val-2")
+    @JsonProperty(value = "my-val-2")
+    private String myVal2;
+
+    public RequestParams() {
+    }
+
+    public String getMyVal1() {
+        return myVal1;
+    }
+
+    public void setMyVal1(String myVal1) {
+        this.myVal1 = myVal1;
+    }
+
+    public String getMyVal2() {
+        return myVal2;
+    }
+
+    public void setMyVal2(String myVal2) {
+        this.myVal2 = myVal2;
+    }
+}
+</code></pre>
+
+<p>You will need a SerletModelAttributeMethodProcessor to analyze the target class, generate a mapping, invoke your ServletRequestDataBinder.</p>
+
+<pre><code>    public class KebabCaseProcessor extends ServletModelAttributeMethodProcessor {
+
+    public KebabCaseProcessor(boolean annotationNotRequired) {
+        super(annotationNotRequired);
+    }
+
+    @Autowired
+    private RequestMappingHandlerAdapter requestMappingHandlerAdapter;
+
+    private final Map&lt;Class&lt;?&gt;, Map&lt;String, String&gt;&gt; replaceMap = new ConcurrentHashMap&lt;Class&lt;?&gt;, Map&lt;String, String&gt;&gt;();
+
+    @Override
+    protected void bindRequestParameters(WebDataBinder binder, NativeWebRequest nativeWebRequest) {
+        Object target = binder.getTarget();
+        Class&lt;?&gt; targetClass = target.getClass();
+        if (!replaceMap.containsKey(targetClass)) {
+            Map&lt;String, String&gt; mapping = analyzeClass(targetClass);
+            replaceMap.put(targetClass, mapping);
+        }
+        Map&lt;String, String&gt; mapping = replaceMap.get(targetClass);
+        ServletRequestDataBinder kebabCaseDataBinder = new KebabCaseRequestDataBinder(target, binder.getObjectName(), mapping);
+        requestMappingHandlerAdapter.getWebBindingInitializer().initBinder(kebabCaseDataBinder, nativeWebRequest);
+        super.bindRequestParameters(kebabCaseDataBinder, nativeWebRequest);
+    }
+
+    private static Map&lt;String, String&gt; analyzeClass(Class&lt;?&gt; targetClass) {
+        Field[] fields = targetClass.getDeclaredFields();
+        Map&lt;String, String&gt; renameMap = new HashMap&lt;String, String&gt;();
+        for (Field field : fields) {
+            XmlElement xmlElementAnnotation = field.getAnnotation(XmlElement.class);
+            JsonProperty jsonPropertyAnnotation = field.getAnnotation(JsonProperty.class);
+            if (xmlElementAnnotation != null &amp;&amp; !xmlElementAnnotation.name().isEmpty()) {
+                renameMap.put(xmlElementAnnotation.name(), field.getName());
+            } else if (jsonPropertyAnnotation != null &amp;&amp; !jsonPropertyAnnotation.value().isEmpty()) {
+                renameMap.put(jsonPropertyAnnotation.value(), field.getName());
+            }
+        }
+        if (renameMap.isEmpty())
+            return Collections.emptyMap();
+        return renameMap;
+    }
+}
+</code></pre>
+
+<p>This KebabCaseProcessor will use reflection to get a list of mappings for your request object.  It will then invoke the KebabCaseDataBinder - passing in the mappings.</p>
+
+<pre><code>@Configuration
+public class KebabCaseRequestDataBinder extends ExtendedServletRequestDataBinder {
+
+    private final Map&lt;String, String&gt; renameMapping;
+
+    public KebabCaseRequestDataBinder(Object target, String objectName, Map&lt;String, String&gt; mapping) {
+        super(target, objectName);
+        this.renameMapping = mapping;
+    }
+
+    protected void addBindValues(MutablePropertyValues mpvs, ServletRequest request) {
+        super.addBindValues(mpvs, request);
+        for (Map.Entry&lt;String, String&gt; entry : renameMapping.entrySet()) {
+            String from = entry.getKey();
+            String to = entry.getValue();
+            if (mpvs.contains(from)) {
+                mpvs.add(to, mpvs.getPropertyValue(from).getValue());
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>All that remains now is to add this behavior to your configuration.  The following configuration overrides the default configuration that the @EnableWebMVC delivers and adds this behavior to your request processing.</p>
+
+<pre><code>@Configuration
+public static class WebContextConfiguration extends WebMvcConfigurationSupport {
+    @Override
+    protected void addArgumentResolvers(List&lt;HandlerMethodArgumentResolver&gt; argumentResolvers) {
+        argumentResolvers.add(kebabCaseProcessor());
+    }
+
+    @Bean
+    protected KebabCaseProcessor kebabCaseProcessor() {
+        return new KebabCaseProcessor(true);
+    }
+} 
+</code></pre>
+
+<p>Credit should be given to @Jkee.  This solution is derivative of an example he posted here:  <a href="http://stackoverflow.com/questions/8986593/how-to-customize-parameter-names-when-binding-spring-mvc-command-objects">How to customize parameter names when binding spring mvc command objects</a>.</p>

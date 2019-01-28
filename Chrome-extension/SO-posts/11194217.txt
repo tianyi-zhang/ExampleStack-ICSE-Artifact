@@ -1,0 +1,100 @@
+<p>I found the solution (thank you Nikolay for pointing me in the right direction).</p>
+
+<p>The problem was two-fold... one, it was returning a site certificate that Android didn't like, and two, it had only SSLv3 (and not TLS) enabled.</p>
+
+<p>Here was my solution.  First I had to create a custom socket factory class:</p>
+
+<pre><code>public class MySSLSocketFactory extends SSLSocketFactory {
+SSLContext sslContext = SSLContext.getInstance("SSLv3");
+
+public MySSLSocketFactory(KeyStore truststore) throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException {
+    super(truststore);
+
+    TrustManager tm = new X509TrustManager() {
+        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {}
+        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {}
+        public X509Certificate[] getAcceptedIssuers() {
+            return null;
+        }
+    };
+
+    sslContext.init(null, new TrustManager[] { tm }, null);
+}
+
+@Override
+public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException, UnknownHostException {
+    SSLSocket S = (SSLSocket) sslContext.getSocketFactory().createSocket(socket, host, port, autoClose);
+    S.setEnabledProtocols(new String[] {"SSLv3"});
+    return S;
+}
+
+@Override
+public Socket createSocket() throws IOException {
+    SSLSocket S = (SSLSocket) sslContext.getSocketFactory().createSocket();
+    S.setEnabledProtocols(new String[] {"SSLv3"});
+    return S;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>Second, I had this custom HttpClient defined in my code:</p>
+
+<pre><code>public HttpClient getNewHttpClient() {
+    try {
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+
+        MySSLSocketFactory sf = new MySSLSocketFactory(trustStore);
+        sf.setHostnameVerifier(MySSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER);
+
+        HttpParams params = new BasicHttpParams();
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+        HttpProtocolParams.setContentCharset(params, HTTP.UTF_8);
+
+        SchemeRegistry registry = new SchemeRegistry();
+        registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+        registry.register(new Scheme("https", sf, 443));
+
+        ClientConnectionManager ccm = new ThreadSafeClientConnManager(params, registry);
+
+        return new DefaultHttpClient(ccm, params);
+    } catch (Exception e) {
+        return new DefaultHttpClient();
+    }
+}
+</code></pre>
+
+<p>Third, I called the custom HttpClient and parsed the results:</p>
+
+<pre><code>public String test(String URIString) {
+    HttpClient httpClient = getNewHttpClient();
+    String result = "";
+    URI uri;
+    try {
+        uri = new URI(URIString);
+    } catch (URISyntaxException e1) {
+        return "ERROR";
+    }
+    HttpHost host = new HttpHost(uri.getHost(), 443, uri.getScheme());
+    HttpPost httppost = new HttpPost(uri.getPath());
+    try {
+        HttpResponse response = httpClient.execute(host, httppost);
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                    response.getEntity().getContent()
+                )
+            );
+            String line = null;
+            while ((line = reader.readLine()) != null){
+              result += line + "\n";
+            }
+
+            return result;
+    } catch (ClientProtocolException e) {
+        return "ERROR";
+    } catch (IOException e) {
+        return "ERROR";
+    }
+}
+</code></pre>

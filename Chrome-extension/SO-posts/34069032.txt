@@ -1,0 +1,169 @@
+<p>I haven't found a way but to send the whole SOAP envelope </p>
+
+<p>So from a background thread <code>AsyncTask</code> i called <code>callSOAPWebService(String data)</code> when executed                 </p>
+
+<pre><code>ByteArrayOutputStream stream = new ByteArrayOutputStream();
+Bitmap resizedBitmap = Bitmap.createScaledBitmap(thumbnail, 150, 150, false);
+resizedBitmap.compress(Bitmap.CompressFormat.PNG, 100,stream);
+byte[] byteArray = stream.toByteArray();
+String encoded = Base64.encodeToString(byteArray, Base64.DEFAULT);
+new ImageUpload().execute(encoded);
+</code></pre>
+
+<p>from the UI thread</p>
+
+<p>and on background </p>
+
+<pre><code>@Override
+        protected String doInBackground(String... params) {
+            callSOAPWebService(params[0]);
+            return null;
+        }
+</code></pre>
+
+<p>and the <code>callSOAPWebService</code> is as follow</p>
+
+<pre><code>private boolean callSOAPWebService(String data) {
+        OutputStream out = null;
+        int respCode;
+        boolean isSuccess = false;
+        URL url;
+        HttpURLConnection httpURLConnection = null;
+        try {
+            url = new URL(GetData.NonOpDomain);
+            httpURLConnection = (HttpURLConnection) url.openConnection();
+            do {
+                httpURLConnection.setRequestMethod("POST");
+                httpURLConnection.setRequestProperty("Connection", "keep-alive");
+                httpURLConnection.setRequestProperty("Content-Type", "text/xml");
+                httpURLConnection.setRequestProperty("SendChunked", "True");
+                httpURLConnection.setRequestProperty("UseCookieContainer", "True");
+                HttpURLConnection.setFollowRedirects(false);
+                httpURLConnection.setDoOutput(true);
+                httpURLConnection.setDoInput(true);
+                httpURLConnection.setUseCaches(true);
+                httpURLConnection.setRequestProperty("Content-length", getReqData(data).length + "");
+                httpURLConnection.setReadTimeout(100 * 1000);
+                // httpURLConnection.setConnectTimeout(10 * 1000);
+                httpURLConnection.connect();
+                out = httpURLConnection.getOutputStream();
+                if (out != null) {
+                    out.write(getReqData(data));
+                    out.flush();
+                }
+                respCode = httpURLConnection.getResponseCode();
+                Log.e("respCode", ":" + respCode);
+            } while (respCode == -1);
+
+            // If it works fine
+            if (respCode == 200) {
+                try {
+                    InputStream responce = httpURLConnection.getInputStream();
+                    String str = convertStreamToString(responce);
+                    System.out.println(".....data....." + str);
+                    InputStream is = new ByteArrayInputStream(str.getBytes("UTF-8"));
+                    XmlPullParserFactory xmlFactoryObject = XmlPullParserFactory.newInstance();
+                    XmlPullParser myparser = xmlFactoryObject.newPullParser();
+                    myparser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false);
+                    myparser.setInput(is, null);
+                    parseXMLAndStoreIt(myparser);
+                } catch (Exception e1) {
+                    e1.printStackTrace();
+                }
+            } else {
+                isSuccess = false;
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (out != null) {
+                out = null;
+            }
+            if (httpURLConnection != null) {
+                httpURLConnection.disconnect();
+                httpURLConnection = null;
+            }
+        }
+        return isSuccess;
+    }
+</code></pre>
+
+<p>and the helper method</p>
+
+<pre><code>public volatile boolean parsingComplete = true;
+
+public void parseXMLAndStoreIt(XmlPullParser myParser) {
+    int event;
+    String text = null;
+    try {
+        event = myParser.getEventType();
+        while (event != XmlPullParser.END_DOCUMENT) {
+            String name = myParser.getName();
+
+            switch (event) {
+                case XmlPullParser.START_TAG:
+                    break;
+
+                case XmlPullParser.TEXT:
+                    text = myParser.getText();
+                    break;
+                case XmlPullParser.END_TAG:
+                    if (name.equals("UploadImageResult")) {
+                        uploadedImage = text;
+                        uploadedImage = uploadedImage.replace("\"", "");
+                    }
+                    break;
+            }
+            event = myParser.next();
+        }
+        parsingComplete = false;
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+public static String createSoapHeader() {
+    String soapHeader;
+
+    soapHeader = "&lt;?xml version=\"1.0\" encoding=\"utf-8\"?&gt;"
+            + "&lt;soap:Envelope "
+            + "xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\""
+            + " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+            + " xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"" + "&gt;";
+    return soapHeader;
+}
+
+public static byte[] getReqData(String data) {
+    StringBuilder requestData = new StringBuilder();
+
+    requestData.append(createSoapHeader());
+    requestData.append("&lt;soap:Body&gt;" + "&lt;UploadImage" + " xmlns=\"http://example.org/\"&gt;" + "&lt;ImageContent&gt;").append(data).append("&lt;/ImageContent&gt;\n").append("&lt;imageExtenstion&gt;jpg&lt;/imageExtenstion&gt;").append("&lt;/UploadImage&gt; &lt;/soap:Body&gt; &lt;/soap:Envelope&gt;");
+    Log.d("reqData: ", requestData.toString());
+    return requestData.toString().trim().getBytes();
+}
+
+private static String convertStreamToString(InputStream is)
+        throws UnsupportedEncodingException {
+    BufferedReader reader = new BufferedReader(new InputStreamReader(is,
+            "UTF-8"));
+    StringBuilder sb = new StringBuilder();
+    String line;
+    try {
+        while ((line = reader.readLine()) != null) {
+            sb.append(line + "\n");
+        }
+    } catch (IOException e) {
+        e.printStackTrace();
+    } finally {
+        try {
+            is.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+    return sb.toString();
+
+}
+</code></pre>
+
+<p>Hope it will help some one in the future</p>

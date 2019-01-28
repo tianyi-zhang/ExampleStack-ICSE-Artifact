@@ -1,0 +1,63 @@
+<p>2 choices:</p>
+
+<ol>
+<li><p>You can do what you do and create your own key store and I've done that, here is instructions from my code that I stored (because it was so time consuming to get it to work):</p>
+
+<p>To generate PKS:</p>
+
+<ol>
+<li>Created cert in IIS7 and then exported as pfx. Follow instruction on SelfSSL: <a href="http://www.robbagby.com/iis/self-signed-certificates-on-iis-7-the-easy-way-and-the-most-effective-way/" rel="nofollow">http://www.robbagby.com/iis/self-signed-certificates-on-iis-7-the-easy-way-and-the-most-effective-way/</a>
+1a. Download tool: <a href="http://cid-3c8d41bb553e84f5.skydrive.live.com/browse.aspx/SelfSSL" rel="nofollow">http://cid-3c8d41bb553e84f5.skydrive.live.com/browse.aspx/SelfSSL</a>
+1b. Run: SelfSSL /N:CN=mydomainname /V:1000 /S:1 /P:8081
+I use port 8181 on my server
+1c. Export from IIS manager to cert.pfx</li>
+<li>Run command line in SSL to convert file into X.509:
+openssl pkcs12 -in C:\cert.pfx -out C:\cert.cer -nodes</li>
+<li>Edit file and delete all except -----BEGIN.... END CERTIFICATE----- IMPORTANT! It was working when I got proper (5) amount of dashes and put tags and data on separate lines</li>
+<li>use keytool. C:\Java\JDK\bcprov.jar was downloaded separately
+C:\Users>keytool -import -v -trustcacerts -alias key_alias -file C:\cert.cer -keystore C:\mystore.bks -storetype BKS -provider org.bouncycastle.jce.provider.BouncyCastleProvider -providerpath C:\Java\JDK\bcprov.jar -storepass 123456</li>
+</ol></li>
+<li><p>Create TRUST ALL KeyStore and forget about all this. Basically, you can use any SSL without errors. Just disable it in production if you really care. Here is code I use to get SSL client prepared (assuming you use Apache Http client)</p>
+
+<pre><code>private HttpClient getHttpClient()
+{
+    HttpParams params = new BasicHttpParams();
+
+    //Set main protocol parameters
+    HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+    HttpProtocolParams.setContentCharset(params, HTTP.DEFAULT_CONTENT_CHARSET);
+    HttpProtocolParams.setUseExpectContinue(params, true);
+
+    // Turn off stale checking.  Our connections break all the time anyway, and it's not worth it to pay the penalty of checking every time.
+    HttpConnectionParams.setStaleCheckingEnabled(params, false);
+    // FIX v2.2.1+ - Set timeout to 30 seconds, seems like 5 seconds was not enough for good communication
+    HttpConnectionParams.setConnectionTimeout(params, 30 * 1000);
+    HttpConnectionParams.setSoTimeout(params, 30 * 1000);
+    HttpConnectionParams.setSocketBufferSize(params, 8192);
+
+    // Don't handle redirects -- return them to the caller.  Our code often wants to re-POST after a redirect, which we must do ourselves.
+    HttpClientParams.setRedirecting(params, false);
+
+    // Register our own "trust-all" SSL scheme
+    SchemeRegistry schReg = new SchemeRegistry();
+    try
+    {
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+
+        TrustAllSSLSocketFactory sslSocketFactory = new TrustAllSSLSocketFactory(trustStore);
+        sslSocketFactory.setHostnameVerifier(SSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER);
+
+        Scheme sslTrustAllScheme = new Scheme("https", sslSocketFactory, 443);
+        schReg.register(sslTrustAllScheme);
+    }
+    catch (Exception ex)
+    {
+        LogData.e(LOG_TAG, ex, LogData.Priority.None);
+    }
+
+    ClientConnectionManager conMgr = new ThreadSafeClientConnManager(params,schReg);
+    return new DefaultHttpClient(conMgr, params);
+}
+</code></pre></li>
+</ol>

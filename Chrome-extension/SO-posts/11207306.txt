@@ -1,0 +1,142 @@
+<p>First you need to <a href="https://developers.google.com/android/c2dm/signup" rel="nofollow">signup</a> with google's C2DM</p>
+
+<p>Second get a Auth token for your C2DM application</p>
+
+<pre><code>function(){
+        // Create the post data
+        // Requires a field with the email and the password
+        StringBuilder builder = new StringBuilder();
+        builder.append("Email=").append(email);
+        builder.append("&amp;Passwd=").append(password);
+        builder.append("&amp;accountType=GOOGLE");
+        builder.append("&amp;source=MyLittleExample");
+        builder.append("&amp;service=ac2dm");
+
+        // Setup the Http Post
+        byte[] data = builder.toString().getBytes();
+        URL url = new URL("https://www.google.com/accounts/ClientLogin");
+        HttpURLConnection con = (HttpURLConnection) url.openConnection();
+        con.setUseCaches(false);
+        con.setDoOutput(true);
+        con.setRequestMethod("POST");
+        con.setRequestProperty("Content-Type",
+                "application/x-www-form-urlencoded");
+        con.setRequestProperty("Content-Length", Integer.toString(data.length));
+
+        // Issue the HTTP POST request
+        OutputStream output = con.getOutputStream();
+        output.write(data);
+        output.close();
+
+        // Read the response
+        BufferedReader reader = new BufferedReader(new InputStreamReader(con.getInputStream()));
+        String line = null;
+        String auth_key = null;
+        while ((line = reader.readLine()) != null) {
+            if (line.startsWith("Auth=")) {
+                auth_key = line.substring(5);
+            }
+        }
+
+        // Finally get the authentication token
+        // To something useful with it
+        return auth_key;
+}
+</code></pre>
+
+<p>Now you need to register the client mobile device to C2DM to receive the updates</p>
+
+<pre><code>public void register(View view) {
+    Intent intent = new Intent("com.google.android.c2dm.intent.REGISTER");
+    intent.putExtra("app",PendingIntent.getBroadcast(this, 0, new Intent(), 0));
+    intent.putExtra("sender", "youruser@gmail.com");
+    startService(intent);
+}
+</code></pre>
+
+<p>The service will asynchronously register with Google and will send the "<strong>com.google.android.c2dm.intent.REGISTRATION</strong>" intent upon successful registration. Your application need to register an Broadcast Receiver for this intent. This also requires the usage of a permission based on your package as the Android system checks this internally.</p>
+
+<pre><code>&lt;receiver android:name=".C2DMMessageReceiver"
+    android:permission="com.google.android.c2dm.permission.SEND"&gt;
+    &lt;intent-filter&gt;
+        &lt;action android:name="com.google.android.c2dm.intent.RECEIVE"&gt;&lt;/action&gt;
+        &lt;category android:name="de.vogella.android.c2dm.simpleclient" /&gt;
+    &lt;/intent-filter&gt;
+&lt;/receiver&gt;
+</code></pre>
+
+<p>//   </p>
+
+<pre><code>public class C2DMRegistrationReceiver extends BroadcastReceiver {
+
+@Override
+public void onReceive(Context context, Intent intent) {
+    String action = intent.getAction();
+    Log.w("C2DM", "Registration Receiver called");
+    if ("com.google.android.c2dm.intent.REGISTRATION".equals(action)) {
+        Log.w("C2DM", "Received registration ID");
+        final String registrationId = intent
+                .getStringExtra("registration_id");
+        String error = intent.getStringExtra("error");
+
+        Log.d("C2DM", "dmControl: registrationId = " + registrationId
+                + ", error = " + error);
+        // Send and store this in your application server(unique for each device)
+    }
+}
+}
+</code></pre>
+
+<p>Now you can start sending C2DM messages through your server</p>
+
+<pre><code>private final static String AUTH = "authentication";
+
+    private static final String UPDATE_CLIENT_AUTH = "Update-Client-Auth";
+
+    public static final String PARAM_REGISTRATION_ID = "registration_id";
+
+    public static final String PARAM_DELAY_WHILE_IDLE = "delay_while_idle";
+
+    public static final String PARAM_COLLAPSE_KEY = "collapse_key";
+
+    private static final String UTF8 = "UTF-8";
+
+    public static int sendMessage(String auth_token, String registrationId,
+            String message) throws IOException {
+
+        StringBuilder postDataBuilder = new StringBuilder();
+        postDataBuilder.append(PARAM_REGISTRATION_ID).append("=")
+                .append(registrationId);
+        postDataBuilder.append("&amp;").append(PARAM_COLLAPSE_KEY).append("=")
+                .append("0");
+        postDataBuilder.append("&amp;").append("data.payload").append("=")
+                .append(URLEncoder.encode(message, UTF8));
+
+        byte[] postData = postDataBuilder.toString().getBytes(UTF8);
+
+        // Hit the dm URL.
+
+        URL url = new URL("https://android.clients.google.com/c2dm/send");
+        HttpsURLConnection
+                .setDefaultHostnameVerifier(new CustomizedHostnameVerifier());
+        HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+        conn.setDoOutput(true);
+        conn.setUseCaches(false);
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type",
+                "application/x-www-form-urlencoded;charset=UTF-8");
+        conn.setRequestProperty("Content-Length",
+                Integer.toString(postData.length));
+        conn.setRequestProperty("Authorization", "GoogleLogin auth="
+                + auth_token);
+
+        OutputStream out = conn.getOutputStream();
+        out.write(postData);
+        out.close();
+
+        int responseCode = conn.getResponseCode();
+        return responseCode;
+    }
+</code></pre>
+
+<p><a href="http://www.vogella.com/articles/AndroidCloudToDeviceMessaging/article.html" rel="nofollow">Reference</a></p>

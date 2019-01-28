@@ -1,0 +1,66 @@
+<p>I had the same problem but in my case I had forgotten I had an <strong>self-signed certificate</strong> on my server so OkHttp was getting the certificate and then refusing to retrieve any images. Consequently from the server side it looked like Picasso was not making any requests. </p>
+
+<p>So the fix was to create an <strong>unsafe OkHttp client</strong> that doesn't test certificates:</p>
+
+<pre><code>static OkHttpClient getUnsafeOkHttpClient() {
+  try {
+      // Create a trust manager that does not validate certificate chains
+      final TrustManager[] trustAllCerts = new TrustManager[] { new X509TrustManager() {
+          @Override
+          public void checkClientTrusted(java.security.cert.X509Certificate[] chain,
+                  String authType) throws CertificateException {
+          }
+
+          @Override
+          public void checkServerTrusted(java.security.cert.X509Certificate[] chain,
+                  String authType) throws CertificateException {
+          }
+
+          @Override
+          public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+              return null;
+          }
+      } };
+
+      // Install the all-trusting trust manager
+      final SSLContext sslContext = SSLContext.getInstance("SSL");
+      sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+      // Create an ssl socket factory with our all-trusting manager
+      final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
+
+      OkHttpClient okHttpClient = new OkHttpClient();
+      okHttpClient.setSslSocketFactory(sslSocketFactory);
+      okHttpClient.setHostnameVerifier(new HostnameVerifier() {
+          @Override
+          public boolean verify(String hostname, SSLSession session) {
+              return true;
+          }
+      });
+
+      return okHttpClient;
+  } catch (Exception e) {
+      throw new RuntimeException(e);
+  }
+}
+</code></pre>
+
+<p>Then use it in my CustomOkHttpDownloader:</p>
+
+<pre><code>static class CustomOkHttpDownloader extends OkHttpDownloader {
+
+    private String accessToken;
+
+    public CustomOkHttpDownloader(Context context, String accessToken) {
+        super(getUnsafeOkHttpClient());
+        this.accessToken = accessToken;
+    }
+
+    @Override
+    protected HttpURLConnection openConnection(final Uri uri) throws IOException {
+        HttpURLConnection connection = super.openConnection(uri);
+        connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+        Log.d(LOG_TAG, "Creating connection for " + uri + " with " + accessToken);
+        return connection;
+    }
+}
+</code></pre>

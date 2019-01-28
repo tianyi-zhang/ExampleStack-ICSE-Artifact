@@ -1,0 +1,133 @@
+<p>I did it!</p>
+
+<p>I created a runtime attacher for the profiler outlined <a href="http://www.ibm.com/developerworks/java/library/j-jip/" rel="nofollow">here</a>. Its basically that, with the premain renamed to 'agentmain'.</p>
+
+<p>I made a Util class that has the attacher along with other useful functions. The attacher works by creating a jar with the agent, with a manifest stating that it can profile. The Util class looks like this:</p>
+
+<pre><code>    public class Util {
+
+    /**
+     * Gets the current JVM PID
+     * @return
+     * Returns the PID
+     * @throws Exception
+     */
+
+    public static String getPidFromRuntimeMBean() {
+    String jvm = ManagementFactory.getRuntimeMXBean().getName();
+    String pid = jvm.substring(0, jvm.indexOf('@'));
+    return pid;
+    }
+
+    /**
+     * Attaches given agent classes to JVM
+     * 
+     * @param agentClasses
+     * A Class&lt;?&gt;[] of classes to be included in agent
+     * @param JVMPid
+     * The PID of the JVM to attach to
+     */
+
+    public static void attachAgentToJVM(Class&lt;?&gt;[] agentClasses, String JVMPid) {
+
+    try {
+
+
+    File jarFile = File.createTempFile("agent", ".jar");
+    jarFile.deleteOnExit();
+
+    Manifest manifest = new Manifest();
+    Attributes mainAttributes = manifest.getMainAttributes();
+    mainAttributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
+    mainAttributes.put(new Attributes.Name("Agent-Class"),
+        Agent.class.getName());
+    mainAttributes.put(new Attributes.Name("Can-Retransform-Classes"),
+        "true");
+    mainAttributes.put(new Attributes.Name("Can-Redefine-Classes"), "true");
+
+    JarOutputStream jos = new JarOutputStream(new FileOutputStream(
+        jarFile), manifest);
+
+
+    for(Class&lt;?&gt; clazz: agentClasses) {         
+        JarEntry agent = new JarEntry(clazz.getName().replace('.',
+            '/')
+            + ".class");
+        jos.putNextEntry(agent);
+
+    jos.write(getBytesFromIS(clazz.getClassLoader()
+        .getResourceAsStream(
+            clazz.getName().replace('.', '/') + ".class")));
+    jos.closeEntry();
+    }
+
+    jos.close();
+    VirtualMachine vm = VirtualMachine.attach(JVMPid);
+    vm.loadAgent(jarFile.getAbsolutePath());
+    vm.detach();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+
+    }
+
+    /**
+     * Gets bytes from InputStream
+     * 
+     * @param stream
+     * The InputStream
+     * @return 
+     * Returns a byte[] representation of given stream
+     */
+
+    public static byte[] getBytesFromIS(InputStream stream) {
+
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    try {
+        int nRead;
+        byte[] data = new byte[16384];
+
+        while ((nRead = stream.read(data, 0, data.length)) != -1) {
+        buffer.write(data, 0, nRead);
+        }
+
+        buffer.flush();
+    } catch (Exception e) {
+        System.err.println("Failed to convert IS to byte[]!");
+        e.printStackTrace();
+    }
+
+    return buffer.toByteArray();
+
+    }
+
+    /**
+     * Gets bytes from class
+     * 
+     * @param clazz    
+     * The class
+     * @return
+     * Returns a byte[] representation of given class
+     */
+
+    public static byte[] getBytesFromClass(Class&lt;?&gt; clazz) {            
+    return getBytesFromIS(clazz.getClassLoader().getResourceAsStream( clazz.getName().replace('.', '/') + ".class"));   
+    }
+
+}
+</code></pre>
+
+<p>I included JavaDoc comments for clarity.</p>
+
+<p>An example of using it would be:</p>
+
+<pre><code>Util.attachAgentToJVM(new Class&lt;?&gt;[] { Agent.class, Util.class,
+        Profile.class, ProfileClassAdapter.class,
+        ProfileMethodAdapter.class }, Util.getPidFromRuntimeMBean());   
+</code></pre>
+
+<p>Remember that the attacher wants Agent.class to be the main agent. You can change this easily. The rest of the Class[] are classes to be included in the temporary agent.jar</p>
+
+<p>If your IDE complains about "UnsatisfiedLinkError"s, it is because the attach.(dll|so) needed for this only comes with the JDK. Just copy paste it into your %JAVA_PATH%/jre/lib. Also, add a reference to your JDK's tools.jar, because it contains all the com.sun imports. </p>
+
+<p><strong>EDIT:</strong> I have a working github example is anyone might think this is useful. Its <a href="https://github.com/Icyene/ASM-Late-Bind-Agent" rel="nofollow">here</a>.</p>

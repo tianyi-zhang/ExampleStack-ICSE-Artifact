@@ -1,0 +1,137 @@
+<p>The type <code>&lt;E extends Comparable&lt;E&gt;&gt;</code> is fine, but there are several other problems:</p>
+
+<ul>
+<li><p><code>c</code> is a <a href="https://docs.oracle.com/javase/8/docs/api/java/util/Collection.html" rel="nofollow"><code>Collection</code></a>, but you can't sort a <code>Collection</code> unless that <code>Collection</code> is a <a href="https://docs.oracle.com/javase/8/docs/api/java/util/List.html" rel="nofollow"><code>List</code></a>, because only <code>List</code>s allow the arranging and rearranging of elements in specific orders. Other types of <code>Collection</code>, such as a <a href="https://docs.oracle.com/javase/8/docs/api/java/util/Set.html" rel="nofollow"><code>Set</code></a> or <a href="https://en.wikipedia.org/wiki/Bag_%28mathematics%29" rel="nofollow">bag</a>, do not. You could typecast <code>c</code> to <code>List</code>, but still it would be the wrong object to sort. It looks like you want to put the contents of <code>c</code> into your linked list and then sort <em>that</em>:</p>
+
+<pre><code>SortedLinkedList(Collection&lt;? extends E&gt; c)
+{
+    list.addAll(c);
+    Collections.sort(list);
+}
+</code></pre></li>
+<li><p>The list is declared <code>LinkedList&lt;Object&gt;</code> but should be <code>LinkedList&lt;E&gt;</code>, (<a href="https://stackoverflow.com/questions/9844236/declaring-a-linkedlist-in-java">or maybe <code>List&lt;E&gt;</code></a>), so that it is declared to contain sortable objects.</p></li>
+<li><p>The assignment of <code>new LinkedList();</code> <a href="https://stackoverflow.com/questions/2770321/what-is-a-raw-type-and-why-shouldnt-we-use-it">should be <code>new LinkedList&lt;E&gt;()</code></a> , which can be <a href="https://stackoverflow.com/questions/4166966/what-is-the-point-of-the-diamond-operator-in-java-7">shortened to <code>new LinkedList&lt;&gt;()</code></a>.</p></li>
+</ul>
+
+<p>That's enough changes to make the code compile, but let's delve deeper. I infer that what you're trying to do here is create a generic container collection that is a linked list with an invariant that its elements are always maintained in sorted order. In that case, some changes you'll want to make are:</p>
+
+<ul>
+<li><p>The <code>list</code> variable should be <code>private</code> to prevent other classes futzing about with it. If you do not want to re-assign the variable after initialization it would also be nice to make it <code>final</code>, which protects against accidental re-assignment and clarifies that that is how you're using it.</p></li>
+<li><p>The constructors should be <code>public</code> to allow access from other packages.</p></li>
+<li><p>I'm not sure what you intend the <code>compareTo</code> method there for. (How do you define a comparison of one entire collection against another?) Possibly it should be removed.</p></li>
+<li><p>Currently you're both encapsulating and extending <code>LinkedList</code>, which doesn't make sense. Each instance of your class has <em>two</em> <code>LinkedList</code>s, one in the <code>list</code> variable, and one inherited from the parent. You need to decide on one or the other.</p>
+
+<ul>
+<li><p>If you want to <em>extend</em> <code>LinkedList</code> then you can get rid of the <code>list</code> variable entirely and call the superclass methods instead. E.g.:</p>
+
+<pre><code>public SortedLinkedList(Collection&lt;? extends E&gt; c)
+{
+    super.addAll(c);
+    Collections.sort(this);
+}
+</code></pre>
+
+<p>In this case you will need to override any mutative methods of the parent class to make sure that none of them can be used to subvert the invariant that your class maintains its elements in sorted order. E.g., override <a href="https://docs.oracle.com/javase/8/docs/api/java/util/LinkedList.html#add-E-" rel="nofollow"><code>add(E element)</code></a> and make it insert the new element in the correct place. Whereas <a href="https://docs.oracle.com/javase/8/docs/api/java/util/LinkedList.html#add-int-E-" rel="nofollow"><code>add(int position, E element)</code></a> should be overridden to throw an <a href="https://docs.oracle.com/javase/8/docs/api/java/lang/UnsupportedOperationException.html" rel="nofollow"><code>UnsupportedOperationException</code></a> since inserting an element at a specified index position doesn't make sense, because an element's position in a sorted list is already implied by its value.</p>
+
+<p>A disadvantage of extending <code>LinkedList</code> is that is possible for new mutative methods to be added to the <code>LinkedList</code> class in future, which could then allow users to subvert your collection's invariant.</p></li>
+<li><p>If you want to <em>encapsulate</em> a <code>LinkedList</code> with your <code>list</code> variable, then you should delete <code>extends LinkedList&lt;E&gt;</code> and instead have <code>implements List&lt;E&gt;</code>.</p>
+
+<p>In this case you will need to provide an implementation for all the methods of the interface, but you can instantly implement most of them correctly by extending one of the abstract skeletal classes that the Java Collections Framework provides, such as <a href="https://docs.oracle.com/javase/8/docs/api/java/util/AbstractSequentialList.html" rel="nofollow"><code>AbstractSequentialList</code></a>.</p></li>
+<li><p>Third possibility: neither extend nor encapsulate <code>LinkedList</code> but write a linked list from scratch.</p></li>
+</ul></li>
+<li><p>The line <code>import java.lang.*;</code> is unnecessary. Everything in the <code>java.lang</code> package <a href="https://docs.oracle.com/javase/specs/jls/se8/html/jls-7.html#jls-7.3" rel="nofollow">is imported by default</a>.</p></li>
+</ul>
+
+<p>The following is an example based on the above fixes:</p>
+
+<pre><code>import java.util.*;
+
+public class SortedLinkedList&lt;E extends Comparable&lt;E&gt;&gt;
+        extends AbstractSequentialList&lt;E&gt; implements List&lt;E&gt; {
+    private final LinkedList&lt;E&gt; list = new LinkedList&lt;&gt;();
+
+    public SortedLinkedList() {}
+
+    public SortedLinkedList(Collection&lt;? extends E&gt; c)
+    {
+        list.addAll(c);
+        Collections.sort(list);
+    }
+
+    @Override
+    public boolean add(E element) {
+        list.add(element);
+        Collections.sort(list);
+        return true;
+    }
+
+    @Override
+    public ListIterator&lt;E&gt; listIterator(int index) {
+        // Rather than returning list.listIterator(index) directly, we
+        // encapsulate it to block the add and set methods:
+        return new ListIterator&lt;E&gt;() {
+            private final ListIterator&lt;E&gt; base = list.listIterator(index);
+
+            @Override
+            public boolean hasNext() {
+                return base.hasNext();
+            }
+
+            @Override
+            public E next() {
+                return base.next();
+            }
+
+            @Override
+            public boolean hasPrevious() {
+                return base.hasPrevious();
+            }
+
+            @Override
+            public E previous() {
+                return base.previous();
+            }
+
+            @Override
+            public int nextIndex() {
+                return base.nextIndex();
+            }
+
+            @Override
+            public int previousIndex() {
+                return base.previousIndex();
+            }
+
+            @Override
+            public void remove() {
+                base.remove();
+            }
+
+            @Override
+            public void set(E e) {
+                // prevent unsorting the list
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void add(E e) {
+                // prevent unsorting the list
+                throw new UnsupportedOperationException();
+            }
+        };
+    }
+
+    @Override
+    public int size() {
+        return list.size();
+    }
+}
+</code></pre>
+
+<p>The bulk of the <code>List</code> methods get implemented with no effort thanks the magical superclass <code>AbstractSequentialList</code> and <em>its</em> superclasses. However if you check <a href="http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/tip/src/share/classes/java/util" rel="nofollow">the source</a> you'll find things you can improve if you override those methods because the inherited implementations are designed principally to minimize effort in extending the class. E.g. to clear the list it iterates each element and carefully removes them one at a time (via <code>ListIterator.remove()</code>), whereas deferring to the <code>LinkedList</code>'s <code>clear()</code> method would be faster.</p>
+
+<p>Also, instead of re-sorting the entire list after adding an element, it would be much more efficient to insert it directly in the correct place. You can do this via <a href="https://docs.oracle.com/javase/8/docs/api/java/util/ListIterator.html#add-E-" rel="nofollow"><code>ListIterator.add</code></a>, but I'll leave that to you :)</p>
+
+<p>Another nice feature would be to allow your class to be constructed with a custom <a href="https://docs.oracle.com/javase/8/docs/api/java/util/Comparator.html" rel="nofollow"><code>Comparator</code></a> to be used for sorting elements. This would allow use of element types that do not implement <code>Comparable</code>, as well as the ability to override the default ordering (e.g., users of the class could supply a <code>Comparator</code> for <a href="https://docs.oracle.com/javase/8/docs/api/java/lang/String.html#CASE_INSENSITIVE_ORDER" rel="nofollow">case-insensitive ordering of <code>String</code>s</a>). <a href="https://docs.oracle.com/javase/8/docs/api/java/util/TreeMap.html#constructor.summary" rel="nofollow"><code>TreeMap</code></a> is an example of a class that supports this sort of feature.</p>
+
+<p>I hope the example is helpful for showing the concepts, anyway.</p>

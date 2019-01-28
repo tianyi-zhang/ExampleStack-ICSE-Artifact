@@ -1,0 +1,523 @@
+<p>Besides having some silly error like a <code>||</code> instead of a <code>&amp;&amp;</code>. It would very hard to identify where the problem for something like this is without seeing much more of the application. However I will give a few tips: </p>
+
+<ol>
+<li>Before adding collision detection, make sure your movement is working perfectly. </li>
+<li>When adding collision detection simplify the testing to a bare minimum, for example add only 1 wall. Then try your hardest to break through that wall, like move into it at every angle and watch for strange behavior such not being able to move once you've collided or moving through the wall.</li>
+<li>You will find problems when implementing collision detection if you make your character move THEN look for collisions. You should examine the coordinates where the next 'step' would be and if you have hit a wall then dont move. Think about it, if you move your character then after the program does the collision detection and sees that you've hit a wall then technically your inside the wall! You should calculate the next coordinates for your character and if there is no collision then commit those coordinates to the character.</li>
+</ol>
+
+<p>Make sure you debug your program throughly, add println statements: <code>System.out.println("collision!")</code> or the debugger, whatever way you like best.</p>
+
+<p><em>this really should be a comment but it was to long...</em></p>
+
+<hr>
+
+<p><strong>Edit:</strong> 
+I see your question on CodeReview got closed, this was likely due to the fact that you said "my code isnt working". I told you to ask it on there with the intent of having them basically do what I am doing here. Improve and reorganize your code, not fix the collision detection. I did happen to fix that for you but I commented it so LOOK AT MY COMMENTS IN THE CODE!!! :)</p>
+
+<p>Here are some of the problems I found</p>
+
+<ol>
+<li>Your classes should follow the Java naming conventions, this means CamelCase with Captial letters to start, so game should be Game, input would be Input ect... Static variables should always be UPPER_SNAKE_CASE, static variables are always declared at the top of the class.</li>
+<li>The scope of your variables is all over the place, for instance the <code>Input</code> class detects inputs but changes variables in the <code>Game</code> class. One benefit of OOP is that you can break apart specific areas of your application to specific classes, what you dont want to have is a <a href="http://en.wikipedia.org/wiki/God_object" rel="nofollow">god object</a> which is what you have now with your <code>Game</code> class. It becomes overwhelming and hard to manage. Keep doing this and pretty soon you will have an unmanageable program.</li>
+<li>You have some strange variable naming or strange usage of them. Im looking at <code>pTileX</code>, <code>pTileY</code>, <code>playerPosX</code>, <code>playerPosY</code>, <code>tileX</code>, <code>tileY</code>. Why 6 variables? You should only need 2, the x and y position of the player. The tile location could at any time be found using those coordinates. </li>
+<li>Your map class is pretty much useless at the moment. You have a few static variables in there but you dont utilize any OOP structure with it! You have the right Idea making it but lets put the class structure to use.</li>
+<li>Never declare something as a global variable unless it needs to be, always reduce the scope of your variable and increase as necessary. When you become a more seasoned programmer you will have more knowledge about what scope it should be.</li>
+</ol>
+
+<p>Im going to give you a fixed up version of your code, further moving methods and things around will be necessary for future additions. I removed ALOT of global variables that were just silly to have up there. </p>
+
+<p><strong>Game.class</strong></p>
+
+<pre><code>import java.awt.BorderLayout;
+import java.awt.Canvas;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Graphics;
+import java.awt.Image;
+import java.awt.Point;
+
+import javax.swing.JFrame;
+
+public class Game extends Canvas implements Runnable {
+    public static int playerHeight = 16;
+    public static int playerWidth = 16;
+    public static int movementSpeed = 3;
+
+    public boolean running = false;
+
+    private JFrame frame;
+    private Image bufferImage;
+    private Graphics bufferGraphics;
+    private Input input;
+
+    private Point playerLocation = null;
+
+    private GameMap currentLevel;
+
+
+    public Game() {
+        Resources.loadResources();
+        loadLevel(new GameMap.Level1());
+
+        frame = new JFrame("PacMan"); // creates the frame for our game
+        input = new Input();
+
+        // if(MAIN_MENU == true &amp;&amp; GAME == false){
+        // buttons = new buttons(frame.getContentPane()); //draws the buttons
+        // based on the code in our graphics/buttons.java
+        // }
+
+        frame.setLayout(new BorderLayout());
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); // ends program on
+                                                                // click of the
+                                                                // Exit button
+                                                                // in the top
+                                                                // right corner
+        frame.setLocationByPlatform(true);
+        frame.addKeyListener(new Input());
+        frame.add(this, BorderLayout.CENTER);
+        frame.pack(); // keeps size correct
+        frame.setResizable(false); // keep this false, if set to true whenever
+                                    // someone resizes it our code will not
+                                    // function correctly
+        frame.setVisible(true);
+
+        this.addKeyListener(input);
+        this.createBufferStrategy(2); // I think this is double buffering,
+                                        // honestly not too sure
+    }
+
+    /**
+     * Loads the level into the game, also changes the dimensions of the window to fit the game
+     * @param gameMap
+     */
+    private void loadLevel(GameMap gameMap) {
+        currentLevel = gameMap;
+
+        playerLocation = convertMapLocationToScreenLocation(currentLevel.getPlayerStartLocation());
+
+        Dimension canvasSize = new Dimension(currentLevel.getWidth()*Resources.TILE_WIDTH, currentLevel.getHeight()*Resources.TILE_HEIGHT);
+
+        setMinimumSize(canvasSize);
+        setMaximumSize(canvasSize);
+        setPreferredSize(canvasSize);
+
+    }
+
+    public void run() {
+        long lastTime = System.nanoTime();
+        double nsPerTick = 1000000000 / 60D;
+        long lastTimer = System.currentTimeMillis();
+        double delta = 0;
+
+        int frames = 0;
+        int ticks = 0;
+
+        while (running == true) {
+            long now = System.nanoTime();
+            delta += (now - lastTime) / nsPerTick;
+            lastTime = now;
+            boolean render = false;
+
+            while (delta &gt;= 1) {
+                ticks++;
+                tick();
+                delta -= 1;
+                render = true;
+
+            }
+
+            try {
+                Thread.sleep(20); // keep the Frames from going to high
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            if (render == true) {
+                frames++;
+                render();
+            }
+
+            if (System.currentTimeMillis() - lastTimer &gt;= 1000) {
+                lastTimer += 1000;
+
+                frames = 0;
+                ticks = 0;
+            }
+        }
+
+        try {
+            Thread.sleep(20); // keep the Frames from going to high
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public synchronized void start() {
+        new Thread(this).start();
+        running = true;
+
+    }
+
+    public synchronized void stop() {
+        running = false;
+    }
+
+    public void render() {
+        Graphics g = getGraphics();
+        if (bufferImage == null) {
+
+            bufferImage = createImage(this.getSize().width, this.getSize().height);
+            bufferGraphics = bufferImage.getGraphics();
+
+        }
+
+        bufferGraphics.setColor(Color.orange);
+        bufferGraphics.fillRect(0, 0, this.getSize().width, this.getSize().height);
+
+        drawGame(bufferGraphics);
+
+        g.drawImage(bufferImage, 0, 0, this);
+    }
+
+    // this had to be renamed to drawGame, the paint method is used by AWT objects. This caused a serious bug where you would be constantly repainting.
+    public void drawGame(Graphics g) {
+
+        for (int x = 0; x &lt; currentLevel.getWidth(); x++) {
+            for (int y = 0; y &lt; currentLevel.getHeight(); y++) {
+                int tile = currentLevel.getTileAt(x, y);
+                int tileX = x * Resources.TILE_WIDTH;
+                int tileY = y * Resources.TILE_HEIGHT;
+
+                if (tile == GameMap.TILE_WALL) {
+                    g.drawImage(Resources.WALL, tileX, tileY, Resources.TILE_WIDTH, Resources.TILE_HEIGHT, null);
+                }
+
+                if (tile == GameMap.TILE_NOTHING) {
+                    g.drawImage(Resources.BLACK_BACK, tileX, tileY,
+                            Resources.TILE_WIDTH, Resources.TILE_HEIGHT, null);
+                }
+
+                if (tile == GameMap.TILE_POINT) {
+                    g.drawImage(Resources.POINT, tileX, tileY,
+                            Resources.TILE_WIDTH, Resources.TILE_HEIGHT, null);
+                }
+                /* This is not a good way to find the first location for the player, knowing that location belongs to the Map class
+                if (tile == 5) {
+                    if (!loaded) {
+                        playerPosX = tileX;
+                        playerPosY = tileY;
+                        loaded = true;
+                    }
+                    g.drawImage(blackBack, tileX, tileY,
+                            (int) 21.42857142857143, 26, null);
+                }*/
+            }
+        }
+        g.drawImage(Resources.PACMAN, playerLocation.x, playerLocation.y, playerWidth, playerHeight, null);
+    }
+
+    public void tick() {
+
+        int nextPlayerPosX = playerLocation.x;
+        int nextPlayerPosY = playerLocation.y;
+
+        if (input.key_up) {
+            nextPlayerPosY -= movementSpeed;
+        }
+
+        if (input.key_down) {
+            nextPlayerPosY += movementSpeed;
+        }
+
+        if (input.key_left) {
+            nextPlayerPosX -= movementSpeed;
+        }
+
+        if (input.key_right) {
+            nextPlayerPosX += movementSpeed;
+        }
+
+        // lets make sure the next location doesnt collide with a wall, if so then dont move the pacman!
+        if(!doesPlayerCollideWith(nextPlayerPosX, nextPlayerPosY, GameMap.TILE_WALL)) {
+            playerLocation.setLocation(nextPlayerPosX, nextPlayerPosY);
+        }
+    }
+
+    /**
+     * Looks at the players screen location and gets the map tiles for each corner.
+     * @param screenX
+     * @param screenY
+     * @return the 4 map tiles for each corner of the pac man given the screenX and screenY
+     */
+    private int[] getPlayerCornerCollisions(int screenX, int screenY) {
+        int[] corners = new int[4];
+        Point tileLocation = convertScreenLocationToMapLocation(screenX, screenY);
+        corners[0] = currentLevel.getTileAt(tileLocation.x, tileLocation.y);
+
+        tileLocation = convertScreenLocationToMapLocation(screenX + playerWidth, screenY);
+        corners[1] = currentLevel.getTileAt(tileLocation.x, tileLocation.y);
+
+        tileLocation = convertScreenLocationToMapLocation(screenX, screenY + playerHeight);
+        corners[2] = currentLevel.getTileAt(tileLocation.x, tileLocation.y);
+
+        tileLocation = convertScreenLocationToMapLocation(screenX + playerWidth, screenY + playerHeight);
+        corners[3] = currentLevel.getTileAt(tileLocation.x, tileLocation.y);
+        return corners;
+    }
+
+    /**
+     * Checks if any corners of the player intersects with the given mapTileType
+     * @param screenX
+     * @param screenY
+     * @param mapTileType
+     * @return true if the player intersects with the given map tile type
+     */
+    public boolean doesPlayerCollideWith(int screenX, int screenY, int mapTileType) {
+        for(int tileType : getPlayerCornerCollisions(screenX, screenY)) {
+            if(tileType == mapTileType) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Takes the screen location and converts it to a coordinate in the map
+     * @param location
+     * @return
+     */
+    public Point convertScreenLocationToMapLocation(Point location) {
+        return convertScreenLocationToMapLocation(location.x, location.y);
+    }
+    public Point convertScreenLocationToMapLocation(int x, int y) {
+        return new Point(x/Resources.TILE_WIDTH, y/Resources.TILE_HEIGHT);
+    }
+
+    public Point convertMapLocationToScreenLocation(Point location) {
+        return convertMapLocationToScreenLocation(location.x, location.y);
+    }
+    public Point convertMapLocationToScreenLocation(int x, int y) {
+        return new Point(x*Resources.TILE_WIDTH, y*Resources.TILE_HEIGHT);
+    }
+
+    public static void main(String[] args) {
+        new Game().start();
+    }
+}
+</code></pre>
+
+<p><strong>GameMap.class</strong> <em>- was previously Map.class</em></p>
+
+<pre><code>import java.awt.Point;
+
+public abstract class GameMap {
+    public static final int TILE_WALL = 0;
+    public static final int TILE_NOTHING = 1;
+    public static final int TILE_POINT = 2;
+    public static final int TILE_START_LOCATION = 5;
+
+
+
+    public abstract int getWidth();
+    public abstract int getHeight();
+    public abstract int[][] getLevelData();
+    public abstract java.awt.Point getPlayerStartLocation();
+
+    public int getTileAt(int x, int y) {
+        return getLevelData()[y][x];
+    }
+
+    public static class Level1 extends GameMap {
+
+        @Override
+        public int getWidth() {
+            return LEVEL_1_DATA[0].length;
+        }
+
+        @Override
+        public int getHeight() {
+            return LEVEL_1_DATA.length;
+        }
+
+        @Override
+        public int[][] getLevelData() {
+            return LEVEL_1_DATA;
+        }
+
+        @Override
+        public Point getPlayerStartLocation() {
+            for(int y=0;y&lt;LEVEL_1_DATA.length;y++) {
+                for(int x=0;x&lt;LEVEL_1_DATA[y].length;x++) {
+                    if(LEVEL_1_DATA[y][x] == GameMap.TILE_START_LOCATION) {
+                        return new Point(x, y);
+                    }
+                }
+            }
+            // should never reach this unless we forgot to put a start location.
+            throw new RuntimeException("No player start location could be found!");
+        }
+    }
+
+    private static int[][] LEVEL_1_DATA = {
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0},
+        {0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0},
+        {0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0},
+        {0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0},
+        {0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0},
+        {0,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,0},
+        {0,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,0},
+        {0,1,1,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,0},
+        {0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,1,1,1,1,1,1,1,1,1,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,0,0,0,2,2,0,0,0,1,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,1,1,1,0,0,2,2,2,2,0,0,1,1,1,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,0,0,2,2,2,2,0,0,1,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,1,1,1,1,1,1,1,1,1,0,0,1,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0},
+        {0,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0},
+        {0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0},
+        {0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0},
+        {0,1,1,1,0,0,1,1,1,1,1,1,1,5,1,1,1,1,1,1,1,1,0,0,1,1,1,0},
+        {0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0},
+        {0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0},
+        {0,1,1,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,0},
+        {0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0},
+        {0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0},
+        {0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+    };
+}
+</code></pre>
+
+<p><strong>Input.class</strong></p>
+
+<pre><code>import java.awt.event.*;
+
+public class Input implements KeyListener
+{
+    public boolean key_down = false;
+    public boolean key_up = false;
+    public boolean key_right = false;
+    public boolean key_left = false;
+
+    public void keyTyped(KeyEvent e) {
+    }
+
+    /** Here we have a rather basic key listener
+     *  It is set that you can only go left right up or down right now
+     *  If more directions are needed delete the "other key = false"
+     */
+
+    public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_RIGHT) {
+            key_right = true;
+            key_left = false;
+            key_up = false;
+            key_down = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_LEFT) {
+            key_right = false;
+            key_left = true;
+            key_up = false;
+            key_down = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_UP) {
+            key_right = false;
+            key_left = false;
+            key_up = true;
+            key_down = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_DOWN) {
+            key_right = false;
+            key_left = false;
+            key_up = false;
+            key_down = true;
+        }
+    }
+
+
+
+
+
+    public void keyReleased(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_RIGHT) {
+            key_right = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_LEFT) {
+            key_left = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_UP) {
+            key_up = false;
+        }
+        if (e.getKeyCode() == KeyEvent.VK_DOWN) {
+           key_down = false;
+        }
+    }
+}
+</code></pre>
+
+<p><strong>Resource.class</strong></p>
+
+<pre><code>import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.Image;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+
+import javax.imageio.ImageIO;
+
+public final class Resources {
+    private final static String NL = System.getProperty("line.separator");
+
+    public static final int TILE_WIDTH = 23;// 578;
+    public static final int TILE_HEIGHT = 29;// 720;
+
+    public static BufferedImage BACKGROUND = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage PACMAN = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage SETTINGS_BACKGROUND = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage LEVEL1 = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    /*public static BufferedImage LEVEL2 = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);*/
+    public static BufferedImage POINTS = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage POINT = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage WALL = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage BLACK_BACK = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+    public static BufferedImage POINT_BACK = new BufferedImage(TILE_WIDTH, TILE_HEIGHT,
+            BufferedImage.TYPE_INT_RGB);
+
+    public static void loadResources() {
+        try {
+            BACKGROUND = ImageIO.read(new File("res\\Background.png"));
+            WALL = ImageIO.read(new File("res\\maptile.png"));
+            PACMAN = ImageIO.read(new File("res\\pacman.png"));
+            SETTINGS_BACKGROUND = ImageIO.read(new File("res\\Background.png"));
+            LEVEL1 = ImageIO.read(new File("res\\level1.png"));
+            POINT = ImageIO.read(new File("res\\Points for pacman.png"));
+            BLACK_BACK = ImageIO.read(new File("res\\blackBack.png"));
+            POINT_BACK = ImageIO.read(new File("res\\points.png"));
+
+        } catch (IOException e) {
+            System.out.println("~~~~~~~~~~~~~~~~~~~~~~~~~~ WARNING! ~~~~~~~~~~~~~~~~~~~~~~~~~~");
+            System.out.println("There was am Image unsuccessfully loaded!"
+                            + NL
+                            + "The game may not work properly, check the load images method for spelling errors!");
+            System.out.println("~~~~~~~~~~~~~~~~~~~~~~~~~~ WARNING! ~~~~~~~~~~~~~~~~~~~~~~~~~~"
+                            + NL + NL);
+
+        }
+    }
+}
+</code></pre>

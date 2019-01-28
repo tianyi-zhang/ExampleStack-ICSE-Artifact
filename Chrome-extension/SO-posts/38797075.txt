@@ -1,0 +1,52 @@
+<p>You may consider the case when <code>active.poll()</code> accesses the old elements[] reclaimed in <code>ArrayDequeue.doubleCapacity()</code> for which the deque is full at the same time.</p>
+
+<p>One possible timeline:</p>
+
+<ol>
+<li>The polling thread checks out <code>active.isEmpty()</code> returns false</li>
+<li>The polling thread calls ```active.pollFirst() to access the elements[] which is not atomic</li>
+<li>One or more other threads call <code>active.addLast()</code> in bursts so that <code>active</code> is full and doubleCapacity() is triggered</li>
+<li>In doubleCapacity(), the elements[] is replaced with a newly allocated array such that the old elements[] is reclaimed by GC</li>
+<li>The polling thread now references the reclaimed elements[] and possibly gets null.</li>
+</ol>
+
+<p>My guess is that you would like to avoid synchronization for polling while the queue is not empty. To avoid the race due to doubleCapacity(), make sure the queue is allocated with a sufficiently large capacity and will not be full anytime addLast() is called. However, there might be other races you need to consider depending on the actual implementation.</p>
+
+<p>The following sources from openJDK are appended FYI.</p>
+
+<pre><code>public E pollFirst() {
+    int h = head;
+    @SuppressWarnings("unchecked")
+    E result = (E) elements[h];
+    // Element is null if deque empty
+    if (result == null)
+        return null;
+    elements[h] = null;     // Must null out slot
+    head = (h + 1) &amp; (elements.length - 1);
+    return result;
+}
+
+public void addLast(E e) {
+    if (e == null)
+        throw new NullPointerException();
+    elements[tail] = e;
+    if ( (tail = (tail + 1) &amp; (elements.length - 1)) == head)
+        doubleCapacity();
+}
+
+private void doubleCapacity() {
+    assert head == tail;
+    int p = head;
+    int n = elements.length;
+    int r = n - p; // number of elements to the right of p
+    int newCapacity = n &lt;&lt; 1;
+    if (newCapacity &lt; 0)
+        throw new IllegalStateException("Sorry, deque too big");
+    Object[] a = new Object[newCapacity];
+    System.arraycopy(elements, p, a, 0, r);
+    System.arraycopy(elements, 0, a, r, p);
+    elements = a;
+    head = 0;
+    tail = n;
+}
+</code></pre>

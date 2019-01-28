@@ -1,0 +1,87 @@
+<p>JAXB always adds all namespaces that are known by the JAXBContext to the root element of the XML document for performance reasons. See this comment by Kohsuke on <a href="http://java.net/jira/browse/JAXB-103?focusedCommentId=64411&amp;page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#action_64411">JAXB-103</a> for more information.</p>
+
+<p>The only way I found to deal with this, is to traverse the document myself after it has been created with JAXB and remove all unused namespaces using the following helper class:</p>
+
+<pre><code>public class RemoveUnusedNamespaces {
+
+    private static final String XML_NAMESPACE_SCHEMA_INSTANCE = "http://www.w3.org/2001/XMLSchema-instance";
+
+    private static final String XML_NAMESPACE_NAMESPACE = "http://www.w3.org/2000/xmlns/";
+
+    private interface ElementVisitor {
+
+        void visit(Element element);
+
+    }
+
+    public void process(Document document) {
+        final Set&lt;String&gt; namespaces = new HashSet&lt;String&gt;();
+
+        Element element = document.getDocumentElement();
+        traverse(element, new ElementVisitor() {
+
+            public void visit(Element element) {
+                String namespace = element.getNamespaceURI();
+                if (namespace == null)
+                    namespace = "";
+                namespaces.add(namespace);
+                NamedNodeMap attributes = element.getAttributes();
+                for (int i = 0; i &lt; attributes.getLength(); i++) {
+                    Node node = attributes.item(i);
+                    if (XML_NAMESPACE_NAMESPACE.equals(node.getNamespaceURI()))
+                        continue;
+                    String prefix;
+                    if (XML_NAMESPACE_SCHEMA_INSTANCE.equals(node.getNamespaceURI())) {
+                        if ("type".equals(node.getLocalName())) {
+                            String value = node.getNodeValue();
+                            if (value.contains(":"))
+                                prefix = value.substring(0, value.indexOf(":"));
+                            else
+                                prefix = null;
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        prefix = node.getPrefix();
+                    }
+                    namespace = element.lookupNamespaceURI(prefix);
+                    if (namespace == null)
+                        namespace = "";
+                    namespaces.add(namespace);
+                }
+            }
+
+        });
+        traverse(element, new ElementVisitor() {
+
+            public void visit(Element element) {
+                Set&lt;String&gt; removeLocalNames = new HashSet&lt;String&gt;();
+                NamedNodeMap attributes = element.getAttributes();
+                for (int i = 0; i &lt; attributes.getLength(); i++) {
+                    Node node = attributes.item(i);
+                    if (!XML_NAMESPACE_NAMESPACE.equals(node.getNamespaceURI()))
+                        continue;
+                    if (namespaces.contains(node.getNodeValue()))
+                        continue;
+                    removeLocalNames.add(node.getLocalName());
+                }
+                for (String localName : removeLocalNames)
+                    element.removeAttributeNS(XML_NAMESPACE_NAMESPACE, localName);
+            }
+
+        });
+    }
+
+    private final void traverse(Element element, ElementVisitor visitor) {
+        visitor.visit(element);
+        NodeList children = element.getChildNodes();
+        for (int i = 0; i &lt; children.getLength(); i++) {
+            Node node = children.item(i);
+            if (node.getNodeType() != Node.ELEMENT_NODE)
+                continue;
+            traverse((Element) node, visitor);
+        }
+    }
+
+}
+</code></pre>

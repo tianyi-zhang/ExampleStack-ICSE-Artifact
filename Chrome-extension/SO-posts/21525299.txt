@@ -1,0 +1,182 @@
+<p>Your error is pretty straighforward. Logcat tells you this:</p>
+
+<pre><code>FATAL EXCEPTION: Thread-65119
+02-03 14:01:56.178: E/AndroidRuntime(21178): java.lang.IllegalStateException: OAuth consumer key/secret combination not supplied
+</code></pre>
+
+<p>You need to declare your <code>Twitter twitter</code> object as a class variable, because you are setting the consumer and secret keys only to an instance of the object, but when you are requesting the auth token, you get a new instance of it, that doesn't have the configuration for the keys set.</p>
+
+<p><code>private static Twitter twitter;</code></p>
+
+<p>Then use this twitter object in the <code>private void loginToTwitter()</code>, and replace this:</p>
+
+<p><code>twitter4j.Twitter twitter = factory.getInstance();</code></p>
+
+<p>with</p>
+
+<p><code>twitter = factory.getInstance();</code></p>
+
+<p>where your twitter object is now a class iVar.</p>
+
+<p>Here is a sample from my own implementation, that should help you:</p>
+
+<pre><code>public class TwitterRequestTokenActivity extends Activity {
+
+final String TAG = getClass().getName();
+
+// Twitter oauth urls
+static final String URL_TWITTER_AUTH = "auth_url";
+static final String URL_TWITTER_OAUTH_VERIFIER = "oauth_verifier";
+static final String URL_TWITTER_OAUTH_DENIED = "denied";
+static final String URL_TWITTER_OAUTH_TOKEN = "oauth_token";
+static final String TWITTER_CALLBACK_URL = "appnameoauth://twitterLogin";
+
+private static Twitter twitter;
+private static RequestToken requestToken;
+private AccessToken accessToken;
+
+/** Progress */
+ProgressDialog mProgressDialog;
+
+@Override
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    authenticate();
+}
+
+@Override
+public void onDestroy() {
+    super.onDestroy();
+}   
+
+/**
+ * Called when the OAuthRequestTokenTask finishes (user has authorized the request token).
+ * The callback URL will be intercepted here.
+ */
+@Override
+public void onNewIntent(Intent intent) 
+{
+    super.onNewIntent(intent);
+    final Uri uri = intent.getData();
+    if (uri != null &amp;&amp; uri.toString().startsWith(TWITTER_CALLBACK_URL)) {
+        //check if user did cancel the twitter auth
+        final String error = uri.getQueryParameter(URL_TWITTER_OAUTH_DENIED);
+        if (error==null)
+            getTwitterAccessToken(uri);
+        else {
+            // Login failed
+            Toast.makeText(TwitterRequestTokenActivity.this, getString(R.string.twitter_login_failed), Toast.LENGTH_LONG).show();
+            //user did not authenticate
+            finish();
+        }
+    } 
+    else {
+        // Assume error: such as no connection
+        Toast.makeText(TwitterRequestTokenActivity.this, getString(R.string.twitter_login_failed), Toast.LENGTH_LONG).show();
+        finish();
+    }
+}
+
+/**
+ * Gets our token data once we obtain our accessToken from the asyncTask
+ */
+private void uploadToken() {
+    // upload data to our server
+    mProgressDialog = ProgressDialog.show(TwitterRequestTokenActivity.this, getString(R.string.generic_wait), getString(R.string.generic_sync), true, false);
+    // Getting user details from twitter
+    long userID = accessToken.getUserId();
+
+    //upload code to our server (irrelevant to question)
+}
+
+private void getTwitterAccessToken(Uri uri) {
+    mProgressDialog = ProgressDialog.show(TwitterRequestTokenActivity.this, getString(R.string.generic_wait), getString(R.string.twitter_logging_in), true, false);
+    final String verifier = uri.getQueryParameter(URL_TWITTER_OAUTH_VERIFIER);
+    // get the Token from Twitter       
+    AsyncTask&lt;Void, Void, Void&gt; tokenTask = new AsyncTask&lt;Void, Void, Void&gt;() {
+        @Override
+        protected Void doInBackground(Void... params) {
+            try {
+                TwitterRequestTokenActivity.this.accessToken = twitter.getOAuthAccessToken(requestToken, verifier);
+            }
+            catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void aVoid) {
+            hideProgress();
+            if (TwitterRequestTokenActivity.this.accessToken==null){
+                hideProgress();
+                finish();                   
+            }
+            else
+                uploadToken();
+        }
+    };
+
+    tokenTask.execute();
+}
+
+/**
+ * Starts the oAuth request with our callback URL
+ */
+private void authenticate() {
+    ConfigurationBuilder builder = new ConfigurationBuilder();
+    builder.setOAuthConsumerKey(Global.TWITTER_CONSUMER_KEY);
+    builder.setOAuthConsumerSecret(Global.TWITTER_CONSUMER_SECRET);
+    Configuration configuration = builder.build();
+
+    TwitterFactory factory = new TwitterFactory(configuration);
+    twitter = factory.getInstance();
+
+        Thread thread = new Thread(new Runnable(){
+            @Override
+            public void run() {
+                try {
+                    requestToken = twitter.getOAuthRequestToken(TWITTER_CALLBACK_URL);
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(requestToken.getAuthenticationURL())).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_FROM_BACKGROUND);
+                    TwitterRequestTokenActivity.this.startActivity(intent);
+                }
+                catch (Exception e) {
+                    finish();
+                }
+            }
+        });
+
+        thread.start();
+}
+
+/**
+ * Hides the progress bar
+ */
+private void hideProgress() {
+    try {
+        mProgressDialog.dismiss();
+    } catch (Exception e) {}
+}
+</code></pre>
+
+<p>}</p>
+
+<p>Also you need to make sure this activity is declared in your manifest as single task and set to listen to your custom oAUTH callback url:</p>
+
+<pre><code>    &lt;activity
+        android:name=".twitter.TwitterRequestTokenActivity"
+        android:configChanges="keyboardHidden|orientation"
+        android:launchMode="singleTask" &gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.intent.action.VIEW" /&gt;
+
+            &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+            &lt;category android:name="android.intent.category.BROWSABLE" /&gt;
+
+            &lt;data
+                android:host="twitterLogin"
+                android:scheme="appnameoauth" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/activity&gt;
+</code></pre>

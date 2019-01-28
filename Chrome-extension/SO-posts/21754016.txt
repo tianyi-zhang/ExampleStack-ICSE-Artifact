@@ -1,0 +1,193 @@
+<p><em>Answering My Own Question</em></p>
+
+<p>After spending hours and hours figured it out. Here step-by-step process of of asking read and publish permissions </p>
+
+<p><strong>Setup</strong> Eclipse, Android, Facebook SDK 3.6
+<strong>Program</strong> MainActivity and Static Fragment
+<strong>Trying to Achieve?</strong>  Asking read permissions and then publish permissions.</p>
+
+<p><em><strong>MainActivity</em></strong></p>
+
+<pre><code>public class YourFragmentActivity extends FragmentActivity {
+
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    //Static Fragment
+    setContentView(R.layout.fragment_layout);
+}
+
+
+@Override
+public void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+    Session.getActiveSession().onActivityResult(this, requestCode, resultCode, data);
+}
+}
+</code></pre>
+
+<p><em><strong>YourFragment.java</em></strong></p>
+
+<pre><code>public class YourFragment extends Fragment {
+public static String TAG = YourFragment.class.getSimpleName();
+
+private static final List&lt;String&gt; PERMISSIONS = Arrays.asList("publish_stream, publish_actions");
+
+// Flag to represent if we are waiting for extended permissions
+
+private Session.StatusCallback statusCallback = new SessionStatusCallback();
+private Session.StatusCallback publishCallback = new PublishCallback();
+
+private Button publish;
+
+
+
+@Override
+public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+    View view = inflater.inflate(R.layout.fragment, container, false);
+
+    buttonLoginLogout = (Button) view.findViewById(R.id.buttonLoginLogout);
+    publish = (Button) view.findViewById(R.id.publish);
+
+
+            //Make Sure you have session when you instantiate fragment
+    Session session = Session.getActiveSession();
+    if (session == null) {
+        if (savedInstanceState != null) {
+            session = Session.restoreSession(getActivity(), null, statusCallback, savedInstanceState);
+        }
+        if (session == null) {
+            session = new Session(getActivity());
+        }
+        Session.setActiveSession(session);
+        if (session.getState().equals(SessionState.CREATED_TOKEN_LOADED)) {
+            session.openForRead(new Session.OpenRequest(this).setCallback(statusCallback));
+        }
+    }
+
+    onSessionStateChange();
+
+    return view;
+}
+
+@Override
+public void onStart() {
+    super.onStart();
+    Session.getActiveSession().addCallback(statusCallback);
+}
+
+@Override
+public void onStop() {
+    super.onStop();
+    Session.getActiveSession().removeCallback(statusCallback);
+}
+
+@Override
+public void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+    Session.getActiveSession().onActivityResult(getActivity(), requestCode, resultCode, data);
+}
+
+@Override
+public void onSaveInstanceState(Bundle outState) {
+    super.onSaveInstanceState(outState);
+    Session session = Session.getActiveSession();
+    Session.saveSession(session, outState);
+}
+
+private void onSessionStateChange() {
+    Session session = Session.getActiveSession();
+
+    if(session.getPermissions().contains("publish_actions")){
+
+                 //You got you updated token here with extended permissions
+    }
+    if (session.isOpened()) {
+
+                 //Do you stuff here. e.g Getting accessToken, expiry etc.
+
+    }
+    else {
+    }
+}
+
+public  void requestPublishPermissions(Activity activity, Session session, List&lt;String&gt; permissions, int requestCode) {
+
+    if (session != null) {
+        Session.NewPermissionsRequest reauthRequest = new Session.NewPermissionsRequest(activity, permissions).setRequestCode(requestCode);
+        reauthRequest.setCallback(publishCallback);
+
+        session.requestNewPublishPermissions(reauthRequest);
+    }
+}
+
+    //Set this on onclick call of some button in you fragment
+private void openForRead() {
+    Session session = Session.getActiveSession();
+    if (!session.isOpened() &amp;&amp; !session.isClosed()) {
+        session.openForRead(new Session.OpenRequest(this).setCallback(statusCallback));
+    }
+    else {
+        Session.openActiveSession(getActivity(), this, true, statusCallback);
+    }
+}
+
+    //Set this on onclick call of some logout button in you fragment 
+private void logMeOut() {
+    Session session = Session.getActiveSession();
+    if (!session.isClosed()) {
+        session.closeAndClearTokenInformation();
+    }
+}
+
+private class SessionStatusCallback implements Session.StatusCallback {
+    @Override
+    public void call(Session session, SessionState state, Exception exception) {
+        onSessionStateChange();
+        Debug.waitForDebugger();
+        if (exception != null){
+                            //Handel your exception case here 
+            Log.i(TAG, exception.getMessage());
+                    }
+    }
+}
+
+private class PublishCallback implements Session.StatusCallback {
+    @Override
+    public void call(Session session, SessionState state, Exception exception) {
+        Debug.waitForDebugger();
+        onSessionStateChange();
+        if (exception != null){
+                            //Handel your exception case here
+            Log.i(TAG, exception.getMessage());
+                     }
+    }
+}
+}
+</code></pre>
+
+<p><em><strong>Errors you might encounter</em></strong></p>
+
+<ul>
+<li><strong>1) publish permission never callsback</strong></li>
+</ul>
+
+<p>This is the most annoying one. When user grant publish permission callback never returns but the same
+time if you user sees its app setting page in FB it shows that user has granted publish permission
+to you app. In such scenario, technically we can use same accessToken which we have received in readForOpen call because most of the times accessToken doesn't change even after successful callbacks (Isn't it a flaw). But we cannot rely on this as FB can change accessToken anytime.</p>
+
+<p><em><strong>How to avoid this?</em></strong>
+-- Make sure onActivityResult is there in both your Fragment and main Activity. And calling Session.onActivityResult </p>
+
+<p>-- Make sure you are setting a publish callback to newRequest. FB picks callback instance back from NewPermissionsRequest using addCallback(newPermissionsRequest.getCallback());</p>
+
+<ul>
+<li><strong>2) User logged in as different Facebook user</strong></li>
+</ul>
+
+<p>Interestingly, FB SDK shows this only when you ask for publish permission. Internally FB sdk validates fbid by making a "me" call an compare response (return could be null) with previous (existing session fbid) one and if there is a difference between these two SDK shows this error.</p>
+
+<p><em><strong>How to avoid this?</em></strong>
+-- Make sure you have setup your FB application correctly specially package name.
+-- This one made me insane. DO NOT USE PROXY. while using proxy android phone somehow FB SDK's internal "ME" call to validate FBIDs fails with error com.facebook.FacebookException: could not construct request body and graph user becomes null and hence this error. Though is is kind of weird because I am using fiddler which is normal intercepting proxy</p>
+
+<p>I hope this will help.</p>

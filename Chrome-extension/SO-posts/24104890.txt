@@ -1,0 +1,174 @@
+<p>Instead of <code>new DefaultHttpClient()</code> try to use this class <code>getHttpClient()</code>:</p>
+
+<pre><code>import java.io.IOException;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import org.apache.http.HttpVersion;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.params.HttpClientParams;
+import org.apache.http.conn.ClientConnectionManager;
+import org.apache.http.conn.scheme.PlainSocketFactory;
+import org.apache.http.conn.scheme.Scheme;
+import org.apache.http.conn.scheme.SchemeRegistry;
+import org.apache.http.conn.ssl.SSLSocketFactory;
+import org.apache.http.conn.ssl.X509HostnameVerifier;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.conn.tsccm.ThreadSafeClientConnManager;
+import org.apache.http.params.BasicHttpParams;
+import org.apache.http.params.HttpConnectionParams;
+import org.apache.http.params.HttpParams;
+import org.apache.http.params.HttpProtocolParams;
+import org.apache.http.protocol.HTTP;
+
+public class MySSLSocketFactory extends SSLSocketFactory {
+    SSLContext sslContext = SSLContext.getInstance("TLS");
+    public static int ConnectionTimeoutInSeconds = 45;
+    public static boolean DisableSSLcertificateCheck = true;
+
+    public MySSLSocketFactory(KeyStore truststore) throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException {
+        super(truststore);
+
+        TrustManager tm = new X509TrustManager() {
+            public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            }
+
+            public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            }
+
+            public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                return null;
+            }
+
+        };
+
+        sslContext.init(null, new TrustManager[] { tm }, null);
+    }
+
+    @Override
+    public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException, UnknownHostException {
+        return sslContext.getSocketFactory().createSocket(socket, host, port, autoClose);
+    }
+
+    @Override
+    public Socket createSocket() throws IOException {
+        return sslContext.getSocketFactory().createSocket();
+    }
+
+    public static HttpClient getHttpClient() {
+        try {
+
+            HttpParams params = new BasicHttpParams();
+
+            // Turn off stale checking.  Our connections break all the time anyway,
+            // and it's not worth it to pay the penalty of checking every time.
+            HttpConnectionParams.setStaleCheckingEnabled(params, false);
+
+            // Default connection and socket timeout of 20 seconds.  Tweak to taste.
+            HttpConnectionParams.setConnectionTimeout(params, ConnectionTimeoutInSeconds * 1000);
+            HttpConnectionParams.setSoTimeout(params, ConnectionTimeoutInSeconds * 1000);
+            HttpConnectionParams.setSocketBufferSize(params, 8192);
+
+            // Don't handle redirects -- return them to the caller.  Our code
+            // often wants to re-POST after a redirect, which we must do ourselves.
+            HttpClientParams.setRedirecting(params, false);
+
+            SSLSocketFactory mySSLSocketFactory = SSLSocketFactory.getSocketFactory();
+
+            // disable ssl check on debug
+            if (DisableSSLcertificateCheck ) {
+                KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+                trustStore.load(null, null);
+                mySSLSocketFactory = new MySSLSocketFactory(trustStore);
+                HostnameVerifier hostnameVerifier = org.apache.http.conn.ssl.SSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER;
+                mySSLSocketFactory.setHostnameVerifier((X509HostnameVerifier) hostnameVerifier);
+            }
+
+            SchemeRegistry schemeRegistry = new SchemeRegistry();
+            schemeRegistry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+            schemeRegistry.register(new Scheme("https", mySSLSocketFactory, 443));
+            ClientConnectionManager manager = new ThreadSafeClientConnManager(params, schemeRegistry);
+
+            return new DefaultHttpClient(manager, params);
+        } catch (Exception e) {
+            return new DefaultHttpClient();
+        }
+    }
+
+}
+</code></pre>
+
+<p>It handles SSL, enable you to ignore the SSL certificate and allows you to change the timeouts manually. 
+I would start with "disable ssl check" and set timeout to 90 (sec).</p>
+
+<p>Another way you might try to authenticate is the same as Bing search API authentication works (you need to download and include commons-codec-1.9.jar):</p>
+
+<pre><code>public class SearchAsyncTask extends AsyncTask&lt;Void, Void, Void&gt; {
+
+private final String TAG = getClass().getName();
+
+@Override
+protected Void doInBackground(Void... params) {
+    try {
+        String bingUrl = "https://api.datamarket.azure.com/Bing/SearchWeb/v1/Web?Query=pinhassi";
+
+        String accountKey = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        byte[] accountKeyBytes = Base64.encodeBase64((accountKey + ":" + accountKey).getBytes());
+        String accountKeyEnc = new String(accountKeyBytes);
+
+        URL url = null;
+        url = new URL(bingUrl);
+
+        URLConnection urlConnection = url.openConnection();
+        urlConnection.setRequestProperty("Authorization", "Basic " + accountKeyEnc);
+        InputStream response = urlConnection.getInputStream();
+        String res = readStream(response);
+        Log.d(TAG, res);
+        //conn.disconnect();
+
+    } catch (Exception e) {
+        e.printStackTrace();
+        Log.e(TAG, e.getMessage());
+    }
+
+    return null;
+}
+
+private String readStream(InputStream in) {
+    BufferedReader reader = null;
+    StringBuilder sb = new StringBuilder();
+    try {
+        reader = new BufferedReader(new InputStreamReader(in));
+        String line = "";
+        while ((line = reader.readLine()) != null) {
+            //System.out.println(line);
+            sb.append(line + "\n");
+        }
+    } catch (IOException e) {
+        e.printStackTrace();
+    } finally {
+        if (reader != null) {
+            try {
+                reader.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    return sb.toString();
+}
+
+}
+</code></pre>

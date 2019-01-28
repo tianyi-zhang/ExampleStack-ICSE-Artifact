@@ -1,0 +1,189 @@
+<p>Let's start with...</p>
+
+<ul>
+<li>Don't use <code>getGraphics</code>.  This is not how to perform custom painting.  <code>getGraphics</code> may return <code>null</code> and is, at best, a snapshot, which will be discard when the next paint cycle occurs.</li>
+<li><code>JPanel</code> already has <code>getWidth</code>, <code>getHeight</code> and <code>setSize</code> methods, you should never have a need to overridden them.  Instead, you should override <code>getPreferredSize</code> and return a size hint back that the parent layout manager can use.</li>
+<li>If you create a <code>Graphics</code> context, you should <code>dispose</code> of it.  In your <code>paint</code> method, you use <code>gh.create</code>, this is consuming resources and under some systems, until the <code>Graphics</code> context is disposed, it may not actually paint anything.</li>
+<li>Don't override <code>paint</code>, instead use <code>paintComponent</code></li>
+<li>DO NOT modify the clip rectangle.  Seriously, this is going to cause you more issues then you can imagine.</li>
+<li>Don't use <code>null</code> layout managers without EXTREMELY good reason.</li>
+<li><code>JPanel</code> has a <code>setBounds</code> method, while, under normal circumstances, you shouldn't need to use it, since you've thrown away the layout manager, you should use it.</li>
+</ul>
+
+<p>Basically, you've discard all the inner workings of the <code>JPanel</code> that enable the paint system to know that it should actually paint your panel</p>
+
+<p><strong>Updated with example</strong></p>
+
+<p>As an example...</p>
+
+<p>Instead of using the clip, I use a masking technique, and mask the shape I want over the source image.  I also buffer the result, which should make it more memory conservative as well as render faster</p>
+
+<p><img src="http://i.stack.imgur.com/NbsdN.png" alt="enter image description here"><img src="http://i.stack.imgur.com/Gyzur.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.AlphaComposite;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Insets;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import javax.imageio.ImageIO;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+import javax.swing.border.EmptyBorder;
+
+public class ImagePaneExample {
+
+    public static void main(String[] args) {
+        new ImagePaneExample();
+    }
+
+    public ImagePaneExample() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                }
+
+                try {
+                    BufferedImage img = ImageIO.read(new File("C:\\hold\\thumbnails\\2005-09-29-3957.jpeg"));
+                    ImagePane imgPane = new ImagePane();
+                    imgPane.setImage(img);
+                    imgPane.setRounded(true);
+                    imgPane.setBorder(new EmptyBorder(20, 20, 20, 20));
+
+                    JFrame frame = new JFrame("Testing");
+                    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                    frame.setLayout(new BorderLayout());
+                    frame.add(imgPane);
+                    frame.pack();
+                    frame.setLocationRelativeTo(null);
+                    frame.setVisible(true);
+                } catch (Exception exp) {
+                    exp.printStackTrace();
+                }
+            }
+        });
+    }
+
+    public class ImagePane extends JPanel {
+
+        private BufferedImage img;
+        private BufferedImage renderImg;
+        private boolean rounded;
+
+        public ImagePane() {
+        }
+
+        public void setRounded(boolean value) {
+            if (value != rounded) {
+                rounded = value;
+                renderImg = null;
+                firePropertyChange("rounded", !rounded, rounded);
+                repaint();
+            }
+        }
+
+        public boolean isRounded() {
+            return rounded;
+        }
+
+        public void setImage(BufferedImage value) {
+            if (value != img) {
+                BufferedImage old = img;
+                img = value;
+                renderImg = null;
+                firePropertyChange("image", old, img);
+                repaint();
+            }
+        }
+
+        public BufferedImage getImage() {
+            return img;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            Dimension size = img == null ? new Dimension(200, 200) : new Dimension(img.getWidth(), img.getHeight());
+            Insets insets = getInsets();
+            size.width += (insets.left + insets.right);
+            size.height += (insets.top + insets.bottom);
+            return size;
+        }
+
+        protected void applyQualityRenderHints(Graphics2D g2d) {
+            g2d.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2d.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
+            g2d.setRenderingHint(RenderingHints.KEY_DITHERING, RenderingHints.VALUE_DITHER_ENABLE);
+            g2d.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g2d.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+        }
+
+        protected BufferedImage getImageToRender() {
+
+            if (renderImg == null) {
+                BufferedImage source = getImage();
+                if (source != null) {
+                    if (isRounded()) {
+                        BufferedImage mask = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                        Graphics2D g2d = mask.createGraphics();
+                        applyQualityRenderHints(g2d);
+                        g2d.setBackground(new Color(255, 255, 255, 0));
+                        g2d.clearRect(0, 0, mask.getWidth(), mask.getHeight());
+                        g2d.setBackground(new Color(255, 255, 255, 255));
+                        g2d.fillRoundRect(0, 0, mask.getWidth(), mask.getHeight(), 40, 40);
+                        g2d.dispose();
+
+                        BufferedImage comp = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                        g2d = comp.createGraphics();
+                        applyQualityRenderHints(g2d);
+                        g2d.setBackground(new Color(255, 255, 255, 0));
+                        g2d.clearRect(0, 0, source.getWidth(), source.getHeight());
+                        g2d.drawImage(source, 0, 0, this);
+                        g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.DST_IN));
+                        g2d.drawImage(mask, 0, 0, this);
+                        g2d.dispose();
+
+                        renderImg = comp;
+                    } else {
+                        renderImg = source;
+                    }
+                }
+            }
+
+            return renderImg;
+
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            BufferedImage img = getImageToRender();
+            System.out.println(img);
+            if (img != null) {
+                Insets insets = getInsets();
+                Graphics2D g2d = (Graphics2D) g.create();
+                int width = getWidth();
+                int height = getHeight();
+                int x = ((width - img.getWidth()) / 2);
+                int y = ((height - img.getHeight()) / 2);
+                g2d.drawImage(img, x, y, this);
+                g2d.dispose();
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>I'd recommend some more reading through <a href="http://docs.oracle.com/javase/tutorial/uiswing/" rel="nofollow">Creating a UI with Swing</a>, in particular the section on layout managers, as well as <a href="http://docs.oracle.com/javase/tutorial/uiswing/painting/" rel="nofollow">Performing Custom Painting</a> and <a href="http://www.oracle.com/technetwork/java/painting-140037.html" rel="nofollow">Painting in AWT and Swing</a></p>

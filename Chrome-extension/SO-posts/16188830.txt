@@ -1,0 +1,90 @@
+<p>An other solution is to use <strong>HTTP PUT method</strong> to send a file directly to the Sharepoint.</p>
+
+<p>For that you can use <strong>Apache HTTP Client</strong>:</p>
+
+<pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.apache.httpcomponents&lt;/groupId&gt;
+    &lt;artifactId&gt;httpclient&lt;/artifactId&gt;
+    &lt;version&gt;4.2.3&lt;/version&gt;
+&lt;/dependency&gt;
+</code></pre>
+
+<p>And to permit NTLMv2 authentication you need <strong>JCIF</strong> library.</p>
+
+<pre><code>&lt;dependency&gt;
+   &lt;groupId&gt;jcifs&lt;/groupId&gt;
+   &lt;artifactId&gt;jcifs&lt;/artifactId&gt;
+   &lt;version&gt;1.3.17&lt;/version&gt;
+&lt;/dependency&gt;
+</code></pre>
+
+<p>First we need to write a wrapper to permit Apache HTTP Client to use JCIF for NTLMv2 support :</p>
+
+<pre><code>public final class JCIFSEngine implements NTLMEngine {
+
+    private static final int TYPE_1_FLAGS =
+            NtlmFlags.NTLMSSP_NEGOTIATE_56
+            | NtlmFlags.NTLMSSP_NEGOTIATE_128
+            | NtlmFlags.NTLMSSP_NEGOTIATE_NTLM2
+            | NtlmFlags.NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            | NtlmFlags.NTLMSSP_REQUEST_TARGET;
+
+    @Override
+    public String generateType1Msg(final String domain, final String workstation)
+            throws NTLMEngineException {
+        final Type1Message type1Message = new Type1Message(TYPE_1_FLAGS, domain, workstation);
+        return Base64.encode(type1Message.toByteArray());
+    }
+
+    @Override
+    public String generateType3Msg(final String username, final String password,
+            final String domain, final String workstation, final String challenge)
+            throws NTLMEngineException {
+        Type2Message type2Message;
+        try {
+            type2Message = new Type2Message(Base64.decode(challenge));
+        } catch (final IOException exception) {
+            throw new NTLMEngineException("Invalid NTLM type 2 message", exception);
+        }
+        final int type2Flags = type2Message.getFlags();
+        final int type3Flags = type2Flags
+                &amp; (0xffffffff ^ (NtlmFlags.NTLMSSP_TARGET_TYPE_DOMAIN | NtlmFlags.NTLMSSP_TARGET_TYPE_SERVER));
+        final Type3Message type3Message = new Type3Message(type2Message, password, domain,
+                username, workstation, type3Flags);
+        return Base64.encode(type3Message.toByteArray());
+    }
+}
+</code></pre>
+
+<p><a href="http://hc.apache.org/httpcomponents-client-ga/ntlm.html" rel="nofollow">Reference</a></p>
+
+<p>The main code to execute HTTP PUT with authentication:</p>
+
+<pre><code>    try {
+
+        HttpParams params = new BasicHttpParams();
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+        DefaultHttpClient httpclient = new DefaultHttpClient(params);
+
+        //Register JCIF NTLMv2 to manage ntlm auth.
+        httpclient.getAuthSchemes().register("ntlm", new AuthSchemeFactory() {
+            @Override
+            public AuthScheme newInstance(HttpParams hp) {
+                return new NTLMScheme(new JCIFSEngine());
+            }
+        });
+
+        //Provide login/password
+        httpclient.getCredentialsProvider().setCredentials(
+                AuthScope.ANY,
+                new NTCredentials([LOGIN], [PASSWORD], "", [DOMAIN]));
+        //Create HTTP PUT Request       
+        HttpPut request = new HttpPut("http://[server]/[site]/[folder]/[fileName]");
+        request.setEntity(new FileEntity([File]));            
+
+        return httpclient.execute(request);
+
+    } catch (IOException ex) {
+      //...
+    }
+</code></pre>

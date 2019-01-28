@@ -1,0 +1,42 @@
+<p>The solution phreed gives in the bottom half of question is basically correct. I'll try to add some more details here.</p>
+
+<p>When you do <code>getContentResolver().openInputStream(...)</code>, content resolver will go to your content provider and call its <code>openFile</code> method. This is how the <code>openFile</code> looks in <a href="http://android.git.kernel.org/?p=platform/frameworks/base.git;a=blob;f=core/java/android/content/ContentProvider.java;h=5fb2aaec83d7f3e857ec2bdc05f4f926fde4cd2b;hb=HEAD">ContentProvider.java</a>:</p>
+
+<pre><code>public ParcelFileDescriptor openFile(Uri uri, String mode)
+     throws FileNotFoundException {
+ throw new FileNotFoundException("No files supported by provider at "
+         + uri);
+}
+</code></pre>
+
+<p>So this explains where the "No files supported ..." error exactly comes from! You get around this by overriding <code>openFile</code> method in your subclass and providing your own implementation. It's neat: you get perfect control of where your files get placed when any client does <code>openInputStream</code> or <code>openOutputStream</code>. </p>
+
+<p>Code sample in phreed's question gives a hint how the implementation could look like. Here's my slightly modified version which also creates directories and files as needed. I'm novice at this stuff so this might not be the optimal way of doing things, but it gives an idea. For one thing, it should probably check if external storage is available.</p>
+
+<pre><code>@Override
+public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+    File root = new File(Environment.getExternalStorageDirectory(), 
+            "/Android/data/com.example.myapp/cache");
+    root.mkdirs();
+    File path = new File(root, uri.getEncodedPath());
+    // So, if the uri was content://com.example.myapp/some/data.xml,
+    // we'll end up accessing /Android/data/com.example.myapp/cache/some/data.xml
+
+    int imode = 0;
+    if (mode.contains("w")) {
+            imode |= ParcelFileDescriptor.MODE_WRITE_ONLY;
+            if (!path.exists()) {
+                try {
+                    path.createNewFile();
+                } catch (IOException e) {
+                    // TODO decide what to do about it, whom to notify...
+                    e.printStackTrace();
+                }
+            }
+    }
+    if (mode.contains("r")) imode |= ParcelFileDescriptor.MODE_READ_ONLY;
+    if (mode.contains("+")) imode |= ParcelFileDescriptor.MODE_APPEND;        
+
+    return ParcelFileDescriptor.open(path, imode);
+}
+</code></pre>

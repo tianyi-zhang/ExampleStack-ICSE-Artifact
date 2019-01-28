@@ -1,0 +1,121 @@
+<p>I researched this for some days and I found a solution that is working for me at the moment. 
+I get the oauth2 token from the android AccountManager and then send the email via SMTP using JavaMail. The idea is based on the Java example here <a href="http://code.google.com/p/google-mail-oauth2-tools/wiki/JavaSampleCode">http://code.google.com/p/google-mail-oauth2-tools/wiki/JavaSampleCode</a> and on this java Xoauth example here <a href="http://google-mail-xoauth-tools.googlecode.com/svn/trunk/java/com/google/code/samples/xoauth/XoauthAuthenticator.java">http://google-mail-xoauth-tools.googlecode.com/svn/trunk/java/com/google/code/samples/xoauth/XoauthAuthenticator.java</a></p>
+
+<p>There's no working SASL implementation in JavaMail for Android and using asmack wasn't working  so I didn't use SASL and I issued the command directly like in the Xoauth example above.</p>
+
+<p>I get the token from the acount manager like this </p>
+
+<pre><code>AccountManager am = AccountManager.get(this);
+Account me = ...; //You need to get a google account on the device, it changes if you have more than one
+am.getAuthToken(me, "oauth2:https://mail.google.com/", null, this, new OnTokenAcquired(), null);
+
+private class OnTokenAcquired implements AccountManagerCallback&lt;Bundle&gt;{
+    @Override
+    public void run(AccountManagerFuture&lt;Bundle&gt; result){
+        try{
+            Bundle bundle = result.getResult();
+            token = bundle.getString(AccountManager.KEY_AUTHTOKEN);
+
+        } catch (Exception e){
+            Log.d("test", e.getMessage());
+        }
+    }
+}
+</code></pre>
+
+<p>If it works, you have an oauth2 token in token. I use the token in this code</p>
+
+<pre><code>import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.Provider;
+import java.security.Security;
+import java.util.Properties;
+
+import javax.activation.DataHandler;
+import javax.activation.DataSource;
+import javax.mail.Session;
+import javax.mail.Transport;
+import javax.mail.URLName;
+import javax.mail.Message;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
+
+import android.util.Log;
+
+import com.sun.mail.smtp.SMTPTransport;
+import com.sun.mail.util.BASE64EncoderStream;
+
+public class GMailOauthSender {
+private Session session;
+
+
+public SMTPTransport connectToSmtp(String host, int port, String userEmail,
+        String oauthToken, boolean debug) throws Exception {
+
+    Properties props = new Properties();
+    props.put("mail.smtp.starttls.enable", "true");
+    props.put("mail.smtp.starttls.required", "true");
+    props.put("mail.smtp.sasl.enable", "false");
+    session = Session.getInstance(props);
+    session.setDebug(debug);
+
+
+    final URLName unusedUrlName = null;
+    SMTPTransport transport = new SMTPTransport(session, unusedUrlName);
+    // If the password is non-null, SMTP tries to do AUTH LOGIN.
+    final String emptyPassword = null;
+    transport.connect(host, port, userEmail, emptyPassword);
+
+            byte[] response = String.format("user=%s\1auth=Bearer %s\1\1", userEmail,
+            oauthToken).getBytes();
+    response = BASE64EncoderStream.encode(response);
+
+    transport.issueCommand("AUTH XOAUTH2 " + new String(response),
+            235);
+
+    return transport;
+}
+
+public synchronized void sendMail(String subject, String body, String user,
+        String oauthToken, String recipients) {
+    try {
+
+        SMTPTransport smtpTransport = connectToSmtp("smtp.gmail.com",
+                587,
+                user,
+                oauthToken,
+                true);
+
+        MimeMessage message = new MimeMessage(session);
+        DataHandler handler = new DataHandler(new ByteArrayDataSource(body.getBytes(), "text/plain"));   
+                message.setSender(new InternetAddress(user));   
+                message.setSubject(subject);   
+                message.setDataHandler(handler);   
+        if (recipients.indexOf(',') &gt; 0)   
+            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipients));   
+        else  
+            message.setRecipient(Message.RecipientType.TO, new InternetAddress(recipients));   
+        smtpTransport.sendMessage(message, message.getAllRecipients());   
+
+
+    } catch (Exception e) {
+        Log.d("test", e.getMessage());
+    }
+
+}
+</code></pre>
+
+<p>I'm not at all an expert in this and I didn't use any Security provider like in the examples above, not sure how it will affect this but it's working for me. 
+Hope this helps and that someone can tell me if there's something wrong with this too :p
+It's my first answer here so sorry if I did something wrong!</p>
+
+<p>Ops, forgot some other documentation I used: <a href="https://developers.google.com/google-apps/gmail/xoauth2_protocol">https://developers.google.com/google-apps/gmail/xoauth2_protocol</a> and <a href="http://developer.android.com/training/id-auth/authenticate.html">http://developer.android.com/training/id-auth/authenticate.html</a></p>
+
+<p>ops again! You also need these permissions in the manifest</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+&lt;uses-permission android:name="android.permission.GET_ACCOUNTS" /&gt;
+&lt;uses-permission android:name="android.permission.USE_CREDENTIALS" /&gt;
+</code></pre>

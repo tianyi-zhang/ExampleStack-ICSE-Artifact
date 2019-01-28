@@ -1,0 +1,157 @@
+<p>You "can't" disable it. By "can't" I mean not easily. You'd have to intercept/re-implement/override the node traversing which is too much I think. You can do this</p>
+
+<pre><code>String dom = Parser.unescapeEntities(doc.html(), false);
+</code></pre>
+
+<p><strong>Update</strong></p>
+
+<p>First of all we have to identify the location of the problem. </p>
+
+<p><strong>TextNode.java</strong></p>
+
+<pre><code>void outerHtmlHead(StringBuilder accum, int depth,
+        Document.OutputSettings out) {
+    if ((out.prettyPrint())
+            &amp;&amp; ((((siblingIndex() == 0)
+                    &amp;&amp; (this.parentNode instanceof Element)
+                    &amp;&amp; (((Element) this.parentNode).tag().formatAsBlock()) &amp;&amp; (!(isBlank()))) || ((out
+                    .outline()) &amp;&amp; (siblingNodes().size() &gt; 0) &amp;&amp; (!(isBlank())))))) {
+        indent(accum, depth, out);
+    }
+
+    boolean normaliseWhite = (out.prettyPrint())
+            &amp;&amp; (parent() instanceof Element)
+            &amp;&amp; (!(Element.preserveWhitespace(parent())));
+    Entities.escape(accum, getWholeText(), out, false, normaliseWhite,
+            false);
+}
+</code></pre>
+
+<p>In particular the problem is here</p>
+
+<pre><code>Entities.escape(accum, getWholeText(), out, false, normaliseWhite,false);
+</code></pre>
+
+<p><strong>Entities.java</strong></p>
+
+<pre><code>static void escape(StringBuilder accum, String string,
+        Document.OutputSettings out, boolean inAttribute,
+        boolean normaliseWhite, boolean stripLeadingWhite) {
+    boolean lastWasWhite = false;
+    boolean reachedNonWhite = false;
+    EscapeMode escapeMode = out.escapeMode();
+    CharsetEncoder encoder = out.encoder();
+    CoreCharset coreCharset = CoreCharset.access$300(encoder.charset()
+            .name());
+    Map map = escapeMode.getMap();
+    int length = string.length();
+    int codePoint;
+    for (int offset = 0; offset &lt; length; offset += Character
+            .charCount(codePoint)) {
+        codePoint = string.codePointAt(offset);
+
+        if (normaliseWhite) {
+            if (StringUtil.isWhitespace(codePoint)) {
+                if ((stripLeadingWhite) &amp;&amp; (!(reachedNonWhite)))
+                    continue;
+                if (lastWasWhite)
+                    continue;
+                accum.append(' ');
+                lastWasWhite = true;
+                continue;
+            }
+            lastWasWhite = false;
+            reachedNonWhite = true;
+        }
+
+        if (codePoint &lt; 65536) {
+            char c = (char) codePoint;
+
+            switch (c) {
+            case '&amp;':
+                accum.append("&amp;amp;");
+                break;
+            case ' ':
+                if (escapeMode != EscapeMode.xhtml)
+                    accum.append("&amp;nbsp;");
+                else
+                    accum.append("&amp;#xa0;");
+                break;
+            case '&lt;':
+                if ((!(inAttribute)) || (escapeMode == EscapeMode.xhtml))
+                    accum.append("&amp;lt;");
+                else
+                    accum.append(c);
+                break;
+            case '&gt;':
+                if (!(inAttribute))
+                    accum.append("&amp;gt;");
+                else
+                    accum.append(c);
+                break;
+            case '"':
+                if (inAttribute)
+                    accum.append("&amp;quot;");
+                else
+                    accum.append(c);
+                break;
+            default:
+                if (canEncode(coreCharset, c, encoder))
+                    accum.append(c);
+                else if (map.containsKey(Character.valueOf(c)))
+                    accum.append('&amp;')
+                            .append((String) map.get(Character.valueOf(c)))
+                            .append(';');
+                else
+                    accum.append("&amp;#x")
+                            .append(Integer.toHexString(codePoint))
+                            .append(';');
+            }
+        } else {
+            String c = new String(Character.toChars(codePoint));
+            if (encoder.canEncode(c))
+                accum.append(c);
+            else
+                accum.append("&amp;#x").append(Integer.toHexString(codePoint))
+                        .append(';');
+        }
+    }
+}
+</code></pre>
+
+<p>Ok now we've identified the problem, so what's the solution. Well here is the problem. Normally what you would do would be to override <code>outerHtmlHead</code> (which is called for every node when calling <code>html()</code> or <code>toString()-calls outerHtml</code> or <code>outerHtml()</code>. The problem is that this method is <a href="https://docs.oracle.com/javase/tutorial/java/javaOO/accesscontrol.html" rel="nofollow">package private</a> so it's not visible in order to override it outside of the package. </p>
+
+<p>One easy way would be to download the source code of Jsoup and include your custom class inside the same package. Another would be to change the visiblity of these two to protected.   </p>
+
+<pre><code>abstract void outerHtmlHead(StringBuilder paramStringBuilder, int paramInt, Document.OutputSettings paramOutputSettings);
+
+abstract void outerHtmlTail(StringBuilder paramStringBuilder, int paramInt,Document.OutputSettings paramOutputSettings);
+</code></pre>
+
+<p>The project will have compilation errors in every class that extends <code>class Node</code> about not being able to decrease the visibility of an overridden method. 
+Change the visibility to <code>protected</code> as well.
+After that you can implement a new class extending the <code>TextNode</code> class. Something like this would suffice I believe</p>
+
+<pre><code>public class RawTextNode extends TextNode {
+
+    @Override
+    protected void outerHtmlHead(StringBuilder accum, int depth, OutputSettings out) {
+        if ((out.prettyPrint())
+                &amp;&amp; ((((siblingIndex() == 0)
+                        &amp;&amp; (parentNode() instanceof Element)
+                        &amp;&amp; (((Element) parentNode()).tag().formatAsBlock()) &amp;&amp; (!(isBlank()))) || ((out
+                        .outline()) &amp;&amp; (siblingNodes().size() &gt; 0) &amp;&amp; (!(isBlank())))))) {
+            indent(accum, depth, out);
+        }
+    }
+}
+</code></pre>
+
+<p>and your code must change accordingly</p>
+
+<pre><code>head.appendElement("script").attr("type", "application/javascript").appendChild(new RawTextNode(myJS, ""));
+</code></pre>
+
+<p>If you leave it as it is, the text will be represented by <code>TextNode</code>, you need to explicitly state the text must be represented by your custom class. </p>
+
+<p>Of course you could go deeper and create a new class that handles in a generic way the <code>script</code> parts. </p>

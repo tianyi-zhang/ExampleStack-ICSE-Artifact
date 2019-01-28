@@ -1,0 +1,216 @@
+<p>Here's the code which works for given use case (Used existing Splitter code as a reference)</p>
+
+<pre><code>public class Splitter {
+private final CharMatcher trimmer;
+private final CharMatcher startTextQualifier;
+private final CharMatcher endTextQualifier;
+private final Strategy strategy;
+
+private Splitter(Strategy strategy, CharMatcher trimmer, CharMatcher startTextQualifier, CharMatcher endTextQualifier) {
+    this.strategy = strategy;
+    this.trimmer = trimmer;
+    this.startTextQualifier = startTextQualifier;
+    this.endTextQualifier = endTextQualifier;
+}
+
+private Splitter(Strategy strategy) {
+    this(strategy, CharMatcher.NONE, CharMatcher.NONE, CharMatcher.NONE);
+}
+
+public Splitter trimResults(CharMatcher trimmer) {
+    checkNotNull(trimmer);
+    return new Splitter(strategy, trimmer, startTextQualifier, endTextQualifier);
+}
+
+public Splitter ignoreIn(CharMatcher startTextQualifier, CharMatcher endTextQualifier) {
+    checkNotNull(startTextQualifier);
+    checkNotNull(endTextQualifier);
+    return new Splitter(strategy, trimmer, startTextQualifier, endTextQualifier);
+}
+
+public Splitter ignoreIn(char startTextQualifier, char endTextQualifier) {
+    return ignoreIn(CharMatcher.is(startTextQualifier), CharMatcher.is(endTextQualifier));
+}
+
+public Splitter trimResults() {
+    return trimResults(CharMatcher.WHITESPACE);
+}
+
+public static Splitter on(final CharMatcher separatorMatcher) {
+    checkNotNull(separatorMatcher);
+
+    return new Splitter(new Strategy() {
+        @Override public SplittingIterator iterator(Splitter splitter, final CharSequence toSplit) {
+            return new SplittingIterator(splitter, toSplit) {
+                @Override int separatorStart(int start) {
+                    boolean wrapped = false;
+                    for (int i = start; i &lt; toSplit.length(); i++) {
+                        /**
+                         * Suppose start text qualifier = '[' and end text qualifier = ']' then following code
+                         * doesn't address cases for multiple start-end combinations i.e it doesn't see whether
+                         * end is properly closed e.g. for configuration like - {@code
+                         * Splitter.on("|")..ignoreIn('[', ']').split("abc|[abc|[def]ghi]|jkl")
+                         * results -&gt; abc, [abc|[def]ghi], jkl
+                         }
+                         */
+                        if (!wrapped &amp;&amp; startTextQualifier.matches(toSplit.charAt(i))) {
+                            wrapped = true;
+                        } else  if (wrapped &amp;&amp; endTextQualifier.matches(toSplit.charAt(i))) {
+                            wrapped = false;
+                        }
+                        if (!wrapped &amp;&amp; separatorMatcher.matches(toSplit.charAt(i))) {
+                            return i;
+                        }
+                    }
+                    return -1;
+                }
+
+                @Override int separatorEnd(int separatorPosition) {
+                    return separatorPosition + 1;
+                }
+            };
+        }
+    });
+}
+
+public static Splitter on(final String separator) {
+    checkArgument(!separator.isEmpty(), "The separator may not be the empty string.");
+    checkArgument(separator.length() &lt;= 2, "The separator's max length is 2, passed - %s.", separator);
+    if (separator.length() == 1) {
+        return on(separator.charAt(0));
+    }
+    return new Splitter(new Strategy() {
+        @Override public SplittingIterator iterator(Splitter splitter, CharSequence toSplit) {
+            return new SplittingIterator(splitter, toSplit) {
+                @Override public int separatorStart(int start) {
+                    int delimiterLength = separator.length();
+                    boolean wrapped = false;
+
+                    positions:
+                    for (int p = start, last = toSplit.length() - delimiterLength; p &lt;= last; p++) {
+                        for (int i = 0; i &lt; delimiterLength; i++) {
+                            if (startTextQualifier.matches(toSplit.charAt(i))) {
+                                wrapped = !wrapped;
+                            }
+                            if (!wrapped &amp;&amp; toSplit.charAt(i + p) != separator.charAt(i)) {
+                                continue positions;
+                            }
+                        }
+                        return p;
+                    }
+                    return -1;
+                }
+
+                @Override public int separatorEnd(int separatorPosition) {
+                    return separatorPosition + separator.length();
+                }
+            };
+        }
+    });
+}
+
+public static Splitter on(char separator) {
+    return on(CharMatcher.is(separator));
+}
+
+public Iterable&lt;String&gt; split(final CharSequence sequence) {
+    checkNotNull(sequence);
+
+    return new Iterable&lt;String&gt;() {
+        @Override public Iterator&lt;String&gt; iterator() {
+            return spliterator(sequence);
+        }
+    };
+}
+
+private Iterator&lt;String&gt; spliterator(CharSequence sequence) {
+    return strategy.iterator(this, sequence);
+}
+
+
+private interface Strategy {
+    Iterator&lt;String&gt; iterator(Splitter splitter, CharSequence toSplit);
+}
+
+private abstract static class SplittingIterator extends AbstractIterator&lt;String&gt; {
+    final CharSequence toSplit;
+    final CharMatcher trimmer;
+    final CharMatcher startTextQualifier;
+    final CharMatcher endTextQualifier;
+
+    /**
+     * Returns the first index in {@code toSplit} at or after {@code start}
+     * that contains the separator.
+     */
+    abstract int separatorStart(int start);
+
+    /**
+     * Returns the first index in {@code toSplit} after {@code
+     * separatorPosition} that does not contain a separator. This method is only
+     * invoked after a call to {@code separatorStart}.
+     */
+    abstract int separatorEnd(int separatorPosition);
+
+    int offset = 0;
+
+    protected SplittingIterator(Splitter splitter, CharSequence toSplit) {
+        this.trimmer = splitter.trimmer;
+        this.startTextQualifier = splitter.startTextQualifier;
+        this.endTextQualifier = splitter.endTextQualifier;
+        this.toSplit = toSplit;
+    }
+
+    @Override
+    protected String computeNext() {
+        if (offset != -1) {
+            int start = offset;
+            int separatorPosition = separatorStart(offset);
+            int end = calculateEnd(separatorPosition);
+            start = trimStartIfRequired(start, end);
+            end = trimEndIfRequired(start, end);
+            if (start != end)
+                return toSplit.subSequence(start, end).toString();
+        }
+        return endOfData();
+    }
+
+    private int calculateEnd(int separatorPosition) {
+        int end;
+        if (separatorPosition == -1) {
+            end = toSplit.length();
+            offset = -1;
+        } else {
+            end = separatorPosition;
+            offset = separatorEnd(separatorPosition);
+        }
+        return end;
+    }
+
+    private int trimEndIfRequired(int start, int end) {
+        while (end &gt; start &amp;&amp; trimmer.matches(toSplit.charAt(end - 1))) {
+            end--;
+        }
+        return end;
+    }
+
+    private int trimStartIfRequired(int start, int end) {
+        while (start &lt; end &amp;&amp; trimmer.matches(toSplit.charAt(start))) {
+            start++;
+        }
+        return start;
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>Small test - </p>
+
+<pre><code>public static void main(String[] args) {
+    Splitter splitter = Splitter.on("|").ignoreIn('[', ']');
+    System.out.println(Joiner.on(',').join(splitter.split("foo|ba[r|ba]z")));
+    // yields -&gt; foo,ba[r|ba]z
+}
+</code></pre>
+
+<p>Please note - this code isn't tested and does not address all the cases, feel free to modify as per your need. </p>

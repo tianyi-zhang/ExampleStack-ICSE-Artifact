@@ -1,0 +1,436 @@
+<pre><code>Prerequisite:
+•   Android 4.2.2+
+•   Latest Android SDK
+•   Google Play Services 7.8+ (Rev. 26.0 in SDK)
+•   Android-support-design.jar in application. (your sdk path\extras\android\support\design\libs)
+•   android-support-v7-appcompat.jar in application.( your sdk path\extras\android\support\v7\appcompat\libs)
+</code></pre>
+
+<p>Download the code sample code from this <a href="https://github.com/googlesamples/android-vision" rel="nofollow">link</a>,import the multi-tracker project in eclipse. Add the google play services 7.8+ &amp; Android-support-design.jar in your app. Remove the FaceTrackerFactory.java class which not required.Now modified the BarcodeTrackerFactory.java and MultiTrackerActivity.java class.</p>
+
+<p>BarcodeTrackerFactory.java</p>
+
+<pre><code>import android.app.Activity;
+import android.content.Intent;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.util.Log;
+
+import com.google.android.gms.samples.vision.face.multitracker.ui.camera.GraphicOverlay;
+import com.google.android.gms.vision.MultiProcessor;
+import com.google.android.gms.vision.Tracker;
+import com.google.android.gms.vision.barcode.Barcode;
+
+/**
+ * Factory for creating a tracker and associated graphic to be associated with a new barcode.  The
+ * multi-processor uses this factory to create barcode trackers as needed -- one for each barcode.
+ */
+class BarcodeTrackerFactory implements MultiProcessor.Factory&lt;Barcode&gt; {
+    public Activity context;
+    private GraphicOverlay mGraphicOverlay;
+
+
+    BarcodeTrackerFactory(GraphicOverlay graphicOverlay) {
+        mGraphicOverlay = graphicOverlay;
+    }
+    BarcodeTrackerFactory(GraphicOverlay graphicOverlay ,Activity ctx) {
+        mGraphicOverlay = graphicOverlay;
+        this.context =ctx;
+    }
+    @Override
+    public Tracker&lt;Barcode&gt; create(Barcode barcode) {
+        BarcodeGraphic graphic = new BarcodeGraphic(mGraphicOverlay,context);
+        return new GraphicTracker&lt;&gt;(mGraphicOverlay, graphic);
+    }
+}
+
+/**
+ * Graphic instance for rendering barcode position, size, and ID within an associated graphic
+ * overlay view.
+ */
+class BarcodeGraphic extends TrackedGraphic&lt;Barcode&gt; {
+    private static final int COLOR_CHOICES[] = {
+            Color.BLUE,
+            Color.CYAN,
+            Color.GREEN
+    };
+    private static int mCurrentColorIndex = 0;
+
+    private Paint mRectPaint;
+    private Paint mTextPaint;
+    private volatile Barcode mBarcode;
+    private Activity context;
+private boolean isFirstScandetaction=true;
+    BarcodeGraphic(GraphicOverlay overlay ,Activity context) {
+        super(overlay);
+        this.context=context;
+        mCurrentColorIndex = (mCurrentColorIndex + 1) % COLOR_CHOICES.length;
+        final int selectedColor = COLOR_CHOICES[mCurrentColorIndex];
+
+        mRectPaint = new Paint();
+        mRectPaint.setColor(selectedColor);
+        mRectPaint.setStyle(Paint.Style.STROKE);
+        mRectPaint.setStrokeWidth(4.0f);
+
+        mTextPaint = new Paint();
+        mTextPaint.setColor(selectedColor);
+        mTextPaint.setTextSize(36.0f);
+    }
+
+    /**
+     * Updates the barcode instance from the detection of the most recent frame.  Invalidates the
+     * relevant portions of the overlay to trigger a redraw.
+     */
+    void updateItem(Barcode barcode) {
+        mBarcode = barcode;
+        if (isFirstScandetaction) {
+            postInvalidate();
+            if (null != mBarcode) {
+                isFirstScandetaction = false;
+
+                Intent intent = new Intent();
+                intent.putExtra("SCAN_RESULT", barcode.rawValue.toString());
+                intent.putExtra("SCAN_RESULT_FORMAT",String.valueOf( barcode.format));
+                 context.setResult(Activity.RESULT_OK, intent);
+                 context.finish();
+            }
+
+        }
+    }
+
+    /**
+     * Draws the barcode annotations for position, size, and raw value on the supplied canvas.
+     */
+    @Override
+    public void draw(Canvas canvas) {
+        Barcode barcode = mBarcode;
+        if (barcode == null) {
+            return;
+        }
+
+        // Draws the bounding box around the barcode.
+        RectF rect = new RectF(barcode.getBoundingBox());
+        rect.left = translateX(rect.left);
+        rect.top = translateY(rect.top);
+        rect.right = translateX(rect.right);
+        rect.bottom = translateY(rect.bottom);
+        canvas.drawRect(rect, mRectPaint);
+
+        // Draws a label at the bottom of the barcode indicate the barcode value that was detected.
+        canvas.drawText(barcode.rawValue, rect.left, rect.bottom, mTextPaint);
+
+        Log.v("On Draw", "called");
+    }
+}
+</code></pre>
+
+<p>MultiTrackerActivity.java</p>
+
+<pre><code>import java.io.IOException;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.Dialog;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.support.design.widget.Snackbar;
+import android.support.v4.app.ActivityCompat;
+import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
+import android.view.View;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.android.gms.samples.vision.face.multitracker.ui.camera.CameraSourcePreview;
+import com.google.android.gms.samples.vision.face.multitracker.ui.camera.GraphicOverlay;
+import com.google.android.gms.vision.CameraSource;
+import com.google.android.gms.vision.MultiProcessor;
+import com.google.android.gms.vision.barcode.BarcodeDetector;
+
+/**
+ * Activity for the multi-tracker app.  This app detects faces and barcodes with the rear facing
+ * camera, and draws overlay graphics to indicate the position, size, and ID of each face and
+ * barcode.
+ */
+public final class MultiTrackerActivity extends AppCompatActivity {
+    private static final String TAG = "MultiTracker";
+
+    private static final int RC_HANDLE_GMS = 9001;
+    // permission request codes need to be &lt; 256
+    private static final int RC_HANDLE_CAMERA_PERM = 2;
+
+    private CameraSource mCameraSource = null;
+    private CameraSourcePreview mPreview;
+    private GraphicOverlay mGraphicOverlay;
+
+    /**
+     * Initializes the UI and creates the detector pipeline.
+     */
+    @Override
+    public void onCreate(Bundle icicle) {
+        super.onCreate(icicle);
+        setContentView(R.layout.main);
+
+        mPreview = (CameraSourcePreview) findViewById(R.id.preview);
+        mGraphicOverlay = (GraphicOverlay) findViewById(R.id.faceOverlay);
+
+        // Check for the camera permission before accessing the camera.  If the
+        // permission is not granted yet, request permission.
+        int rc = ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA);
+        if (rc == PackageManager.PERMISSION_GRANTED) {
+            createCameraSource();
+        } else {
+            requestCameraPermission();
+        }
+    }
+
+    /**
+     * Handles the requesting of the camera permission.  This includes
+     * showing a "Snackbar" message of why the permission is needed then
+     * sending the request.
+     */
+    private void requestCameraPermission() {
+        Log.w(TAG, "Camera permission is not granted. Requesting permission");
+
+        final String[] permissions = new String[]{Manifest.permission.CAMERA};
+
+        if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
+                Manifest.permission.CAMERA)) {
+            ActivityCompat.requestPermissions(this, permissions, RC_HANDLE_CAMERA_PERM);
+            return;
+        }
+
+        final Activity thisActivity = this;
+
+        View.OnClickListener listener = new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                ActivityCompat.requestPermissions(thisActivity, permissions,
+                        RC_HANDLE_CAMERA_PERM);
+            }
+        };
+
+        Snackbar.make(mGraphicOverlay, R.string.permission_camera_rationale,
+                Snackbar.LENGTH_INDEFINITE)
+                .setAction(R.string.ok, listener)
+                .show();
+    }
+
+
+
+    /**
+     * Creates and starts the camera.  Note that this uses a higher resolution in comparison
+     * to other detection examples to enable the barcode detector to detect small barcodes
+     * at long distances.
+     */
+    private void createCameraSource() {
+
+
+        Context context = getApplicationContext();
+
+        // A barcode detector is created to track barcodes.  An associated multi-processor instance
+        // is set to receive the barcode detection results, track the barcodes, and maintain
+        // graphics for each barcode on screen.  The factory is used by the multi-processor to
+        // create a separate tracker instance for each barcode.      
+        BarcodeDetector barcodeDetector = new BarcodeDetector.Builder(context).build();
+        BarcodeTrackerFactory barcodeFactory = new BarcodeTrackerFactory(mGraphicOverlay,this);
+        barcodeDetector.setProcessor(
+                new MultiProcessor.Builder&lt;&gt;(barcodeFactory).build());
+
+
+        if (!barcodeDetector.isOperational()) {
+            // Note: The first time that an app using the barcode or face API is installed on a
+            // device, GMS will download a native libraries to the device in order to do detection.
+            // Usually this completes before the app is run for the first time.  But if that
+            // download has not yet completed, then the above call will not detect any barcodes
+            // and/or faces.
+            //
+            // isOperational() can be used to check if the required native libraries are currently
+            // available.  The detectors will automatically become operational once the library
+            // downloads complete on device.
+            Log.w(TAG, "Detector dependencies are not yet available.");
+        }
+
+        // Creates and starts the camera.  Note that this uses a higher resolution in comparison
+        // to other detection examples to enable the barcode detector to detect small barcodes
+        // at long distances.
+        mCameraSource = new CameraSource.Builder(getApplicationContext(), barcodeDetector)
+                .setFacing(CameraSource.CAMERA_FACING_BACK)
+                .setRequestedPreviewSize(1600, 1024)
+                .setRequestedFps(15.0f)
+                .build();
+    }
+
+    /**
+     * Restarts the camera.
+     */
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        startCameraSource();
+    }
+
+    /**
+     * Stops the camera.
+     */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        mPreview.stop();
+    }
+
+    /**
+     * Releases the resources associated with the camera source, the associated detectors, and the
+     * rest of the processing pipeline.
+     */
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mCameraSource != null) {
+            mCameraSource.release();
+        }
+    }
+
+
+    /**
+     * Callback for the result from requesting permissions. This method
+     * is invoked for every call on {@link #requestPermissions(String[], int)}.
+     * &lt;p&gt;
+     * &lt;strong&gt;Note:&lt;/strong&gt; It is possible that the permissions request interaction
+     * with the user is interrupted. In this case you will receive empty permissions
+     * and results arrays which should be treated as a cancellation.
+     * &lt;/p&gt;
+     *
+     * @param requestCode  The request code passed in {@link #requestPermissions(String[], int)}.
+     * @param permissions  The requested permissions. Never null.
+     * @param grantResults The grant results for the corresponding permissions
+     *                     which is either {@link PackageManager#PERMISSION_GRANTED}
+     *                     or {@link PackageManager#PERMISSION_DENIED}. Never null.
+     * @see #requestPermissions(String[], int)
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode != RC_HANDLE_CAMERA_PERM) {
+            Log.d(TAG, "Got unexpected permission result: " + requestCode);
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+            return;
+        }
+
+        if (grantResults.length != 0 &amp;&amp; grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "Camera permission granted - initialize the camera source");
+            // we have permission, so create the camerasource
+            createCameraSource();
+            return;
+        }
+
+        Log.e(TAG, "Permission not granted: results len = " + grantResults.length +
+                " Result code = " + (grantResults.length &gt; 0 ? grantResults[0] : "(empty)"));
+
+        DialogInterface.OnClickListener listener = new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+                finish();
+            }
+        };
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Multitracker sample")
+                .setMessage(R.string.no_camera_permission)
+                .setPositiveButton(R.string.ok, listener)
+                .show();
+    }
+    /**
+     * Starts or restarts the camera source, if it exists.  If the camera source doesn't exist yet
+     * (e.g., because onResume was called before the camera source was created), this will be called
+     * again when the camera source is created.
+     */
+    private void startCameraSource() {
+
+        // check that the device has play services available.
+        int code = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(
+                getApplicationContext());
+        if (code != ConnectionResult.SUCCESS) {
+            Dialog dlg =
+                    GoogleApiAvailability.getInstance().getErrorDialog(this, code, RC_HANDLE_GMS);
+            dlg.show();
+        }
+
+        if (mCameraSource != null) {
+            try {
+                mPreview.start(mCameraSource, mGraphicOverlay);
+            } catch (IOException e) {
+                Log.e(TAG, "Unable to start camera source.", e);
+                mCameraSource.release();
+                mCameraSource = null;
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Now to call the scan code and recieve the result-
+BarCodeReader.java</p>
+
+<pre><code>import android.content.Intent;
+import android.os.Bundle;
+import android.support.v4.app.FragmentActivity;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.Toast;
+
+public class BarCodeReader extends FragmentActivity {
+
+    String QR_CODE = "256";
+    private Button btnscan;
+
+    @Override
+    protected void onCreate(Bundle bundle) {
+        super.onCreate(bundle);
+        setContentView(R.layout.scanlayout);
+        btnscan = (Button) findViewById(R.id.scanbtn);
+
+        btnscan.setOnClickListener(new OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+
+                Intent intent = new Intent(BarCodeReader.this,
+                        MultiTrackerActivity.class);
+
+                startActivityForResult(intent, 0);
+            }
+        });
+    }
+
+    public void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        if (requestCode == 0) {
+            if (resultCode == RESULT_OK) {
+
+                String contents = intent.getStringExtra("SCAN_RESULT");
+                String format = intent.getStringExtra("SCAN_RESULT_FORMAT");
+                if (format.equals(QR_CODE)) {
+                    Toast.makeText(
+                            BarCodeReader.this,
+                            "content is : " + contents + " \n Format is:    "
+                                    + format, Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(BarCodeReader.this, "wrong format",
+                            Toast.LENGTH_LONG).show();
+                }
+
+            } else if (resultCode == RESULT_CANCELED) {
+                // To Handle cancel
+                Log.i("App", "Scan unsuccessful");
+            }
+        }
+    }
+
+}
+</code></pre>

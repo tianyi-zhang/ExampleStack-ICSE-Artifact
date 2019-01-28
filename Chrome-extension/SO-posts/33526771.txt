@@ -1,0 +1,145 @@
+<p>When you say matching percentage, what do you mean? if you want to know how many words of original text are included in resulted document (for example 2 out of 3 in your case)
+then you can use <a href="https://lucene.apache.org/core/4_7_0/core/org/apache/lucene/index/IndexReader.html#getTermVector%28int,%20java.lang.String%29" rel="nofollow">term vectors</a> to get the job done, get the term vector for the field and document and iterate over terms and see if there are terms in the content you are looking for. Or even you can store the string and get the entire content and do your calculation for math(if storage is not an issue). 
+Current lucene uses <a href="https://www.google.com/url?sa=t&amp;rct=j&amp;q=&amp;esrc=s&amp;source=web&amp;cd=3&amp;cad=rja&amp;uact=8&amp;ved=0CCcQFjACahUKEwidx6-vlPfIAhUM4mMKHeqRC_I&amp;url=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FVector_space_model&amp;usg=AFQjCNGrPOUuwe_J8M3gp_X-GVsySn4OGQ&amp;sig2=koVacJ-3Q53vMryDNwLSOg" rel="nofollow">vector space model</a>(going to change from version 6x to BM25) for calculating score and gives you what the matching score by <a href="https://lucene.apache.org/core/3_5_0/api/all/org/apache/lucene/search/ScoreDoc.html#score" rel="nofollow">ScroeDoc</a>
+But score doc gives decimal value, if it is sufficient then use it. </p>
+
+<p>if this does not answer the question, then give more details on how to calculate with samples. </p>
+
+<p>Hope this helps. </p>
+
+<p>PS, I have written simple script, so you can see and correct it for your needs:</p>
+
+<pre><code>package org.query;
+
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.core.WhitespaceAnalyzer;
+import org.apache.lucene.analysis.tokenattributes.TermToBytesRefAttribute;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.FieldType;
+import org.apache.lucene.index.*;
+import org.apache.lucene.search.*;
+import org.apache.lucene.store.RAMDirectory;
+import org.apache.lucene.util.BytesRef;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Created by ekamolid on 11/2/2015.
+ */
+public class LevenshteinTest {
+    private RAMDirectory directory;
+    private IndexSearcher searcher;
+    private IndexReader reader;
+    private Analyzer analyzer;
+
+    @Before
+    public void setUp() throws Exception {
+        directory = new RAMDirectory();
+
+        analyzer = new WhitespaceAnalyzer();
+        IndexWriter writer = new IndexWriter(directory, new IndexWriterConfig(analyzer));
+
+        Document doc = new Document();
+        FieldType fieldType = new FieldType();
+        fieldType.setIndexOptions(IndexOptions.DOCS_AND_FREQS);
+        fieldType.setStoreTermVectors(true);
+        doc.add(new Field("f", "the quick brown fox jumps over the lazy dog", fieldType));
+        writer.addDocument(doc);
+
+        doc = new Document();
+        doc.add(new Field("f", "the quick red fox jumps over the sleepy cat", fieldType));
+        writer.addDocument(doc);
+
+        doc = new Document();
+        doc.add(new Field("f", "quiick caar went xyztz dog", fieldType));
+        writer.addDocument(doc);
+
+        writer.close();
+
+        reader = DirectoryReader.open(directory);
+        searcher = new IndexSearcher(reader);
+    }
+
+    public static int distance(String a, String b) { //code is taken from http://rosettacode.org/wiki/Levenshtein_distance#Java
+        a = a.toLowerCase();
+        b = b.toLowerCase();
+        // i == 0
+        int[] costs = new int[b.length() + 1];
+        for (int j = 0; j &lt; costs.length; j++)
+            costs[j] = j;
+        for (int i = 1; i &lt;= a.length(); i++) {
+            // j == 0; nw = lev(i - 1, j)
+            costs[0] = i;
+            int nw = i - 1;
+            for (int j = 1; j &lt;= b.length(); j++) {
+                int cj = Math.min(1 + Math.min(costs[j], costs[j - 1]), a.charAt(i - 1) == b.charAt(j - 1) ? nw : nw + 1);
+                nw = costs[j];
+                costs[j] = cj;
+            }
+        }
+        return costs[b.length()];
+    }
+
+
+    @Test
+    public void test1() throws Exception {
+        String s = "quick caar dog";
+        TokenStream tokenStream = analyzer.tokenStream("abc", s);
+        TermToBytesRefAttribute termAttribute = tokenStream.getAttribute(TermToBytesRefAttribute.class);
+        Set&lt;String&gt; stringSet = new HashSet&lt;&gt;();
+        tokenStream.reset();
+        BooleanQuery.Builder builder = new BooleanQuery.Builder();
+        while (tokenStream.incrementToken()) {
+            stringSet.add(termAttribute.getBytesRef().utf8ToString());
+            Query query = new FuzzyQuery(new Term("f", termAttribute.getBytesRef().utf8ToString()), 2); //search only 2 edits
+            builder.add(query, BooleanClause.Occur.SHOULD);
+        }
+        TopDocs hits = searcher.search(builder.build(), 10);
+        int exactMatch = 0;
+        int match1 = 0;
+        int match2 = 0;
+        for (ScoreDoc scoreDoc : hits.scoreDocs) {
+            exactMatch = match1 = match2 = 0;
+            Terms terms = reader.getTermVector(scoreDoc.doc, "f");
+            TermsEnum termsEnum = terms.iterator();
+            while (true) {
+                BytesRef bytesRef = termsEnum.next();
+                if (bytesRef == null) {
+                    break;
+                }
+                String str = bytesRef.utf8ToString();
+                if (stringSet.contains(str)) {
+                    exactMatch++;
+                    continue;
+                }
+                for (String s1 : stringSet) {
+                    int distance = distance(s1, str);
+                    if (distance &lt;= 1) {
+                        match1++;
+                    } else if (distance &lt;= 2) {
+                        match2++;
+                    }
+                }
+            }
+            System.out.print(" doc=" + scoreDoc.doc);
+            System.out.print(" exactMatch=" + exactMatch);
+            System.out.print(" match1=" + match1);
+            System.out.println(" match2=" + match1);
+        }
+    }
+}
+</code></pre>
+
+<p>Output I got is:</p>
+
+<pre><code> doc=2 exactMatch=2 match1=1 match2=1
+ doc=1 exactMatch=1 match1=0 match2=0
+ doc=0 exactMatch=2 match1=0 match2=0
+</code></pre>
+
+<p>This is working code and tells how many chars are exact match, how many of them are 1 char difference and 2 char difference. So you can put your login in there to calculate % based on numbers you have on your hand. This might be bit slower since you are iterating over docs, but you should restrict your results to certain number(<code>10</code> in the example) so it won't be slow. </p>

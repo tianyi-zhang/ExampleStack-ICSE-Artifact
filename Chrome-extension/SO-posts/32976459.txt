@@ -1,0 +1,388 @@
+<p>I was facing the same issue as you today and I could fix it right now. </p>
+
+<p>What I had to do was create a custom view like this:</p>
+
+<pre><code>package com.github.rodrigohenriques.samples.customview;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.annotation.TargetApi;
+import android.content.Context;
+import android.graphics.Matrix;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.os.Build;
+import android.support.design.widget.AppBarLayout;
+import android.support.design.widget.CoordinatorLayout;
+import android.support.design.widget.Snackbar;
+import android.support.v4.view.ViewCompat;
+import android.support.v4.view.ViewPropertyAnimatorListener;
+import android.support.v4.view.animation.FastOutSlowInInterpolator;
+import android.util.AttributeSet;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.widget.ImageView;
+
+import java.util.List;
+
+@CoordinatorLayout.DefaultBehavior(CoordinatedImageView.Behavior.class)
+public class CoordinatedImageView extends ImageView {
+
+    private boolean mIsHiding;
+
+    public CoordinatedImageView(Context context) {
+        super(context);
+    }
+
+    public CoordinatedImageView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    public CoordinatedImageView(Context context, AttributeSet attrs, int defStyleAttr) {
+        super(context, attrs, defStyleAttr);
+    }
+
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    public CoordinatedImageView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
+        super(context, attrs, defStyleAttr, defStyleRes);
+    }
+
+    public void hide() {
+        if(!this.mIsHiding &amp;&amp; this.getVisibility() == VISIBLE) {
+            if(ViewCompat.isLaidOut(this) &amp;&amp; !this.isInEditMode()) {
+                this.animate().scaleX(0.0F).scaleY(0.0F).alpha(0.0F).setDuration(200L).setInterpolator(new FastOutSlowInInterpolator()).setListener(new AnimatorListenerAdapter() {
+                    public void onAnimationStart(Animator animation) {
+                        CoordinatedImageView.this.mIsHiding = true;
+                        CoordinatedImageView.this.setVisibility(VISIBLE);
+                    }
+
+                    public void onAnimationCancel(Animator animation) {
+                        CoordinatedImageView.this.mIsHiding = false;
+                    }
+
+                    public void onAnimationEnd(Animator animation) {
+                        CoordinatedImageView.this.mIsHiding = false;
+                        CoordinatedImageView.this.setVisibility(GONE);
+                    }
+                });
+            } else {
+                this.setVisibility(GONE);
+            }
+        }
+    }
+
+    public void show() {
+        if(this.getVisibility() != VISIBLE) {
+            if(ViewCompat.isLaidOut(this) &amp;&amp; !this.isInEditMode()) {
+                this.setAlpha(0.0F);
+                this.setScaleY(0.0F);
+                this.setScaleX(0.0F);
+                this.animate().scaleX(1.0F).scaleY(1.0F).alpha(1.0F).setDuration(200L).setInterpolator(new FastOutSlowInInterpolator()).setListener(new AnimatorListenerAdapter() {
+                    public void onAnimationStart(Animator animation) {
+                        CoordinatedImageView.this.setVisibility(VISIBLE);
+                    }
+                });
+            } else {
+                this.setVisibility(VISIBLE);
+                this.setAlpha(1.0F);
+                this.setScaleY(1.0F);
+                this.setScaleX(1.0F);
+            }
+        }
+    }
+
+    public static class Behavior extends android.support.design.widget.CoordinatorLayout.Behavior&lt;CoordinatedImageView&gt; {
+        private static final boolean SNACKBAR_BEHAVIOR_ENABLED;
+        private Rect mTmpRect;
+
+        public Behavior() {
+        }
+
+        public boolean layoutDependsOn(CoordinatorLayout parent, CoordinatedImageView child, View dependency) {
+            return SNACKBAR_BEHAVIOR_ENABLED &amp;&amp; dependency instanceof Snackbar.SnackbarLayout;
+        }
+
+        public boolean onDependentViewChanged(CoordinatorLayout parent, CoordinatedImageView child, View dependency) {
+            if(dependency instanceof Snackbar.SnackbarLayout) {
+                this.updateFabTranslationForSnackbar(parent, child, dependency);
+            } else if(dependency instanceof AppBarLayout) {
+                this.updateFabVisibility(parent, (AppBarLayout)dependency, child);
+            }
+
+            return false;
+        }
+
+        public void onDependentViewRemoved(CoordinatorLayout parent, CoordinatedImageView child, View dependency) {
+            if(dependency instanceof Snackbar.SnackbarLayout &amp;&amp; ViewCompat.getTranslationY(child) != 0.0F) {
+                ViewCompat.animate(child).translationY(0.0F).scaleX(1.0F).scaleY(1.0F).alpha(1.0F).setInterpolator(new FastOutSlowInInterpolator()).setListener((ViewPropertyAnimatorListener)null);
+            }
+
+        }
+
+        private boolean updateFabVisibility(CoordinatorLayout parent, AppBarLayout appBarLayout, CoordinatedImageView child) {
+            CoordinatorLayout.LayoutParams lp = (CoordinatorLayout.LayoutParams)child.getLayoutParams();
+            if(lp.getAnchorId() != appBarLayout.getId()) {
+                return false;
+            } else {
+                if(this.mTmpRect == null) {
+                    this.mTmpRect = new Rect();
+                }
+
+                Rect rect = this.mTmpRect;
+                ViewGroupUtils.getDescendantRect(parent, appBarLayout, rect);
+                if(rect.bottom &lt;= getMinimumHeightForVisibleOverlappingContent(appBarLayout)) {
+                    child.hide();
+                } else {
+                    child.show();
+                }
+
+                return true;
+            }
+        }
+
+        private int getMinimumHeightForVisibleOverlappingContent(AppBarLayout appBarLayout) {
+            int minHeight = ViewCompat.getMinimumHeight(appBarLayout);
+            if(minHeight != 0) {
+                return minHeight * 2;
+            } else {
+                int childCount = appBarLayout.getChildCount();
+                return childCount &gt;= 1?ViewCompat.getMinimumHeight(appBarLayout.getChildAt(childCount - 1)) * 2 :0;
+            }
+        }
+
+        private void updateFabTranslationForSnackbar(CoordinatorLayout parent, CoordinatedImageView imageView, View snackbar) {
+            if(imageView.getVisibility() == 0) {
+                float translationY = this.getFabTranslationYForSnackbar(parent, imageView);
+                ViewCompat.setTranslationY(imageView, translationY);
+            }
+        }
+
+        private float getFabTranslationYForSnackbar(CoordinatorLayout parent, CoordinatedImageView imageView) {
+            float minOffset = 0.0F;
+            List dependencies = parent.getDependencies(imageView);
+            int i = 0;
+
+            for(int z = dependencies.size(); i &lt; z; ++i) {
+                View view = (View)dependencies.get(i);
+                if(view instanceof Snackbar.SnackbarLayout &amp;&amp; parent.doViewsOverlap(imageView, view)) {
+                    minOffset = Math.min(minOffset, ViewCompat.getTranslationY(view) - (float)view.getHeight());
+                }
+            }
+
+            return minOffset;
+        }
+
+        public boolean onLayoutChild(CoordinatorLayout parent, CoordinatedImageView child, int layoutDirection) {
+            List dependencies = parent.getDependencies(child);
+            int i = 0;
+
+            for(int count = dependencies.size(); i &lt; count; ++i) {
+                View dependency = (View)dependencies.get(i);
+                if(dependency instanceof AppBarLayout &amp;&amp; this.updateFabVisibility(parent, (AppBarLayout)dependency, child)) {
+                    break;
+                }
+            }
+
+            parent.onLayoutChild(child, layoutDirection);
+            this.offsetIfNeeded(parent, child);
+            return true;
+        }
+
+        private void offsetIfNeeded(CoordinatorLayout parent, CoordinatedImageView imageView) {
+            Rect padding = new Rect(imageView.getPaddingLeft(), imageView.getPaddingTop(), imageView.getPaddingRight(), imageView.getPaddingBottom());
+            if(padding.centerX() &gt; 0 &amp;&amp; padding.centerY() &gt; 0) {
+                CoordinatorLayout.LayoutParams lp = (CoordinatorLayout.LayoutParams)imageView.getLayoutParams();
+                int offsetTB = 0;
+                int offsetLR = 0;
+                if(imageView.getRight() &gt;= parent.getWidth() - lp.rightMargin) {
+                    offsetLR = padding.right;
+                } else if(imageView.getLeft() &lt;= lp.leftMargin) {
+                    offsetLR = -padding.left;
+                }
+
+                if(imageView.getBottom() &gt;= parent.getBottom() - lp.bottomMargin) {
+                    offsetTB = padding.bottom;
+                } else if(imageView.getTop() &lt;= lp.topMargin) {
+                    offsetTB = -padding.top;
+                }
+
+                imageView.offsetTopAndBottom(offsetTB);
+                imageView.offsetLeftAndRight(offsetLR);
+            }
+
+        }
+
+        static {
+            SNACKBAR_BEHAVIOR_ENABLED = Build.VERSION.SDK_INT &gt;= 11;
+        }
+    }
+
+    private static class ViewGroupUtils {
+        private static final ViewGroupUtils.ViewGroupUtilsImpl IMPL;
+
+        ViewGroupUtils() {
+        }
+
+        static void offsetDescendantRect(ViewGroup parent, View descendant, Rect rect) {
+            IMPL.offsetDescendantRect(parent, descendant, rect);
+        }
+
+        static void getDescendantRect(ViewGroup parent, View descendant, Rect out) {
+            out.set(0, 0, descendant.getWidth(), descendant.getHeight());
+            offsetDescendantRect(parent, descendant, out);
+        }
+
+        static {
+            int version = Build.VERSION.SDK_INT;
+            if(version &gt;= 11) {
+                IMPL = new ViewGroupUtils.ViewGroupUtilsImplHoneycomb();
+            } else {
+                IMPL = new ViewGroupUtils.ViewGroupUtilsImplBase();
+            }
+
+        }
+
+        private static class ViewGroupUtilsImplHoneycomb implements ViewGroupUtils.ViewGroupUtilsImpl {
+            private ViewGroupUtilsImplHoneycomb() {
+            }
+
+            public void offsetDescendantRect(ViewGroup parent, View child, Rect rect) {
+                ViewGroupUtilsHoneycomb.offsetDescendantRect(parent, child, rect);
+            }
+        }
+
+        private static class ViewGroupUtilsImplBase implements ViewGroupUtils.ViewGroupUtilsImpl {
+            private ViewGroupUtilsImplBase() {
+            }
+
+            public void offsetDescendantRect(ViewGroup parent, View child, Rect rect) {
+                parent.offsetDescendantRectToMyCoords(child, rect);
+            }
+        }
+
+        private interface ViewGroupUtilsImpl {
+            void offsetDescendantRect(ViewGroup var1, View var2, Rect var3);
+        }
+    }
+
+    private static class ViewGroupUtilsHoneycomb {
+        private static final ThreadLocal&lt;Matrix&gt; sMatrix = new ThreadLocal();
+        private static final ThreadLocal&lt;RectF&gt; sRectF = new ThreadLocal();
+        private static final Matrix IDENTITY = new Matrix();
+
+        ViewGroupUtilsHoneycomb() {
+        }
+
+        public static void offsetDescendantRect(ViewGroup group, View child, Rect rect) {
+            Matrix m = (Matrix)sMatrix.get();
+            if(m == null) {
+                m = new Matrix();
+                sMatrix.set(m);
+            } else {
+                m.set(IDENTITY);
+            }
+
+            offsetDescendantMatrix(group, child, m);
+            RectF rectF = (RectF)sRectF.get();
+            if(rectF == null) {
+                rectF = new RectF();
+            }
+
+            rectF.set(rect);
+            m.mapRect(rectF);
+            rect.set((int)(rectF.left + 0.5F), (int)(rectF.top + 0.5F), (int)(rectF.right + 0.5F), (int)(rectF.bottom + 0.5F));
+        }
+
+        static void offsetDescendantMatrix(ViewParent target, View view, Matrix m) {
+            ViewParent parent = view.getParent();
+            if(parent instanceof View &amp;&amp; parent != target) {
+                View vp = (View)parent;
+                offsetDescendantMatrix(target, vp, m);
+                m.preTranslate((float)(-vp.getScrollX()), (float)(-vp.getScrollY()));
+            }
+
+            m.preTranslate((float)view.getLeft(), (float)view.getTop());
+            if(!view.getMatrix().isIdentity()) {
+                m.preConcat(view.getMatrix());
+            }
+
+        }
+    }
+}
+</code></pre>
+
+<p>And then use this custom view in my layout:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;android.support.design.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    tools:context=".ScrollingActivity"&gt;
+
+    &lt;android.support.design.widget.AppBarLayout
+        android:id="@+id/app_bar"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/app_bar_height"
+        android:fitsSystemWindows="true"
+        android:theme="@style/AppTheme.AppBarOverlay"&gt;
+
+        &lt;android.support.design.widget.CollapsingToolbarLayout
+            android:id="@+id/toolbar_layout"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fitsSystemWindows="true"
+            app:contentScrim="?attr/colorPrimary"
+            app:layout_scrollFlags="scroll|exitUntilCollapsed"&gt;
+
+            &lt;ImageView
+                android:id="@+id/backdrop"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:fitsSystemWindows="true"
+                android:src="@drawable/image"
+                app:layout_collapseMode="parallax" /&gt;
+
+            &lt;android.support.v7.widget.Toolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize"
+                app:layout_collapseMode="pin"
+                app:popupTheme="@style/AppTheme.PopupOverlay" /&gt;
+
+        &lt;/android.support.design.widget.CollapsingToolbarLayout&gt;
+    &lt;/android.support.design.widget.AppBarLayout&gt;
+
+    &lt;include layout="@layout/content_scrolling" /&gt;
+
+    &lt;android.support.design.widget.FloatingActionButton
+        android:id="@+id/fab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="@dimen/fab_margin"
+        android:src="@android:drawable/ic_dialog_email"
+        app:layout_anchor="@id/app_bar"
+        app:layout_anchorGravity="bottom|end" /&gt;
+
+    &lt;com.github.rodrigohenriques.samples.customview.CoordinatedImageView
+        android:id="@+id/logo"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/image"
+        android:layout_margin="@dimen/fab_margin"
+        app:layout_anchor="@id/app_bar"
+        app:layout_anchorGravity="bottom|start" /&gt;
+
+&lt;/android.support.design.widget.CoordinatorLayout&gt;
+</code></pre>
+
+<p>I also created a gist: <a href="https://gist.github.com/rodrigohenriques/123f2c6a40b95e00e145" rel="nofollow">https://gist.github.com/rodrigohenriques/123f2c6a40b95e00e145</a></p>
+
+<p>Good luck to you buddy. </p>
+
+<p>Hope that it helps. </p>

@@ -1,0 +1,42 @@
+<p>I think it is the return address pattern that you are describing - <a href="https://camel.apache.org/return-address.html" rel="nofollow">https://camel.apache.org/return-address.html</a></p>
+
+<p>There is some sample code in a junit test case here - <a href="http://svn.apache.org/viewvc/camel/trunk/components/camel-jms/src/test/java/org/apache/camel/component/jms/JmsInOnlyWithReplyToAsHeaderTest.java?view=markup" rel="nofollow">http://svn.apache.org/viewvc/camel/trunk/components/camel-jms/src/test/java/org/apache/camel/component/jms/JmsInOnlyWithReplyToAsHeaderTest.java?view=markup</a></p>
+
+<p><strong>EDIT: Adding some sample code from the link above to explain it better:</strong></p>
+
+<p>So lets say we have the following endpoints defined below, we have a 
+<code>from("direct:start")</code>, 
+<code>from("activemq:queue:foo")</code> and
+<code>from("activemq:queue:bar?disableReplyTo=true")</code></p>
+
+<p>In our actual test we call this code:</p>
+
+<pre><code>template.sendBodyAndHeader("direct:start", "World", "JMSReplyTo", "queue:bar");
+</code></pre>
+
+<p>This sends a message to the <code>direct:start</code> endpoint with the body containing "World" and a header called <code>JMSReplyTo</code> with the value "queue:bar". Because we have specified this <code>JMSReplyTo</code> header, once the route is finished it will call whatever endpoint is defined in the headers value, in this case it will call the "queue:bar" endpoint. </p>
+
+<pre><code>@Override
+protected RouteBuilder createRouteBuilder() throws Exception {
+return new RouteBuilder() {
+    @Override
+    public void configure() throws Exception {
+        from("direct:start")
+            // must enable preserveMessageQos to force Camel to use the JMSReplyTo header
+            .to("activemq:queue:foo?preserveMessageQos=true")
+            .to("mock:done");
+
+        from("activemq:queue:foo")
+            .to("log:foo?showAll=true", "mock:foo")
+            .transform(body().prepend("Bye "));
+
+        // we should disable reply to to avoid sending the message back to our self
+        // after we have consumed it
+        from("activemq:queue:bar?disableReplyTo=true")
+            .to("log:bar?showAll=true", "mock:bar");
+    }
+};
+}
+</code></pre>
+
+<p>So how does this fit in with your use case? Well what will happen is the client, or some code you have written will specify the <code>JMSReplyTo</code> header with an endpoint that relates to how the response will be sent. So if they want the reply to be placed on a queue, then the <code>JMSReplyTo</code> header's value will be the specified queues endpoint.</p>

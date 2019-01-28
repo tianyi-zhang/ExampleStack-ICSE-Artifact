@@ -1,0 +1,99 @@
+<p>The <a href="http://java.sun.com/javase/6/docs/api/java/net/URI.html">URI</a> class is useful for working with relative paths.</p>
+
+<pre><code>File mydir = new File("C:\\mydir");
+File myfile = new File("C:\\mydir\\path\\myfile.txt");
+System.out.println(mydir.toURI().relativize(myfile.toURI()).getPath());
+</code></pre>
+
+<p>The above code will emit the string <code>path/myfile.txt</code>.</p>
+
+<p>For completeness, here is a <code>zip</code> method for archiving a directory:</p>
+
+<pre><code>  public static void zip(File directory, File zipfile) throws IOException {
+    URI base = directory.toURI();
+    Deque&lt;File&gt; queue = new LinkedList&lt;File&gt;();
+    queue.push(directory);
+    OutputStream out = new FileOutputStream(zipfile);
+    Closeable res = out;
+    try {
+      ZipOutputStream zout = new ZipOutputStream(out);
+      res = zout;
+      while (!queue.isEmpty()) {
+        directory = queue.pop();
+        for (File kid : directory.listFiles()) {
+          String name = base.relativize(kid.toURI()).getPath();
+          if (kid.isDirectory()) {
+            queue.push(kid);
+            name = name.endsWith("/") ? name : name + "/";
+            zout.putNextEntry(new ZipEntry(name));
+          } else {
+            zout.putNextEntry(new ZipEntry(name));
+            copy(kid, zout);
+            zout.closeEntry();
+          }
+        }
+      }
+    } finally {
+      res.close();
+    }
+  }
+</code></pre>
+
+<p>This code makes doesn't preserve dates and I'm not sure how it would react to stuff like symlinks. No attempt is made to add directory entries, so empty directories would not be included.</p>
+
+<p>The corresponding <code>unzip</code> command:</p>
+
+<pre><code>  public static void unzip(File zipfile, File directory) throws IOException {
+    ZipFile zfile = new ZipFile(zipfile);
+    Enumeration&lt;? extends ZipEntry&gt; entries = zfile.entries();
+    while (entries.hasMoreElements()) {
+      ZipEntry entry = entries.nextElement();
+      File file = new File(directory, entry.getName());
+      if (entry.isDirectory()) {
+        file.mkdirs();
+      } else {
+        file.getParentFile().mkdirs();
+        InputStream in = zfile.getInputStream(entry);
+        try {
+          copy(in, file);
+        } finally {
+          in.close();
+        }
+      }
+    }
+  }
+</code></pre>
+
+<p>Utility methods on which they rely:</p>
+
+<pre><code>  private static void copy(InputStream in, OutputStream out) throws IOException {
+    byte[] buffer = new byte[1024];
+    while (true) {
+      int readCount = in.read(buffer);
+      if (readCount &lt; 0) {
+        break;
+      }
+      out.write(buffer, 0, readCount);
+    }
+  }
+
+  private static void copy(File file, OutputStream out) throws IOException {
+    InputStream in = new FileInputStream(file);
+    try {
+      copy(in, out);
+    } finally {
+      in.close();
+    }
+  }
+
+  private static void copy(InputStream in, File file) throws IOException {
+    OutputStream out = new FileOutputStream(file);
+    try {
+      copy(in, out);
+    } finally {
+      out.close();
+    }
+  }
+</code></pre>
+
+<p>The buffer size is entirely arbitrary.</p>

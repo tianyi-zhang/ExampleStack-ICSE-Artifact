@@ -1,0 +1,90 @@
+<p>I implemented my own InExpression which ignores case.
+It is almost the same as InExpresion from hibernate-core-3.6.10.Final.
+Only differences are the 'lower(..)'.</p>
+
+<pre><code>import java.util.ArrayList;
+import org.hibernate.Criteria;
+import org.hibernate.EntityMode;
+import org.hibernate.HibernateException;
+import org.hibernate.criterion.CriteriaQuery;
+import org.hibernate.criterion.Criterion;
+import org.hibernate.criterion.InExpression;
+import org.hibernate.engine.TypedValue;
+import org.hibernate.type.CompositeType;
+import org.hibernate.type.Type;
+import org.hibernate.util.StringHelper;
+
+public class InExpressionIgnoringCase implements Criterion {
+
+private final String propertyName;
+private final Object[] values;
+
+public InExpressionIgnoringCase(final String propertyName, final Object[] values) {
+    this.propertyName = propertyName;
+    this.values = values;
+}
+
+public String toSqlString(final Criteria criteria, final CriteriaQuery criteriaQuery) throws HibernateException {
+    final String[] columns = criteriaQuery.findColumns(this.propertyName, criteria);
+    final String[] wrappedLowerColumns = wrapLower(columns);
+    if (criteriaQuery.getFactory().getDialect().supportsRowValueConstructorSyntaxInInList() || columns.length &lt;= 1) {
+
+        String singleValueParam = StringHelper.repeat("lower(?), ", columns.length - 1) + "lower(?)";
+        if (columns.length &gt; 1)
+            singleValueParam = '(' + singleValueParam + ')';
+        final String params = this.values.length &gt; 0 ? StringHelper.repeat(singleValueParam + ", ",
+                this.values.length - 1) + singleValueParam : "";
+        String cols = StringHelper.join(", ", wrappedLowerColumns);
+        if (columns.length &gt; 1)
+            cols = '(' + cols + ')';
+        return cols + " in (" + params + ')';
+    } else {
+        String cols = " ( " + StringHelper.join(" = lower(?) and ", wrappedLowerColumns) + "= lower(?) ) ";
+        cols = this.values.length &gt; 0 ? StringHelper.repeat(cols + "or ", this.values.length - 1) + cols : "";
+        cols = " ( " + cols + " ) ";
+        return cols;
+    }
+}
+
+public TypedValue[] getTypedValues(final Criteria criteria, final CriteriaQuery criteriaQuery)
+        throws HibernateException {
+    final ArrayList&lt;TypedValue&gt; list = new ArrayList&lt;TypedValue&gt;();
+    final Type type = criteriaQuery.getTypeUsingProjection(criteria, this.propertyName);
+    if (type.isComponentType()) {
+        final CompositeType actype = (CompositeType) type;
+        final Type[] types = actype.getSubtypes();
+        for (int j = 0; j &lt; this.values.length; j++) {
+            for (int i = 0; i &lt; types.length; i++) {
+                final Object subval = this.values[j] == null ? null : actype.getPropertyValues(this.values[j],
+                        EntityMode.POJO)[i];
+                list.add(new TypedValue(types[i], subval, EntityMode.POJO));
+            }
+        }
+    } else {
+        for (int j = 0; j &lt; this.values.length; j++) {
+            list.add(new TypedValue(type, this.values[j], EntityMode.POJO));
+        }
+    }
+    return list.toArray(new TypedValue[list.size()]);
+}
+
+@Override
+public String toString() {
+    return this.propertyName + " in (" + StringHelper.toString(this.values) + ')';
+}
+
+private String[] wrapLower(final String[] columns) {
+    final String[] wrappedColumns = new String[columns.length];
+    for (int i = 0; i &lt; columns.length; i++) {
+        wrappedColumns[i] = "lower(" + columns[i] + ")";
+    }
+    return wrappedColumns;
+}
+}
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>final Criteria crit = session.createCriteria(Item.class);
+            crit.add(new InExpressionIgnoringCase("prop", array));
+</code></pre>

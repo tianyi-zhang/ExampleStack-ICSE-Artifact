@@ -1,0 +1,82 @@
+<p>Your code includes 2 parts:</p>
+
+<pre><code>    CountDownTimer cdt = new CountDownTimer(30000, 1000) {
+
+    public void onTick(long millisUntilFinished) {
+        System.out.println("tick");
+    }
+
+    public void onFinish() {
+        System.out.println("finish");
+    }
+};
+</code></pre>
+
+<p>The first part is instantiating a CountDownTimer object, you can place this code any where, on any thread, because only object was created, it does nothing.</p>
+
+<p>The second part is:</p>
+
+<pre><code>cdt.start();
+</code></pre>
+
+<p>You should notice that CountDownTimer must be start from Main Thread (call it from onCreate or onResume... of an Activity). So if you place your code in another Class, it is not the problem, you must sure that start() function called on Main Thread.</p>
+
+<p>//Update:</p>
+
+<p>You know, the onTick and onFinish function of CountDownTimer always is called on Main Thread. CountDownTimer will not run any thread.</p>
+
+<p>It's its code:</p>
+
+<pre><code>public synchronized final CountDownTimer start() {
+    mCancelled = false;
+    if (mMillisInFuture &lt;= 0) {
+        onFinish();
+        return this;
+    }
+    mStopTimeInFuture = SystemClock.elapsedRealtime() + mMillisInFuture;
+    mHandler.sendMessage(mHandler.obtainMessage(MSG));
+    return this;
+}
+</code></pre>
+
+<p>Very simply, CountDownTimer will send a message by a Handler. </p>
+
+<p>And this is Handler:</p>
+
+<pre><code>// handles counting down
+private Handler mHandler = new Handler() {
+
+    @Override
+    public void handleMessage(Message msg) {
+
+        synchronized (CountDownTimer.this) {
+            if (mCancelled) {
+                return;
+            }
+
+            final long millisLeft = mStopTimeInFuture - SystemClock.elapsedRealtime();
+
+            if (millisLeft &lt;= 0) {
+                onFinish();
+            } else if (millisLeft &lt; mCountdownInterval) {
+                // no tick, just delay until done
+                sendMessageDelayed(obtainMessage(MSG), millisLeft);
+            } else {
+                long lastTickStart = SystemClock.elapsedRealtime();
+                onTick(millisLeft);
+
+                // take into account user's onTick taking time to execute
+                long delay = lastTickStart + mCountdownInterval - SystemClock.elapsedRealtime();
+
+                // special case: user's onTick took more than interval to
+                // complete, skip to next interval
+                while (delay &lt; 0) delay += mCountdownInterval;
+
+                sendMessageDelayed(obtainMessage(MSG), delay);
+            }
+        }
+    }
+};
+</code></pre>
+
+<p>The Handler will send a delay message for calling next onTick() or onFinish(). So it must use Main Thread (or Main Looper). If you want it run in a custom thread, reimplement it in your way :D</p>

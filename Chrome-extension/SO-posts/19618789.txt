@@ -1,0 +1,45 @@
+<p>OK, I found the culprit. It's in the Appengine Maven Plugin class <a href="https://code.google.com/p/appengine-maven-plugin/source/browse/src/main/java/com/google/appengine/devappserver/AbstractDevAppServerMojo.java" rel="nofollow"><code>AbstractDevAppServerMojo</code></a>.</p>
+
+<p>The reason is, that - and that's new to me - the plugin first tries to stop a running development server. That's implemented in this method:</p>
+
+<pre class="lang-java prettyprint-override"><code>  protected void stopDevAppServer() throws MojoExecutionException {
+    HttpURLConnection connection = null;
+    try {
+      Integer port = firstNonNull(this.port, 8080);
+      URL url = new URL("http", firstNonNull(address, "localhost"), port, "/_ah/admin/quit");
+      connection = (HttpURLConnection) url.openConnection();
+      connection.setDoOutput(true);
+      connection.setDoInput(true);
+      connection.setRequestMethod("POST");
+      connection.getOutputStream().write(0); // &lt;-- Problem is here!
+      ByteStreams.toByteArray(connection.getInputStream());
+      connection.disconnect();
+      getLog().warn("Shutting down devappserver on port " + port);
+      Thread.sleep(2000);
+    } catch (MalformedURLException e) {
+      throw new MojoExecutionException("URL malformed attempting to stop the devserver : " + e.getMessage());
+    } catch (IOException e) {
+      getLog().debug("Was not able to contact the devappserver to shut it down.  Most likely this is due to it simply not running anymore. ", e);
+    } catch (InterruptedException e) {
+      Throwables.propagate(e);
+    }
+  }
+</code></pre>
+
+<p>The problem happens only, if the development server is not running. In that case, the URL does not exist and the <code>HttpUrlConnection</code> waits for a timeout.</p>
+
+<p>A workaround is to change the connection timeout duration. For example, setting it to 1 second:</p>
+
+<pre><code>      connection.setRequestMethod("POST");
+      connection.setConnectTimeout(1000);
+      connection.getOutputStream().write(0);
+</code></pre>
+
+<p>This works for me and it should also work for others, since the development server usually runs on the same machine.
+It could also be implemented as a configuration parameter.</p>
+
+<p>So, it has nothing to do with Mavericks (sorry for suspecting you, Apple), but with the Maven plugin itself. Or maybe the timeout duration has been changed somehow in Mavericks.</p>
+
+<p>My solution to this issue? It happens only once, otherwise the development server runs and gets stopped by the plugin automatically. That's good enough for me now.</p>
+
+<p>[Edit] Created an <a href="https://code.google.com/p/appengine-maven-plugin/issues/detail?id=43" rel="nofollow">issue</a> for the Maven plugin.</p>

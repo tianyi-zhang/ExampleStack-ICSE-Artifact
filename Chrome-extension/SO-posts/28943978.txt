@@ -1,0 +1,69 @@
+<p>rely on isoviewer-1.0-RC-27.</p>
+
+<pre><code>public static double[] startTrim(File src, File dst, int startMs, int endMs) throws IOException {
+    Movie movie = MovieCreator.build(src.getAbsolutePath());
+    List&lt;Track&gt; tracks = movie.getTracks();
+    movie.setTracks(new LinkedList&lt;Track&gt;());
+    double startTime = startMs/1000;
+    double endTime = endMs/1000;
+    boolean timeCorrected = false;
+    // Here we try to find a track that has sync samples. Since we can only start decoding
+    // at such a sample we SHOULD make sure that the start of the new fragment is exactly
+    // such a frame
+    for (Track track : tracks) {
+        if (track.getSyncSamples() != null &amp;&amp; track.getSyncSamples().length &gt; 0) {
+            if (timeCorrected) {          
+                throw new RuntimeException("The startTime has already been corrected by another track with SyncSample. Not Supported.");
+            }
+            //false,Short interception;true,Long interception
+            startTime = correctTimeToSyncSample(track, startTime, true);
+            endTime = correctTimeToSyncSample(track, endTime, false);
+            timeCorrected = true;
+        }
+    }
+    int x = 0;
+    for (Track track : tracks) {
+        long currentSample = 0;
+        double currentTime = 0;
+        long startSample = -1;
+        long endSample = -1;
+        x++;
+        for (int i = 0; i &lt; track.getDecodingTimeEntries().size(); i++) {
+            TimeToSampleBox.Entry entry = track.getDecodingTimeEntries().get(i);
+            for (int j = 0; j &lt; entry.getCount(); j++) {
+                // entry.getDelta() is the amount of time the current sample covers.
+                if (currentTime &lt;= startTime) {
+                    // current sample is still before the new starttime
+                    startSample = currentSample;
+                }
+                if (currentTime &lt;= endTime) {
+                    // current sample is after the new start time and still before the new endtime
+                    endSample = currentSample;
+                } else {
+                    // current sample is after the end of the cropped video
+                    break;
+                }
+                currentTime += (double) entry.getDelta() / (double) track.getTrackMetaData().getTimescale();
+                currentSample++;
+            }
+        }
+        movie.addTrack(new CroppedTrack(track, startSample, endSample));
+        break;
+    }
+    Container container = new DefaultMp4Builder().build(movie);  
+    if (!dst.exists()) {
+        dst.createNewFile();
+    }
+
+    FileOutputStream fos = new FileOutputStream(dst);
+    FileChannel fc = fos.getChannel();
+    container.writeContainer(fc);      
+    fc.close();
+    fos.close();
+    double[] doubleArray = new double[2] ;
+    doubleArray[0] = startTime;
+    doubleArray[1] = endTime;
+    return doubleArray;
+
+}
+</code></pre>

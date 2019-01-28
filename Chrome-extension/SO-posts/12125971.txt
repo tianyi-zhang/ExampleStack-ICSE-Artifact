@@ -1,0 +1,98 @@
+<p>You can add <strong>Inject</strong> and <strong>EJB</strong> annotations in servlet's fields if your are using a Java EE 6 Application Server like Glassfish v3. Some like this:</p>
+
+<pre><code>@Inject
+private AppManagedBean appmanaged;
+@EJB
+private SessionBean sessbean;
+</code></pre>
+
+<p>Remeber, those annotations are part of <em>Context and Dependecy Injection</em> or <strong>CDI</strong>, so, you must add the <strong>beans.xml</strong> deployment descriptor.</p>
+
+<p>But, if you can't use the <strong>CDI</strong> annotations, lookup for the <strong>BeanManager</strong> interface at <strong>java:comp/BeanManager</strong> and use it for access (only) <strong>managed beans</strong> (inside a managed bean you can inject <strong>session beans</strong> with <strong>@EJB</strong> annotation). Also remember to add the <strong>beans.xml</strong> deployment descriptor.</p>
+
+<p>Utility class looking up for <strong>java:comp/BeanManager</strong>:</p>
+
+<pre><code>package mavenproject4;
+
+import java.util.Set;
+import javax.enterprise.context.spi.CreationalContext;
+import javax.enterprise.inject.spi.Bean;
+import javax.enterprise.inject.spi.BeanManager;
+import javax.naming.InitialContext;
+import javax.naming.NamingException;
+
+public class ManagedBeans {
+
+    private static final BeanManager beanManager;
+
+    static {
+        try {
+            InitialContext ic = new InitialContext();
+            beanManager = (BeanManager) ic.lookup("java:comp/BeanManager");
+        } catch (NamingException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private ManagedBeans() {
+    }
+
+    public static &lt;T&gt; T getBean(Class&lt;T&gt; clazz, String name) {
+        Set&lt;Bean&lt;?&gt;&gt; beans = beanManager.getBeans(name);
+        Bean&lt;? extends Object&gt; resolve = beanManager.resolve(beans);
+        CreationalContext&lt;? extends Object&gt; createCreationalContext = beanManager.createCreationalContext(resolve);
+        return (T) beanManager.getReference(resolve, clazz, createCreationalContext);
+    }
+}
+</code></pre>
+
+<p>Usage of utility class in servlet's <strong>processRequest</strong> method or equivalent:</p>
+
+<pre><code>response.setContentType("text/html;charset=UTF-8");
+
+AppManagedBean appmanaged = ManagedBeans.getBean(AppManagedBean.class, "app");
+
+PrintWriter out = response.getWriter();
+try {
+    out.println("&lt;html&gt;");
+    out.println("&lt;head&gt;");
+    out.println("&lt;title&gt;Servlet BeanManager&lt;/title&gt;");
+    out.println("&lt;/head&gt;");
+    out.println("&lt;body&gt;");
+    out.println("&lt;h1&gt;" + appmanaged.getHelloWorld() + "&lt;/h1&gt;");
+    out.println("&lt;/body&gt;");
+    out.println("&lt;/html&gt;");
+} finally {
+    out.close();
+}
+</code></pre>
+
+<p>Example of <strong>managed bean</strong> with injected <strong>session bean</strong>:</p>
+
+<pre><code>package mavenproject4;
+
+import java.io.Serializable;
+import javax.annotation.ManagedBean;
+import javax.enterprise.context.ApplicationScoped;
+import javax.inject.Named;
+
+@ManagedBean
+@ApplicationScoped
+@Named("app")
+public class AppManagedBean implements Serializable {
+
+    private int counter = 0;
+    @EJB
+    private SessionBean sessbean;
+
+    public AppManagedBean() {
+    }
+
+    public String getHelloWorld() {
+        counter++;
+        return "Hello World " + counter + " times from Pachuca, Hidalgo, Mexico!";
+    }
+}
+</code></pre>
+
+<p>I don't know if the code in utility class is 100% correct, but works. Also the code doesn't check <em>NullPointerException and friends</em>.</p>

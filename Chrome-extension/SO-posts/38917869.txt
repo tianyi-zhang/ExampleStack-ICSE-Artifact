@@ -1,0 +1,87 @@
+<p>That doesn't appear to be an <code>all</code> debug log - I suggest you run the following test case (from the framework tests)...</p>
+
+<pre><code>@Test
+public void testNetClientAndServerSSLDifferentContexts() throws Exception {
+    System.setProperty("javax.net.debug", "all"); // SSL activity in the console
+    TcpNetServerConnectionFactory server = new TcpNetServerConnectionFactory(0);
+    TcpSSLContextSupport serverSslContextSupport = new DefaultTcpSSLContextSupport("server.ks",
+            "server.truststore.ks", "secret", "secret");
+    DefaultTcpNetSSLSocketFactorySupport serverTcpSocketFactorySupport =
+            new DefaultTcpNetSSLSocketFactorySupport(serverSslContextSupport);
+    serverTcpSocketFactorySupport.afterPropertiesSet();
+    server.setTcpSocketFactorySupport(serverTcpSocketFactorySupport);
+    final List&lt;Message&lt;?&gt;&gt; messages = new ArrayList&lt;Message&lt;?&gt;&gt;();
+    final CountDownLatch latch = new CountDownLatch(1);
+    server.registerListener(new TcpListener() {
+
+        @Override
+        public boolean onMessage(Message&lt;?&gt; message) {
+            messages.add(message);
+            latch.countDown();
+            return false;
+        }
+
+    });
+    server.start();
+    TestingUtilities.waitListening(server, null);
+
+    TcpNetClientConnectionFactory client = new TcpNetClientConnectionFactory("localhost", server.getPort());
+    TcpSSLContextSupport clientSslContextSupport = new DefaultTcpSSLContextSupport("client.ks",
+            "client.truststore.ks", "secret", "secret");
+    DefaultTcpNetSSLSocketFactorySupport clientTcpSocketFactorySupport =
+            new DefaultTcpNetSSLSocketFactorySupport(clientSslContextSupport);
+    clientTcpSocketFactorySupport.afterPropertiesSet();
+    client.setTcpSocketFactorySupport(clientTcpSocketFactorySupport);
+    client.start();
+
+    TcpConnection connection = client.getConnection();
+    connection.send(new GenericMessage&lt;String&gt;("Hello, world!"));
+    assertTrue(latch.await(10, TimeUnit.SECONDS));
+    assertEquals("Hello, world!", new String((byte[]) messages.get(0).getPayload()));
+}
+</code></pre>
+
+<p>The debug log starts like this...</p>
+
+<pre><code>***
+found key for : sitestserver
+chain [0] = [
+[
+  Version: V3
+  Subject: CN=Spring Integration Test Server, OU=SpringSource, O=VMware, L=Palo Alto, ST=CA, C=US
+  Signature Algorithm: SHA1withRSA, OID = 1.2.840.113549.1.1.5
+
+  Key:  Sun RSA public key, 1024 bits
+  modulus: 145953694279918711466593323385178894247518594695766350354036273697592524406041558890428426220351711997889835331198023000923126848152011583237597808196751267657648195434943824515101123741288592866628375132742429927417934808064049810040188644453056781002083733535076342958460726082218474705117624658622289918247
+  public exponent: 65537
+  Validity: [From: Sat Feb 25 14:31:38 EST 2012,
+               To: Mon Feb 01 14:31:38 EST 2112]
+  Issuer: CN=Spring Integration Test Server, OU=SpringSource, O=VMware, L=Palo Alto, ST=CA, C=US
+  SerialNumber: [    4f49371a]
+
+]
+  Algorithm: [SHA1withRSA]
+  Signature:
+0000: AC 69 48 78 22 9F 32 3F   88 2F DB 49 53 87 F1 10  .iHx".2?./.IS...
+0010: 64 D3 30 22 0D 04 13 90   07 9B 0E 9A FB 1F 65 97  d.0"..........e.
+0020: 5D 2D C1 C6 A1 8A C5 C7   16 71 A9 47 95 C2 FF D5  ]-.......q.G....
+0030: 1D 10 06 51 EE 64 37 A9   D3 B0 69 F9 84 5B 9D 1D  ...Q.d7...i..[..
+0040: E1 6C C0 48 31 FD 82 10   B5 D4 56 D4 76 2D DE EB  .l.H1.....V.v-..
+0050: B2 66 1F B6 D1 C3 AA E2   E6 8D 4B B6 05 BC F0 88  .f........K.....
+0060: 7B BC 81 B1 C2 BB 3D 1C   0A AD 5B 29 55 94 05 2C  ......=...[)U..,
+0070: 5B 5C 44 82 54 90 5F B4   70 EA 10 45 AC A0 5F 2B  [\D.T._.p..E.._+
+
+]
+***
+adding as trusted cert:
+  Subject: CN=Spring Integration Test Client, OU=SpringSource, O=VMware, L=Palo Alto, ST=CA, C=US
+  Issuer:  CN=Spring Integration Test Client, OU=SpringSource, O=VMware, L=Palo Alto, ST=CA, C=US
+  Algorithm: RSA; Serial number: 0x4f4936f4
+  Valid from Sat Feb 25 14:31:00 EST 2012 until Mon Feb 01 14:31:00 EST 2112
+
+trigger seeding of SecureRandom
+done seeding SecureRandom
+Ignoring unavailable cipher suite: TLS_DHE_DSS_WITH_AES_256_GCM_SHA384
+Ignoring unavailable cipher suite: TLS_RSA_WITH_AES_256_CBC_SHA
+...
+</code></pre>

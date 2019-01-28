@@ -1,0 +1,130 @@
+<p>If you are using v3 version of in app purchase then The Version 3 API supports <strong>managed in-app products</strong> and subscriptions. </p>
+
+<p>Managed in-app products are items that have their ownership information tracked and managed by Google Play. When a user purchases a managed in-app item, Google Play stores the purchase information for each item on a per-user basis. This enables you to later query Google Play at any time to restore the state of the items a specific user has purchased. This information is persistent on the Google Play servers even if the user uninstalls the application or if they change devices.</p>
+
+<p>If you are using the Version 3 API, you can also <strong>consume managed</strong> items within your application. You would typically implement consumption for items that can be purchased multiple times (such as in-game currency, fuel, or magic spells). Once purchased, a managed item cannot be purchased again until you consume the item, by sending a consumption request to Google Play. </p>
+
+<p>To consume item refer below method:</p>
+
+<pre><code>IabHelper.OnIabPurchaseFinishedListener mPurchaseFinishedListener = new IabHelper.OnIabPurchaseFinishedListener() {
+        public void onIabPurchaseFinished(IabResult result, Purchase purchase) {
+            Log.d(TAG, "Purchase finished: " + result + ", purchase: " + purchase);
+
+            // if we were disposed of in the meantime, quit.
+            if (mHelper == null) return;
+
+            if (result.isFailure()) {
+                complain("Error purchasing: " + result);
+                return;
+            }
+            if (!verifyDeveloperPayload(purchase)) {
+                complain("Error purchasing. Authenticity verification failed.");
+                return;
+            }
+            Log.d(TAG, "Purchase successful.");
+
+            if (purchase.getSku().equals(SKU_PREMIUM)) {
+                //consumeItem();
+                Constant.showProgressDialog(getActivity());
+                mHelper.consumeAsync(purchase, mConsumeFinishedListener);
+            }
+
+
+        }
+    };
+</code></pre>
+
+<p>Also add this method to your activity</p>
+
+<pre><code>IabHelper.OnConsumeFinishedListener mConsumeFinishedListener = new IabHelper.OnConsumeFinishedListener() {
+        public void onConsumeFinished(Purchase purchase, IabResult result) {
+            Log.d(TAG, "Consumption finished. Purchase: " + purchase + ", result: " + result);
+
+            // if we were disposed of in the meantime, quit.
+            if (mHelper == null) return;
+
+            // We know this is the "gas" sku because it's the only one we consume,
+            // so we don't check which sku was consumed. If you have more than one
+            // sku, you probably should check...
+            if (result.isSuccess()) {
+                // successfully consumed, so we apply the effects of the item in our
+                // game world's logic, which in our case means filling the gas tank a bit
+                Log.d(TAG, "Consumption successful. Provisioning.");
+
+            }
+            else {
+                complain("Error while consuming: " + result);
+            }
+
+            Log.d(TAG, "End consumption flow.");
+        }
+    };
+</code></pre>
+
+<p>In your IabHelper.java class have below method:</p>
+
+<pre><code>int queryPurchases(Inventory inv, String itemType) throws JSONException, RemoteException {
+        // Query purchases
+        logDebug("Querying owned items, item type: " + itemType);
+        logDebug("Package name: " + mContext.getPackageName());
+        boolean verificationFailed = false;
+        String continueToken = null;
+
+        do {
+            logDebug("Calling getPurchases with continuation token: " + continueToken);
+            Bundle ownedItems = mService.getPurchases(3, mContext.getPackageName(),
+                    itemType, continueToken);
+
+            int response = getResponseCodeFromBundle(ownedItems);
+            logDebug("Owned items response: " + String.valueOf(response));
+            if (response != BILLING_RESPONSE_RESULT_OK) {
+                logDebug("getPurchases() failed: " + getResponseDesc(response));
+                return response;
+            }
+            if (!ownedItems.containsKey(RESPONSE_INAPP_ITEM_LIST)
+                    || !ownedItems.containsKey(RESPONSE_INAPP_PURCHASE_DATA_LIST)
+                    || !ownedItems.containsKey(RESPONSE_INAPP_SIGNATURE_LIST)) {
+                logError("Bundle returned from getPurchases() doesn't contain required fields.");
+                return IABHELPER_BAD_RESPONSE;
+            }
+
+            ArrayList&lt;String&gt; ownedSkus = ownedItems.getStringArrayList(
+                        RESPONSE_INAPP_ITEM_LIST);
+            ArrayList&lt;String&gt; purchaseDataList = ownedItems.getStringArrayList(
+                        RESPONSE_INAPP_PURCHASE_DATA_LIST);
+            ArrayList&lt;String&gt; signatureList = ownedItems.getStringArrayList(
+                        RESPONSE_INAPP_SIGNATURE_LIST);
+
+            for (int i = 0; i &lt; purchaseDataList.size(); ++i) {
+                String purchaseData = purchaseDataList.get(i);
+                String signature = signatureList.get(i);
+                String sku = ownedSkus.get(i);
+                if (Security.verifyPurchase(mSignatureBase64, purchaseData, signature)) {
+                    logDebug("Sku is owned: " + sku);
+                    Purchase purchase = new Purchase(itemType, purchaseData, signature);
+
+                    if (TextUtils.isEmpty(purchase.getToken())) {
+                        logWarn("BUG: empty/null token!");
+                        logDebug("Purchase data: " + purchaseData);
+                    }
+
+                    // Record ownership and token
+                    inv.addPurchase(purchase);
+                }
+                else {
+                    logWarn("Purchase signature verification **FAILED**. Not adding item.");
+                    logDebug("   Purchase data: " + purchaseData);
+                    logDebug("   Signature: " + signature);
+                    verificationFailed = true;
+                }
+            }
+
+            continueToken = ownedItems.getString(INAPP_CONTINUATION_TOKEN);
+            logDebug("Continuation token: " + continueToken);
+        } while (!TextUtils.isEmpty(continueToken));
+
+        return verificationFailed ? IABHELPER_VERIFICATION_FAILED : BILLING_RESPONSE_RESULT_OK;
+    }
+</code></pre>
+
+<p>In This you will get the owned item list </p>

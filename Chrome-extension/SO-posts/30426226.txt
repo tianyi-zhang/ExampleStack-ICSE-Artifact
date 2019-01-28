@@ -1,0 +1,191 @@
+<p>Yeah Jersey made the creation of custom injections a bit more complicated in 2.x. There are a few main components to custom injection you need to know about with Jersey 2.x</p>
+
+<ul>
+<li><a href="https://hk2.java.net/apidocs/org/glassfish/hk2/api/Factory.html"><code>org.glassfish.hk2.api.Factory</code></a> - Creates injectable objects/services</li>
+<li><a href="https://hk2.java.net/apidocs/org/glassfish/hk2/api/InjectionResolver.html"><code>org.glassfish.hk2.api.InjectionResolver</code></a> - Used to create injection points for your own annotations.</li>
+<li><a href="http://www.javafind.net/gate.jsp?q=/library/232/jersey-server-2.6-javadoc/org/glassfish/jersey/server/spi/internal/ValueFactoryProvider.html"><code>org.glassfish.jersey.server.spi.internal.ValueFactoryProvider</code></a> - To provide parameter value injections.</li>
+</ul>
+
+<p>You can read more about custom injection in <a href="https://jersey.java.net/documentation/latest/ioc.html">Custom Injection and Lifecycle Management</a>. One shortcoming of the documentation is the lack of explanation of how to inject parameter values. You could get away with simply implementing the <code>InjectResolver</code>, and you would be able to inject into fields with your custom annotation, but in order to inject into method parameters, we need to <code>ValueFactoryProvider</code>.</p>
+
+<p>Luckily there are some abstract classes we can extend (which the documentation also fails to mention) that will make life a little easier. I has to scour the <a href="https://github.com/jersey/jersey/tree/master/core-server/src/main/java/org/glassfish/jersey/server/internal/inject">source code of the <code>org.glassfish.jersey.server.internal.inject</code> package</a> for a bit to try and figure it all out.</p>
+
+<p>Here's a full example to help get you started.</p>
+
+<p><strong><code>Token</code></strong> (injectable object)</p>
+
+<pre><code>public class Token {
+    private final String token;
+    public Token(String token) { this.token = token; }
+    public String getToken() { return token; }
+}
+</code></pre>
+
+<p><strong><code>@TokenParam</code></strong> (our injection annotation)</p>
+
+<pre><code>@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.PARAMETER, ElementType.FIELD})
+public @interface TokenParam {
+    boolean someAttribute() default true;
+}
+</code></pre>
+
+<p><strong><code>TokenFactory</code></strong> (implements <code>Factory</code> per the first bullet point, but we just extend the <code>AbstractConatainerRequestValueFactory</code>. There we'll have access to the <code>ContainerRequestContext</code>. Note, that all these HK2 components, we can inject other dependencies into them, for example the <code>TokenAuthenticator</code>, which we will bind to HK2 later.</p>
+
+<pre><code>import javax.inject.Inject;
+import javax.ws.rs.WebApplicationException;
+import javax.ws.rs.core.HttpHeaders;
+import javax.ws.rs.core.Response;
+import org.glassfish.jersey.server.internal.inject.AbstractContainerRequestValueFactory;
+
+public class TokenFactory extends AbstractContainerRequestValueFactory&lt;Token&gt; {
+
+    private final TokenAuthenticator tokenAuthenticator;
+
+    @Inject
+    public TokenFactory(TokenAuthenticator tokenAuthenticator) {
+        this.tokenAuthenticator = tokenAuthenticator;
+    }
+
+    @Override
+    public Token provide() {
+        String auth = getContainerRequest().getHeaderString(HttpHeaders.AUTHORIZATION);
+        try {
+            if (tokenAuthenticator.authenticate(auth).get() == null) {
+                throw new WebApplicationException(Response.Status.FORBIDDEN);
+            }
+        } catch (AuthenticationException ex) {
+            Logger.getLogger(TokenFactory.class.getName()).log(Level.SEVERE, null, ex);
+        }
+
+        return new Token("New Token");
+    }  
+}
+</code></pre>
+
+<p><strong><code>TokenParamInjectionResolver</code></strong> (implements the <code>InjectResolver</code> per bullet point two. I simply extend <code>ParamInjectionResolver</code>. If your interested in what's going on under the hood, you can find the class in the source code I linked to)</p>
+
+<pre><code>import org.glassfish.jersey.server.internal.inject.ParamInjectionResolver;
+
+public class TokenParamInjectionResolver extends ParamInjectionResolver {
+    public TokenParamInjectionResolver() {
+        super(TokenFactoryProvider.class);
+    }
+}
+</code></pre>
+
+<p><strong><code>TokenFactoryProvider</code></strong> (implements the <code>ValueFactoryProvider</code> per the third bullet point. I simply extend <code>AbstractValueFactoryProvider</code>. Again, you can look at the source for the under the hood details)</p>
+
+<pre><code>import javax.inject.Inject;
+import org.glassfish.hk2.api.Factory;
+import org.glassfish.hk2.api.ServiceLocator;
+import org.glassfish.jersey.server.internal.inject.AbstractValueFactoryProvider;
+import org.glassfish.jersey.server.internal.inject.MultivaluedParameterExtractorProvider;
+import org.glassfish.jersey.server.model.Parameter;
+
+public class TokenFactoryProvider extends AbstractValueFactoryProvider {
+
+    private final TokenFactory tokenFactory;
+
+    @Inject
+    public TokenFactoryProvider(
+            final MultivaluedParameterExtractorProvider extractorProvider,
+            ServiceLocator locator,
+            TokenFactory tokenFactory) {
+
+        super(extractorProvider, locator, Parameter.Source.UNKNOWN);
+        this.tokenFactory = tokenFactory;
+    }
+
+    @Override
+    protected Factory&lt;?&gt; createValueFactory(Parameter parameter) {
+         Class&lt;?&gt; paramType = parameter.getRawType();
+         TokenParam annotation = parameter.getAnnotation(TokenParam.class);
+         if (annotation != null &amp;&amp; paramType.isAssignableFrom(Token.class)) {
+             return tokenFactory;
+         }
+         return null;
+    }
+}
+</code></pre>
+
+<p><strong><code>TokenFeature</code></strong> (Here we bind all the components seen above, even the <code>TokenAuthentictor</code>, which I have left out, but if your usual Dropwizard <code>Authenticator</code>. I also made use of a <code>Feature</code>. I tend to do this to wrap components of a custom feature. This is also where you can decide all the scoping. Just note some components are required to be in <code>Singleton</code> scope)</p>
+
+<pre><code>import javax.inject.Singleton;
+import javax.ws.rs.core.Feature;
+import javax.ws.rs.core.FeatureContext;
+import org.glassfish.hk2.api.InjectionResolver;
+import org.glassfish.hk2.api.TypeLiteral;
+import org.glassfish.hk2.utilities.binding.AbstractBinder;
+import org.glassfish.jersey.server.spi.internal.ValueFactoryProvider;
+
+public class TokenFeature implements Feature {
+
+    @Override
+    public boolean configure(FeatureContext context) {
+        context.register(new AbstractBinder(){
+            @Override
+            public void configure() {
+                bind(TokenAuthenticator.class)
+                        .to(TokenAuthenticator.class)
+                        .in(Singleton.class);
+                bind(TokenFactory.class).to(TokenFactory.class)
+                        .in(Singleton.class);
+                bind(TokenFactoryProvider.class)
+                        .to(ValueFactoryProvider.class)
+                        .in(Singleton.class);
+                bind(TokenParamInjectionResolver.class)
+                        .to(new TypeLiteral&lt;InjectionResolver&lt;TokenParam&gt;&gt;(){})
+                        .in(Singleton.class);
+            }
+        });
+        return true;
+    } 
+}
+</code></pre>
+
+<p>And finally simply register the feature</p>
+
+<pre><code>register(TokenFeature.class);
+</code></pre>
+
+<p>Now you should be able to inject the <code>Token</code> with <code>@TokenParam</code>, as well as your usual entity bodies (which would not be possible if we didn't implement the <code>ValueFactoryProvider</code></p>
+
+<pre><code>@POST
+@Consumes(MediaType.APPLICATION_JSON)
+public String postToken(@TokenParam Token token, User user) {
+
+}
+</code></pre>
+
+<hr>
+
+<h2>UPDATE</h2>
+
+<p>It's kind of a half-@$$ example for your particular use case. A better approach would probably have a clone method in your <code>Factory</code> class and create a new <code>TokenFactory</code> with some parameters (maybe that you get from your annotation<code>. For example, in the</code>TokenFactory` you can have something like</p>
+
+<pre><code>public class TokenFactory extends AbstractContainerRequestValueFactory&lt;Token&gt; {
+
+    public TokenFactory clone(boolean someAttribute) {
+        return new TokenFactory(authenticator, someAttribute);
+    }
+</code></pre>
+
+<p>In the <code>TokenFactoryProvider</code> ine <code>createValueFactory</code> method, you then call the clone method</p>
+
+<pre><code>TokenParam annotation = parameter.getAnnotation(TokenParam.class);
+
+if (annotation != null &amp;&amp; paramType.isAssignableFrom(Token.class)) {
+    return tokenFactory.clone(annotation.someAttribute());
+}
+</code></pre>
+
+<p>Or you could actually <em>create</em> the factory inside the method. you have options.</p>
+
+<h2>UPDATE 2</h2>
+
+<p><strong>See Also</strong></p>
+
+<ul>
+<li><a href="http://stackoverflow.com/q/34747574/2587435">jersey 2 context injection based upon HttpRequest without singleton</a></li>
+</ul>

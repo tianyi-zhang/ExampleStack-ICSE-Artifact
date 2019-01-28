@@ -1,0 +1,105 @@
+<p>The Snapshot API is very specific in how you must do things. The following is the high-level procedure for Snapshot save:</p>
+
+<ul>
+<li>Open the snapshot</li>
+<li>Resolve conflicts</li>
+<li>Save</li>
+</ul>
+
+<p>The following code is from the <a href="https://github.com/playgameservices/android-basic-samples/blob/master/BasicSamples/CollectAllTheStars2/src/main/java/com/google/example/games/catt2/MainActivity.java" rel="nofollow">Google Play Games Snapshot sample</a> which shows you how to use Snapshots cross-platform across Android and iOS.</p>
+
+<p>First, you must open the snapshot and resolve conflicts on open. </p>
+
+<pre><code>/**
+ * Prepares saving Snapshot to the user's synchronized storage, conditionally resolves errors,
+ * and stores the Snapshot.
+ */
+void saveSnapshot() {
+    AsyncTask&lt;Void, Void, Snapshots.OpenSnapshotResult&gt; task =
+            new AsyncTask&lt;Void, Void, Snapshots.OpenSnapshotResult&gt;() {
+                @Override
+                protected Snapshots.OpenSnapshotResult doInBackground(Void... params) {
+                    Snapshots.OpenSnapshotResult result = Games.Snapshots.open(getApiClient(),
+                            currentSaveName, true).await();
+                    return result;
+                }
+
+                @Override
+                protected void onPostExecute(Snapshots.OpenSnapshotResult result) {
+                    Snapshot toWrite = processSnapshotOpenResult(result, 0);
+
+                    Log.i(TAG, writeSnapshot(toWrite));
+                }
+            };
+
+    task.execute();
+}
+</code></pre>
+
+<p>Next, you must handle conflict resolution:</p>
+
+<pre><code>/**
+ * Conflict resolution for when Snapshots are opened.
+ * @param result The open snapshot result to resolve on open.
+ * @return The opened Snapshot on success; otherwise, returns null.
+ */
+Snapshot processSnapshotOpenResult(Snapshots.OpenSnapshotResult result, int retryCount){
+    Snapshot mResolvedSnapshot = null;
+    retryCount++;
+    int status = result.getStatus().getStatusCode();
+
+    Log.i(TAG, "Save Result status: " + status);
+
+    if (status == GamesStatusCodes.STATUS_OK) {
+        return result.getSnapshot();
+    } else if (status == GamesStatusCodes.STATUS_SNAPSHOT_CONTENTS_UNAVAILABLE) {
+        return result.getSnapshot();
+    } else if (status == GamesStatusCodes.STATUS_SNAPSHOT_CONFLICT){
+        Snapshot snapshot = result.getSnapshot();
+        Snapshot conflictSnapshot = result.getConflictingSnapshot();
+
+        // Resolve between conflicts by selecting the newest of the conflicting snapshots.
+        mResolvedSnapshot = snapshot;
+
+        if (snapshot.getMetadata().getLastModifiedTimestamp() &lt;
+                conflictSnapshot.getMetadata().getLastModifiedTimestamp()){
+            mResolvedSnapshot = conflictSnapshot;
+        }
+
+        Snapshots.OpenSnapshotResult resolveResult = Games.Snapshots.resolveConflict(
+                getApiClient(), result.getConflictId(), mResolvedSnapshot)
+                .await();
+
+        if (retryCount &lt; MAX_SNAPSHOT_RESOLVE_RETRIES){
+            return processSnapshotOpenResult(resolveResult, retryCount);
+        }else{
+            String message = "Could not resolve snapshot conflicts";
+            Log.e(TAG, message);
+            Toast.makeText(getBaseContext(), message, Toast.LENGTH_LONG);
+        }
+
+    }
+    // Fail, return null.
+    return null;
+}
+</code></pre>
+
+<p>The following code is how this is done in <a href="https://github.com/playgameservices/android-basic-samples/blob/master/BasicSamples/CollectAllTheStars2/src/main/java/com/google/example/games/catt2/MainActivity.java" rel="nofollow">the Google Play Games Snapshots sample app</a>:</p>
+
+<pre><code>/**
+ * Generates metadata, takes a screenshot, and performs the write operation for saving a
+ * snapshot.
+ */
+private String writeSnapshot(Snapshot snapshot){
+    // Set the data payload for the snapshot.
+    snapshot.writeBytes(mSaveGame.toBytes());
+
+    // Save the snapshot.
+    SnapshotMetadataChange metadataChange = new SnapshotMetadataChange.Builder()
+            .setCoverImage(getScreenShot())
+            .setDescription("Modified data at: " + Calendar.getInstance().getTime())
+            .build();
+    Games.Snapshots.commitAndClose(getApiClient(), snapshot, metadataChange);
+    return snapshot.toString();
+}
+</code></pre>

@@ -1,0 +1,254 @@
+<p>Ok, so I figured it out eventually.</p>
+
+<p>You will need a SyncAdapter which in tern needs an AccountAuthenticator, more details on this can be found here: <a href="http://developer.android.com/training/sync-adapters/index.html" rel="nofollow">http://developer.android.com/training/sync-adapters/index.html</a></p>
+
+<p>And here is the bear minimum distilled version with some stuff pointed out:</p>
+
+<ol>
+<li><p>Create an AccountAuthenticator and just stub it out </p>
+
+<pre><code>public class Authenticator extends AbstractAccountAuthenticator {
+
+public Authenticator(Context context) {
+    super(context);
+}
+
+@Override
+public Bundle addAccount(AccountAuthenticatorResponse response, String accountType, String authTokenType, String[] requiredFeatures, Bundle options) throws NetworkErrorException {
+    return null;
+}
+
+@Override
+public Bundle confirmCredentials(
+        AccountAuthenticatorResponse response, Account account, Bundle options) {
+    return null;
+}
+
+@Override
+public Bundle editProperties(AccountAuthenticatorResponse response, String accountType) {
+    throw new UnsupportedOperationException();
+}
+
+@Override
+public Bundle getAuthToken(AccountAuthenticatorResponse response, Account account, String authTokenType, Bundle loginOptions) throws NetworkErrorException {
+    throw new UnsupportedOperationException();
+}
+
+@Override
+public String getAuthTokenLabel(String authTokenType) {
+    // null means we don't support multiple authToken types
+    return null;
+}
+
+@Override
+public Bundle hasFeatures(AccountAuthenticatorResponse response, Account account, String[] features) {
+    throw new UnsupportedOperationException();
+}
+
+@Override
+public Bundle updateCredentials(AccountAuthenticatorResponse response, Account account, String authTokenType, Bundle loginOptions) {
+    return null;
+}
+}
+</code></pre></li>
+<li><p>Create a SyncAdapter and just stub it out </p>
+
+<pre><code>public class SyncAdapter extends AbstractThreadedSyncAdapter {
+
+public SyncAdapter(Context context, boolean autoInitialize) {
+    super(context, autoInitialize);
+}
+
+@Override
+public void onPerformSync(Account account, Bundle extras, String authority, ContentProviderClient provider, SyncResult syncResult) {
+}
+}
+</code></pre></li>
+<li><p>Make the AccountAuthenticator accessible through a service</p>
+
+<pre><code>public class AuthenticationService extends Service {
+private Authenticator mAuthenticator;
+
+@Override
+public void onCreate() {
+    mAuthenticator = new Authenticator(this);
+}
+@Override
+public IBinder onBind(Intent intent) {
+    return mAuthenticator.getIBinder();
+}
+}
+</code></pre></li>
+<li><p>Make the SyncAdapter accessible through a service</p>
+
+<pre><code>public class SyncService extends Service {
+
+private static final Object sSyncAdapterLock = new Object();
+private static SyncAdapter sSyncAdapter = null;
+
+@Override
+public void onCreate() {
+    synchronized (sSyncAdapterLock) {
+        if (sSyncAdapter == null) {
+            sSyncAdapter = new SyncAdapter(getApplicationContext(), true);
+        }
+    }
+}
+
+@Override
+public IBinder onBind(Intent intent) {
+    return sSyncAdapter.getSyncAdapterBinder();
+}
+}
+</code></pre></li>
+<li><p>Declare the two services in the manifest</p>
+
+<pre><code>&lt;service 
+    android:name="com.test.customcontact.AuthenticationService"&gt;
+    &lt;intent-filter&gt;
+        &lt;action android:name="android.accounts.AccountAuthenticator" /&gt;
+    &lt;/intent-filter&gt;
+    &lt;meta-data
+        android:name="android.accounts.AccountAuthenticator"
+        android:resource="@xml/authenticator" /&gt;
+&lt;/service&gt;
+
+&lt;service
+    android:name="com.test.customcontact.SyncService"
+    android:exported="true"&gt;
+    &lt;intent-filter&gt;
+        &lt;action android:name="android.content.SyncAdapter" /&gt;
+    &lt;/intent-filter&gt;
+    &lt;meta-data android:name="android.content.SyncAdapter" android:resource="@xml/syncadapter" /&gt;
+    &lt;meta-data android:name="android.provider.CONTACTS_STRUCTURE" android:resource="@xml/contacts" /&gt;
+&lt;/service&gt;
+</code></pre></li>
+<li><p>As you can see we will also have 3 resources in res/xml :</p>
+
+<ol>
+<li>@xml/authenticator, </li>
+<li>@xml/syncadapter </li>
+<li><p>@xml/contacts:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accountType="com.test.customcontact"
+    android:icon="@drawable/ic_launcher"
+    android:smallIcon="@drawable/ic_launcher"
+    android:label="@string/app_name"
+/&gt;
+
+&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
+    android:contentAuthority="com.android.contacts"
+    android:accountType="com.test.customcontact"
+    android:supportsUploading="false"
+    android:userVisible="true"
+/&gt;
+
+&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;ContactsSource
+    xmlns:android="http://schemas.android.com/apk/res/android"&gt;
+    &lt;ContactsDataKind
+        android:mimeType="vnd.android.cursor.item/com.sample.call"
+        android:icon="@drawable/ic_launcher"
+        android:summaryColumn="data2"
+        android:detailColumn="data3"/&gt;
+&lt;/ContactsSource&gt;
+</code></pre></li>
+</ol></li>
+</ol>
+
+<p>In these XMLs we will be interested in android:accountType which should be the app package and android:mimeType which will be the custom mime type we will use to store the contacts that will open our app
+Also note that 
+
+<p>Now for the code:</p>
+
+<ol start="7">
+<li><p>Create a system account (will appear in settings/accounts) ACCOUNT_TYPE is the same as in the above XMLs</p>
+
+<pre><code>public static final String ACCOUNT_TYPE = "com.test.customcontact";
+public static final String ACCOUNT_NAME = "sample";
+
+private void addNewAccount() {
+    Account newAccount = new Account(ACCOUNT_NAME, ACCOUNT_TYPE);
+    AccountManager accountManager = (AccountManager) getSystemService(ACCOUNT_SERVICE);
+    accountManager.addAccountExplicitly(newAccount, null, null);
+}
+</code></pre></li>
+<li><p>Now we can store a contact that will have a custom mime type and thus a custom option via which our app can be accessed</p>
+
+<pre><code>public void addContact(String name, String lastName) {
+    ContentResolver resolver = getContentResolver();
+    resolver.delete(ContactsContract.RawContacts.CONTENT_URI, ContactsContract.RawContacts.ACCOUNT_TYPE + " = ?", new String[] { ACCOUNT_TYPE });
+
+    ArrayList&lt;ContentProviderOperation&gt; ops = new ArrayList&lt;ContentProviderOperation&gt;();
+
+    ops.add(ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
+            .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, ACCOUNT_NAME)
+            .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE)
+            .build());
+
+    //Uncomment below code if you want this contact to show up individually as well and not only if it gets matched with another contact
+
+//        ops.add(ContentProviderOperation.newInsert(ContactsContract.Settings.CONTENT_URI)
+//                .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, AccountGeneral.ACCOUNT_NAME)
+//                .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, AccountGeneral.ACCOUNT_TYPE)
+//                .withValue(ContactsContract.Settings.UNGROUPED_VISIBLE, 1)
+//                .build());
+
+    ops.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
+            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+            .withValue(ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, name)
+            .withValue(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME, lastName)
+            .build());
+
+
+    ops.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
+            .withValue(ContactsContract.Data.MIMETYPE, MIMETYPE)
+            .withValue(ContactsContract.Data.DATA1, 12345)
+            .withValue(ContactsContract.Data.DATA2, "Call via my app")
+            .withValue(ContactsContract.Data.DATA3, "Call via my app")
+            .build());
+    try {
+        resolver.applyBatch(ContactsContract.AUTHORITY, ops);
+    }
+    catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+</code></pre></li>
+<li><p>The final step is to create an activity to handle the custom mimetype action - the connection is made via a special intent filter in the manifest</p>
+
+<pre><code>&lt;activity
+    android:name="com.test.customcontact.ViewingActivity"
+    android:screenOrientation="portrait"
+    android:exported="true"&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.intent.action.VIEW" /&gt;
+            &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+            &lt;data android:mimeType="vnd.android.cursor.item/com.sample.call" /&gt;
+        &lt;/intent-filter&gt;
+&lt;/activity&gt;
+</code></pre></li>
+</ol>
+
+<p>Notice that &lt;data android:mimeType is the same as &lt;ContactsDataKind android:mimeType in the contacts.XML </p>
+
+<p>Last but not least the manifest permissions required:</p>
+
+<ol start="10">
+<li><p>Add AndroidManifest.xml permissions</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.WRITE_CONTACTS"/&gt;
+&lt;uses-permission android:name="android.permission.READ_CONTACTS"/&gt;
+&lt;uses-permission android:name="android.permission.READ_PROFILE" /&gt;
+&lt;uses-permission android:name="android.permission.GET_ACCOUNTS" /&gt;
+&lt;uses-permission android:name="android.permission.MANAGE_ACCOUNTS"/&gt;
+&lt;uses-permission android:name="android.permission.AUTHENTICATE_ACCOUNTS"/&gt;
+&lt;uses-permission android:name="android.permission.READ_SYNC_SETTINGS"/&gt;
+&lt;uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS"/&gt;
+</code></pre></li>
+</ol>

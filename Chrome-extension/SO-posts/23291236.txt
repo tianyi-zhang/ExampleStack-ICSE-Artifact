@@ -1,0 +1,231 @@
+<p>The straighforward solution should not be so difficult, but ... notice that there may be <strong>many</strong> objects reachable from a given object....</p>
+
+<p>EDIT based on the comment: </p>
+
+<p>The objects should be separated into softly-, weakly-, phantom- and strongly reachable objects. This is a bit more complicated. One could implement an elegant solution based on graphs manually, but I pragmatically modified the code from the first answer. Note that this has not been tested extensively. </p>
+
+<pre><code>import java.lang.ref.PhantomReference;
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.SoftReference;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+public class AllReachableObjects
+{
+    public static void main(String[] args)
+    {
+        TestObject a = new TestObject("a", null, null, null, null);
+        TestObject as = new TestObject("as", a, null, null, null);
+        TestObject aw = new TestObject("aw", null, a, null, null);
+        TestObject ap = new TestObject("ap", null, null, a, null);
+        TestObject ar = new TestObject("ar", null, null, null, a);
+
+        printInfo(new ReachableObjects(as));
+        printInfo(new ReachableObjects(aw));
+        printInfo(new ReachableObjects(ap));
+        printInfo(new ReachableObjects(ar));
+
+        TestObject asr = new TestObject("as", null, null, null, as);
+        TestObject ars = new TestObject("as", ar, null, null, null);
+
+        printInfo(new ReachableObjects(asr));
+        printInfo(new ReachableObjects(ars));
+
+    }
+
+    private static void printInfo(ReachableObjects r)
+    {
+        System.out.println("Soft");
+        printList(r.getSoftlyReachable());
+        System.out.println("Weak");
+        printList(r.getWeaklyReachable());
+        System.out.println("Phantom");
+        printList(r.getPhantomReachable());
+        System.out.println("Strong");
+        printList(r.getStronglyReachable());
+    }
+
+    private static void printList(List&lt;Object&gt; list)
+    {
+        for (Object object : list)
+        {
+            System.out.println("    "+object+" (class "+object.getClass()+")");
+        }
+    }
+
+
+}
+
+
+class ReachableObjects
+{
+    private static final Field REFERENCE_REFERENT_FIELD =
+        initReferenceReferentField();
+
+    private static Field initReferenceReferentField()
+    {
+        try
+        {
+            return Reference.class.getDeclaredField("referent");
+        }
+        catch (NoSuchFieldException e)
+        {
+            e.printStackTrace();
+        }
+        catch (SecurityException e)
+        {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    private Set&lt;Object&gt; softlyReachable;
+    private Set&lt;Object&gt; weaklyReachable;
+    private Set&lt;Object&gt; phantomReachable;
+    private Set&lt;Object&gt; stronglyReachable;
+
+
+    public ReachableObjects(Object object)
+    {
+        softlyReachable = new LinkedHashSet&lt;Object&gt;();
+        weaklyReachable = new LinkedHashSet&lt;Object&gt;();
+        phantomReachable = new LinkedHashSet&lt;Object&gt;();
+        stronglyReachable = new LinkedHashSet&lt;Object&gt;();
+
+        try
+        {
+            collectAllReachableObjects(object, stronglyReachable, "");
+        }
+        catch (IllegalArgumentException e)
+        {
+            e.printStackTrace();
+        }
+        catch (IllegalAccessException e)
+        {
+            e.printStackTrace();
+        }
+        softlyReachable.removeAll(weaklyReachable);
+        softlyReachable.removeAll(phantomReachable);
+        softlyReachable.removeAll(stronglyReachable);
+
+        weaklyReachable.removeAll(softlyReachable);
+        weaklyReachable.removeAll(phantomReachable);
+        weaklyReachable.removeAll(stronglyReachable);
+
+        phantomReachable.removeAll(softlyReachable);
+        phantomReachable.removeAll(weaklyReachable);
+        phantomReachable.removeAll(stronglyReachable);
+    }
+
+    private void collectAllReachableObjects(
+        Object from, Set&lt;Object&gt; result, String indent) 
+        throws IllegalArgumentException, IllegalAccessException
+    {
+        if (result.contains(from))
+        {
+            return;
+        }
+        result.add(from);
+        Class&lt;?&gt; c = from.getClass();
+        Class&lt;?&gt; leafClass = c;
+        while (c != null)
+        {
+            //System.out.println(indent+"Class "+c);
+
+            Field fields[] = c.getDeclaredFields();
+            for (Field field : fields)
+            {
+                //System.out.println(indent+"Field "+field+" of "+c);
+
+                if (Modifier.isStatic(field.getModifiers()))
+                {
+                    continue;
+                }
+
+                boolean wasAccessible = field.isAccessible();
+                field.setAccessible(true);
+                Object value = field.get(from);
+                if (value != null)
+                {
+                    Set&lt;Object&gt; nextResult = stronglyReachable;
+                    if (field.equals(REFERENCE_REFERENT_FIELD))
+                    {
+                        if (leafClass.equals(SoftReference.class))
+                        {
+                            nextResult = softlyReachable;
+                        }
+                        else if (leafClass.equals(WeakReference.class))
+                        {
+                            nextResult = weaklyReachable;
+                        }
+                        else if (leafClass.equals(PhantomReference.class))
+                        {
+                            nextResult = phantomReachable;
+                        }
+                    }
+                    collectAllReachableObjects(value, nextResult, indent+"  ");
+                }
+                field.setAccessible(wasAccessible);
+            }
+            c = c.getSuperclass();
+        }
+    }
+
+    List&lt;Object&gt; getSoftlyReachable()
+    {
+        return new ArrayList&lt;Object&gt;(softlyReachable);
+    }
+    List&lt;Object&gt; getWeaklyReachable()
+    {
+        return new ArrayList&lt;Object&gt;(weaklyReachable);
+    }
+    List&lt;Object&gt; getPhantomReachable()
+    {
+        return new ArrayList&lt;Object&gt;(phantomReachable);
+    }
+    List&lt;Object&gt; getStronglyReachable()
+    {
+        return new ArrayList&lt;Object&gt;(stronglyReachable);
+    }
+}
+
+
+class TestObject
+{
+    String name;
+    SoftReference&lt;TestObject&gt; softReference;
+    WeakReference&lt;TestObject&gt; weakReference;
+    PhantomReference&lt;TestObject&gt; phantomReference;
+    Object strongReference;
+
+    TestObject(String name, 
+        TestObject soft, TestObject weak, TestObject phantom, TestObject strong)
+    {
+        this.name = name;
+        if (soft != null)
+        {
+            softReference = new SoftReference&lt;TestObject&gt;(soft);
+        }
+        if (weak != null)
+        {
+            weakReference = new WeakReference&lt;TestObject&gt;(weak);
+        }
+        if (phantom != null)
+        {
+            phantomReference = new PhantomReference&lt;TestObject&gt;(phantom, new ReferenceQueue&lt;&gt;());
+        }
+        strongReference = strong;
+    }
+    @Override
+    public String toString()
+    {
+        return name;
+    }
+}
+</code></pre>

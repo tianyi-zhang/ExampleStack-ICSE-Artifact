@@ -1,0 +1,98 @@
+<pre><code>  static KeyPair demo(InputStream pub, InputStream pvt)
+    throws IOException, GeneralSecurityException
+  {
+    KeyFactory f = KeyFactory.getInstance("RSA");
+
+    RSAPublicKeySpec pubspec = decodeRSAPublicSSH(readAllBase64Bytes(pub));
+    RSAPrivateCrtKeySpec pvtspec = decodeRSAPrivatePKCS1(readAllBase64Bytes(pvt));
+
+    return new KeyPair(f.generatePublic(pubspec), f.generatePrivate(pvtspec));
+  }
+
+  static RSAPublicKeySpec decodeRSAPublicSSH(byte[] encoded)
+  {
+    ByteBuffer input = ByteBuffer.wrap(encoded);
+    String type = string(input);
+    if (!"ssh-rsa".equals(type))
+      throw new IllegalArgumentException("Unsupported type");
+    BigInteger exp = sshint(input);
+    BigInteger mod = sshint(input);
+    if (input.hasRemaining())
+      throw new IllegalArgumentException("Excess data");
+    return new RSAPublicKeySpec(mod, exp);
+  }
+
+  static RSAPrivateCrtKeySpec decodeRSAPrivatePKCS1(byte[] encoded)
+  {
+    ByteBuffer input = ByteBuffer.wrap(encoded);
+    if (der(input, 0x30) != input.remaining())
+      throw new IllegalArgumentException("Excess data");
+    if (!BigInteger.ZERO.equals(derint(input)))
+      throw new IllegalArgumentException("Unsupported version");
+    BigInteger n = derint(input);
+    BigInteger e = derint(input);
+    BigInteger d = derint(input);
+    BigInteger p = derint(input);
+    BigInteger q = derint(input);
+    BigInteger ep = derint(input);
+    BigInteger eq = derint(input);
+    BigInteger c = derint(input);
+    return new RSAPrivateCrtKeySpec(n, e, d, p, q, ep, eq, c);
+  }
+
+  private static String string(ByteBuffer buf)
+  {
+    return new String(lenval(buf), Charset.forName("US-ASCII"));
+  }
+
+  private static BigInteger sshint(ByteBuffer buf)
+  {
+    return new BigInteger(+1, lenval(buf));
+  }
+
+  private static byte[] lenval(ByteBuffer buf)
+  {
+    int len = buf.getInt();
+    byte[] copy = new byte[len];
+    buf.get(copy);
+    return copy;
+  }
+
+  private static BigInteger derint(ByteBuffer input)
+  {
+    byte[] value = new byte[der(input, 0x02)];
+    input.get(value);
+    return new BigInteger(+1, value);
+  }
+
+  private static int der(ByteBuffer input, int exp)
+  {
+    int tag = input.get() &amp; 0xFF;
+    if (tag != exp)
+      throw new IllegalArgumentException("Unexpected tag");
+    int n = input.get() &amp; 0xFF;
+    if (n &lt; 128)
+      return n;
+    n &amp;= 0x7F;
+    if ((n &lt; 1) || (n &gt; 2))
+      throw new IllegalArgumentException("Invalid length");
+    int len = 0;
+    while (n-- &gt; 0) {
+      len &lt;&lt;= 8;
+      len |= input.get() &amp; 0xFF;
+    }
+    return len;
+  }
+
+  private static byte[] readAllBase64Bytes(InputStream input)
+  {
+    StringBuilder buf = new StringBuilder();
+    Scanner scanner = new Scanner(input, "US-ASCII");
+    while (scanner.hasNextLine()) {
+      String line = scanner.nextLine().trim();
+      if (!line.startsWith("-----"))
+        buf.append(line);
+    }
+    return DatatypeConverter.parseBase64Binary(buf.toString());
+  }
+</code></pre>

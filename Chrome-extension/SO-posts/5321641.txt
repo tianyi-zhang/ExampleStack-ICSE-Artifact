@@ -1,0 +1,164 @@
+<p>Its not always a good idea to store bitmaps in memory. If you really want to do so then try using SoftReference for your map. <a href="http://stackoverflow.com/questions/1945201/android-image-cache">Check this</a></p>
+
+<p>make your map's value argument as <code>SoftReference&lt;Bitmap&gt;</code>. Then while searching in the map use this code snippet </p>
+
+<pre><code>@SuppressWarnings("unchecked")
+public class DrawableManager {
+
+@SuppressWarnings("rawtypes")
+private final Map&lt;String, SoftReference&lt;Bitmap&gt;&gt; drawableMap;
+
+    @SuppressWarnings("rawtypes")
+    private DrawableManager() {
+        drawableMap = new HashMap&lt;String, SoftReference&lt;Bitmap&gt;&gt;();
+    }
+
+    static private DrawableManager  _instance;
+
+    static public DrawableManager getInstance() {
+        if(_instance == null) {
+            _instance = new DrawableManager();
+        }
+        return _instance;
+    }
+
+    public Bitmap fetchBitmap(final String sURL) {
+        if(sURL.length() == 0)
+            return null;
+        Bitmap bm = null;
+            SoftReference&lt;Bitmap&gt; reference = drawbaleM.get(imagePath);                  
+            if(reference != null) bm = reference.get();
+            if(bm != null) {
+             return bm;
+            }
+
+        byte[] imageData = ThumbImg(sURL);
+
+        if(imageData == null)
+            return null;
+
+        if(imageData.length &gt; 0) {
+            bm =  BitmapFactory.decodeByteArray(imageData, 0, imageData.length);
+            if(bm != null) {
+                drawableMap.put(sURL, bm);
+            }
+            return bm;
+        }
+        else { 
+            return null;
+        }
+    }
+
+    public void fetchBitmapOnThread(final String sURL, final ImageView imageView) {
+        if (drawableMap.containsKey(sURL)) {
+            imageView.setImageBitmap((Bitmap) drawableMap.get(sURL));
+        }
+
+        final Handler handler = new Handler() {
+            @Override
+            public void handleMessage(Message message) {
+                imageView.setImageBitmap((Bitmap) message.obj);
+            }
+        };
+
+        Thread thread = new Thread() {
+            @Override
+            public void run() {
+                Bitmap bitmap = fetchBitmap(sURL);
+                Message message = handler.obtainMessage(1, bitmap);
+                handler.sendMessage(message);
+            }
+        };
+        thread.start();
+    }
+
+
+    @SuppressWarnings("unused")
+    public static byte[] ThumbImg(String imgUrl) 
+    {
+
+        //first check in the cache, if not available then store in the sd card memory
+            HttpURLConnection connection = null;
+            String userAgent = null;
+
+            try
+            {
+                URL url = new URL(imgUrl);
+                connection = ( HttpURLConnection ) url.openConnection();
+                 if(userAgent != null) {
+                     connection.setRequestProperty("User-Agent", userAgent);
+                 }
+                 connection.setConnectTimeout(5000);
+                 connection.setReadTimeout(5000);
+                    int CHUNKSIZE = 8192;        //size of fixed chunks
+                int BUFFERSIZE = 1024;       //size of reading buffer
+
+
+                 int bytesRead = 0;
+                 byte[] buffer = new byte[BUFFERSIZE];   //initialize buffer
+                 byte[] fixedChunk = new byte[CHUNKSIZE]; //initialize 1st chunk
+                 ArrayList&lt;byte[]&gt; BufferChunkList = new ArrayList&lt;byte[]&gt;(); // List of chunk data
+                 int spaceLeft = CHUNKSIZE;
+                 int chunkIndex = 0;
+
+                 DataInputStream in = new DataInputStream(connection.getInputStream() );
+
+                 while( ( bytesRead = in.read( buffer ) ) != -1 ) { //loop until the DataInputStream is completed
+                     if(bytesRead &gt; spaceLeft) {
+                         //copy to end of current chunk
+                         System.arraycopy(buffer, 0, fixedChunk, chunkIndex, spaceLeft);
+                         BufferChunkList.add(fixedChunk);
+
+                         //create a new chunk, and fill in the leftover
+                         fixedChunk = new byte[CHUNKSIZE];
+                         chunkIndex = bytesRead - spaceLeft;
+                         System.arraycopy(buffer, spaceLeft, fixedChunk, 0, chunkIndex);
+                     } else {
+                         //plenty of space, just copy it in
+                         System.arraycopy(buffer, 0, fixedChunk, chunkIndex, bytesRead);
+                         chunkIndex = chunkIndex + bytesRead;
+                     }
+                     spaceLeft = CHUNKSIZE - chunkIndex;
+                 }
+
+                 if (in != null) {
+                     in.close();
+                 }
+
+                 // copy it all into one big array
+                 int responseSize = (BufferChunkList.size() * CHUNKSIZE) + chunkIndex;  
+                 Log.d("response size",""+responseSize);
+                 byte[] responseBody = new byte[responseSize];
+                 int index = 0;
+                 for(byte[] b : BufferChunkList) {
+                     System.arraycopy(b, 0, responseBody, index, CHUNKSIZE);
+                     index = index + CHUNKSIZE;
+                 }
+                 System.arraycopy(fixedChunk, 0, responseBody, index, chunkIndex);
+
+                return responseBody;                     
+
+
+            }catch(SocketTimeoutException se)
+            {
+
+            }
+            catch(Exception e)
+            {
+
+                e.printStackTrace();
+            }finally
+            {
+                if(connection!=null)
+                connection.disconnect();
+            }
+
+        return null;
+    }
+
+}
+</code></pre>
+
+<p>Please note this doesnot guarantee relief from OOM. It is not always a good idea to show large bitmaps. </p>
+
+<p>Another option you can go after is use <a href="http://developer.android.com/reference/android/graphics/BitmapFactory.Options.html#inSampleSize" rel="nofollow">BitmapFactory.Options inSampleSize</a> argument</p>

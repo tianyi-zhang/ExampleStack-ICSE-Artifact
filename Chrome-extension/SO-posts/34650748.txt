@@ -1,0 +1,354 @@
+<p>Using Java Hibernate,  to solve this problem I decided to change the Hibernate-core JAR. I madea a helper class to split an expression in more joins like: <code>... t.column IN (: list_1) OR t.column IN (: list_2) ...</code> , Then I changed AbstractQueryImpl.expandParameterList method  from hibernate to call my method if the collection exceeds the limit. <br/>
+My hibernate-core version is 3.6.10.Final, but it work fine and for 4.x versions - I tested it. <br/>
+My code is tested for next cases:</p>
+
+<pre><code>  where t.id in (:idList)
+  where (t.id in (:idList))
+  where ((t.id) in (:idList))
+  where 1=1 and t.id in (:idList)
+  where 1=1 and (t.id in (:idList))
+  where 1=1 and(t.id) in (:idList)
+  where 1=1 and((t.id) in (:idList))
+  where 1=1 and(t.id in (:idList))
+
+  where t.id not in (:idList)
+  where (t.id not in (:idList))
+  where ((t.id) not in (:idList))
+</code></pre>
+
+<p>AbstractQueryImpl.expandParameterList :</p>
+
+<pre><code>private String expandParameterList(String query, String name, TypedValue typedList, Map namedParamsCopy) {
+    Collection vals = (Collection) typedList.getValue();
+    Type type = typedList.getType();
+
+    boolean isJpaPositionalParam = parameterMetadata.getNamedParameterDescriptor( name ).isJpaStyle();
+    String paramPrefix = isJpaPositionalParam ? "?" : ParserHelper.HQL_VARIABLE_PREFIX;
+    String placeholder =
+            new StringBuffer( paramPrefix.length() + name.length() )
+                    .append( paramPrefix ).append(  name )
+                    .toString();
+
+    if ( query == null ) {
+        return query;
+    }
+    int loc = query.indexOf( placeholder );
+
+    if ( loc &lt; 0 ) {
+        return query;
+    }
+
+    String beforePlaceholder = query.substring( 0, loc );
+    String afterPlaceholder =  query.substring( loc + placeholder.length() );
+
+    // check if placeholder is already immediately enclosed in parentheses
+    // (ignoring whitespace)
+    boolean isEnclosedInParens =
+            StringHelper.getLastNonWhitespaceCharacter( beforePlaceholder ) == '(' &amp;&amp;
+                    StringHelper.getFirstNonWhitespaceCharacter( afterPlaceholder ) == ')';
+
+    if ( vals.size() == 1  &amp;&amp; isEnclosedInParens ) {
+        // short-circuit for performance when only 1 value and the
+        // placeholder is already enclosed in parentheses...
+        namedParamsCopy.put( name, new TypedValue( type, vals.iterator().next(), session.getEntityMode() ) );
+        return query;
+    }
+
+    // *** changes by Vasile Bors for HHH-1123 ***
+    // case vals.size() &gt; 1000
+    if ((vals.size() &gt;= InExpressionExpander.MAX_ALLOWED_PER_INEXPR) &amp;&amp; isEnclosedInParens) {
+
+        InExpressionExpander inExpressionExpander = new InExpressionExpander(beforePlaceholder, afterPlaceholder);
+        if(inExpressionExpander.isValidInOrNotInExpression()){
+
+            List&lt;String&gt; list = new ArrayList&lt;String&gt;( vals.size() );
+            Iterator iter = vals.iterator();
+            int i = 0;
+            String alias;
+            while ( iter.hasNext() ) {
+                alias = ( isJpaPositionalParam ? 'x' + name : name ) + i++ + '_';
+                namedParamsCopy.put( alias, new TypedValue( type, iter.next(), session.getEntityMode() ) );
+                list.add(ParserHelper.HQL_VARIABLE_PREFIX + alias );
+            }
+
+            String expandedExpression = inExpressionExpander.expandExpression(list);
+            if(expandedExpression != null){
+                return expandedExpression;
+            }
+        }
+    }
+    // *** end changes by Vasile Bors for HHH-1123 ***
+
+    StringBuffer list = new StringBuffer(16);
+    Iterator iter = vals.iterator();
+    int i = 0;
+    while (iter.hasNext()) {
+        String alias = (isJpaPositionalParam ? 'x' + name : name) + i++ + '_';
+        namedParamsCopy.put(alias, new TypedValue(type, iter.next(), session.getEntityMode()));
+        list.append(ParserHelper.HQL_VARIABLE_PREFIX).append(alias);
+        if (iter.hasNext()) {
+            list.append(", ");
+        }
+    }
+
+    return StringHelper.replace(
+            beforePlaceholder,
+            afterPlaceholder,
+            placeholder.toString(),
+            list.toString(),
+            true,
+            true
+    );
+}
+</code></pre>
+
+<p>My helper class InExpressionExpander:</p>
+
+<p>package org.hibernate.util;</p>
+
+<pre><code>import org.hibernate.QueryException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Iterator;
+import java.util.List;
+import java.util.Stack;
+
+/**
+ * Utility class for expand Hql and Sql IN expressions with a parameter with more than IN expression limit size (HHH-1123).
+ * &lt;br/&gt;
+ * It work for expression with formats:
+ * &lt;pre&gt;
+ *
+ * where t.id in (:idList)
+ * where (t.id in (:idList))
+ * where ((t.id) in (:idList))
+ * where 1=1 and t.id in (:idList)
+ * where 1=1 and (t.id in (:idList))
+ * where 1=1 and(t.id) in (:idList)
+ * where 1=1 and((t.id) in (:idList))
+ * where 1=1 and(t.id in (:idList))
+ *
+ * where t.id not in (:idList)
+ * where (t.id not in (:idList))
+ * where ((t.id) not in (:idList))
+ * &lt;/pre&gt;
+ * &lt;p/&gt;
+ * Example:
+ * &lt;pre&gt;
+ * select t.id from tableOrEntity t where t.id IN (:idList)
+ * &lt;/pre
+ *
+ * @author Vasile Bors
+ * @since 13/12/2015.
+ */
+public class InExpressionExpander {
+    private static final Logger log = LoggerFactory.getLogger(InExpressionExpander.class);
+
+    public static final  int MAX_ALLOWED_PER_INEXPR = 1000;
+    private static final int MAX_PARAMS_PER_INEXPR  = 500;
+
+    private Stack&lt;String&gt; stackExpr = new Stack&lt;String&gt;();
+    private StringBuilder toWalkQuery;
+
+    private final String beforePlaceholder;
+    private final String afterPlaceholder;
+    private boolean wasChecked         = false;
+    private boolean isEnclosedInParens = false;
+    private boolean isInExpr           = false;
+    private boolean isNotInExpr        = false;
+
+    public InExpressionExpander(String beforePlaceholder, String afterPlaceholder) {
+        this.toWalkQuery = new StringBuilder(beforePlaceholder);
+
+        this.beforePlaceholder = beforePlaceholder;
+        this.afterPlaceholder = afterPlaceholder;
+    }
+
+    public boolean isValidInOrNotInExpression() {
+        if (!wasChecked) {
+            String lastExpr = extractLastExpression();
+            if ("(".equals(lastExpr)) {
+                isEnclosedInParens = true;
+                lastExpr = extractLastExpression();
+            }
+            isInExpr = "in".equalsIgnoreCase(lastExpr);
+        }
+
+        wasChecked = true;
+        return isInExpr;
+    }
+
+    public String expandExpression(List paramList) {
+        if (isValidInOrNotInExpression()) {
+
+            final String lastExpr = extractLastExpression(false);
+
+            if ("not".equalsIgnoreCase(lastExpr)) {
+                isNotInExpr = true;
+                extractLastExpression(); //extract "not" and consume it
+            }
+
+            extractColumnForInExpression();
+
+            StringBuilder exprPrefixBuilder = new StringBuilder();
+            for (int i = stackExpr.size() - 1; i &gt; -1; i--) {
+                exprPrefixBuilder.append(stackExpr.get(i)).append(' ');
+            }
+            if (!isEnclosedInParens) {
+                exprPrefixBuilder.append('(');
+            }
+
+            String expandedExpression = expandInExpression(exprPrefixBuilder, paramList);
+            String beforeExpression = getBeforeExpression();
+            String afterExpression = getAfterExpression();
+
+            String expandedQuery = new StringBuilder(beforeExpression).append(expandedExpression)
+                    .append(afterExpression)
+                    .toString();
+
+            if (log.isDebugEnabled()) {
+                log.debug(
+                        "Query was changed to prevent exception for maximum number of expression in a list. Expanded IN expression query:\n {}",
+                        expandedExpression);
+
+                log.debug("Expanded query:\n {}", expandedQuery);
+            }
+
+            return expandedQuery;
+        }
+
+        log.error("Illegal call of InExpressionExpander.expandExpression() without IN expression.");
+        return null;
+    }
+
+    private String expandInExpression(StringBuilder exprPrefixBuilder, List values) {
+
+        String joinExpr = isNotInExpr ? ") and " : ") or ";
+        StringBuilder expr = new StringBuilder(16);
+        Iterator iter = values.iterator();
+        int i = 0;
+        boolean firstExpr = true;
+        while (iter.hasNext()) {
+            if (firstExpr || i % MAX_PARAMS_PER_INEXPR == 0) {
+                //close previous expression and start new expression
+                if (!firstExpr) {
+                    expr.append(joinExpr);
+                } else {
+                    firstExpr = false;
+                }
+                expr.append(exprPrefixBuilder);
+            } else {
+                expr.append(", ");
+            }
+            expr.append(iter.next());
+            i++;
+        }
+
+        expr.append(')');// close for last in expression
+
+        return expr.toString();
+    }
+
+    /**
+     * Method extract last expression parsed by space from toWalkQuery and remove it from toWalkQuery;&lt;br/&gt;
+     * If expression has brackets it will return al content between brackets and it will add additional space to adjust splitting by space.
+     *
+     * @return last expression from toWalkQuery
+     */
+    private String extractLastExpression() {
+        return extractLastExpression(true);
+    }
+
+    /**
+     * Method extract last expression parsed by space from toWalkQuery, remove it from toWalkQuery if is consume = true;&lt;br/&gt;
+     * If expression has brackets it will return al content between brackets and it will add additional space to adjust splitting by space.
+     *
+     * @param consum if true  the method will extract and remove last expression from toWalkQuery
+     * @return last expression from toWalkQuery
+     */
+    private String extractLastExpression(final boolean consum) {
+        int lastIndex = this.toWalkQuery.length() - 1;
+        String lastExpr;
+        int exprSeparatorIndex = this.toWalkQuery.lastIndexOf(" ");
+        if (lastIndex == exprSeparatorIndex) { //remove last space from the end
+            this.toWalkQuery.delete(exprSeparatorIndex, this.toWalkQuery.length());
+            return extractLastExpression(consum);
+        } else {
+            lastExpr = this.toWalkQuery.substring(exprSeparatorIndex + 1, this.toWalkQuery.length());
+
+            if (lastExpr.length() &gt; 1) {
+                if (lastExpr.endsWith(")")) {
+                    //if parens are closed at the end we need to find where it is open
+                    int opensParens = 0;
+                    int closedParens = 0;
+                    int startExprIndex = -1;
+
+                    char c;
+                    for (int i = lastExpr.length() - 1; i &gt; -1; i--) {
+                        c = lastExpr.charAt(i);
+                        if (c == ')') {
+                            closedParens++;
+                        } else if (c == '(') {
+                            opensParens++;
+                        }
+
+                        if (closedParens == opensParens) {
+                            startExprIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (startExprIndex &gt; -1) {
+                        lastExpr = lastExpr.substring(startExprIndex, lastExpr.length());
+                        exprSeparatorIndex = exprSeparatorIndex + startExprIndex
+                                + 1; // +1 because separator is not space and don't must be deleted
+                    }
+                } else if (lastExpr.contains("(")) {
+                    int parentsIndex = exprSeparatorIndex + lastExpr.indexOf('(') + 1;
+                    this.toWalkQuery.replace(parentsIndex, parentsIndex + 1, " ( ");
+                    return extractLastExpression(consum);
+                }
+            }
+
+            if (consum) {
+                this.toWalkQuery.delete(exprSeparatorIndex, this.toWalkQuery.length());
+            }
+        }
+
+        if (consum) {
+            stackExpr.push(lastExpr);
+        }
+
+        return lastExpr;
+    }
+
+    private String extractColumnForInExpression() {
+        String column = extractLastExpression();
+
+        String beforeColumn = extractLastExpression(false);
+        long pointIndx = beforeColumn.lastIndexOf('.');
+        if (pointIndx &gt; -1) {
+            if (pointIndx == (beforeColumn.length() - 1)) {
+                throw new QueryException(
+                        "Invalid column format: " + beforeColumn + ' ' + column
+                                + " . Remove space from column!");
+            }
+        }
+        return column;
+    }
+
+    private String getBeforeExpression() {
+        return this.toWalkQuery + " (";
+    }
+
+    private String getAfterExpression() {
+        if (StringHelper.getFirstNonWhitespaceCharacter(afterPlaceholder) == ')') {
+            return afterPlaceholder;
+        }
+        return afterPlaceholder + ") ";
+    }
+}
+</code></pre>
+
+<p>I am happy to receive any suggestions for improving this solution.</p>

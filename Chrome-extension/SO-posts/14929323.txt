@@ -1,0 +1,173 @@
+<p>I was able to get this to work and since it is still an open question I will include the complete solution here.</p>
+
+<p>Although the idea of changing the file extension to prevent the compression is nice, but I prefer to copy the <code>srt</code> file from the resources to the app local directory on the device, but anyways for the sake of completeness here is a list of extensions that won't be compressed.</p>
+
+<blockquote>
+  <p>".jpg", ".jpeg", ".png", ".gif", ".wav", ".mp2", ".mp3", ".ogg", ".aac",
+  ".mpg", ".mpeg", ".mid", ".midi", ".smf", ".jet", ".rtttl", ".imy", ".xmf", ".mp4", ".m4a", ".m4v", ".3gp", ".3gpp", ".3g2", ".3gpp2",".amr", ".awb", ".wma", ".wmv"</p>
+</blockquote>
+
+<p>The solution steps are simple:</p>
+
+<ol>
+<li><p>Create a <code>MediaPlayer</code> instance and prepare it by either calling <code>MediaPlayer.create()</code> or <code>player.setDataSource()</code> then <code>player.prepare()</code></p></li>
+<li><p>If the subtitle files does not already exists on the android device, copy it from the resource folder to the device</p></li>
+<li><p>Call <code>player.addTimedTextSource()</code> with the first argument a <code>String</code> that contains the full path of the <em>subtitle file</em> on the device and <code>MediaPlayer.MEDIA_MIMETYPE_TEXT_SUBRIP</code> as the second argument</p></li>
+<li><p>Select the <code>TimedText</code> track by calling <code>player.selectTrack()</code> and pass <code>the index of timedTextType</code> by searching the <code>TrackInfo[]</code> returned from <code>player.getTrackInfo()</code> (I find it usually <code>2</code>)</p></li>
+<li><p>Set up a listener with <code>player.setOnTimedTextListener()</code> and then start playing the media file <code>player.start()</code></p></li>
+</ol>
+
+<p><strong>Here is the complete class:</strong></p>
+
+<p><em>To run this exact class you will need two files under your <code>res/raw</code> folder <code>sub.srt</code> and <code>video.mp4</code> (or whatever extensions). Then define a <code>TextView</code> with the id <code>txtDisplay</code>. Finally your project/device/emulator must support <code>API 16</code></em></p>
+
+<pre><code>public class MainActivity extends Activity implements OnTimedTextListener {
+    private static final String TAG = "TimedTextTest";
+    private TextView txtDisplay;
+    private static Handler handler = new Handler();
+
+    @Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+    txtDisplay = (TextView) findViewById(R.id.txtDisplay);
+    MediaPlayer player = MediaPlayer.create(this, R.raw.video);
+    try {
+        player.addTimedTextSource(getSubtitleFile(R.raw.sub),
+                MediaPlayer.MEDIA_MIMETYPE_TEXT_SUBRIP);
+        int textTrackIndex = findTrackIndexFor(
+                TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT, player.getTrackInfo());
+        if (textTrackIndex &gt;= 0) {
+            player.selectTrack(textTrackIndex);
+        } else {
+            Log.w(TAG, "Cannot find text track!");
+        }
+        player.setOnTimedTextListener(this);
+        player.start();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+private int findTrackIndexFor(int mediaTrackType, TrackInfo[] trackInfo) {
+    int index = -1;
+    for (int i = 0; i &lt; trackInfo.length; i++) {
+        if (trackInfo[i].getTrackType() == mediaTrackType) {
+            return i;
+        }
+    }
+    return index;
+}
+
+private String getSubtitleFile(int resId) {
+    String fileName = getResources().getResourceEntryName(resId);
+    File subtitleFile = getFileStreamPath(fileName);
+    if (subtitleFile.exists()) {
+        Log.d(TAG, "Subtitle already exists");
+        return subtitleFile.getAbsolutePath();
+    }
+    Log.d(TAG, "Subtitle does not exists, copy it from res/raw");
+
+    // Copy the file from the res/raw folder to your app folder on the
+    // device
+    InputStream inputStream = null;
+    OutputStream outputStream = null;
+    try {
+        inputStream = getResources().openRawResource(resId);
+        outputStream = new FileOutputStream(subtitleFile, false);
+        copyFile(inputStream, outputStream);
+        return subtitleFile.getAbsolutePath();
+    } catch (Exception e) {
+        e.printStackTrace();
+    } finally {
+        closeStreams(inputStream, outputStream);
+    }
+    return "";
+}
+
+private void copyFile(InputStream inputStream, OutputStream outputStream)
+        throws IOException {
+    final int BUFFER_SIZE = 1024;
+    byte[] buffer = new byte[BUFFER_SIZE];
+    int length = -1;
+    while ((length = inputStream.read(buffer)) != -1) {
+        outputStream.write(buffer, 0, length);
+    }
+}
+
+// A handy method I use to close all the streams
+private void closeStreams(Closeable... closeables) {
+    if (closeables != null) {
+        for (Closeable stream : closeables) {
+            if (stream != null) {
+                try {
+                    stream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+
+@Override
+public void onTimedText(final MediaPlayer mp, final TimedText text) {
+    if (text != null) {
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                int seconds = mp.getCurrentPosition() / 1000;
+
+                txtDisplay.setText("[" + secondsToDuration(seconds) + "] "
+                        + text.getText());
+            }
+        });
+    }
+}
+
+// To display the seconds in the duration format 00:00:00
+public String secondsToDuration(int seconds) {
+    return String.format("%02d:%02d:%02d", seconds / 3600,
+            (seconds % 3600) / 60, (seconds % 60), Locale.US);
+}
+}
+</code></pre>
+
+<p><strong>And here is the <code>subtitle</code> file I am using as example:</strong></p>
+
+<pre><code>1
+00:00:00,220 --&gt; 00:00:01,215
+First Text Example
+
+2
+00:00:03,148 --&gt; 00:00:05,053
+Second Text Example
+
+3
+00:00:08,004 --&gt; 00:00:09,884
+Third Text Example
+
+4
+00:00:11,300 --&gt; 00:00:12,900
+Fourth Text Example
+
+5
+00:00:15,500 --&gt; 00:00:16,700
+Fifth Text Example
+
+6
+00:00:18,434 --&gt; 00:00:20,434
+Sixth Text Example
+
+7
+00:00:22,600 --&gt; 00:00:23,700
+Last Text Example
+</code></pre>
+
+<p>Here are few screenshots from the test app showing that the <code>TextView</code> is changing automatically (i.e. reading from the subtitle file) as the media file progresses</p>
+
+<p><img src="http://i.stack.imgur.com/kr4mF.png" alt="TimedText Example"></p>
+
+<p><strong>Edit:</strong></p>
+
+<p>Here is the code for <a href="https://github.com/iTech-Developer/TimedTextTest">an example project</a></p>

@@ -1,0 +1,154 @@
+<p>I did not see any issues when I transformed B before A on the Sun 1.6.0&#x5f;15 and 1.5.0&#x5f;17 JREs (I used <a href="http://asm.ow2.org/">ASM</a>). I would double-check the transformation code by running it externally and inspecting the resultant classes (e.g. with javap). I'd also check your classpath configuration to ensure A isn't loaded before your agent for some reason (perhaps check in your premain with <a href="http://java.sun.com/javase/6/docs/api/java/lang/instrument/Instrumentation.html#getAllLoadedClasses%28%29">getAllLoadedClasses</a>).</p>
+
+<p><hr /></p>
+
+<p>EDIT:</p>
+
+<p>If you load class <code>A</code> in your agent like this:</p>
+
+<pre><code>Class.forName("A");
+</code></pre>
+
+<p>...then an exception is thrown:</p>
+
+<pre><code>Exception in thread "main" java.lang.NoSuchMethodError: B.print()V
+</code></pre>
+
+<p>This makes sense - <code>A</code> becomes a dependency of the agent and it would not make sense for the agent to instrument its own code. You'd get an infinite loop that resulted in a stack overflow. Therefore, <code>A</code> is not processed by the <code>ClassFileTransformer</code>.</p>
+
+<p><hr /></p>
+
+<p>For completeness, here is my test code that works without problem. As mentioned, it depends on the ASM library.</p>
+
+<p>The agent:</p>
+
+<pre><code>public class ClassModifierAgent implements ClassFileTransformer {
+
+  public byte[] transform(ClassLoader loader, String className,
+      Class&lt;?&gt; classBeingRedefined, ProtectionDomain protectionDomain,
+      byte[] classfileBuffer) throws IllegalClassFormatException {
+    System.out.println("transform: " + className);
+    if ("A".equals(className)) {
+      return new AModifier().modify(classfileBuffer);
+    }
+    if ("B".equals(className)) {
+      return new BModifier().modify(classfileBuffer);
+    }
+    return classfileBuffer;
+  }
+
+  /** Agent "main" equivalent */
+  public static void premain(String agentArguments,
+      Instrumentation instrumentation) {
+    instrumentation.addTransformer(new ClassModifierAgent());
+  }
+
+}
+</code></pre>
+
+<p>Method injector for <code>A</code>:</p>
+
+<pre><code>public class AModifier extends Modifier {
+
+  @Override
+  protected ClassVisitor createVisitor(ClassVisitor cv) {
+    return new AVisitor(cv);
+  }
+
+  private static class AVisitor extends ClassAdapter {
+
+    public AVisitor(ClassVisitor cv) { super(cv); }
+
+    @Override
+    public void visitEnd() {
+      MethodVisitor mv = cv.visitMethod(Opcodes.ACC_PUBLIC, "print", "()V",
+          null, null);
+      mv.visitCode();
+      mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/System", "out",
+          "Ljava/io/PrintStream;");
+      mv.visitLdcInsn("X");
+      mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/io/PrintStream",
+          "println", "(Ljava/lang/String;)V");
+      mv.visitInsn(Opcodes.RETURN);
+      mv.visitMaxs(2, 1);
+      mv.visitEnd();
+
+      super.visitEnd();
+    }
+
+  }
+
+}
+</code></pre>
+
+<p>Method replacer for <code>B</code>:</p>
+
+<pre><code>public class BModifier extends Modifier {
+
+  @Override
+  protected ClassVisitor createVisitor(ClassVisitor cv) {
+    return new BVisitor(cv);
+  }
+
+  class BVisitor extends ClassAdapter {
+
+    public BVisitor(ClassVisitor cv) { super(cv); }
+
+    @Override
+    public MethodVisitor visitMethod(int access, String name, String desc,
+        String signature, String[] exceptions) {
+      if ("foo".equals(name)) {
+        MethodVisitor mv = cv.visitMethod(Opcodes.ACC_PUBLIC, "foo", "()V",
+            null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "B", "print", "()V");
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        return new EmptyVisitor();
+      } else {
+        return super.visitMethod(access, name, desc, signature, exceptions);
+      }
+    }
+  }
+}
+</code></pre>
+
+<p>Common base code:</p>
+
+<pre><code>public abstract class Modifier {
+
+  protected abstract ClassVisitor createVisitor(ClassVisitor cv);
+
+  public byte[] modify(byte[] data) {
+    ClassReader reader = new ClassReader(data);
+    ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_FRAMES);
+    ClassVisitor visitor = writer;
+    visitor = new CheckClassAdapter(visitor);
+    visitor = createVisitor(visitor);
+    reader.accept(visitor, 0);
+    return writer.toByteArray();
+  }
+
+}
+</code></pre>
+
+<p>For some visible results, I added a <code>System.out.println('X');</code> to <code>A.print()</code>.</p>
+
+<p>When run on this code:</p>
+
+<pre><code>public class MainInstrumented {
+  public static void main(String[] args) {
+    new B().foo();
+  }
+}
+</code></pre>
+
+<p>...it produces this output:</p>
+
+<pre><code>transform: MainInstrumented
+transform: B
+transform: A
+X
+</code></pre>

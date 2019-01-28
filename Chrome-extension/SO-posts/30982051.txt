@@ -1,0 +1,229 @@
+<p>After more than whole work day of experimenting I got working solution. 
+It consists of Logging filter, two wrappers for request and response and registration of Logging filter:</p>
+
+<p>the filter class is:</p>
+
+<pre><code>/**
+ * Http logging filter, which wraps around request and response in
+ * each http call and logs
+ * whole request and response bodies. It is enabled by 
+ * putting this instance into filter chain
+ * by overriding getServletFilters() in  
+ * AbstractAnnotationConfigDispatcherServletInitializer.
+ */
+public class LoggingFilter extends AbstractRequestLoggingFilter {
+
+private static final Logger log = LoggerFactory.getLogger(LoggingFilter.class);
+
+@Override
+protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+        throws ServletException, IOException {
+    long id = System.currentTimeMillis();
+    RequestLoggingWrapper requestLoggingWrapper = new RequestLoggingWrapper(id, request);
+    ResponseLoggingWrapper responseLoggingWrapper = new ResponseLoggingWrapper(id, response);
+    log.debug(id + ": http request " + request.getRequestURI());
+    super.doFilterInternal(requestLoggingWrapper, responseLoggingWrapper, filterChain);
+    log.debug(id + ": http response " + response.getStatus() + " finished in " + (System.currentTimeMillis() - id) + "ms");
+}
+
+@Override
+protected void beforeRequest(HttpServletRequest request, String message) {
+
+}
+
+@Override
+protected void afterRequest(HttpServletRequest request, String message) {
+
+}
+}
+</code></pre>
+
+<p>this class is using stream wrappers, which was suggested by 
+Master Slave and David Ehrmann. </p>
+
+<p>Request wrapper looks like this:</p>
+
+<pre><code>/**
+ * Request logging wrapper using proxy split stream to extract request body
+ */
+public class RequestLoggingWrapper extends HttpServletRequestWrapper {
+private static final Logger log =  LoggerFactory.getLogger(RequestLoggingWrapper.class);
+private final ByteArrayOutputStream bos = new ByteArrayOutputStream();
+private long id;
+
+/**
+ * @param requestId and id which gets logged to output file. It's used to bind request with
+ *                  response
+ * @param request   request from which we want to extract post data
+ */
+public RequestLoggingWrapper(Long requestId, HttpServletRequest request) {
+    super(request);
+    this.id = requestId;
+}
+
+@Override
+public ServletInputStream getInputStream() throws IOException {
+    final ServletInputStream servletInputStream = RequestLoggingWrapper.super.getInputStream();
+    return new ServletInputStream() {
+        private TeeInputStream tee = new TeeInputStream(servletInputStream, bos);
+
+        @Override
+        public int read() throws IOException {
+            return tee.read();
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            return tee.read(b, off, len);
+        }
+
+        @Override
+        public int read(byte[] b) throws IOException {
+            return tee.read(b);
+        }
+
+        @Override
+        public boolean isFinished() {
+            return servletInputStream.isFinished();
+        }
+
+        @Override
+        public boolean isReady() {
+            return servletInputStream.isReady();
+        }
+
+        @Override
+        public void setReadListener(ReadListener readListener) {
+            servletInputStream.setReadListener(readListener);
+        }
+
+        @Override
+        public void close() throws IOException {
+            super.close();
+            // do the logging
+            logRequest();
+        }
+    };
+}
+
+public void logRequest() {
+    log.info(getId() + ": http request " + new String(toByteArray()));
+}
+
+public byte[] toByteArray() {
+    return bos.toByteArray();
+}
+
+public long getId() {
+    return id;
+}
+
+public void setId(long id) {
+    this.id = id;
+}
+}
+</code></pre>
+
+<p>and response wrapper is different only in close/flush method (close doesn't get called)</p>
+
+<pre><code>public class ResponseLoggingWrapper extends HttpServletResponseWrapper {
+private static final Logger log = LoggerFactory.getLogger(ResponseLoggingWrapper.class);
+private final ByteArrayOutputStream bos = new ByteArrayOutputStream();
+private long id;
+
+/**
+ * @param requestId and id which gets logged to output file. It's used to bind response with
+ *                  response (they will have same id, currenttimemilis is used)
+ * @param response  response from which we want to extract stream data
+ */
+public ResponseLoggingWrapper(Long requestId, HttpServletResponse response) {
+    super(response);
+    this.id = requestId;
+}
+
+@Override
+public ServletOutputStream getOutputStream() throws IOException {
+    final ServletOutputStream servletOutputStream = ResponseLoggingWrapper.super.getOutputStream();
+    return new ServletOutputStream() {
+        private TeeOutputStream tee = new TeeOutputStream(servletOutputStream, bos);
+
+        @Override
+        public void write(byte[] b) throws IOException {
+            tee.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            tee.write(b, off, len);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            tee.flush();
+            logRequest();
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            tee.write(b);
+        }
+
+        @Override
+        public boolean isReady() {
+            return servletOutputStream.isReady();
+        }
+
+        @Override
+        public void setWriteListener(WriteListener writeListener) {
+            servletOutputStream.setWriteListener(writeListener);
+        }
+
+
+        @Override
+        public void close() throws IOException {
+            super.close();
+            // do the logging
+            logRequest();
+        }
+    };
+}
+
+public void logRequest() {
+    byte[] toLog = toByteArray();
+    if (toLog != null &amp;&amp; toLog.length &gt; 0)
+        log.info(getId() + ": http response " + new String(toLog));
+}
+
+/**
+ * this method will clear the buffer, so
+ *
+ * @return captured bytes from stream
+ */
+public byte[] toByteArray() {
+    byte[] ret = bos.toByteArray();
+    bos.reset();
+    return ret;
+}
+
+public long getId() {
+    return id;
+}
+
+public void setId(long id) {
+    this.id = id;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>at last LoggingFilter needs to be registered in AbstractAnnotationConfigDispatcherServletInitializer like this:</p>
+
+<pre><code> @Override
+protected Filter[] getServletFilters() {
+    LoggingFilter requestLoggingFilter = new LoggingFilter();
+
+    return new Filter[]{requestLoggingFilter};
+}
+</code></pre>
+
+<p>I know, there is maven lib for this, but I don't want to include whole lib because of small logging utility. It was much harder than I originally thought. I expected to achieve this just by modifying log4j.properties. I still think this should be part of Spring. </p>

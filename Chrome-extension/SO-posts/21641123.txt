@@ -1,0 +1,85 @@
+<p>I think i found a better solution to this problem than snapshotting the current fragment to a bitmap as Luksprog suggested.</p>
+
+<p>The trick is to <strong>hide</strong> the fragment being removed or detached and only after the animations have been completed the fragment is removed or detached in its own fragment transaction.</p>
+
+<p>Imagine we have <code>FragmentA</code> and <code>FragmentB</code>, both with sub fragments. Now when you would normally do:</p>
+
+<pre class="lang-java prettyprint-override"><code>getSupportFragmentManager()
+  .beginTransaction()
+  .setCustomAnimations(anim1, anim2, anim1, anim2)
+  .add(R.id.fragmentHolder, new FragmentB())
+  .remove(fragmentA)    &lt;-------------------------------------------
+  .addToBackStack(null)
+  .commit()
+</code></pre>
+
+<p>Instead you do</p>
+
+<pre class="lang-java prettyprint-override"><code>getSupportFragmentManager()
+  .beginTransaction()
+  .setCustomAnimations(anim1, anim2, anim1, anim2)
+  .add(R.id.fragmentHolder, new FragmentB())
+  .hide(fragmentA)    &lt;---------------------------------------------
+  .addToBackStack(null)
+  .commit()
+
+fragmentA.removeMe = true;
+</code></pre>
+
+<p>Now for the implementation of the Fragment:</p>
+
+<pre class="lang-java prettyprint-override"><code>public class BaseFragment extends Fragment {
+
+    protected Boolean detachMe = false;
+    protected Boolean removeMe = false;
+
+    @Override
+    public Animation onCreateAnimation(int transit, boolean enter, int nextAnim) {
+        if (nextAnim == 0) {
+            if (!enter) {
+                onExit();
+            }
+
+            return null;
+        }
+
+        Animation animation = AnimationUtils.loadAnimation(getActivity(), nextAnim);
+        assert animation != null;
+
+        if (!enter) {
+            animation.setAnimationListener(new Animation.AnimationListener() {
+                @Override
+                public void onAnimationStart(Animation animation) {
+                }
+
+                @Override
+                public void onAnimationEnd(Animation animation) {
+                    onExit();
+                }
+
+                @Override
+                public void onAnimationRepeat(Animation animation) {
+                }
+            });
+        }
+
+        return animation;
+    }
+
+    private void onExit() {
+        if (!detachMe && !removeMe) {
+            return;
+        }
+
+        FragmentTransaction fragmentTransaction = getFragmentManager().beginTransaction();
+        if (detachMe) {
+            fragmentTransaction.detach(this);
+            detachMe = false;
+        } else if (removeMe) {
+            fragmentTransaction.remove(this);
+            removeMe = false;
+        }
+        fragmentTransaction.commit();
+    }
+}
+</code></pre>

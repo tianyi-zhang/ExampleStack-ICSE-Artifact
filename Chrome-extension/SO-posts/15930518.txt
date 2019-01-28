@@ -1,0 +1,849 @@
+<p>I finally got it to work, for the most part. I wasn't keeping the related data for each vertex together well enough so by the time it needed to be rendered, it was all out of order. 
+The parser as of now supports vertices, normals and texture coordinates, although with mildly detailed meshes it hits the maximum heap size and gets stuck in a very long garbage collection loop. I created the suzanne monkey head in Blender, subdivided it once with smoothing and exported that as an OBJ. It did load, but it took about 20 minutes.</p>
+
+<p>Here is the source, I'm sure it will help someone as I could not manage to find code that read an OBJ file and sent it to the graphics card in the form of VBOs, WITH normals and texture coordinates working:</p>
+
+<pre><code>public class OBJToolkit {
+    private static ArrayList&lt;String&gt; parseOBJ(String modelLocation) throws IOException
+    {
+        BufferedReader reader = new BufferedReader(new FileReader(new File(modelLocation)));
+        ArrayList&lt;String&gt; lines = new ArrayList&lt;String&gt;();
+        while(reader.ready())
+        {
+            lines.add(reader.readLine());
+        }
+        reader.close();
+        reader = null;
+        return lines;
+    }
+
+    public static Mesh loadOBJ(String modelLocation) throws FileNotFoundException, IOException
+    {
+        Log.d("OBJToolkit", "Location searched for model: " + modelLocation);
+
+        ArrayList&lt;Vector3f&gt; allVertices = new ArrayList&lt;Vector3f&gt;();
+        ArrayList&lt;Vector2f&gt; allTextureCoords = new ArrayList&lt;Vector2f&gt;();
+        ArrayList&lt;Vector3f&gt; allNormals = new ArrayList&lt;Vector3f&gt;();
+
+        ArrayList&lt;Face&gt; faces = new ArrayList&lt;Face&gt;();
+
+        Mesh mesh = new Mesh();
+
+        ArrayList&lt;String&gt; lines = parseOBJ(modelLocation);
+
+        Log.d("OBJToolkit", "About to read the contents of the model");
+        for (String line : lines)
+        {
+            if (line == null)
+                break;
+
+            if (line.startsWith("v "))
+            {
+                allVertices.add(new Vector3f(Float.valueOf(line.split(" ")[1]), Float.valueOf(line.split(" ")[2]), Float.valueOf(line.split(" ")[3])));
+            }
+
+            if (line.startsWith("vt "))
+            {
+                allTextureCoords.add(new Vector2f(Float.valueOf(line.split(" ")[1]),Float.valueOf(line.split(" ")[2])));
+            }
+
+            if (line.startsWith("vn "))
+            {
+                allNormals.add(new Vector3f(Float.valueOf(line.split(" ")[1]), Float.valueOf(line.split(" ")[2]), Float.valueOf(line.split(" ")[3])));
+            }
+
+            if (line.startsWith("f "))
+            {
+                //Log.d("OBJToolkit", line);
+                Face f = new Face();
+                String[] faceVertexArray = line.split(" ");
+
+                for (int index = 1; index &lt; faceVertexArray.length; index++)
+                {
+                    String[] valueArray = faceVertexArray[index].split("/");
+
+                    if (allTextureCoords.size() &gt; 0)
+                        f.addVertex(new Vertex(allVertices.get(Integer.valueOf(valueArray[0]) - 1), allNormals.get(Integer.valueOf(valueArray[2]) - 1), allTextureCoords.get(Integer.valueOf(valueArray[1]) - 1)));
+                    else
+                        f.addVertex(new Vertex(allVertices.get(Integer.valueOf(valueArray[0]) - 1), allNormals.get(Integer.valueOf(valueArray[2]) - 1), new Vector2f(0, 0)));
+                }
+                faces.add(f);
+            }
+        }
+
+        Log.d("OBJToolkit", "Number of vertices: " + allVertices.size());
+        Log.d("OBJToolkit", "Number of normals: " + allNormals.size());
+        Log.d("OBJToolkit", "Number of texture coords: " + allTextureCoords.size());
+
+        lines = null;
+        allVertices = null;
+        allNormals = null;
+        allTextureCoords = null;
+
+        ArrayList&lt;Vector3f&gt; VBOVertices = new ArrayList&lt;Vector3f&gt;();
+        ArrayList&lt;Vector2f&gt; VBOTextureCoords = new ArrayList&lt;Vector2f&gt;();
+        ArrayList&lt;Vector3f&gt; VBONormals = new ArrayList&lt;Vector3f&gt;();
+        ArrayList&lt;Integer&gt; VBOIndices = new ArrayList&lt;Integer&gt;();
+
+        Log.d("OBJToolkit", "About to reorganize each point of data");
+        int counter = 0;
+        for (Face f : faces)
+        {
+            for (Vertex v : f.vertices)
+            {
+                VBOVertices.add(v.position);
+                VBONormals.add(v.normal);
+                VBOTextureCoords.add(v.textureCoord);
+                VBOIndices.add(counter);
+                counter++;
+            }
+        }
+
+        faces = null;
+
+        mesh.createBuffers(vector3fListToFloatArray(VBOVertices), integerListToShortArray(VBOIndices), null, vector2fListToFloatArray(VBOTextureCoords), vector3fListToFloatArray(VBONormals));
+
+        VBOVertices = null;
+        VBONormals = null;
+        VBOTextureCoords = null;
+        VBOIndices = null;
+        return mesh;
+    }
+
+    public static void printFloatArrayList(ArrayList&lt;Float&gt; list)
+    {
+        String strToPrint = "";
+        for (float value : list)
+        {
+            strToPrint += (value + ", ");
+        }
+        Log.d("OBJToolkit", strToPrint);
+    }
+
+    public static String floatArrayToString(ArrayList&lt;Float&gt; list)
+    {
+        String strToPrint = "";
+        for (float value : list)
+        {
+            strToPrint += (value + ", ");
+        }
+        return strToPrint;
+    }
+
+    public static String vector3fArrayToString(ArrayList&lt;Vector3f&gt; list)
+    {
+        String strToPrint = "";
+        for (Vector3f v : list)
+        {
+            strToPrint += v.x + ", ";
+            strToPrint += v.y + ", ";
+            strToPrint += v.z + ", ";
+        }
+        return strToPrint;
+    }
+
+    public static void printStringArray(String[] list)
+    {
+        String strToPrint = "";
+        for (String s : list)
+        {
+            strToPrint += s + ",";
+        }
+        Log.d("OBJToolkit", strToPrint);
+    }
+
+    public static void printIntegerArrayList(ArrayList&lt;Integer&gt; list)
+    {
+        String strToPrint = "";
+        for (float value : list)
+        {
+            strToPrint += (value + ", ");
+        }
+        Log.d("OBJToolkit", strToPrint);
+    }
+
+    public static float[] floatListToFloatArray(ArrayList&lt;Float&gt; list)
+    {
+        Log.d("OBJToolkit", "Converting ArrayList Float");
+        float[] returnArray = new float[list.size()];
+        int counter = 0;
+        for (Float i : list)
+        {
+            returnArray[counter] = i.floatValue();
+            counter++;
+        }
+        return returnArray;
+    }
+
+    public static short[] integerListToShortArray(ArrayList&lt;Integer&gt; list)
+    {
+        Log.d("OBJToolkit", "Converting ArrayList Integer");
+        short[] returnArray = new short[list.size()];
+        int counter = 0;
+        for (int i : list)
+        {
+            returnArray[counter] = (short)i;
+            counter++;
+        }
+        return returnArray;
+    }
+
+    public static float[] vector3fListToFloatArray(ArrayList&lt;Vector3f&gt; list)
+    {
+        Log.d("OBJToolkit", "Converting ArrayList Vector3f");
+        float[] returnArray = new float[list.size() * 3];
+        int counter = 0;
+        for (Vector3f v : list)
+        {
+            returnArray[counter] = v.x;
+            counter++;
+            returnArray[counter] = v.y;
+            counter++;
+            returnArray[counter] = v.z;
+            counter++;
+        }
+
+        return returnArray;
+    }
+
+    public static float[] vector2fListToFloatArray(ArrayList&lt;Vector2f&gt; list)
+    {
+        Log.d("OBJToolkit", "Converting ArrayList Vector2f");
+        float[] returnArray = new float[list.size() * 2];
+        int counter = 0;
+        for (Vector2f v : list)
+        {
+            returnArray[counter] = v.x;
+            counter++;
+            returnArray[counter] = v.y;
+            counter++;
+        }
+
+        return returnArray;
+    }
+</code></pre>
+
+<p>Vector3f:</p>
+
+<pre><code>public class Vector3f {
+    public float x, y, z;
+
+    public Vector3f()
+    {
+        setTo(0, 0, 0);
+    }
+
+    public Vector3f(float x, float y, float z)
+    {
+        setTo(x, y, z);
+    }
+
+    public void setTo(float x, float y, float z)
+    {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
+
+    public float lengthSquared()
+    {
+        return x*x + y*y + z*z;
+    }
+
+    public float length()
+    {
+        return (float) Math.sqrt(lengthSquared());
+    }
+
+    public Vector3f add(Vector3f v)
+    {
+        return new Vector3f(x + v.x, y + v.y, z + v.z);
+    }
+
+    public Vector3f addAndSet(Vector3f v)
+    {
+        x += v.x;
+        y += v.y;
+        z += v.z;
+        return this;
+    }
+
+    public Vector3f crossProduct(Vector3f v)
+    {
+        return new Vector3f(y * v.z - z * v.y,
+                z * v.x - x * z,
+                x * v.y - y * v.x
+                );
+    }
+
+    public Vector3f negate()
+    {
+        x *= -1;
+        y *= -1;
+        z *= -1;
+        return this;
+    }
+
+    public Vector3f normalize()
+    {
+        float l = length();
+
+        return new Vector3f(x / l, y / l, z / l);
+    }
+
+    public float dotProduct(Vector3f v)
+    {
+        return x * v.x + y * v.y + z * v.z;
+    }
+
+    public float angleBetween(Vector3f v)
+    {
+        float dls = dotProduct(v) / (length() * v.length());
+        if (dls &lt; -1f)
+            dls = -1f;
+        else if (dls &gt; 1.0f)
+            dls = 1.0f;
+        return (float)Math.acos(dls);
+    }
+
+    public Vector3f scale(float scale)
+    {
+        return new Vector3f(x * scale, y * scale, z * scale);
+    }
+
+    public Vector3f scaleAndSet(float scale)
+    {
+        x *= scale;
+        y *= scale;
+        z *= scale;
+        return this;
+    }
+
+
+}
+</code></pre>
+
+<p>Vector2f:</p>
+
+<pre><code>public class Vector2f {
+    public float x, y;
+
+    public Vector2f()
+    {
+        setTo(0, 0);
+    }
+
+    public Vector2f(float x, float y)
+    {
+        setTo(x, y);
+    }
+
+    public void setTo(float x, float y)
+    {
+        this.x = x;
+        this.y = y;
+    }
+
+    public float lengthSquared()
+    {
+        return x * x + y * y;
+    }
+
+    public float length()
+    {
+        return (float) Math.sqrt(lengthSquared());
+    }
+
+    public Vector2f add(float x, float y)
+    {
+        return new Vector2f(this.x + x, this.y + y);
+    }
+
+    public Vector2f addAndSet(float x, float y)
+    {
+        this.x += x;
+        this.y += y;
+        return this;
+    }
+
+    public Vector2f negate()
+    {
+        x *= -1;
+        y *= -1;
+        return this;
+    }
+
+    public Vector2f normalize()
+    {
+        float l = length();
+        return new Vector2f(x / l, y / l);
+    }
+
+    public float dotProduct(Vector2f v)
+    {
+        return x * v.x + y * v.y;
+    }
+
+    public float angleBetween(Vector2f v)
+    {
+        float dls = dotProduct(v) / (length() * v.length());
+        if (dls &lt; -1f)
+            dls = -1f;
+        else if (dls &gt; 1.0f)
+            dls = 1.0f;
+        return (float)Math.acos(dls);
+    }
+
+    public Vector2f scale(float scale)
+    {
+        return new Vector2f(x * scale, y * scale);
+    }
+
+    public Vector2f scaleAndSet(float scale)
+    {
+        x *= scale;
+        y *= scale;
+        return this;
+    }
+}
+</code></pre>
+
+<p>Mesh:</p>
+
+<pre><code>public class Mesh { 
+    Bitmap bitmap = null;
+
+    private FloatBuffer verticesBuffer;
+    private ShortBuffer indicesBuffer;
+    private FloatBuffer normalsBuffer;
+    private int numOfIndices = -1;
+    private float[] rgba = new float[] {1.0f, 1.0f, 1.0f, 1.0f};
+    private FloatBuffer colorBuffer;
+    private FloatBuffer mTextureBuffer;
+    private int mTextureId = -1;
+    private Bitmap mBitmap;
+    private boolean mShouldLoadTexture = false;
+
+    public float x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0;
+
+    public Mesh() {
+
+    }
+
+    public void draw(GL10 gl)
+    {
+        //Log.d("Mesh", "About to render mesh");
+        gl.glFrontFace(GL10.GL_CCW);
+        gl.glEnable(GL10.GL_CULL_FACE);
+        gl.glCullFace(GL10.GL_BACK);
+        gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+        gl.glEnableClientState(GL10.GL_NORMAL_ARRAY);
+        gl.glVertexPointer(3, GL10.GL_FLOAT, 0, verticesBuffer);
+        gl.glNormalPointer(GL10.GL_FLOAT, 0, normalsBuffer);
+        gl.glColor4f(rgba[0], rgba[1], rgba[2], rgba[3]);
+        if (colorBuffer != null)
+        {
+            gl.glEnableClientState(GL10.GL_COLOR_ARRAY);
+            gl.glColorPointer(4, GL10.GL_FLOAT, 0, colorBuffer);
+        }
+
+        if (mShouldLoadTexture)
+        {
+            loadGLTexture(gl);
+            mShouldLoadTexture = false;
+        }
+
+        if (mTextureId != -1 &amp;&amp; mTextureBuffer != null)
+        {
+            gl.glEnable(GL10.GL_TEXTURE_2D);
+            gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+            gl.glTexCoordPointer(2, GL10.GL_FLOAT, 0, mTextureBuffer);
+            gl.glBindTexture(GL10.GL_TEXTURE_2D, mTextureId);
+        }
+
+        gl.glTranslatef(x, y, z);
+        gl.glRotatef(rx, 1, 0, 0);
+        gl.glRotatef(ry, 0, 1, 0);
+        gl.glRotatef(rz, 0, 0, 1);
+        gl.glDrawElements(GL10.GL_TRIANGLES, numOfIndices, GL10.GL_UNSIGNED_SHORT, indicesBuffer);
+        gl.glDisableClientState(GL10.GL_NORMAL_ARRAY);
+        gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+        if (mTextureId != -1 &amp;&amp; mTextureBuffer != null)
+        {
+            gl.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+        }
+        gl.glDisable(GL10.GL_CULL_FACE);
+    }
+
+    public void setTexture(Bitmap bitmap) {
+        this.bitmap = bitmap;
+    }
+
+    public void createBuffers(float[] vertices, short[] indices, float[] colors, float[] textureCoords, float[] normals)
+    {
+        Log.d("MeshCreateBuffers", "Vertices: " + floatArrayToString(vertices));
+        setVertices(vertices);
+        Log.d("MeshCreateBuffers", "Indices: " + shortArrayToString(indices));
+        setIndices(indices);
+        if (colors != null)
+            setColors(colors);
+        if (textureCoords != null)
+            setTextureCoordinates(textureCoords);
+        if (normals != null)
+            setNormals(normals);
+        Log.d("MeshCreateBuffers", "Texture Coors: " + floatArrayToString(textureCoords));
+    }
+
+    public String floatArrayToString(float[] array)
+    {
+        String returnString = "";
+        for (int i = 0; i &lt; array.length; i++)
+        {
+            returnString += ", " + array[i];
+        }
+        if (returnString.length() &gt; 2)
+            return returnString.substring(2);
+        else
+            return returnString;
+    }
+
+    public String shortArrayToString(short[] array)
+    {
+        String returnString = "";
+        for (int i = 0; i &lt; array.length; i++)
+        {
+            returnString += ", " + array[i];
+        }
+        if (returnString.length() &gt; 2)
+            return returnString.substring(2);
+        else
+            return returnString;
+    }
+
+    protected void setVertices(float[] vertices)
+    {
+        ByteBuffer vbb = ByteBuffer.allocateDirect(vertices.length * 4);
+        vbb.order(ByteOrder.nativeOrder());
+        verticesBuffer = vbb.asFloatBuffer();
+        verticesBuffer.put(vertices);
+        verticesBuffer.position(0);
+    }
+
+    protected void setIndices(short[] indices)
+    {
+        ByteBuffer ibb = ByteBuffer.allocateDirect(indices.length * 2);
+        ibb.order(ByteOrder.nativeOrder());
+        indicesBuffer = ibb.asShortBuffer();
+        indicesBuffer.put(indices);
+        indicesBuffer.position(0);
+        numOfIndices = indices.length;
+    }
+
+    protected void setColor(float red, float green, float blue, float alpha)
+    {
+        rgba[0] = red;
+        rgba[1] = green;
+        rgba[2] = blue;
+        rgba[3] = alpha;
+    }
+
+    protected void setColors(float[] colors)
+    {
+        ByteBuffer cbb = ByteBuffer.allocateDirect(colors.length * 4);
+        cbb.order(ByteOrder.nativeOrder());
+        colorBuffer = cbb.asFloatBuffer();
+        colorBuffer.put(colors);
+        colorBuffer.position(0);
+    }
+
+    protected void setTextureCoordinates(float[] textureCoords)
+    {
+        ByteBuffer byteBuf = ByteBuffer.allocateDirect(textureCoords.length * 4);
+        byteBuf.order(ByteOrder.nativeOrder());
+        mTextureBuffer = byteBuf.asFloatBuffer();
+        mTextureBuffer.put(textureCoords);
+        mTextureBuffer.position(0);
+    }
+
+    protected void setNormals(float[] normals)
+    {
+        ByteBuffer byteBuf = ByteBuffer.allocateDirect(normals.length * 4);
+        byteBuf.order(ByteOrder.nativeOrder());
+        normalsBuffer = byteBuf.asFloatBuffer();
+        normalsBuffer.put(normals);
+        normalsBuffer.position(0);
+    }
+
+    public void loadBitmap(Bitmap bitmap)
+    {
+        this.mBitmap = bitmap;
+        mShouldLoadTexture = true;
+    }
+
+    private void loadGLTexture(GL10 gl)
+    {
+        int[] textures = new int[1];
+        gl.glGenTextures(1, textures, 0);
+        mTextureId = textures[0];
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, mTextureId);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_LINEAR);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, GL10.GL_LINEAR);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S, GL10.GL_CLAMP_TO_EDGE);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T, GL10.GL_REPEAT);
+        GLUtils.texImage2D(GL10.GL_TEXTURE_2D, 0, mBitmap, 0);
+    }
+}
+</code></pre>
+
+<p>Face:</p>
+
+<pre><code>public class Face {
+    ArrayList&lt;Vertex&gt; vertices = new ArrayList&lt;Vertex&gt;();
+
+    public Face()
+    {
+
+    }
+
+    public void addVertex(Vertex vertex)
+    {
+        vertices.add(vertex);
+    }
+}
+</code></pre>
+
+<p>Vertex:</p>
+
+<pre><code>public class Vertex {
+    public Vector3f position, normal;
+    public Vector2f textureCoord;
+
+    public Vertex(Vector3f pos, Vector3f norm, Vector2f textCoord)
+    {
+        position = pos;
+        normal = norm;
+        textureCoord = textCoord;
+    }
+}
+</code></pre>
+
+<p>MainActivity:</p>
+
+<pre><code>public class MainActivity extends Activity {
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        this.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        MyGLSurfaceView view = new MyGLSurfaceView(this);
+        OpenGLRenderer renderer = new OpenGLRenderer();
+        view.renderer = renderer;
+        //renderer.plane.loadBitmap(BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher));
+        view.setRenderer(renderer);
+        setContentView(view);
+    }
+}
+
+class MyGLSurfaceView extends GLSurfaceView implements OnGestureListener, OnTouchListener
+{
+    OpenGLRenderer renderer;
+    GestureDetector detector;
+
+    float lastX = 0, lastY = 0;
+
+    float onDown = 0, onUp = 0;
+
+    public MyGLSurfaceView(Context context) {
+        super(context);
+        detector = new GestureDetector(this);
+        setOnTouchListener(this);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent me)
+    {
+        detector.onTouchEvent(me);
+        //Log.d("OBJToolkit", "X: " + me.getX());
+        //Log.d("OBJToolkit", "Y: " + me.getY());
+        return super.onTouchEvent(me);
+    }
+
+    @Override
+    public boolean onTouch(View v, MotionEvent me)
+    {
+        Log.d("OBJToolkit", "Registered onTouch event");
+        Log.d("OBJToolkit", "X: " + me.getX());
+        Log.d("OBJToolkit", "Y: " + me.getY());
+        if (me.getAction() == MotionEvent.ACTION_DOWN)
+        {
+            lastY = me.getY();
+        }
+        else if (me.getAction() == MotionEvent.ACTION_MOVE)
+        {
+            renderer.moveMesh(me.getY() - lastY);
+        }
+        /*
+        if (lastX == 0)
+        {
+            lastX = me.getX();
+        }
+        if (lastY == 0)
+        {
+            lastY = me.getY();
+        }
+        Log.d("OBJToolkit", String.valueOf((me.getY() - lastY) * 0.1f));
+        renderer.moveMesh(me.getY() - lastY);
+        */
+        lastY = me.getY();
+
+        return true;
+    }
+
+    @Override
+    public boolean onDown(MotionEvent e) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onDown Event");
+        return false;
+    }
+
+    @Override
+    public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
+            float velocityY) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onFling Event");
+        return false;
+    }
+
+    @Override
+    public void onLongPress(MotionEvent e) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onLongPress Event");
+
+    }
+
+    @Override
+    public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX,
+            float distanceY) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onScroll Event");
+        return false;
+    }
+
+    @Override
+    public void onShowPress(MotionEvent e) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onShowPress Event");
+    }
+
+    @Override
+    public boolean onSingleTapUp(MotionEvent e) {
+        // TODO Auto-generated method stub
+        //Log.d("OBJToolkit", "Registered onSIngleTapUp Event");
+        return false;
+    }
+
+}
+</code></pre>
+
+<p>OpenGLRenderer:</p>
+
+<pre><code>public class OpenGLRenderer implements Renderer
+{
+    //SmoothColoredSquare smoothSquare = new SmoothColoredSquare();
+    //Cube cube = new Cube(1, 1, 1);
+    public Mesh plane;
+
+    public float meshMoveSpeed = .05f, planePosition = 0f;
+
+    float zNear = 0.01f, zFar = 1000.0f, fieldOfView = 45.0f, size;
+
+    @Override
+    public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+        Log.d(getClass().getName(), "About to attempt to load model");
+        try {
+            plane = OBJToolkit.loadOBJ(Environment.getExternalStorageDirectory().getPath() + "/testModel.obj");
+        } catch (FileNotFoundException e) {
+            // TODO Auto-generated catch block
+            Log.d("FNF", "testModel.obj not found");
+            e.printStackTrace();
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            Log.d("IOE", "testModel.obj not found IOE");
+            e.printStackTrace();
+        }
+        //.z = -7.7f;
+        //plane.rx = -10;
+        gl.glEnable(GL11.GL_DEPTH_TEST);
+        gl.glDepthFunc(GL10.GL_LEQUAL);
+        gl.glMatrixMode(GL11.GL_MODELVIEW);
+        gl.glShadeModel(GL11.GL_SMOOTH);
+        gl.glClearDepthf(1.0f);
+        gl.glEnable(GL11.GL_LIGHTING);
+        gl.glEnable(GL11.GL_LIGHT0);
+        float ambientColor[] = {0.2f, 0.2f, 0.2f, 1.0f};
+        float diffuseColor[] = {0.2f, 0.2f, 0.2f, 1.0f};
+        float lightPosition[] = {-2f, 5f, -2f, 1f};
+        gl.glLightfv(GL11.GL_LIGHT0, GL11.GL_AMBIENT, ambientColor, 0);
+        gl.glLightfv(GL11.GL_LIGHT0, GL11.GL_DIFFUSE, diffuseColor, 0);
+        gl.glLightfv(GL11.GL_LIGHT0, GL11.GL_POSITION, lightPosition, 0);
+        gl.glLoadIdentity();
+        gl.glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
+        gl.glHint(GL11.GL_PERSPECTIVE_CORRECTION_HINT, GL11.GL_NICEST);
+    }
+
+    @Override
+    public void onSurfaceChanged(GL10 gl, int width, int height) {
+        //Reset viewport
+        gl.glViewport(0, 0, width, height);
+        //Select projection matrix
+        gl.glMatrixMode(GL10.GL_PROJECTION);
+        size = (float) (zNear * Math.tan((fieldOfView / 180.0f) * Math.PI) / 2.0f);
+        gl.glFrustumf(-size, size, -size / (width / height), size / (width / height), zNear, zFar);
+        gl.glViewport(0, 0, width, height);
+        //Reset projection matrix
+        gl.glLoadIdentity();
+        //Calculate aspect ratio of window
+        GLU.gluPerspective(gl, 45.0f, (float)width / (float)height, 0.1f, 100.0f);
+        //GLU.gluLookAt(gl, -5f, 2f, 0f, 0f, 0f, 0f, 0f, 1f, 0f);
+        //Select modelview matrix
+        gl.glMatrixMode(GL10.GL_MODELVIEW);
+        //Reset modelview matrix
+        gl.glLoadIdentity();
+    }
+
+    @Override
+    public void onDrawFrame(GL10 gl) {
+        //Clear the screen before drawing
+        gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
+
+        //plane.ry += 2f;
+        //plane.rz += 2f;
+
+        plane.x += meshMoveSpeed;
+        plane.z = planePosition;
+        if (plane.x &gt; 3f)
+        {
+            meshMoveSpeed *= -1;
+        }
+        else if(plane.x &lt; -3f)
+        {
+            meshMoveSpeed *= -1;
+        }
+
+        //Reset the current position held by OpenGL, otherwise the
+        //camera will be pushed farther and farther back every frame
+        gl.glLoadIdentity();
+
+        //Move the camera backwards in order to actually see the face
+        gl.glTranslatef(0, 0f, -15f);
+
+        plane.draw(gl);
+    }
+
+    public void moveMesh(float distance)
+    {
+        planePosition += distance * 0.05f;
+    }
+}
+</code></pre>

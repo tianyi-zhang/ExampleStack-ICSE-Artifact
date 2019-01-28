@@ -1,0 +1,41 @@
+<p>It actually turned out to pretty easy to get the same behaviour as <code>ResourceBundle.getBundle</code>. I've <a href="http://grepcode.com/file/repository.grepcode.com/java/root/jdk/openjdk/8-b132/java/util/ResourceBundle.java#ResourceBundle.getBundleImpl%28java.lang.String%2Cjava.util.Locale%2Cjava.lang.ClassLoader%2Cjava.util.ResourceBundle.Control%29" rel="nofollow">looked at the code</a> and found that the most important part for handling of the locales and filenames is <a href="http://docs.oracle.com/javase/8/docs/api/java/util/ResourceBundle.Control.html" rel="nofollow">ResourceBundle.Control</a>.</p>
+
+<p>So here's a simple method that returns the URL to localized resource (following the same filename scheme as resource bundles) without caching and support for just the current locale:</p>
+
+<pre><code>/** Load localized resource for current locale.
+ * 
+ * @param baseName Basename of the resource. May include a path.
+ * @param suffix File extension of the resource.
+ * @return URL for the localized resource or null if none was found.
+ */
+public static URL getLocalizedResource(String baseName, String suffix) {
+    Locale locale = Locale.getDefault();
+    ResourceBundle.Control control = ResourceBundle.Control.getControl(ResourceBundle.Control.FORMAT_DEFAULT);
+    List&lt;Locale&gt; candidateLocales = control.getCandidateLocales(baseName, locale);
+
+    for (Locale specificLocale : candidateLocales) {
+        String bundleName = control.toBundleName(baseName, specificLocale);
+        String resourceName = control.toResourceName(bundleName, suffix);
+
+        // Replace "Utils" with the name of your class!
+        URL url = Utils.class.getResource(resourceName);
+        if (url != null) {
+            return url;
+        }
+    }
+
+    return null;
+}
+</code></pre>
+
+<p>If someone wants to extend it to support generic locales as an argument: the important part in the <code>ResourceBundle.getBundleImpl</code> implementation is:</p>
+
+<pre><code>for (Locale targetLocale = locale;
+     targetLocale != null;
+     targetLocale = control.getFallbackLocale(baseName, targetLocale)) {
+         List&lt;Locale&gt; candidateLocales = control.getCandidateLocales(baseName, targetLocale);
+         ...
+}
+</code></pre>
+
+<p>The last entry of <code>getCandidateLocales</code> is the empty locale (<code>Locale.ROOT</code>). It should be ignored when the locales since the default resource would then be found in the first <code>for</code> iteration, before the fallback locale is tested.</p>

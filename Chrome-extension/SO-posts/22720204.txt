@@ -1,0 +1,256 @@
+<p>Unfortunately you can't rely on SlidingUpPanelLayout's <code>onInterceptTouchEvent</code> method for the aforementioned reasons. Once a child view's <code>onTouchEvent</code> method returns <code>true</code>, <code>onInterceptTouchEvent</code> is no longer called.</p>
+
+<p>My solution is a bit convoluted, but it allows you to achieve exactly what (I think) you're looking for. A single touch/drag event will drag the panel into place and, once in place, continue scrolling the child view. Likewise when dragging down, a single touch/drag event can scroll the child view and, once completely scrolled, will begin dragging the panel down.</p>
+
+<p><strong>Updated 2015-04-12</strong> Updated to version 3.0.0 of the SlidingUpPanelLayout code. Also accounting for ListViews instead of just ScrollViews.</p>
+
+<p><strong>1)</strong>
+In the <code>res/</code> folder of SlidingUpPanel's library project, open the <code>attrs.xml</code> and add</p>
+
+<pre><code>&lt;attr name="scrollView" format="reference" /&gt;
+</code></pre>
+
+<p>You'll use this to identify a single child view that will usurp the touch event once the panel has been dragged into position. In your layout xml file, you can then add</p>
+
+<pre><code>sothree:scrollView="@+id/myScrollView"
+</code></pre>
+
+<p>Or whatever the ID of your scrollView is. Also make sure that you do not declare a <code>sothree:dragView</code> ID, so the entire view is draggable.</p>
+
+<p>The rest of the steps are all done within <code>SlidingUpPanelLayout.java</code>...</p>
+
+<p><strong>2)</strong>
+Declare the following variables:</p>
+
+<pre><code>View mScrollView;
+int mScrollViewResId = -1;
+boolean isChildHandlingTouch = false;
+float mPrevMotionX;
+float mPrevMotionY;
+</code></pre>
+
+<p><strong>3)</strong> In the constructor, just after <code>mDragViewResId</code> is set, add the following line:</p>
+
+<pre><code>mScrollViewResId = ta.getResourceId(R.styleable.SlidingUpPanelLayout_scrollView, -1);
+</code></pre>
+
+<p><strong>4)</strong>
+In <code>onFinishInflate</code>, add the following code:</p>
+
+<pre><code>if (mScrollViewResId != -1) {
+    mScrollView = findViewById(mScrollViewResId);
+}
+</code></pre>
+
+<p><strong>5)</strong>
+Add the following method:</p>
+
+<pre><code>private boolean isScrollViewUnder(int x, int y) {
+    if (mScrollView == null)
+        return false;
+
+    int[] viewLocation = new int[2];
+    mScrollView.getLocationOnScreen(viewLocation);
+    int[] parentLocation = new int[2];
+    this.getLocationOnScreen(parentLocation);
+    int screenX = parentLocation[0] + x;
+    int screenY = parentLocation[1] + y;
+    return screenX &gt;= viewLocation[0] &amp;&amp; 
+           screenX &lt; viewLocation[0] + mScrollView.getWidth() &amp;&amp; 
+           screenY &gt;= viewLocation[1] &amp;&amp; 
+           screenY &lt; viewLocation[1] + mScrollView.getHeight();
+}
+</code></pre>
+
+<p><strong>6)</strong>
+Remove <code>onInterceptTouchEvent</code>.</p>
+
+<p><strong>7)</strong>
+Modify <code>onTouchEvent</code> to the following:</p>
+
+<pre><code>public boolean onTouchEvent(MotionEvent ev) {
+    if (!isEnabled() || !isTouchEnabled()) {
+        return super.onTouchEvent(ev);
+    }
+    try {
+        mDragHelper.processTouchEvent(ev);
+
+        final int action = ev.getAction();
+        boolean wantTouchEvents = false;
+
+        switch (action &amp; MotionEventCompat.ACTION_MASK) {
+            case MotionEvent.ACTION_UP: {
+                final float x = ev.getX();
+                final float y = ev.getY();
+                final float dx = x - mInitialMotionX;
+                final float dy = y - mInitialMotionY;
+                final int slop = mDragHelper.getTouchSlop();
+                View dragView = mDragView != null ? mDragView : mSlideableView;
+
+                if (dx * dx + dy * dy &lt; slop * slop &amp;&amp;
+                        isDragViewUnder((int) x, (int) y) &amp;&amp;
+                        !isScrollViewUnder((int) x, (int) y)) {
+                    dragView.playSoundEffect(SoundEffectConstants.CLICK);
+
+                    if ((PanelState.EXPANDED != mSlideState) &amp;&amp; (PanelState.ANCHORED != mSlideState)) {
+                        setPanelState(PanelState.ANCHORED);
+                    } else {
+                        setPanelState(PanelState.COLLAPSED);
+                    }
+                    break;
+                }
+                break;
+            }
+        }
+
+        return wantTouchEvents;
+    } catch (Exception ex) {
+        ex.printStackTrace();
+        return false;
+    }
+}
+</code></pre>
+
+<p><strong>8)</strong>
+Add the following method:</p>
+
+<pre><code>@Override
+public boolean dispatchTouchEvent(MotionEvent ev) {
+    // Identify if we want to handle the touch event in this class.
+    // We do this here because we want to be able to handle the case
+    // where a child begins handling a touch event, but then the
+    // parent takes over. If we rely on onInterceptTouchEvent, we
+    // lose control of the touch as soon as the child handles the event.
+    if (mScrollView == null)
+        return super.dispatchTouchEvent(ev);
+
+    final int action = MotionEventCompat.getActionMasked(ev);
+
+    final float x = ev.getX();
+    final float y = ev.getY();
+
+    if (action == MotionEvent.ACTION_DOWN) {
+        // Go ahead and have the drag helper attempt to intercept
+        // the touch event. If it won't be dragging, we'll cancel it later.
+        mDragHelper.shouldInterceptTouchEvent(ev);
+
+        mInitialMotionX = mPrevMotionX = x;
+        mInitialMotionY = mPrevMotionY = y;
+
+        isChildHandlingTouch = false;
+    } else if (action == MotionEvent.ACTION_MOVE) {
+        float dx = x - mPrevMotionX;
+        float dy = y - mPrevMotionY;
+        mPrevMotionX = x;
+        mPrevMotionY = y;
+
+        // If the scroll view isn't under the touch, pass the
+        // event along to the dragView.
+        if (!isScrollViewUnder((int) x, (int) y))
+            return this.onTouchEvent(ev);
+
+        // Which direction (up or down) is the drag moving?
+        if (dy &gt; 0) { // DOWN
+            // Is the child less than fully scrolled?
+            // Then let the child handle it.
+            if (isScrollViewScrolling()) {
+                isChildHandlingTouch = true;
+                return super.dispatchTouchEvent(ev);
+            }
+
+            // Was the child handling the touch previously?
+            // Then we need to rejigger things so that the
+            // drag panel gets a proper down event.
+            if (isChildHandlingTouch) {
+                // Send an 'UP' event to the child.
+                MotionEvent up = MotionEvent.obtain(ev);
+                up.setAction(MotionEvent.ACTION_UP);
+                super.dispatchTouchEvent(up);
+                up.recycle();
+
+                // Send a 'DOWN' event to the panel. (We'll cheat
+                // and hijack this one)
+                ev.setAction(MotionEvent.ACTION_DOWN);
+            }
+
+            isChildHandlingTouch = false;
+            return this.onTouchEvent(ev);
+        } else if (dy &lt; 0) { // UP
+            // Is the panel less than fully expanded?
+            // Then we'll handle the drag here.
+            if (mSlideOffset &lt; 1.0f) {
+                isChildHandlingTouch = false;
+                return this.onTouchEvent(ev);
+            }
+
+            // Was the panel handling the touch previously?
+            // Then we need to rejigger things so that the
+            // child gets a proper down event.
+            if (!isChildHandlingTouch) {
+                mDragHelper.cancel();
+                ev.setAction(MotionEvent.ACTION_DOWN);
+            }
+
+            isChildHandlingTouch = true;
+            return super.dispatchTouchEvent(ev);
+        }
+    } else if ((action == MotionEvent.ACTION_CANCEL) ||
+            (action == MotionEvent.ACTION_UP)) {
+        if (!isChildHandlingTouch) {
+            final float dx = x - mInitialMotionX;
+            final float dy = y - mInitialMotionY;
+            final int slop = mDragHelper.getTouchSlop();
+
+            if ((mIsUsingDragViewTouchEvents) &amp;&amp; (dx * dx + dy * dy &lt; slop * slop))
+                return super.dispatchTouchEvent(ev);
+
+            return this.onTouchEvent(ev);
+        }
+    }
+
+    // In all other cases, just let the default behavior take over.
+    return super.dispatchTouchEvent(ev);
+}
+</code></pre>
+
+<p><strong>9)</strong> Add the following method to determine whether the scrollView is still scrolling. Handles cases for both ScrollView and ListView:</p>
+
+<pre><code>/**
+ * Computes the scroll position of the the scrollView, if set.
+ * @return
+ */
+private boolean isScrollViewScrolling() {
+    if (mScrollView == null)
+        return false;
+
+    // ScrollViews are scrolling when getScrollY() is a value greater than 0.
+    if (mScrollView instanceof ScrollView) {
+        return (mScrollView.getScrollY() &gt; 0);
+    }
+    // ListViews are scrolling if the first child is not displayed, or if the first child has an offset &gt; 0
+    else if (mScrollView instanceof ListView) {
+        ListView lv = (ListView) mScrollView;
+
+        if (lv.getFirstVisiblePosition() &gt; 0)
+            return true;
+
+        View v = lv.getChildAt(0);
+        int top = (v == null) ? (0) : (-v.getTop() + lv.getFirstVisiblePosition() * lv.getHeight());
+        return top &gt; 0;
+    }
+
+    return false;
+}
+</code></pre>
+
+<p><strong>10)</strong> (Optional) Add the following method to allow you to set the scrollView at runtime (i.e. You want to put a fragment in the panel, and the fragment's child has a ScrollView/ListView you want to scroll):</p>
+
+<pre><code>public void setScrollView(View scrollView) {
+    mScrollView = scrollView;
+}
+</code></pre>
+
+<p>We're now completely managing the handling of the touch event from within this class. If we're dragging the panel up and it slides fully into place, we cancel the drag and then spoof a new touch in the <code>mScrollView</code> child. If we're scrolling the child and reach the top, we spoof an "up" event in the child and spoof a new touch for the drag. This also allows tap events on other child widgets.</p>
+
+<p><strong>Known Issues</strong>
+The "up"/"down" events that we're spoofing can unintentionally trigger a click event on a child element of the scrollView.</p>

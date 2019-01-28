@@ -1,0 +1,345 @@
+<p>This is a class that can be use to make call to webservice called WebService.java</p>
+
+<pre><code>package com.blessan;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.SocketTimeoutException;
+import java.net.URLEncoder;
+import java.util.ArrayList;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.conn.ConnectTimeoutException;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.params.HttpConnectionParams;
+import org.apache.http.params.HttpParams;
+import org.apache.http.protocol.HTTP;
+
+public class WebService {
+
+    private ArrayList &lt;NameValuePair&gt; params;
+    private ArrayList &lt;NameValuePair&gt; headers;
+
+    private String url;
+
+    private int responseCode;
+    private String message;
+
+    private String response;
+
+    public enum RequestMethod
+    {
+        GET,POST
+    }
+
+    public String getResponse() {
+        return response;
+    }
+
+    public String getErrorMessage() {
+        return message;
+    }
+
+    public int getResponseCode() {
+        return responseCode;
+    }
+
+    public WebService(String url)
+    {
+        this.url = url;
+        params = new ArrayList&lt;NameValuePair&gt;();
+        headers = new ArrayList&lt;NameValuePair&gt;();
+    }
+
+    public void AddParam(String name, String value)
+    {
+        params.add(new BasicNameValuePair(name, value));
+    }
+
+    public void AddHeader(String name, String value)
+    {
+        headers.add(new BasicNameValuePair(name, value));
+    }
+
+    public void Execute(RequestMethod method) throws Exception
+    {
+        switch(method) {
+            case GET:
+            {
+                //add parameters
+                String combinedParams = "";
+                if(!params.isEmpty()){
+                    combinedParams += "?";
+                    for(NameValuePair p : params)
+                    {
+                        String paramString = p.getName() + "=" + URLEncoder.encode(p.getValue(),"UTF-8");
+                        if(combinedParams.length() &gt; 1)
+                        {
+                            combinedParams  +=  "&amp;" + paramString;
+                        }
+                        else
+                        {
+                            combinedParams += paramString;
+                        }
+                    }
+                }
+
+                HttpGet request = new HttpGet(url + combinedParams);
+
+                //add headers
+                for(NameValuePair h : headers)
+                {
+                    request.addHeader(h.getName(), h.getValue());
+                }
+
+                executeRequest(request, url);
+                break;
+            }
+            case POST:
+            {
+                HttpPost request = new HttpPost(url);
+
+                //add headers
+                for(NameValuePair h : headers)
+                {   
+                    request.addHeader(h.getName(), h.getValue());
+                }
+
+                if(!params.isEmpty()){
+                    request.setEntity(new UrlEncodedFormEntity(params, HTTP.UTF_8));
+                }
+
+                executeRequest(request, url);
+                break;
+            }
+        }
+    }
+
+    private void executeRequest(HttpUriRequest request, String url) throws SocketTimeoutException, ConnectTimeoutException
+    {
+        HttpClient client = new DefaultHttpClient();
+        HttpParams params = client.getParams();
+        HttpConnectionParams.setConnectionTimeout(params, 10000);
+        HttpConnectionParams.setSoTimeout(params, 10000);
+        HttpResponse httpResponse;
+
+        try {
+            httpResponse = client.execute(request);
+            responseCode = httpResponse.getStatusLine().getStatusCode();
+            message = httpResponse.getStatusLine().getReasonPhrase();
+
+            HttpEntity entity = httpResponse.getEntity();
+
+            if (entity != null) {
+
+                InputStream instream = entity.getContent();
+                response = convertStreamToString(instream);
+
+                // Closing the input stream will trigger connection release
+                instream.close();
+            }
+
+        } catch (ClientProtocolException e)  {
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+        } catch(SocketTimeoutException e){
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+            throw new SocketTimeoutException();
+        } catch(ConnectTimeoutException e){
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+            throw new ConnectTimeoutException();
+        } catch (IOException e) {
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+        } catch (Exception e){
+            client.getConnectionManager().shutdown();
+            e.printStackTrace();
+        }
+    }
+
+    private static String convertStreamToString(InputStream is) {
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+        StringBuilder sb = new StringBuilder();
+
+        String line = null;
+        try {
+            while ((line = reader.readLine()) != null) {
+                sb.append(line + "\n");
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                is.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return sb.toString();
+    }
+}
+</code></pre>
+
+<p>This is how you use it from your activity</p>
+
+<pre><code>WebService webClient = new WebService(Constants.REQUEST_URL);
+        webClient.AddParam("method", "getUserLogin");
+        webClient.AddParam("key", Constants.REQUEST_KEY);
+        webClient.AddParam("xml_content","&lt;Request&gt;"+
+                                             "&lt;Authentication&gt;"+
+                                                 "&lt;Username&gt;"+StringEscapeUtils.escapeXml(userName.getText().toString().trim())+"&lt;/Username&gt;"+
+                                                 "&lt;Password&gt;"+StringEscapeUtils.escapeXml(passWord.getText().toString().trim())+"&lt;/Password&gt;"+
+                                                 "&lt;AccountID&gt;"+appContext.getCurrentAccount().accId+"&lt;/AccountID&gt;"+
+                                             "&lt;/Authentication&gt;"+
+                                             appContext.getDeviceInfo()+
+                                         "&lt;/Request&gt;");
+
+        try {           
+            webClient.Execute(WebService.RequestMethod.POST);
+            String response = webClient.getResponse();
+            SAXParserFactory spf = SAXParserFactory.newInstance();
+            SAXParser sp = spf.newSAXParser();
+            XMLReader xr = sp.getXMLReader();
+            GetUserLoginHandler getUserLoginHandler = new GetUserLoginHandler();
+            xr.setContentHandler(getUserLoginHandler);            
+            InputSource input = new InputSource(new StringReader(response));
+            xr.parse(input);           
+
+            serverResponse = getUserLoginHandler.getResults();
+            handler.sendEmptyMessage(0);
+        } catch(SocketTimeoutException e){
+            errorHandler.sendEmptyMessage(0);
+        } catch(ConnectTimeoutException e){
+            errorHandler.sendEmptyMessage(0);
+        } catch (Exception e) {
+            if(e.toString().indexOf("ExpatParser$ParseException") != -1){
+                errorHandler.sendEmptyMessage(1);   
+            } else {    
+                errorHandler.sendEmptyMessage(0);
+            }
+        }
+</code></pre>
+
+<p>The GetUserLoginHandler is a handler used to parse the response for this request.</p>
+
+<pre><code>package com.blessan;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import org.xml.sax.Attributes;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+
+public class GetUserLoginHandler extends DefaultHandler {
+    private boolean in_statuscode    = false;
+    private boolean in_statusmessage = false;
+    private boolean in_userid        = false;
+    private boolean in_username      = false;
+    private boolean in_accountaccess = false;
+    private boolean in_clockstatus   = false;
+    private boolean in_timestamp     = false;
+    private boolean in_depttransfer  = false;
+    private boolean in_currdeptid    = false;
+    private boolean in_currdeptname  = false;
+    private Map&lt;String, String&gt; results         =   new HashMap&lt;String, String&gt;();
+
+    @Override
+    public void endDocument() throws SAXException {
+    }
+
+    @Override
+    public void startElement(String namespaceURI, String localName,String qName, Attributes atts) throws SAXException {
+        if (localName.equals("StatusCode")) {
+            this.in_statuscode    = true;
+        } else if (localName.equals("StatusMessage")) {
+            this.in_statusmessage = true;
+        } else if (localName.equals("UserId")) {
+            this.in_userid        = true;
+        } else if (localName.equals("UserName")) {
+            this.in_username      = true;
+        } else if (localName.equals("AccountAccess")) {
+            this.in_accountaccess = true;
+        } else if (localName.equals("ClockStatus")) {
+            this.in_clockstatus   = true;
+        } else if (localName.equals("Timestamp")) {
+            this.in_timestamp     = true;
+        } else if (localName.equals("DepartmentTransfer")) {
+            this.in_depttransfer  = true;
+        } else if (localName.equals("CurrentDepartmentID")) {
+            this.in_currdeptid    = true;
+        } else if (localName.equals("CurrentDepartmentName")) {
+            this.in_currdeptname  = true;
+        }
+    }
+
+    @Override
+    public void endElement(String namespaceURI, String localName, String qName) throws SAXException {
+        if (localName.equals("StatusCode")) {
+            this.in_statuscode    = false;
+        } else if (localName.equals("StatusMessage")) {
+            this.in_statusmessage = false;
+        } else if (localName.equals("UserId")) {
+            this.in_userid        = false;
+        } else if (localName.equals("UserName")) {
+            this.in_username      = false;
+        } else if (localName.equals("AccountAccess")) {
+            this.in_accountaccess = false;
+        } else if (localName.equals("ClockStatus")) {
+            this.in_clockstatus   = false;
+        } else if (localName.equals("Timestamp")) {
+            this.in_timestamp     = false;
+        } else if (localName.equals("DepartmentTransfer")) {
+            this.in_depttransfer  = false;
+        } else if (localName.equals("CurrentDepartmentID")) {
+            this.in_currdeptid    = false;
+        } else if (localName.equals("CurrentDepartmentName")) {
+            this.in_currdeptname  = false;
+        }
+    }
+
+    @Override
+    public void characters(char ch[], int start, int length) {
+        if (this.in_statuscode) {
+            results.put("StatusCode", new String(ch, start, length));
+        } if (this.in_statusmessage) {
+            results.put("StatusMessage", new String(ch, start, length));
+        } if (this.in_userid) {
+            results.put("UserId", new String(ch, start, length));
+        } if (this.in_username) {
+            results.put("UserName", new String(ch, start, length));
+        } if (this.in_accountaccess) {
+            results.put("AccountAccess", new String(ch, start, length));
+        } if (this.in_clockstatus) {
+            results.put("ClockStatus", new String(ch, start, length));
+        } if (this.in_timestamp) {
+            results.put("Timestamp", new String(ch, start, length));
+        } if (this.in_depttransfer) {
+            results.put("DepartmentTransfer", new String(ch, start, length));
+        } if (this.in_currdeptid) {
+            results.put("CurrentDepartmentID", new String(ch, start, length));
+        } if (this.in_currdeptname) {
+            results.put("CurrentDepartmentName", new String(ch, start, length));
+        }
+    }
+
+    public Map&lt;String, String&gt; getResults(){
+        return results;
+    }
+}
+</code></pre>
+
+<p>This is just an example. There are many tutorials explaining SAX parsing in detail.</p>

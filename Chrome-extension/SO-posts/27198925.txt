@@ -1,0 +1,173 @@
+<p><s>To extend Muzikant's Solution #2, can someone please try the solution below on an Android 5.0 rooted device (as I currently do not possess one) and let me know if it works or does not work.</p>
+
+<p>To enable or disable mobile data, try:</p>
+
+<pre><code>// 1: Enable; 0: Disable
+su -c settings put global mobile_data 1
+su -c am broadcast -a android.intent.action.ANY_DATA_STATE --ez state 1
+</code></pre>
+
+<p>Note: The <code>mobile_data</code> variable can be found in Android API 21 source codes at <code>/android-sdk/sources/android-21/android/provider/Settings.java</code> and is declared as:</p>
+
+<pre><code>/**
+ * Whether mobile data connections are allowed by the user.  See
+ * ConnectivityManager for more info.
+ * @hide
+*/
+public static final String MOBILE_DATA = "mobile_data";
+</code></pre>
+
+<p>While the <code>android.intent.action.ANY_DATA_STATE</code> Intent can be found in Android API 21 source codes at <code>/android-sdk/sources/android-21/com/android/internal/telephony/TelephonyIntents.java</code> and is declared as:</p>
+
+<pre><code>/**
+ * Broadcast Action: The data connection state has changed for any one of the
+ * phone's mobile data connections (eg, default, MMS or GPS specific connection).
+ *
+ * &lt;p class="note"&gt;
+ * Requires the READ_PHONE_STATE permission.
+ * &lt;p class="note"&gt;This is a protected intent that can only be sent by the system.
+ *
+ */
+public static final String ACTION_ANY_DATA_CONNECTION_STATE_CHANGED
+        = "android.intent.action.ANY_DATA_STATE";
+</code></pre>
+
+<p><strong>UPDATE 1</strong>: If you don't want to implement the above Java codes in your Android application, then you can run the <code>su</code> commands via a shell (Linux) or command prompt (Windows) as follow:</p>
+
+<pre><code>adb shell "su -c 'settings put global mobile_data 1; am broadcast -a android.intent.action.ANY_DATA_STATE --ez state 1'"
+</code></pre>
+
+<p><em>Note: <code>adb</code> is located at <code>/android-sdk/platform-tools/</code> directory. The <code>settings</code> command is only supported on Android 4.2 or later. Older Android version will report a <code>"sh: settings: not found"</code> error.</em></p>
+
+<p><strong>UPDATE 2</strong>: Another way to toggle mobile network on a <strong>rooted</strong> Android 5+ device would be to use the undocumented <code>service</code> shell command. The following command can be executed via ADB to toggle mobile network:</p>
+
+<pre><code>// 1: Enable; 0: Disable
+adb shell "su -c 'service call phone 83 i32 1'"
+</code></pre>
+
+<p>Or just:</p>
+
+<pre><code>// 1: Enable; 0: Disable
+adb shell service call phone 83 i32 1
+</code></pre>
+
+<p><strong>Note 1</strong>: The transaction code <strong>83</strong> used in the <code>service call phone</code> command might change between Android versions. Please check <code>com.android.internal.telephony.ITelephony</code> for the value of the  <code>TRANSACTION_setDataEnabled</code> field for your version of Android. Also, instead of hardcoding <strong>83</strong>, you would be better off using Reflection to get the value of the <code>TRANSACTION_setDataEnabled</code> field. This way, it will work across all mobile brands running Android 5+ (If you don't know how to use Reflection to get the value of the <code>TRANSACTION_setDataEnabled</code> field, see solution from PhongLe below- save me from duplicating it here.) <em><strong>Important</strong>: Please note that transaction code <code>TRANSACTION_setDataEnabled</code> has only been introduced in Android 5.0 and later versions. Running this transaction code on earlier versions of Android will do nothing as the transaction code <code>TRANSACTION_setDataEnabled</code> does not exist.</em></p>
+
+<p><strong>Note 2</strong>: <code>adb</code> is located at <code>/android-sdk/platform-tools/</code> directory. If you do not wish to use ADB, execute the method via <code>su</code> in your app.</s></p>
+
+<p><strong>Note 3</strong>: See UPDATE 3 below.</p>
+
+<p><strong>UPDATE 3</strong>: Many Android developers have emailed me questions regarding switching mobile network on/off for Android 5+, but instead of answering individual emails, I'll post my answer here so everyone can use it and adapt it for their Android apps.</p>
+
+<p>First thing first, let's clear up some misconception and misunderstanding regarding:</p>
+
+<pre><code>svc data enable
+svc data disable
+</code></pre>
+
+<p>The above methods would only turn background data on/off, <strong>not</strong> the subscription service, so the battery will drain a fair bit since the subscription service- an Android system service- will still be running in the background. For Android devices supporting multiple sim cards, this scenario is worse as the subscription service constantly scans for available mobile network(s) to use with the active SIM cards available in the Android device. Use this method at your own risk.</p>
+
+<p>Now, the proper way to switch off mobile network, including its corresponding subscription service via the <a href="https://developer.android.com/reference/android/telephony/SubscriptionManager.html"><code>SubscriptionManager</code></a> class introduced in API 22, is:</p>
+
+<pre><code>public static void setMobileNetworkfromLollipop(Context context) throws Exception {
+    String command = null;
+    int state = 0;
+    try {
+        // Get the current state of the mobile network.
+        state = isMobileDataEnabledFromLollipop(context) ? 0 : 1;
+        // Get the value of the "TRANSACTION_setDataEnabled" field.
+        String transactionCode = getTransactionCode(context);
+        // Android 5.1+ (API 22) and later.
+        if (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.LOLLIPOP) {
+            SubscriptionManager mSubscriptionManager = (SubscriptionManager) context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+            // Loop through the subscription list i.e. SIM list.
+            for (int i = 0; i &lt; mSubscriptionManager.getActiveSubscriptionInfoCountMax(); i++) {                    
+                if (transactionCode != null &amp;&amp; transactionCode.length() &gt; 0) {
+                    // Get the active subscription ID for a given SIM card.
+                    int subscriptionId = mSubscriptionManager.getActiveSubscriptionInfoList().get(i).getSubscriptionId();
+                    // Execute the command via `su` to turn off
+                    // mobile network for a subscription service.
+                    command = "service call phone " + transactionCode + " i32 " + subscriptionId + " i32 " + state;
+                    executeCommandViaSu(context, "-c", command);
+                }
+            }
+        } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.LOLLIPOP) {
+            // Android 5.0 (API 21) only.
+            if (transactionCode != null &amp;&amp; transactionCode.length() &gt; 0) {
+                // Execute the command via `su` to turn off mobile network.                     
+                command = "service call phone " + transactionCode + " i32 " + state;
+                executeCommandViaSu(context, "-c", command);
+            }
+        }
+    } catch(Exception e) {
+        // Oops! Something went wrong, so we throw the exception here.
+        throw e;
+    }           
+}
+</code></pre>
+
+<p>To check if the mobile network is enabled or not:</p>
+
+<pre><code>private static boolean isMobileDataEnabledFromLollipop(Context context) {
+    boolean state = false;
+    if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP) {
+        state = Settings.Global.getInt(context.getContentResolver(), "mobile_data", 0) == 1;
+    }
+    return state;
+}
+</code></pre>
+
+<p>To get the value of the <code>TRANSACTION_setDataEnabled</code> field (borrowed from PhongLe's solution below):</p>
+
+<pre><code>private static String getTransactionCode(Context context) throws Exception {
+    try {
+        final TelephonyManager mTelephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE); 
+        final Class&lt;?&gt; mTelephonyClass = Class.forName(mTelephonyManager.getClass().getName());
+        final Method mTelephonyMethod = mTelephonyClass.getDeclaredMethod("getITelephony");
+        mTelephonyMethod.setAccessible(true);
+        final Object mTelephonyStub = mTelephonyMethod.invoke(mTelephonyManager);
+        final Class&lt;?&gt; mTelephonyStubClass = Class.forName(mTelephonyStub.getClass().getName());
+        final Class&lt;?&gt; mClass = mTelephonyStubClass.getDeclaringClass();
+        final Field field = mClass.getDeclaredField("TRANSACTION_setDataEnabled");
+        field.setAccessible(true);
+        return String.valueOf(field.getInt(null));
+    } catch (Exception e) {
+        // The "TRANSACTION_setDataEnabled" field is not available,
+        // or named differently in the current API level, so we throw
+        // an exception and inform users that the method is not available.
+        throw e;
+    }
+}
+</code></pre>
+
+<p>To execute command via <code>su</code>:</p>
+
+<pre><code>private static void executeCommandViaSu(Context context, String option, String command) {
+    boolean success = false;
+    String su = "su";
+    for (int i=0; i &lt; 3; i++) {
+        // Default "su" command executed successfully, then quit.
+        if (success) {
+            break;
+        }
+        // Else, execute other "su" commands.
+        if (i == 1) {
+            su = "/system/xbin/su";
+        } else if (i == 2) {
+            su = "/system/bin/su";
+        }       
+        try {
+            // Execute command as "su".
+            Runtime.getRuntime().exec(new String[]{su, option, command});
+        } catch (IOException e) {
+            success = false; 
+            // Oops! Cannot execute `su` for some reason.
+            // Log error here.
+        } finally {
+            success = true;
+        }
+    }
+}
+</code></pre>
+
+<p>Hope this update clears up any misconception, misunderstanding, or question you may have about switching mobile network on/off on rooted Android 5+ devices.</p>

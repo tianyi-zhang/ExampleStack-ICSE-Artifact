@@ -1,0 +1,322 @@
+<p>You have few variations how to implement XML parsing at Java.</p>
+
+<p>The most common is: <strong>DOM, SAX, StAX</strong>. </p>
+
+<p>Everyone one has pros and cons. With Dom and Sax you able to validate your xml with xsd schema. But Stax works without xsd validation, and much faster.</p>
+
+<p>For example, <strong>xml file</strong>:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;staff xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="oldEmployee.xsd"&gt;
+    &lt;employee&gt;
+        &lt;name&gt;Carl Cracker&lt;/name&gt;
+        &lt;salary&gt;75000&lt;/salary&gt;
+        &lt;hiredate year="1987" month="12" day="15" /&gt;
+    &lt;/employee&gt;
+    &lt;employee&gt;
+        &lt;name&gt;Harry Hacker&lt;/name&gt;
+        &lt;salary&gt;50000&lt;/salary&gt;
+        &lt;hiredate year="1989" month="10" day="1" /&gt;
+    &lt;/employee&gt;
+    &lt;employee&gt;
+        &lt;name&gt;Tony Tester&lt;/name&gt;
+        &lt;salary&gt;40000&lt;/salary&gt;
+        &lt;hiredate year="1990" month="3" day="15" /&gt;
+    &lt;/employee&gt;
+&lt;/staff&gt;
+</code></pre>
+
+<p>The longest at implementation (to my mind) <strong>DOM</strong> parser:</p>
+
+<pre><code>class DomXmlParser {    
+    private Document document;
+    List&lt;Employee&gt; empList = new ArrayList&lt;&gt;();
+
+    public SchemaFactory schemaFactory;
+    public final String JAXP_SCHEMA_LANGUAGE = "http://java.sun.com/xml/jaxp/properties/schemaLanguage";
+    public final String W3C_XML_SCHEMA = "http://www.w3.org/2001/XMLSchema";    
+
+    public DomXmlParser() {  
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setAttribute(JAXP_SCHEMA_LANGUAGE, W3C_XML_SCHEMA);
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            document = builder.parse(new File(EMPLOYEE_XML.getFilename()));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }    
+
+    public List&lt;Employee&gt; parseFromXmlToEmployee() {
+        NodeList nodeList = document.getDocumentElement().getChildNodes();
+        for (int i = 0; i &lt; nodeList.getLength(); i++) {
+            Node node = nodeList.item(i);
+
+            if (node instanceof Element) {
+                Employee emp = new Employee();
+
+                NodeList childNodes = node.getChildNodes();
+                for (int j = 0; j &lt; childNodes.getLength(); j++) {
+                    Node cNode = childNodes.item(j);
+
+                    // identify the child tag of employees
+                    if (cNode instanceof Element) {
+                        switch (cNode.getNodeName()) {
+                            case "name":
+                                emp.setName(text(cNode));
+                                break;
+                            case "salary":
+                                emp.setSalary(Double.parseDouble(text(cNode)));
+                                break;
+                            case "hiredate":
+                                int yearAttr = Integer.parseInt(cNode.getAttributes().getNamedItem("year").getNodeValue());
+                                int monthAttr =  Integer.parseInt(cNode.getAttributes().getNamedItem("month").getNodeValue());
+                                int dayAttr =  Integer.parseInt(cNode.getAttributes().getNamedItem("day").getNodeValue());
+
+                                emp.setHireDay(yearAttr, monthAttr - 1, dayAttr);
+                                break;
+                        }
+                    }
+                }
+                empList.add(emp);
+            }
+        }
+        return empList;
+    }
+    private String text(Node cNode) {
+        return cNode.getTextContent().trim();
+    }
+}
+</code></pre>
+
+<p><strong>SAX parser:</strong></p>
+
+<pre><code>class SaxHandler extends DefaultHandler {
+
+    private Stack&lt;String&gt; elementStack = new Stack&lt;&gt;();
+    private Stack&lt;Object&gt; objectStack = new Stack&lt;&gt;();
+
+    public List&lt;Employee&gt; employees = new ArrayList&lt;&gt;();
+    Employee employee = null;
+
+    @Override
+    public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
+        this.elementStack.push(qName);
+
+        if ("employee".equals(qName)) {
+            employee = new Employee();
+            this.objectStack.push(employee);
+            this.employees.add(employee);
+        }
+        if("hiredate".equals(qName))
+        {
+            int yearatt = Integer.parseInt(attributes.getValue("year"));
+            int monthatt = Integer.parseInt(attributes.getValue("month"));
+            int dayatt = Integer.parseInt(attributes.getValue("day"));
+
+            if (employee != null) {
+                employee.setHireDay(yearatt,  monthatt - 1,  dayatt) ;
+            }
+        }
+    }
+
+    @Override
+    public void endElement(String uri, String localName, String qName) throws SAXException {
+        this.elementStack.pop();
+
+        if ("employee".equals(qName)) {
+            Object objects = this.objectStack.pop();
+        }
+    }
+
+    @Override
+    public void characters(char[] ch, int start, int length) throws SAXException {
+        String value = new String(ch, start, length).trim();
+        if (value.length() == 0) return;        // skip white space
+
+        if ("name".equals(currentElement())) {
+            employee = (Employee) this.objectStack.peek();
+            employee.setName(value);
+        } else if ("salary".equals(currentElement()) &amp;&amp; "employee".equals(currentParrentElement())) {
+            employee.setSalary(Double.parseDouble(value));
+        }
+    }
+
+    private String currentElement() {
+        return this.elementStack.peek();
+    }
+
+    private String currentParrentElement() {
+        if (this.elementStack.size() &lt; 2) return null;
+        return this.elementStack.get(this.elementStack.size() - 2);
+    }
+}
+</code></pre>
+
+<p><strong>Stax parser:</strong></p>
+
+<pre><code>class StaxXmlParser {
+    private List&lt;Employee&gt; employeeList;
+    private Employee currentEmployee;
+    private String tagContent;
+    private String attrContent;
+    private XMLStreamReader reader;
+    public StaxXmlParser(String filename) {
+        employeeList = null;
+        currentEmployee = null;
+        tagContent = null;
+
+        try {
+            XMLInputFactory factory = XMLInputFactory.newFactory();
+            reader = factory.createXMLStreamReader(new FileInputStream(new File(filename)));
+            parseEmployee();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public List&lt;Employee&gt; parseEmployee() throws XMLStreamException {
+        while (reader.hasNext()) {
+            int event = reader.next();
+            switch (event) {
+                case XMLStreamConstants.START_ELEMENT:
+                    if ("employee".equals(reader.getLocalName())) {
+                        currentEmployee = new Employee();
+                    }
+                    if ("staff".equals(reader.getLocalName())) {
+                        employeeList = new ArrayList&lt;&gt;();
+                    }
+                    if ("hiredate".equals(reader.getLocalName())) {
+                        int yearAttr = Integer.parseInt(reader.getAttributeValue(null, "year"));
+                        int monthAttr = Integer.parseInt(reader.getAttributeValue(null, "month"));
+                        int dayAttr = Integer.parseInt(reader.getAttributeValue(null, "day"));
+
+                        currentEmployee.setHireDay(yearAttr, monthAttr - 1, dayAttr);
+                    }
+                    break;
+
+                case XMLStreamConstants.CHARACTERS:
+                    tagContent = reader.getText().trim();
+                    break;
+
+                case XMLStreamConstants.ATTRIBUTE:
+                    int count = reader.getAttributeCount();
+                    for (int i = 0; i &lt; count; i++) {
+                        System.out.printf("count is: %d%n", count);
+                    }
+                    break;
+
+                case XMLStreamConstants.END_ELEMENT:
+                    switch (reader.getLocalName()) {
+                        case "employee":
+                            employeeList.add(currentEmployee);
+                            break;
+                        case "name":
+                            currentEmployee.setName(tagContent);
+                            break;
+                        case "salary":
+                            currentEmployee.setSalary(Double.parseDouble(tagContent));
+                            break;
+                    }
+            }
+        }
+        return employeeList;
+    }    
+}
+</code></pre>
+
+<p>And some <strong>main()</strong> test:</p>
+
+<pre><code> public static void main(String[] args) {
+    long startTime, elapsedTime;
+    Main main = new Main();
+
+    startTime = System.currentTimeMillis();
+    main.testSaxParser();   // test
+    elapsedTime = System.currentTimeMillis() - startTime;
+    System.out.println(String.format("Parsing time is: %d ms%n", elapsedTime / 1000));
+
+    startTime = System.currentTimeMillis();
+    main.testStaxParser();  // test
+    elapsedTime = System.currentTimeMillis() - startTime;
+    System.out.println(String.format("Parsing time is: %d ms%n", elapsedTime / 1000));
+
+    startTime = System.currentTimeMillis();
+    main.testDomParser();  // test
+    elapsedTime = System.currentTimeMillis() - startTime;
+    System.out.println(String.format("Parsing time is: %d ms%n", elapsedTime / 1000));
+}
+</code></pre>
+
+<p><strong>Output:</strong></p>
+
+<pre><code>Using SAX Parser:
+-----------------
+Employee { name=Carl Cracker, salary=75000.0, hireDay=Tue Dec 15 00:00:00 EET 1987 }
+Employee { name=Harry Hacker, salary=50000.0, hireDay=Sun Oct 01 00:00:00 EET 1989 }
+Employee { name=Tony Tester, salary=40000.0, hireDay=Thu Mar 15 00:00:00 EET 1990 }
+Parsing time is: 106 ms
+
+Using StAX Parser:
+------------------
+Employee { name=Carl Cracker, salary=75000.0, hireDay=Tue Dec 15 00:00:00 EET 1987 }
+Employee { name=Harry Hacker, salary=50000.0, hireDay=Sun Oct 01 00:00:00 EET 1989 }
+Employee { name=Tony Tester, salary=40000.0, hireDay=Thu Mar 15 00:00:00 EET 1990 }
+Parsing time is: 5 ms
+
+Using DOM Parser:
+-----------------
+Employee { name=Carl Cracker, salary=75000.0, hireDay=Tue Dec 15 00:00:00 EET 1987 }
+Employee { name=Harry Hacker, salary=50000.0, hireDay=Sun Oct 01 00:00:00 EET 1989 }
+Employee { name=Tony Tester, salary=40000.0, hireDay=Thu Mar 15 00:00:00 EET 1990 }
+Parsing time is: 13 ms
+</code></pre>
+
+<p>You can see some glimpse view at there variations.</p>
+
+<p>But at java exist other as <strong>JAXB</strong> - You need to have <code>xsd</code> schema and accord to this schema you generate classes. After this you this can use <code>unmarchal()</code> to read from <code>xml</code> file:</p>
+
+<pre><code>public class JaxbDemo {
+    public static void main(String[] args) {
+        try {
+            long startTime = System.currentTimeMillis();
+            // create jaxb and instantiate marshaller
+            JAXBContext context = JAXBContext.newInstance(Staff.class.getPackage().getName());
+            FileInputStream in = new FileInputStream(new File(Files.EMPLOYEE_XML.getFilename()));
+
+            System.out.println("Output from employee XML file");
+            Unmarshaller um = context.createUnmarshaller();
+            Staff staff = (Staff) um.unmarshal(in);
+
+            // print employee list
+            for (Staff.Employee emp : staff.getEmployee()) {
+                System.out.println(emp);
+            }
+
+            long elapsedTime = System.currentTimeMillis() - startTime;
+            System.out.println(String.format("Parsing time is: %d ms%n", elapsedTime));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+</code></pre>
+
+<p>I tried this one approach as before, result is next: </p>
+
+<pre><code>Employee { name='Carl Cracker', salary=75000, hiredate=1987-12-15 } }
+Employee { name='Harry Hacker', salary=50000, hiredate=1989-10-1 } }
+Employee { name='Tony Tester', salary=40000, hiredate=1990-3-15 } }
+Parsing time is: 320 ms
+</code></pre>
+
+<p>I added another <code>toString()</code>, and it has different hire day format. </p>
+
+<p>Here is few links that is <strong>interesting for you</strong>:</p>
+
+<ul>
+<li><a href="http://tutorials.jenkov.com/java-xml/index.html" rel="nofollow">Java &amp; XML Tutorial</a> </li>
+<li><a href="http://www.vogella.com/tutorials/JAXB/article.html" rel="nofollow">JAXB Tutorial</a></li>
+</ul>

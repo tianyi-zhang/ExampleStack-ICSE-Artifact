@@ -1,0 +1,93 @@
+<blockquote>
+  <p>The toString method of Object is unique in that it seems to be the only place in Java where the memory address is viewable. How does Object do this?</p>
+</blockquote>
+
+<p>It doesn't get the address, in the HotSpot JVM, it gets a randomly generated 31-bit hashcode stored in the header of the object.  This has to be stored because;</p>
+
+<ul>
+<li>the hashcode cannot change even if the object is moved and has a new address.</li>
+<li>the address is not random enough. The lower 8-bits of the address are always 0. After every GC, the first object to be creates is always the same.</li>
+<li>the address could be 64-bit.</li>
+</ul>
+
+<p>DO TRY THIS AT HOME, NOT SUITABLE FOR WORK!!.</p>
+
+<p>You can get/set the hashCode() using <code>Unsafe</code></p>
+
+<pre><code>static final Unsafe UNSAFE;
+
+static {
+    try {
+        Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+        theUnsafe.setAccessible(true);
+        UNSAFE = (Unsafe) theUnsafe.get(null);
+    } catch (Exception e) {
+        throw new AssertionError(e);
+    }
+}
+
+public static void setIdentityHashCode(Object o, int code) {
+    UNSAFE.putInt(o, 1l, code &amp; 0x7FFF_FFF);
+}
+
+public static void main(String[] args) throws NoSuchFieldException, IllegalAccessException {
+    Double d = 1.0;
+    Double d2 = 1.0;
+    setIdentityHashCode(d, 1);
+    setIdentityHashCode(d2, 1);
+    System.out.println("d: "+d+" System.identityHashCode(d): "+System.identityHashCode(d));
+    System.out.println("d2: "+d2+" System.identityHashCode(d2): "+System.identityHashCode(d2));
+    System.out.println("d == d2: " + (d == d2));
+}
+</code></pre>
+
+<p>prints</p>
+
+<pre><code>d: 1.0 System.identityHashCode(d): 1
+d2: 1.0 System.identityHashCode(d2): 1
+d == d2: false
+</code></pre>
+
+<p>You can get the address from the reference value provided you know how the memory has been translated. In the simplest case, (where you have 64-bit references) the reference is untranslated and the address is the value stored in the reference.</p>
+
+<p>If you run this on a 64-bit JVM with <code>-XX:-UseCompressedOops</code></p>
+
+<pre><code>// This only works if a GC doesn't move the object while attempting to access it.
+static final Unsafe UNSAFE;
+
+static {
+    try {
+        Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+        theUnsafe.setAccessible(true);
+        UNSAFE = (Unsafe) theUnsafe.get(null);
+    } catch (Exception e) {
+        throw new AssertionError(e);
+    }
+}
+
+// run with: -ea -XX:-UseCompressedOops
+public static void main(String[] args) {
+    Object i = 0x12345678;
+    System.out.printf("indentityHashCode = %08x%n", System.identityHashCode(i));
+
+    Object[] obj = { i };
+    assert Unsafe.ARRAY_OBJECT_INDEX_SCALE == 8; // 8 bytes per reference.
+    long address = UNSAFE.getLong(obj, (long) Unsafe.ARRAY_OBJECT_BASE_OFFSET);
+    System.out.printf("%x%n", address);
+    for (int j=0;j&lt;24;j++)
+        System.out.printf("%02x ", UNSAFE.getByte(address + j) &amp; 0xFF);
+    System.out.println();
+    // now some really scary sh!t
+    UNSAFE.putLong(i, 8L, UNSAFE.getLong(0L, 8L));
+    System.out.printf("`i` is now a %s and is %x%n", i.getClass(), i);
+}
+</code></pre>
+
+<p>prints</p>
+
+<pre><code>indentityHashCode = 5a07e868
+7fbf41cb8560
+01 68 e8 07 5a 00 00 00 48 33 3f b9 b9 7f 00 00 78 56 34 12 00 00 00 00 
+   ^^hashCode^          ^class address  ^       ^int value^
+`i` is now a class java.lang.Long and is 12345678
+</code></pre>

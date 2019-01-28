@@ -1,0 +1,106 @@
+<p>Just do the same job as the container already does. I.e. reinvent the wheel of the <a href="http://en.wikipedia.org/wiki/Chain-of-responsibility_pattern" rel="nofollow">chain of responsibility</a> design pattern as is under the covers been used by servlet filters.</p>
+
+<pre><code>public class GodFilter implements Filter {
+
+    private Map&lt;Pattern, Filter&gt; filters = new LinkedHashMap&lt;Pattern, Filter&gt;();
+
+    @Override
+    public void init(FilterConfig config) throws ServletException {
+        Filter1 filter1 = new Filter1();
+        filter1.init(config);
+        filters.put(new Pattern("/foo/*"), filter1);
+
+        Filter2 filter2 = new Filter2();
+        filter2.init(config);
+        filters.put(new Pattern("*.bar"), filter2);
+
+        // ...
+    }
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws ServletException, IOException {
+        HttpServletRequest hsr = (HttpServletRequest) request;
+        String path = hsr.getRequestURI().substring(hsr.getContextPath().length());
+        GodFilterChain godChain = new GodFilterChain(chain);
+
+        for (Entry&lt;Pattern, Filter&gt; entry : filters.entrySet()) {
+            if (entry.getKey().matches(path)) {
+                godChain.addFilter(entry.getValue());
+            }
+        }
+
+        godChain.doFilter(request, response);
+    }
+
+    @Override
+    public void destroy() {
+        for (Filter filter : filters.values()) {
+            filter.destroy();
+        }
+    }
+
+}
+</code></pre>
+
+<p>with those little helper classes (which can if necessary be made <code>private static</code> nested classes of the above <code>GodFilter</code>):</p>
+
+<pre><code>public class Pattern {
+
+    private int position;
+    private String url;
+
+    public Pattern(String url) {
+        this.position = url.startsWith("*") ? 1
+                      : url.endsWith("*") ? -1
+                      : 0;
+        this.url = url.replaceAll("/?\\*", "");
+    }
+
+    public boolean matches(String path) {
+        return (position == -1) ? path.startsWith(url)
+             : (position == 1) ? path.endsWith(url)
+             : path.equals(url);
+    }
+
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>public class GodFilterChain implements FilterChain {
+
+    private FilterChain chain;
+    private List&lt;Filter&gt; filters = new ArrayList&lt;Filter&gt;();
+    private Iterator&lt;Filter&gt; iterator;
+
+    public GodFilterChain(FilterChain chain) {
+        this.chain = chain;
+    }
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response) throws IOException, ServletException {
+        if (iterator == null) {
+            iterator = filters.iterator();
+        }
+
+        if (iterator.hasNext()) {
+            iterator.next().doFilter(request, response, this);
+        } else {
+            chain.doFilter(request, response);
+        }
+    }
+
+    public void addFilter(Filter filter) {
+        if (iterator != null) {
+            throw new IllegalStateException();
+        }
+
+        filters.add(filter);
+    }
+
+}
+</code></pre>
+
+<p>You could if necessary also feed a XML config file with all possible filters so that you end up with easier configuration. You could use reflection to create filters in <code>init()</code> of your <code>GodFilter</code>.</p>
+
+<p>Oh nevermind, that's what the <code>web.xml</code> and the container already is doing...</p>

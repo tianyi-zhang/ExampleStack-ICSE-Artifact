@@ -1,0 +1,165 @@
+<p>The GZIP filter that I use to compress resources in my webapps:</p>
+
+<pre class="lang-java prettyprint-override"><code>public class CompressionFilter implements Filter {
+
+    public void destroy() {
+    }
+
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
+        String acceptEncoding = httpRequest.getHeader(HttpHeaders.ACCEPT_ENCODING);
+        if (acceptEncoding != null) {
+            if (acceptEncoding.indexOf("gzip") &gt;= 0) {
+                GZIPHttpServletResponseWrapper gzipResponse = new GZIPHttpServletResponseWrapper(httpResponse);
+                chain.doFilter(request, gzipResponse);
+                gzipResponse.finish();
+                return;
+            }
+        }
+        chain.doFilter(request, response);
+    }
+
+    public void init(FilterConfig filterConfig) throws ServletException {
+    }
+
+}
+
+public class GZIPHttpServletResponseWrapper extends HttpServletResponseWrapper {
+
+    private ServletResponseGZIPOutputStream gzipStream;
+    private ServletOutputStream outputStream;
+    private PrintWriter printWriter;
+
+    public GZIPHttpServletResponseWrapper(HttpServletResponse response) throws IOException {
+        super(response);
+        response.addHeader(HttpHeaders.CONTENT_ENCODING, "gzip");
+    }
+
+    public void finish() throws IOException {
+        if (printWriter != null) {
+            printWriter.close();
+        }
+        if (outputStream != null) {
+            outputStream.close();
+        }
+        if (gzipStream != null) {
+            gzipStream.close();
+        }
+    }
+
+    @Override
+    public void flushBuffer() throws IOException {
+        if (printWriter != null) {
+            printWriter.flush();
+        }
+        if (outputStream != null) {
+            outputStream.flush();
+        }
+        super.flushBuffer();
+    }
+
+    @Override
+    public ServletOutputStream getOutputStream() throws IOException {
+        if (printWriter != null) {
+            throw new IllegalStateException("printWriter already defined");
+        }
+        if (outputStream == null) {
+            initGzip();
+            outputStream = gzipStream;
+        }
+        return outputStream;
+    }
+
+    @Override
+    public PrintWriter getWriter() throws IOException {
+        if (outputStream != null) {
+            throw new IllegalStateException("printWriter already defined");
+        }
+        if (printWriter == null) {
+            initGzip();
+            printWriter = new PrintWriter(new OutputStreamWriter(gzipStream, getResponse().getCharacterEncoding()));
+        }
+        return printWriter;
+    }
+
+    @Override
+    public void setContentLength(int len) {
+    }
+
+    private void initGzip() throws IOException {
+        gzipStream = new ServletResponseGZIPOutputStream(getResponse().getOutputStream());
+    }
+
+}
+
+public class ServletResponseGZIPOutputStream extends ServletOutputStream {
+
+    GZIPOutputStream gzipStream;
+    final AtomicBoolean open = new AtomicBoolean(true);
+    OutputStream output;
+
+    public ServletResponseGZIPOutputStream(OutputStream output) throws IOException {
+        this.output = output;
+        gzipStream = new GZIPOutputStream(output);
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (open.compareAndSet(true, false)) {
+            gzipStream.close();
+        }
+    }
+
+    @Override
+    public void flush() throws IOException {
+        gzipStream.flush();
+    }
+
+    @Override
+    public void write(byte[] b) throws IOException {
+        write(b, 0, b.length);
+    }
+
+    @Override
+    public void write(byte[] b, int off, int len) throws IOException {
+        if (!open.get()) {
+            throw new IOException("Stream closed!");
+        }
+        gzipStream.write(b, off, len);
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+        if (!open.get()) {
+            throw new IOException("Stream closed!");
+        }
+        gzipStream.write(b);
+    }
+
+}
+</code></pre>
+
+<p>You also need to define the mapping in your web.xml:</p>
+
+<pre class="lang-xml prettyprint-override"><code>&lt;filter&gt;
+    &lt;filter-name&gt;CompressionFilter&lt;/filter-name&gt;
+    &lt;filter-class&gt;com.my.company.CompressionFilter&lt;/filter-class&gt;
+&lt;/filter&gt;
+&lt;filter-mapping&gt;
+    &lt;filter-name&gt;CompressionFilter&lt;/filter-name&gt;
+    &lt;url-pattern&gt;*.js&lt;/url-pattern&gt;
+&lt;/filter-mapping&gt;
+&lt;filter-mapping&gt;
+    &lt;filter-name&gt;CompressionFilter&lt;/filter-name&gt;
+    &lt;url-pattern&gt;*.css&lt;/url-pattern&gt;
+&lt;/filter-mapping&gt;
+&lt;filter-mapping&gt;
+    &lt;filter-name&gt;CompressionFilter&lt;/filter-name&gt;
+    &lt;url-pattern&gt;*.html&lt;/url-pattern&gt;
+&lt;/filter-mapping&gt;
+&lt;filter-mapping&gt;
+    &lt;filter-name&gt;CompressionFilter&lt;/filter-name&gt;
+    &lt;url-pattern&gt;*.jsp&lt;/url-pattern&gt;
+&lt;/filter-mapping&gt;
+</code></pre>

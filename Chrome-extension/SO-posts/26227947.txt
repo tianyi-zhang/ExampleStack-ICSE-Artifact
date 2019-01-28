@@ -1,0 +1,145 @@
+<p>I've written this <code>eval</code> method for arithmetic expressions to answer this question. It does addition, subtraction, multiplication, division, exponentiation (using the <code>^</code> symbol), and a few basic functions like <code>sqrt</code>. It supports grouping using <code>(</code>...<code>)</code>, and it gets the operator <a href="https://en.wikipedia.org/wiki/Order_of_operations">precedence</a> and <a href="https://en.wikipedia.org/wiki/Operator_associativity">associativity</a> rules correct.</p>
+
+<pre><code>public static double eval(final String str) {
+    return new Object() {
+        int pos = -1, ch;
+
+        void nextChar() {
+            ch = (++pos &lt; str.length()) ? str.charAt(pos) : -1;
+        }
+
+        boolean eat(int charToEat) {
+            while (ch == ' ') nextChar();
+            if (ch == charToEat) {
+                nextChar();
+                return true;
+            }
+            return false;
+        }
+
+        double parse() {
+            nextChar();
+            double x = parseExpression();
+            if (pos &lt; str.length()) throw new RuntimeException("Unexpected: " + (char)ch);
+            return x;
+        }
+
+        // Grammar:
+        // expression = term | expression `+` term | expression `-` term
+        // term = factor | term `*` factor | term `/` factor
+        // factor = `+` factor | `-` factor | `(` expression `)`
+        //        | number | functionName factor | factor `^` factor
+
+        double parseExpression() {
+            double x = parseTerm();
+            for (;;) {
+                if      (eat('+')) x += parseTerm(); // addition
+                else if (eat('-')) x -= parseTerm(); // subtraction
+                else return x;
+            }
+        }
+
+        double parseTerm() {
+            double x = parseFactor();
+            for (;;) {
+                if      (eat('*')) x *= parseFactor(); // multiplication
+                else if (eat('/')) x /= parseFactor(); // division
+                else return x;
+            }
+        }
+
+        double parseFactor() {
+            if (eat('+')) return parseFactor(); // unary plus
+            if (eat('-')) return -parseFactor(); // unary minus
+
+            double x;
+            int startPos = this.pos;
+            if (eat('(')) { // parentheses
+                x = parseExpression();
+                eat(')');
+            } else if ((ch &gt;= '0' &amp;&amp; ch &lt;= '9') || ch == '.') { // numbers
+                while ((ch &gt;= '0' &amp;&amp; ch &lt;= '9') || ch == '.') nextChar();
+                x = Double.parseDouble(str.substring(startPos, this.pos));
+            } else if (ch &gt;= 'a' &amp;&amp; ch &lt;= 'z') { // functions
+                while (ch &gt;= 'a' &amp;&amp; ch &lt;= 'z') nextChar();
+                String func = str.substring(startPos, this.pos);
+                x = parseFactor();
+                if (func.equals("sqrt")) x = Math.sqrt(x);
+                else if (func.equals("sin")) x = Math.sin(Math.toRadians(x));
+                else if (func.equals("cos")) x = Math.cos(Math.toRadians(x));
+                else if (func.equals("tan")) x = Math.tan(Math.toRadians(x));
+                else throw new RuntimeException("Unknown function: " + func);
+            } else {
+                throw new RuntimeException("Unexpected: " + (char)ch);
+            }
+
+            if (eat('^')) x = Math.pow(x, parseFactor()); // exponentiation
+
+            return x;
+        }
+    }.parse();
+}
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>System.out.println(eval("((4 - 2^3 + 1) * -sqrt(3*3+4*4)) / 2"));
+</code></pre>
+
+<p>Output: 7.5 <a href="https://www.wolframalpha.com/input/?i=%28%284%20-%202%5E3%20%2B%201%29%20*%20-sqrt%283*3%2B4*4%29%29%20%2F%202">(which is correct)</a></p>
+
+<hr>
+
+<p>The parser is a <a href="https://en.wikipedia.org/wiki/Recursive_descent_parser">recursive descent parser</a>, so internally uses separate parse methods for each level of operator precedence in its grammar. I kept it <strong>short</strong> so it's easy to modify, but here are some ideas you might want to expand it with:</p>
+
+<ul>
+<li><p><strong>Variables:</strong></p>
+
+<p>The bit of the parser that reads the names for functions can easily be changed to handle custom variables too, by looking up names in a variable table passed to the <code>eval</code> method, such as a <code>Map&lt;String,Double&gt; variables</code>.</p></li>
+<li><p><strong>Separate compilation and evaluation:</strong></p>
+
+<p>What if, having added support for variables, you wanted to evaluate the same expression millions of times with changed variables, without parsing it every time? It's possible. First define an interface to use to evaluate the precompiled expression:</p>
+
+<pre><code>@FunctionalInterface
+interface Expression {
+    double eval();
+}
+</code></pre>
+
+<p>Now change all the methods that return <code>double</code>s, so instead they return an instance of that interface. Java 8's lambda syntax works great for this. Example of one of the changed methods:</p>
+
+<pre><code>Expression parseExpression() {
+    Expression x = parseTerm();
+    for (;;) {
+        if (eat('+')) { // addition
+            Expression a = x, b = parseTerm();
+            x = (() -&gt; a.eval() + b.eval());
+        } else if (eat('-')) { // subtraction
+            Expression a = x, b = parseTerm();
+            x = (() -&gt; a.eval() - b.eval());
+        } else {
+            return x;
+        }
+    }
+}
+</code></pre>
+
+<p>That builds a recursive tree of <code>Expression</code> objects representing the compiled expression (an <a href="https://en.wikipedia.org/wiki/Abstract_syntax_tree">abstract syntax tree</a>). Then you can compile it once and evaluate it repeatedly with different values:</p>
+
+<pre><code>public static void main(String[] args) {
+    Map&lt;String,Double&gt; variables = new HashMap&lt;&gt;();
+    Expression exp = parse("x^2 - x + 2", variables);
+    for (double x = -20; x &lt;= +20; x++) {
+        variables.put("x", x);
+        System.out.println(x + " =&gt; " + exp.eval());
+    }
+}
+</code></pre></li>
+<li><p><strong>Different datatypes:</strong></p>
+
+<p>Instead of <code>double</code>, you could change the evaluator to use something more powerful like <code>BigDecimal</code>, or a class that implements complex numbers, or rational numbers (fractions). You could even use <code>Object</code>, allowing some mix of datatypes in expressions, just like a real programming language. :)</p></li>
+</ul>
+
+<hr>
+
+<p><sub>All code in this answer released <a href="https://creativecommons.org/publicdomain/zero/1.0/">to the public domain</a>. Have fun!</sub></p>

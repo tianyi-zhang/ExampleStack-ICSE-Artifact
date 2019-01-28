@@ -1,0 +1,55 @@
+<p>Ok ... I was looking to do the same stuff and for the life of me I couldn't figure out how. The APIs all talk about generating the key pairs and then generating the cert but not how to sign a CSR. Somehow, quite by chance - here's what I found. </p>
+
+<p>Since PKCS10 represents the format of the request (of the CSR), you first need to put your CSR into a PKCS10Holder. Then, you pass it to a CertificateBuilder (since CertificateGenerator is deprecated). The way you pass it is to call getSubject on the holder.  </p>
+
+<p>Here's the code (Java, please adapt as you need):</p>
+
+<pre><code>public static X509Certificate sign(PKCS10CertificationRequest inputCSR, PrivateKey caPrivate, KeyPair pair)
+        throws InvalidKeyException, NoSuchAlgorithmException,
+        NoSuchProviderException, SignatureException, IOException,
+        OperatorCreationException, CertificateException {   
+
+    AlgorithmIdentifier sigAlgId = new DefaultSignatureAlgorithmIdentifierFinder()
+            .find("SHA1withRSA");
+    AlgorithmIdentifier digAlgId = new DefaultDigestAlgorithmIdentifierFinder()
+            .find(sigAlgId);
+
+    AsymmetricKeyParameter foo = PrivateKeyFactory.createKey(caPrivate
+            .getEncoded());
+    SubjectPublicKeyInfo keyInfo = SubjectPublicKeyInfo.getInstance(pair
+            .getPublic().getEncoded());
+
+    PKCS10CertificationRequestHolder pk10Holder = new PKCS10CertificationRequestHolder(inputCSR);
+    //in newer version of BC such as 1.51, this is 
+    //PKCS10CertificationRequest pk10Holder = new PKCS10CertificationRequest(inputCSR);
+
+    X509v3CertificateBuilder myCertificateGenerator = new X509v3CertificateBuilder(
+            new X500Name("CN=issuer"), new BigInteger("1"), new Date(
+                    System.currentTimeMillis()), new Date(
+                    System.currentTimeMillis() + 30 * 365 * 24 * 60 * 60
+                            * 1000), pk10Holder.getSubject(), keyInfo);
+
+    ContentSigner sigGen = new BcRSAContentSignerBuilder(sigAlgId, digAlgId)
+            .build(foo);        
+
+    X509CertificateHolder holder = myCertificateGenerator.build(sigGen);
+    X509CertificateStructure eeX509CertificateStructure = holder.toASN1Structure(); 
+    //in newer version of BC such as 1.51, this is 
+    //org.spongycastle.asn1.x509.Certificate eeX509CertificateStructure = holder.toASN1Structure(); 
+
+    CertificateFactory cf = CertificateFactory.getInstance("X.509", "BC");
+
+    // Read Certificate
+    InputStream is1 = new ByteArrayInputStream(eeX509CertificateStructure.getEncoded());
+    X509Certificate theCert = (X509Certificate) cf.generateCertificate(is1);
+    is1.close();
+    return theCert;
+    //return null;
+}
+</code></pre>
+
+<p>As you can see, I've generated the request outside this method, but passed it in. Then, I have the PKCS10CertificationRequestHolder to accept this as a constructor arg. </p>
+
+<p>Next, in the X509v3CertificateBuilder arguments, you'll see the pk10Holder.getSubject - this is apparently all you need? If something is missing, please let me know too!!! It worked for me. The cert I generated correctly had the DN info I needed. </p>
+
+<p>Wikipedia has a killer section on PKCS - <a href="http://en.wikipedia.org/wiki/PKCS">http://en.wikipedia.org/wiki/PKCS</a></p>

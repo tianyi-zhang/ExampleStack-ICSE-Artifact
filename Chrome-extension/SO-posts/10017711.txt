@@ -1,0 +1,74 @@
+<p>Do not use <code>security</code> namespace shortcuts and migrate all spring configuration from XML to Java. It will make fine tuning of your security much easier. I'm going to do it for our project soon after migrating to 3.1. 
+You can find non-trivial almost plain-bean security XML config example <a href="https://github.com/alx3apps/spring-embedded-tomcat/blob/master/etomcat6-test/src/main/app-dirs/x509dir/conf/etomcat-test-ctx.xml#L50">here</a>.</p>
+
+<p><strong>edit:</strong>
+Finished config (linked above) migration. All config was put into one method deliberately to make it shorter and to demonstrate, that you don't need separate spring bean for every filter. Of course it's better to move complex init parts to separate methods (marked <code>@Bean</code> if necessary). You can find working example in the <code>X509AnnotationTest.Config</code> on the link above.</p>
+
+<pre><code>@Bean
+public FilterChainProxy springSecurityFilterChain() throws Exception {
+    // AuthenticationEntryPoint
+    BasicAuthenticationEntryPoint entryPoint = new BasicAuthenticationEntryPoint();
+    entryPoint.setRealmName("AppName Realm");
+    // accessDecisionManager
+    List&lt;AccessDecisionVoter&gt; voters = Arrays.&lt;AccessDecisionVoter&gt;asList(new RoleVoter(), new WebExpressionVoter());
+    AccessDecisionManager accessDecisionManager = new AffirmativeBased(voters);
+    // SecurityExpressionHandler
+    SecurityExpressionHandler&lt;FilterInvocation&gt; securityExpressionHandler = new DefaultWebSecurityExpressionHandler();
+    // AuthenticationUserDetailsService
+    UserDetailsByNameServiceWrapper&lt;PreAuthenticatedAuthenticationToken&gt; authenticationUserDetailsService = new UserDetailsByNameServiceWrapper&lt;PreAuthenticatedAuthenticationToken&gt;(authUserDetailService);
+    authenticationUserDetailsService.afterPropertiesSet();
+    // PreAuthenticatedAuthenticationProvider
+    PreAuthenticatedAuthenticationProvider preAuthenticatedAuthenticationProvider = new PreAuthenticatedAuthenticationProvider();
+    preAuthenticatedAuthenticationProvider.setPreAuthenticatedUserDetailsService(authenticationUserDetailsService);
+    preAuthenticatedAuthenticationProvider.afterPropertiesSet();
+    // AuthenticationManager
+    List&lt;AuthenticationProvider&gt; providers = Arrays.&lt;AuthenticationProvider&gt;asList(preAuthenticatedAuthenticationProvider);
+    AuthenticationManager authenticationManager = new ProviderManager(providers);
+    // HttpSessionSecurityContextRepository
+    HttpSessionSecurityContextRepository httpSessionSecurityContextRepository = new HttpSessionSecurityContextRepository();
+    // SessionRegistry
+    SessionRegistry sessionRegistry = new SessionRegistryImpl();
+    // ConcurrentSessionControlStrategy
+    ConcurrentSessionControlStrategy concurrentSessionControlStrategy = new ConcurrentSessionControlStrategy(sessionRegistry);
+
+    // ConcurrentSessionFilter
+    ConcurrentSessionFilter concurrentSessionFilter = new ConcurrentSessionFilter(sessionRegistry);
+    concurrentSessionFilter.afterPropertiesSet();
+    // SecurityContextPersistenceFilter
+    SecurityContextPersistenceFilter securityContextPersistenceFilter = new SecurityContextPersistenceFilter(httpSessionSecurityContextRepository);
+    // X509AuthenticationFilter
+    X509AuthenticationFilter x509AuthenticationFilter = new X509AuthenticationFilter();
+    x509AuthenticationFilter.setAuthenticationManager(authenticationManager);
+    x509AuthenticationFilter.afterPropertiesSet();
+    // RequestCacheAwareFilter
+    RequestCacheAwareFilter requestCacheAwareFilter = new RequestCacheAwareFilter();
+    // SecurityContextHolderAwareRequestFilter
+    SecurityContextHolderAwareRequestFilter securityContextHolderAwareRequestFilter = new SecurityContextHolderAwareRequestFilter();
+    // SessionManagementFilter
+    SessionManagementFilter sessionManagementFilter = new SessionManagementFilter(httpSessionSecurityContextRepository, concurrentSessionControlStrategy);
+    // ExceptionTranslationFilter
+    ExceptionTranslationFilter exceptionTranslationFilter = new ExceptionTranslationFilter(entryPoint);
+    exceptionTranslationFilter.setAccessDeniedHandler(new AccessDeniedHandlerImpl());
+    exceptionTranslationFilter.afterPropertiesSet();
+    // FilterSecurityInterceptor
+    FilterSecurityInterceptor filterSecurityInterceptor = new FilterSecurityInterceptor();
+    filterSecurityInterceptor.setAuthenticationManager(authenticationManager);
+    filterSecurityInterceptor.setAccessDecisionManager(accessDecisionManager);
+    LinkedHashMap&lt;RequestMatcher, Collection&lt;ConfigAttribute&gt;&gt; map = new LinkedHashMap&lt;RequestMatcher, Collection&lt;ConfigAttribute&gt;&gt;();
+    map.put(new AntPathRequestMatcher("/**"), Arrays.&lt;ConfigAttribute&gt;asList(new SecurityConfig("isAuthenticated()")));
+    ExpressionBasedFilterInvocationSecurityMetadataSource ms = new ExpressionBasedFilterInvocationSecurityMetadataSource(map, securityExpressionHandler);
+    filterSecurityInterceptor.setSecurityMetadataSource(ms);
+    filterSecurityInterceptor.afterPropertiesSet();
+    // SecurityFilterChain
+    SecurityFilterChain chain = new DefaultSecurityFilterChain(new AntPathRequestMatcher("/**"),
+            concurrentSessionFilter,
+            securityContextPersistenceFilter,
+            x509AuthenticationFilter,
+            requestCacheAwareFilter,
+            securityContextHolderAwareRequestFilter,
+            sessionManagementFilter,
+            exceptionTranslationFilter,
+            filterSecurityInterceptor);
+    return new FilterChainProxy(chain);
+}
+</code></pre>

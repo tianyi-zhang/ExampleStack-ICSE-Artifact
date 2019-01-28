@@ -1,0 +1,191 @@
+<p>Using solution from Riven at <a href="http://riven8192.blogspot.com/2010/02/image-java-animated-gifs.html" rel="nofollow">http://riven8192.blogspot.com/2010/02/image-java-animated-gifs.html</a></p>
+
+<p><strong>ImageUtil.java:</strong></p>
+
+<pre><code>public class ImageUtil
+{
+    public static BufferedImage convertRGBAToGIF(BufferedImage src, int transColor)
+    {
+        BufferedImage dst = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_BYTE_INDEXED);
+        Graphics g = dst.getGraphics();
+        g.setColor(new Color(transColor));
+        g.fillRect(0, 0, dst.getWidth(), dst.getHeight());
+        {
+            IndexColorModel indexedModel = (IndexColorModel) dst.getColorModel();
+            WritableRaster raster = dst.getRaster();
+            int sample = raster.getSample(0, 0, 0);
+            int size = indexedModel.getMapSize();
+            byte[] rr = new byte[size];
+            byte[] gg = new byte[size];
+            byte[] bb = new byte[size];
+            indexedModel.getReds(rr);
+            indexedModel.getGreens(gg);
+            indexedModel.getBlues(bb);
+            IndexColorModel newModel = new IndexColorModel(8, size, rr, gg, bb, sample);
+            dst = new BufferedImage(newModel, raster, dst.isAlphaPremultiplied(), null);
+        }
+        dst.createGraphics().drawImage(src, 0, 0, null);
+        return dst;
+    }
+
+    public static void saveAnimatedGIF(OutputStream out, List&lt;GifFrame&gt; frames, int loopCount) throws Exception
+    {
+        ImageWriter iw = ImageIO.getImageWritersByFormatName("gif").next();
+
+        ImageOutputStream ios = ImageIO.createImageOutputStream(out);
+        iw.setOutput(ios);
+        iw.prepareWriteSequence(null);
+
+        int p = 0;
+        for (GifFrame frame : frames)
+        {
+            ImageWriteParam iwp = iw.getDefaultWriteParam();
+            IIOMetadata metadata = iw.getDefaultImageMetadata(new ImageTypeSpecifier(frame.img), iwp);
+            ImageUtil.configureGIFFrame(metadata, String.valueOf(frame.delay / 10L), p++, frame.disposalMethod, loopCount);
+            IIOImage ii = new IIOImage(frame.img, null, metadata);
+            iw.writeToSequence(ii, null);
+        }
+
+        iw.endWriteSequence();
+        ios.close();
+    }
+
+    private static void configureGIFFrame(IIOMetadata meta, String delayTime, int imageIndex, String disposalMethod, int loopCount)
+    {
+        String metaFormat = meta.getNativeMetadataFormatName();
+
+        if (!"javax_imageio_gif_image_1.0".equals(metaFormat))
+        {
+            throw new IllegalArgumentException("Unfamiliar gif metadata format: " + metaFormat);
+        }
+
+        Node root = meta.getAsTree(metaFormat);
+
+        Node child = root.getFirstChild();
+        while (child != null)
+        {
+            if ("GraphicControlExtension".equals(child.getNodeName()))
+                break;
+            child = child.getNextSibling();
+        }
+
+        IIOMetadataNode gce = (IIOMetadataNode) child;
+        gce.setAttribute("userDelay", "FALSE");
+        gce.setAttribute("delayTime", delayTime);
+        gce.setAttribute("disposalMethod", disposalMethod);
+
+        if (imageIndex == 0)
+        {
+            IIOMetadataNode aes = new IIOMetadataNode("ApplicationExtensions");
+            IIOMetadataNode ae = new IIOMetadataNode("ApplicationExtension");
+            ae.setAttribute("applicationID", "NETSCAPE");
+            ae.setAttribute("authenticationCode", "2.0");
+            byte[] uo = new byte[] { 0x1, (byte) (loopCount &amp; 0xFF), (byte) ((loopCount &gt;&gt; 8) &amp; 0xFF) };
+            ae.setUserObject(uo);
+            aes.appendChild(ae);
+            root.appendChild(aes);
+        }
+
+        try
+        {
+            meta.setFromTree(metaFormat, root);
+        }
+        catch (IIOInvalidTreeException e)
+        {
+            throw new Error(e);
+        }
+    }
+}
+</code></pre>
+
+<p><strong>TestGif.java:</strong></p>
+
+<pre><code>public class TestGif {
+
+    private JFrame frame;
+    private URL url = null;
+
+    public ArrayList&lt;BufferedImage&gt; getFrames(URL gif) throws IOException{
+        ArrayList&lt;BufferedImage&gt; frames = new ArrayList&lt;BufferedImage&gt;();
+        ImageReader ir = new GIFImageReader(new GIFImageReaderSpi());
+        URLConnection urlconnection = gif.openConnection();
+        ir.setInput(ImageIO.createImageInputStream(urlconnection.getInputStream()), false);
+        for(int i = 0; i &lt; ir.getNumImages(true); i++){
+            ImageReadParam param = ir.getDefaultReadParam();
+            frames.add(ir.read(i, param));
+        }
+        return frames;
+    }
+
+    public TestGif() throws FileNotFoundException {
+        frame = new JFrame("teste");
+        try {
+            url = new URL("http://sadpanda.us/images/872436-4CD65DA.gif");
+        } catch (MalformedURLException ex) {
+            Logger.getLogger(TestGif.class.getName()).log(Level.SEVERE, null, ex);
+        }
+
+        List&lt;GifFrame&gt; gifFrames = new ArrayList&lt;GifFrame&gt;();
+        ArrayList&lt;BufferedImage&gt; images = null;
+        try {
+            images = getFrames(url);
+        } catch (IOException e1) {
+            // TODO Auto-generated catch block
+            e1.printStackTrace();
+        }
+
+        for(BufferedImage image: images)
+        {
+            int transparantColor = image.getRGB(0, 0); // purple
+            BufferedImage gif = ImageUtil.convertRGBAToGIF(image, transparantColor);
+            long delay = 100; // every frame takes 100ms
+            String disposal = GifFrame.RESTORE_TO_BGCOLOR; // make transparent pixels not 'shine through'
+            gifFrames.add(new GifFrame(gif, delay, disposal));
+        }
+
+        OutputStream outputStream = new FileOutputStream("C:\\Documents and Settings\\DEVELOPER\\Desktop\\test.gif");
+
+        int loopCount = 0; // loop indefinitely
+        try {
+            ImageUtil.saveAnimatedGIF(outputStream , gifFrames, loopCount);
+        } catch (Exception e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+        ImageIcon icon = null;
+        try {
+            icon = new ImageIcon(new File("C:\\Documents and Settings\\DEVELOPER\\Desktop\\test.gif").toURI().toURL());
+        } catch (MalformedURLException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        JLabel label = new JLabel(icon);
+        icon.setImageObserver(label);
+        frame.getContentPane().add(label);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.pack();
+        frame.setVisible(true);
+    }
+
+    public static void main(String[] args) throws Exception {
+        SwingUtilities.invokeLater(new Runnable() {
+
+            public void run() {
+                try {
+                    new TestGif();
+                } catch (FileNotFoundException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            }
+        });
+    }
+}
+</code></pre>
+
+<p><strong>Result:</strong></p>
+
+<p><a href="http://sadpanda.us/images/874900-EFU9R4J.gif" rel="nofollow">http://sadpanda.us/images/874900-EFU9R4J.gif</a></p>
+
+<p>The solution is not so optimized since I have to create a temporary animated GIF file which removes the annoying colorful square behind the main image and later load it as a labeled animated icon in a Swing GUI.</p>

@@ -1,0 +1,251 @@
+<p>For the complete answer take a look at my blog that also contains source code examples     [blog]: <a href="https://www.link-intersystems.com/blog/2011/10/01/anemic-vs-rich-domain-models/">https://www.link-intersystems.com/blog/2011/10/01/anemic-vs-rich-domain-models/</a></p>
+
+<p>If you look at the anemic domain model from an object oriented perspective it is definitly an anti-pattern because it is pure procedural programming. 
+The reason why it is called an anti-pattern is that the main object oriented principle is not covered by an anemic domain model:</p>
+
+<blockquote>
+  <p>Object oriented means that: an object manages it's state and gurantees that it is in a legal state at any time. (data hiding, encapsulation)</p>
+</blockquote>
+
+<p>Therefore an object encapsulates data and manages the access and interpretation of it.
+In contrast to this an anemic model does not gurantee that it is in a legal state at any time.</p>
+
+<p>An example of an order with order items will help to see the difference.
+So let's take a look at an anemic model of an order.</p>
+
+<h1>An anemic model</h1>
+
+<pre><code> public class Order {
+    private BigDecimal total = BigDecimal.ZERO;
+    private List&lt;OrderItem&gt; items = new ArrayList&lt;OrderItem&gt;();
+
+    public BigDecimal getTotal() {
+        return total;
+    }
+
+    public void setTotal(BigDecimal total) {
+        this.total = total;
+    }
+
+    public List&lt;OrderItem&gt; getItems() {
+        return items;
+    }
+
+    public void setItems(List&lt;OrderItem&gt; items) {
+        this.items = items;
+    }
+}
+
+public class OrderItem {
+
+    private BigDecimal price = BigDecimal.ZERO;
+    private int quantity;
+    private String name;
+
+    public BigDecimal getPrice() {
+        return price;
+    }
+
+    public void setPrice(BigDecimal price) {
+        this.price = price;
+    }
+
+    public int getQuantity() {
+        return quantity;
+    }
+
+    public void setQuantity(int quantity) {
+        this.quantity = quantity;
+    }
+}
+</code></pre>
+
+<p>So where is the logic located that interpretes the order and order items to calculate an order total?
+This logic is often placed in classes named *Helper, *Util, *Manager or simply *Service.
+An order service in an anemic model would look like this:</p>
+
+<pre><code>public class OrderService {
+    public void calculateTotal(Order order) {
+        if (order == null) {
+             throw new IllegalArgumentException("order must not be null");
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        List&lt;OrderItem&gt; items = order.getItems();
+
+        for (OrderItem orderItem : items) {
+            int quantity = orderItem.getQuantity();
+            BigDecimal price = orderItem.getPrice();
+            BigDecimal itemTotal = price.multiply(new BigDecimal(quantity));
+            total = total.add(itemTotal);
+        }
+        order.setTotal(total);
+    }
+}
+</code></pre>
+
+<p>In an anemic model you invoke a method and pass it the anemic model to bring the anemic model in a legal state. Sine the Therefore the anemic model's state management is placed outside the anemic model and this fact makes it an anti-pattern in an object oriented perspective.  </p>
+
+<p>The problems with the anemic order model above are:</p>
+
+<ul>
+<li>If someone adds an OrderItem to the Order the <code>Order.getTotal()</code> value is incorrect as long as it has not been recalculated by the OrderService. In a real world application it can be cumbersome to find out who added the order item and why the OrderService has not been called. As you might have recognized already the Order also breaks encapsulation of the order items list. Someone can call <code>order.getItems().add(orderItem)</code> to add an order item. That can make it difficut to find the code that really adds the item (<code>order.getItems()</code> reference can be passed through the whole appplication).</li>
+<li>The <code>OrderService</code>'s <code>calculateTotal</code>method is responsible to calculate the total for all Order objects. Therefore it must be stateless. But stateless also means that it can not cache the total value and only recalculate it if the Order object changed. So if the calculateTotal method takes a long time you also have a performance issue. Nevertheless you will have performance issues, because clients might not know if the Order is in a legal state or not and therefore preventative call <code>calculateTotal(..)</code> even when it is not needed.</li>
+</ul>
+
+<p>You will also see sometimes that services do not update the anemic model and instead just return the result. E.g.</p>
+
+<pre><code>public class OrderService {
+    public BigDecimal calculateTotal(Order order) {
+        if (order == null) {
+             throw new IllegalArgumentException("order must not be null");
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        List&lt;OrderItem&gt; items = order.getItems();
+
+        for (OrderItem orderItem : items) {
+            int quantity = orderItem.getQuantity();
+            BigDecimal price = orderItem.getPrice();
+            BigDecimal itemTotal = price.multiply(new BigDecimal(quantity));
+            total = total.add(itemTotal);
+        }
+       return total;
+    }
+}
+</code></pre>
+
+<p>In this cases the services interprete the state of the anemic model at some time and do not update the anemic model with the result. The only benefit of this approach is that the anemic model can not contain an invalid <code>total</code> state, because it won't have a <code>total</code> property. But this also means that the <code>total</code> must be calculated everytime it is needed. By removing the <code>total</code> property you lead developers to use the service and to not to rely on the <code>total</code>'s property state. But this will not guarantee that the developers cache the <code>total</code> value in some way and thus they might also use values that are outdated. This way of implementing a service can be done whenever a property is derived form another property. Or in other words... when you interprete basic data. E.g. <code>int getAge(Date birthday)</code>.</p>
+
+<p>Now take a look at the rich domain model to see the difference.</p>
+
+<h1>The rich domain approach</h1>
+
+<pre><code>public class Order {
+
+    private BigDecimal total;
+    private List&lt;OrderItem&gt; items = new ArrayList&lt;OrderItem&gt;();
+
+    /**
+      * The total is defined as the sum of all {@link OrderItem#getTotal()}.
+      *
+      * @return the total of this {@link Order}.
+      */
+    public BigDecimal getTotal() {
+        if (total == null) {
+           /*
+            * we have to calculate the total and remember the result
+            */
+           BigDecimal orderItemTotal = BigDecimal.ZERO;
+           List&lt;OrderItem&gt; items = getItems();
+
+           for (OrderItem orderItem : items) {
+               BigDecimal itemTotal = orderItem.getTotal();
+               /*
+                * add the total of an OrderItem to our total.
+                */
+               orderItemTotal = orderItemTotal.add(itemTotal);
+           }
+
+           this.total = orderItemTotal;
+           }
+        return total;
+        }
+
+   /**
+    * Adds the {@link OrderItem} to this {@link Order}.
+    *
+    * @param orderItem
+    *            the {@link OrderItem} to add. Must not be null.
+    */
+    public void addItem(OrderItem orderItem) {
+        if (orderItem == null) {
+            throw new IllegalArgumentException("orderItem must not be null");
+        }
+        if (this.items.add(orderItem)) {
+           /*
+            * the list of order items changed so we reset the total field to
+            * let getTotal re-calculate the total.
+            */ 
+            this.total = null;
+        }
+    }
+
+    /**
+      *
+      * @return the {@link OrderItem} that belong to this {@link Order}. Clients
+      *         may not modify the returned {@link List}. Use
+      *         {@link #addItem(OrderItem)} instead.
+      */
+    public List&lt;OrderItem&gt; getItems() {
+       /*
+        * we wrap our items to prevent clients from manipulating our internal
+        * state.
+        */
+        return Collections.unmodifiableList(items);
+    }
+
+}
+
+public class OrderItem {
+
+    private BigDecimal price;
+
+    private int quantity;
+
+    private String name = "no name";
+
+    public OrderItem(BigDecimal price, int quantity, String name) {
+     if (price == null) {
+      throw new IllegalArgumentException("price must not be null");
+     }
+     if (name == null) {
+      throw new IllegalArgumentException("name must not be null");
+     }
+     if (price.compareTo(BigDecimal.ZERO) &lt; 0) {
+      throw new IllegalArgumentException(
+        "price must be a positive big decimal");
+     }
+     if (quantity &lt; 1) {
+      throw new IllegalArgumentException("quantity must be 1 or greater");
+     }
+     this.price = price;
+     this.quantity = quantity;
+     this.name = name;
+    }
+
+    public BigDecimal getPrice() {
+     return price;
+    }
+
+    public int getQuantity() {
+     return quantity;
+    }
+
+    public String getName() {
+     return name;
+    }
+
+    /**
+      * The total is defined as the {@link #getPrice()} multiplied with the
+      * {@link #getQuantity()}.
+      *
+      * @return
+      */
+    public BigDecimal getTotal() {
+     int quantity = getQuantity();
+      BigDecimal price = getPrice();
+      BigDecimal total = price.multiply(new BigDecimal(quantity));
+     return total;
+    }
+}
+</code></pre>
+
+<p>The rich domain model respects the object oriented principles and gurantees that it is in a legal state at any time.</p>
+
+<h1>References</h1>
+
+<ul>
+<li>Blog: <a href="https://www.link-intersystems.com/blog/2011/10/01/anemic-vs-rich-domain-models/">https://www.link-intersystems.com/blog/2011/10/01/anemic-vs-rich-domain-models/</a></li>
+<li>Sources: <a href="https://github.com/link-intersystems/blog/tree/master/anemic-vs-rich-domain-model">https://github.com/link-intersystems/blog/tree/master/anemic-vs-rich-domain-model</a></li>
+</ul>

@@ -1,0 +1,158 @@
+<p>This is how I have moved and re-sized Windows in a Windows platform setting. It's a small fraction of some of my User32 JNA Windows library code:</p>
+
+<pre><code>import java.awt.GridLayout;
+import java.awt.event.ActionEvent;
+
+import javax.swing.*;
+
+import com.sun.jna.Native;
+import com.sun.jna.Pointer;
+import com.sun.jna.win32.StdCallLibrary;
+
+@SuppressWarnings("serial")
+public class TestMoveWindow extends JPanel {
+   public static final String[] BOUNDS_NAMES = { "x", "y", "w", "h" };
+   private JTextField windowNameField = new JTextField(15);
+   private JTextField[] boundsFields = new JTextField[BOUNDS_NAMES.length];
+
+   public TestMoveWindow() {
+      JPanel winNamePanel = new JPanel();
+      winNamePanel.add(new JLabel("Window Name:"));
+      winNamePanel.add(windowNameField);
+
+      JPanel boundsPanel = new JPanel(new GridLayout(1, 0, 5, 0));
+      for (int i = 0; i &lt; BOUNDS_NAMES.length; i++) {
+         JPanel fieldPanel = new JPanel();
+         fieldPanel.add(new JLabel(BOUNDS_NAMES[i] + ":"));
+         boundsFields[i] = new JTextField(3);
+         fieldPanel.add(boundsFields[i]);
+         boundsPanel.add(fieldPanel);
+      }
+
+      JPanel btnPanel = new JPanel();
+
+      Action doItAction = new AbstractAction("Do it!") {
+
+         @Override
+         public void actionPerformed(ActionEvent e) {
+            String startOfWindowName = windowNameField.getText().trim();
+            Pointer hWnd = JnaUtil.getWinHwnd(startOfWindowName);
+            if (hWnd == null || startOfWindowName.isEmpty()) {
+               String message = String.format(
+                     "Window named \"%s\" was not found", startOfWindowName);
+               JOptionPane.showMessageDialog(TestMoveWindow.this, message,
+                     "Window Not Found", JOptionPane.ERROR_MESSAGE);
+               return;
+            }
+            int x = 0;
+            int y = 0;
+            int w = 0;
+            int h = 0;
+
+            String xStr = boundsFields[0].getText();
+            String yStr = boundsFields[1].getText();
+            String wStr = boundsFields[2].getText();
+            String hStr = boundsFields[3].getText();
+            try {
+               x = Integer.parseInt(xStr);
+               y = Integer.parseInt(yStr);
+               w = Integer.parseInt(wStr);
+               h = Integer.parseInt(hStr);
+            } catch (NumberFormatException e1) {
+               String message = String
+                     .format(
+                           "Numbers cannot be parsed: \"%s\", \"%s\", \"%s\", \"%s\"",
+                           xStr, yStr, wStr, hStr);
+               JOptionPane.showMessageDialog(TestMoveWindow.this, message,
+                     "Numbers Not Parseable", JOptionPane.ERROR_MESSAGE);
+               return;
+            }
+
+            JnaUtil.moveWindow(hWnd, x, y, w, h);
+
+         }
+      };
+      btnPanel.add(new JButton(doItAction));
+
+      windowNameField.addActionListener(doItAction);
+      for (JTextField boundField : boundsFields) {
+         boundField.addActionListener(doItAction);
+      }
+
+      setLayout(new BoxLayout(this, BoxLayout.PAGE_AXIS));
+      add(winNamePanel);
+      add(boundsPanel);
+      add(btnPanel);
+   }
+
+   private static void createAndShowGui() {
+      JFrame frame = new JFrame("Test Move Window");
+      frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+      frame.getContentPane().add(new TestMoveWindow());
+      frame.pack();
+      frame.setLocationRelativeTo(null);
+      frame.setVisible(true);
+   }
+
+   public static void main(String[] args) {
+      SwingUtilities.invokeLater(new Runnable() {
+         public void run() {
+            createAndShowGui();
+         }
+      });
+   }
+
+}
+
+class JnaUtil {
+   private static final User32 user32 = User32.INSTANCE;
+   private static Pointer callBackHwnd;
+
+   public static Pointer getWinHwnd(final String startOfWindowName) {
+      callBackHwnd = null;
+
+      user32.EnumWindows(new User32.WNDENUMPROC() {
+         @Override
+         public boolean callback(Pointer hWnd, Pointer userData) {
+            byte[] windowText = new byte[512];
+            user32.GetWindowTextA(hWnd, windowText, 512);
+            String wText = Native.toString(windowText).trim();
+
+            if (!wText.isEmpty() &amp;&amp; wText.startsWith(startOfWindowName)) {
+               callBackHwnd = hWnd;
+               return false;
+            }
+            return true;
+         }
+      }, null);
+      return callBackHwnd;
+   }
+
+   public static boolean moveWindow(Pointer hWnd, int x, int y, int nWidth,
+         int nHeight) {
+      boolean bRepaint = true;
+      return user32.MoveWindow(hWnd, x, y, nWidth, nHeight, bRepaint);
+   }
+
+}
+
+interface User32 extends StdCallLibrary {
+   User32 INSTANCE = (User32) Native.loadLibrary("user32", User32.class);
+
+   interface WNDENUMPROC extends StdCallCallback {
+      boolean callback(Pointer hWnd, Pointer arg);
+   }
+
+   boolean EnumWindows(WNDENUMPROC lpEnumFunc, Pointer userData);
+
+   boolean MoveWindow(Pointer hWnd, int x, int y, int nWidth, int nHeight,
+         boolean bRepaint);
+
+   int GetWindowTextA(Pointer hWnd, byte[] lpString, int nMaxCount);
+
+}
+</code></pre>
+
+<p>This would require that you have the jna.jar and platform.jar from the JNA library on your classpath. And again, this is for the Windows platform only. The first part of the code, the TestMoveWindow is simply a test GUI to demonstrate how the program works, and it really is little more than a call to <code>JnaUtil.moveWindow(hWnd, x, y, w, h);</code>, but the "meat" of the code is my JnaUtil class and User32 interface. The JNA library makes doing this <em>so</em> easy, it's ridiculous. For my code to work, you'd also need to know the start of the window text -- which is often the title of the web page -- so that it can get a Pointer to the Window.</p>
+
+<p>I honestly don't know if any cross-platform solution exists. I'd like to think that there is, but I kind of doubt it since I believe that this would always require system calls, but I'd love to be proved wrong!</p>

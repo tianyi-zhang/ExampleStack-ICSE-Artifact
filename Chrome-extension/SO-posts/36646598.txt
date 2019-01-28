@@ -1,0 +1,225 @@
+<p>Firstly, sorry for the massive answer size. However, I felt it necessary to include my entire test Activity so that you can see what I have done.</p>
+
+<h2>The issue</h2>
+
+<p>The issue that you have, is that the <code>DividerItemDecoration</code> has no idea of the state of your row. It does not know whether the item is being deleted.</p>
+
+<p>For this reason, I made a <a href="https://en.wikipedia.org/wiki/Plain_Old_Java_Object">POJO</a> that we can use to contain an integer (that we use as both an itemId and a visual representation and a boolean indicating that this row is being deleted or not.</p>
+
+<p>When you decide to delete entries (in this example <code>adapter.notifyItemRangeRemoved(3, 8);</code>), you must also set the associated <code>Pojo</code> to being deleted (in this example <code>pojo.beingDeleted = true;</code>).</p>
+
+<p>The position of the divider when beingDeleted, is reset to the colour of the parent view. In order to cover up the divider.</p>
+
+<p>I am not very fond of using the dataset itself to manage the state of its parent list. There is perhaps a better way.</p>
+
+<h2>The result visualized</h2>
+
+<p><a href="http://i.stack.imgur.com/nafJP.gif"><img src="http://i.stack.imgur.com/nafJP.gif" alt="Removing items and their dividers"></a></p>
+
+<h2>The Activity:</h2>
+
+<pre><code>public class MainActivity extends AppCompatActivity {
+    private static final int VERTICAL_ITEM_SPACE = 8;
+
+    private List&lt;Pojo&gt; mDataset = new ArrayList&lt;Pojo&gt;();
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        for(int i = 0; i &lt; 30; i++) {
+            mDataset.add(new Pojo(i));
+        }
+
+        final RecyclerView recyclerView = (RecyclerView) findViewById(R.id.recyclerView);
+        LinearLayoutManager layoutManager = new LinearLayoutManager(this);
+        recyclerView.setLayoutManager(layoutManager);
+
+        recyclerView.addItemDecoration(new VerticalSpaceItemDecoration(VERTICAL_ITEM_SPACE));
+        recyclerView.addItemDecoration(new DividerItemDecoration(this));
+
+        RecyclerView.ItemAnimator ia = recyclerView.getItemAnimator();
+        ia.setRemoveDuration(4000);
+
+        final Adapter adapter = new Adapter(mDataset);
+        recyclerView.setAdapter(adapter);
+
+        (new Handler(Looper.getMainLooper())).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                int index = 0;
+                Iterator&lt;Pojo&gt; it = mDataset.iterator();
+                while(it.hasNext()) {
+                    Pojo pojo = it.next();
+
+                    if(index &gt;= 3 &amp;&amp; index &lt;= 10) {
+                        pojo.beingDeleted = true;
+                        it.remove();
+                    }
+
+                    index++;
+                }
+
+                adapter.notifyItemRangeRemoved(3, 8);
+            }
+        }, 2000);
+    }
+
+    public class Adapter extends RecyclerView.Adapter&lt;Holder&gt; {
+        private List&lt;Pojo&gt; mDataset;
+
+        public Adapter(@NonNull final List&lt;Pojo&gt; dataset) {
+            setHasStableIds(true);
+            mDataset = dataset;
+        }
+
+        @Override
+        public Holder onCreateViewHolder(ViewGroup parent, int viewType) {
+            View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.adapter_cell, parent, false);
+            return new Holder(view);
+        }
+
+        @Override
+        public void onBindViewHolder(final Holder holder, final int position) {
+            final Pojo data = mDataset.get(position);
+
+            holder.itemView.setTag(data);
+            holder.textView.setText("Test "+data.dataItem);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return mDataset.get(position).dataItem;
+        }
+
+        @Override
+        public int getItemCount() {
+            return mDataset.size();
+        }
+    }
+
+    public class Holder extends RecyclerView.ViewHolder {
+        public TextView textView;
+
+        public Holder(View itemView) {
+            super(itemView);
+            textView = (TextView) itemView.findViewById(R.id.text);
+        }
+    }
+
+    public class Pojo {
+        public int dataItem;
+        public boolean beingDeleted = false;
+
+        public Pojo(int dataItem) {
+            this.dataItem = dataItem;
+        }
+    }
+
+    public class DividerItemDecoration extends RecyclerView.ItemDecoration {
+
+        private final int[] ATTRS = new int[]{android.R.attr.listDivider};
+
+        private Paint mOverwritePaint;
+        private Drawable mDivider;
+
+        /**
+         * Default divider will be used
+         */
+        public DividerItemDecoration(Context context) {
+            final TypedArray styledAttributes = context.obtainStyledAttributes(ATTRS);
+            mDivider = styledAttributes.getDrawable(0);
+            styledAttributes.recycle();
+            initializePaint();
+        }
+
+        /**
+         * Custom divider will be used
+         */
+        public DividerItemDecoration(Context context, int resId) {
+            mDivider = ContextCompat.getDrawable(context, resId);
+            initializePaint();
+        }
+
+        private void initializePaint() {
+            mOverwritePaint = new Paint();
+            mOverwritePaint.setColor(ContextCompat.getColor(MainActivity.this, android.R.color.background_light));
+        }
+
+        @Override
+        public void onDraw(Canvas c, RecyclerView parent, RecyclerView.State state) {
+            int left = parent.getPaddingLeft();
+            int right = parent.getWidth() - parent.getPaddingRight();
+
+            int childCount = parent.getChildCount();
+            for (int i = 0; i &lt; childCount; i++) {
+                View child = parent.getChildAt(i);
+
+                RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) child.getLayoutParams();
+
+                int top = child.getBottom() + params.bottomMargin;
+                int bottom = top + mDivider.getIntrinsicHeight();
+
+                Pojo item = (Pojo) child.getTag();
+                if(item.beingDeleted) {
+                    c.drawRect(left, top, right, bottom, mOverwritePaint);
+                } else {
+                    mDivider.setBounds(left, top, right, bottom);
+                    mDivider.draw(c);
+                }
+
+            }
+        }
+    }
+
+    public class VerticalSpaceItemDecoration extends RecyclerView.ItemDecoration {
+
+        private final int mVerticalSpaceHeight;
+
+        public VerticalSpaceItemDecoration(int mVerticalSpaceHeight) {
+            this.mVerticalSpaceHeight = mVerticalSpaceHeight;
+        }
+
+        @Override
+        public void getItemOffsets(Rect outRect, View view, RecyclerView parent,
+                                   RecyclerView.State state) {
+            outRect.bottom = mVerticalSpaceHeight;
+        }
+    }
+}
+</code></pre>
+
+<h2>The Activity Layout</h2>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;RelativeLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    android:paddingBottom="@dimen/activity_vertical_margin"
+    android:background="@android:color/background_light"
+    tools:context="test.dae.myapplication.MainActivity"&gt;
+
+    &lt;android.support.v7.widget.RecyclerView
+        android:id="@+id/recyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" /&gt;
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<h2>The RecyclerView "row" Layout</h2>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;TextView xmlns:android="http://schemas.android.com/apk/res/android"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:id="@+id/text"
+          android:padding="8dp"&gt;
+
+&lt;/TextView&gt;
+</code></pre>

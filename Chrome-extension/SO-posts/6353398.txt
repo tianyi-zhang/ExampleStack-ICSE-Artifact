@@ -1,0 +1,128 @@
+<p>You can easily extend the GrizzlyWebContainerFactory to support this requirement (since the class is final, I have created a self-contained utility that allows you to bind the listening socket to localhost). You could use this utility as:</p>
+
+<pre><code>SelectorThread threadSelector = GrizzlyWebContainerFactoryUtil.create("http://127.0.0.1:8080/", initParams, true);
+</code></pre>
+
+<p>Setting the last parameter to true forces it to bind to localhost. The only code I added to support this requirement is:</p>
+
+<pre><code>selectorThread.setAddress(InetAddress.getByName("localhost"));
+</code></pre>
+
+<p>The entire utility class is shown below:</p>
+
+<pre><code>import com.sun.grizzly.http.SelectorThread;
+import com.sun.grizzly.http.servlet.ServletAdapter;
+import com.sun.grizzly.standalone.StaticStreamAlgorithm;
+import com.sun.grizzly.tcp.Adapter;
+import com.sun.grizzly.tcp.http11.GrizzlyAdapter;
+import com.sun.jersey.api.container.ContainerException;
+import com.sun.jersey.api.core.ClasspathResourceConfig;
+import com.sun.jersey.spi.container.servlet.ServletContainer;
+
+import javax.servlet.Servlet;
+import java.io.File;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.URI;
+import java.util.Map;
+
+public class GrizzlyWebContainerFactoryUtil {
+
+  public static SelectorThread create(String u, Map&lt;String, String&gt; initParams, boolean localHostOnly)
+          throws IOException, IllegalArgumentException {
+      if (u == null)
+          throw new IllegalArgumentException("The URI must not be null");
+
+      return create(URI.create(u), initParams, localHostOnly);
+  }
+
+  public static SelectorThread create(URI u, Map&lt;String, String&gt; initParams, boolean localHostOnly) throws IOException {
+    return create(u, ServletContainer.class, initParams, localHostOnly);
+  }
+
+  public static SelectorThread create(URI u, Class&lt;? extends Servlet&gt; c,
+                                      Map&lt;String, String&gt; initParams, boolean localHostOnly) throws IOException {
+    if (u == null)
+      throw new IllegalArgumentException("The URI must not be null");
+
+    ServletAdapter adapter = new ServletAdapter();
+    if (initParams == null) {
+      adapter.addInitParameter(ClasspathResourceConfig.PROPERTY_CLASSPATH,
+        System.getProperty("java.class.path").replace(File.pathSeparatorChar, ';'));
+    } else {
+      for (Map.Entry&lt;String, String&gt; e : initParams.entrySet()) {
+        adapter.addInitParameter(e.getKey(), e.getValue());
+      }
+    }
+
+    adapter.setServletInstance(getInstance(c));
+
+    String path = u.getPath();
+    if (path == null)
+      throw new IllegalArgumentException("The URI path, of the URI " + u +
+        ", must be non-null");
+    else if (path.length() == 0)
+      throw new IllegalArgumentException("The URI path, of the URI " + u +
+        ", must be present");
+    else if (path.charAt(0) != '/')
+      throw new IllegalArgumentException("The URI path, of the URI " + u +
+        ". must start with a '/'");
+
+    if (path.length() &gt; 1) {
+      if (path.endsWith("/"))
+        path = path.substring(0, path.length() - 1);
+      adapter.setContextPath(path);
+    }
+
+    return create(u, adapter, localHostOnly);
+  }
+
+  private static Servlet getInstance(Class&lt;? extends Servlet&gt; c) {
+    try {
+      return c.newInstance();
+    } catch (Exception e) {
+      throw new ContainerException(e);
+    }
+  }
+
+
+  public static SelectorThread create(URI u, Adapter adapter, boolean localHostOnly)
+    throws IOException, IllegalArgumentException {
+    if (u == null)
+      throw new IllegalArgumentException("The URI must not be null");
+
+    // TODO support https
+    final String scheme = u.getScheme();
+    if (!scheme.equalsIgnoreCase("http"))
+      throw new IllegalArgumentException("The URI scheme, of the URI " + u +
+        ", must be equal (ignoring case) to 'http'");
+
+    if (adapter instanceof GrizzlyAdapter) {
+      GrizzlyAdapter ga = (GrizzlyAdapter) adapter;
+      ga.setResourcesContextPath(u.getRawPath());
+    }
+
+    final SelectorThread selectorThread = new SelectorThread();
+
+    selectorThread.setAlgorithmClassName(StaticStreamAlgorithm.class.getName());
+
+    final int port = (u.getPort() == -1) ? 80 : u.getPort();
+    selectorThread.setPort(port);
+
+    if (localHostOnly) {
+      selectorThread.setAddress(InetAddress.getByName("localhost"));
+    }
+    selectorThread.setAdapter(adapter);
+
+    try {
+      selectorThread.listen();
+    } catch (InstantiationException e) {
+      IOException _e = new IOException();
+      _e.initCause(e);
+      throw _e;
+    }
+    return selectorThread;
+  }
+
+}
+</code></pre>

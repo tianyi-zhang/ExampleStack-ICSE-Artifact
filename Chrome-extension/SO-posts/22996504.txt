@@ -1,0 +1,177 @@
+<p><strong>ASKER'S ANSWER MOVED FROM QUESTION</strong></p>
+
+<p>The java bytecode was never the problem.  It is the way I was loading the jar which made it impossible to instrument the code. </p>
+
+<p>Thanks to Ame for helping me tackle it.</p>
+
+<p>The following code works:</p>
+
+<p>MAIN</p>
+
+<pre><code>import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.io.FileInputStream;
+
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+
+public class Main implements Opcodes
+{
+    public static void main(String[] args) throws Exception
+    {
+
+        byte[] obj = readClass("tmcore/obj.class");
+        ClassReader objReader = new ClassReader(obj);
+        ClassWriter objWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+
+        MethodReplacer demoReplacer = new MethodReplacer(objWriter, "run", "()V");
+        demoReplacer.visit(V1_6, ACC_PUBLIC + ACC_SUPER, "tmcore/obj", null, "java/applet/Applet", new String[] { "java/lang/Runnable" });
+        objReader.accept(demoReplacer, ClassReader.EXPAND_FRAMES);
+
+        objReader = new ClassReader(objWriter.toByteArray());
+
+        Class objC = Loader.loadClass(objWriter.toByteArray(), "tmcore.obj");
+        if(objC == null)
+        {
+            System.out.println("obj cannot be loaded");
+        }
+
+        Class game = ClassLoader.getSystemClassLoader().loadClass("tmcore.game");
+        if(game == null)
+        {
+            System.out.println("Can't load game");
+            return;
+        }
+
+        Constructor ctor = game.getDeclaredConstructor(String[].class);
+        if(ctor == null)
+        {
+            System.out.println("can't find constructor");
+            return;
+        }
+
+        //Instantiate the class by calling the constructor
+        String[] arg = {"tmgames.jar"};
+        Object instance = ctor.newInstance(new Object[]{args});
+        if(instance == null)
+        {
+            System.out.println("Can't instantiate constructor");
+        }
+
+        //get reference to main(String[] args)
+        Method method = game.getDeclaredMethod("main", String[].class);
+        //call the main method
+        method.invoke(instance);
+
+    }
+
+
+    public static void verifyValidPath(String path) throws FileNotFoundException
+    {
+            File filePath = new File(path);
+            if (!filePath.exists()) 
+            {
+              throw new FileNotFoundException(filePath.getPath());
+            }
+    }
+
+    public static byte[] readClass(String classpath) throws Exception
+    {
+        verifyValidPath(classpath);
+        File f = new File(classpath);
+
+        FileInputStream file = new FileInputStream(f);
+        if(file == null)
+            throw new FileNotFoundException();
+
+        byte[] classbyte = new byte[(int)f.length()];
+
+        int offset = 0, numRead = 0;
+        while (offset &lt; classbyte.length
+                &amp;&amp; (numRead=file.read(classbyte, offset, classbyte.length-offset)) &gt;= 0) 
+        {
+             offset += numRead;
+        }
+
+        if (offset &lt; classbyte.length) 
+        {
+            file.close();
+            throw new IOException("Could not completely read file ");
+        }
+
+        file.close();
+        return classbyte;
+    }
+}
+</code></pre>
+
+<p>LOADER:</p>
+
+<pre><code>import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+
+class Loader
+{
+    private static final Class[] parameters = new Class[] {URL.class};
+
+     public static void addURL(URL u) throws IOException
+     {
+            URLClassLoader sysloader = (URLClassLoader) ClassLoader.getSystemClassLoader();
+            Class sysclass = URLClassLoader.class;
+
+            try 
+            {
+                Method method = sysclass.getDeclaredMethod("addURL", parameters);
+                method.setAccessible(true);
+                method.invoke(sysloader, new Object[] {u});
+            } 
+            catch (Throwable t) 
+            {
+                t.printStackTrace();
+                throw new IOException("Error, could not add URL to system classloader");
+            }
+
+     }
+
+     public static Class loadClass(byte[] b, String name) 
+     {
+            //override classDefine (as it is protected) and define the class.
+         Class clazz = null;
+         try 
+         {
+             ClassLoader loader = ClassLoader.getSystemClassLoader();
+             Class cls = Class.forName("java.lang.ClassLoader");
+             java.lang.reflect.Method method =
+                     cls.getDeclaredMethod("defineClass", new Class[] { String.class, byte[].class, int.class, int.class });
+
+              // protected method invocaton
+              method.setAccessible(true);
+              try 
+              {
+                  Object[] args = new Object[] {name, b, new Integer(0), new Integer(b.length)};
+                  clazz = (Class) method.invoke(loader, args);
+              } 
+
+              finally 
+              {
+                  method.setAccessible(false);
+              }
+         } 
+         catch (Exception e) 
+         {
+             e.printStackTrace();
+             System.exit(1);
+         }
+            return clazz;
+    }
+}
+</code></pre>
+
+<p>MethodReplacer remains the same.</p>

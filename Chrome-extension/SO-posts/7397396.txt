@@ -1,0 +1,114 @@
+<p>I have changed the version for Android and it works for me now</p>
+
+<pre><code>public class SASLXFacebookPlatformMechanism extends SASLMechanism {
+
+    private static final String NAME              = "X-FACEBOOK-PLATFORM";
+
+    private String              apiKey            = "";
+    private String              accessToken        = "";
+
+    /**
+     * Constructor.
+     */
+    public SASLXFacebookPlatformMechanism(SASLAuthentication saslAuthentication) {
+        super(saslAuthentication);
+    }
+
+    @Override
+    protected void authenticate() throws IOException, XMPPException {
+        getSASLAuthentication().send(new AuthMechanism(NAME, ""));
+    }
+
+    @Override
+    public void authenticate(String apiKey, String host, String accessToken) throws IOException, XMPPException {
+        if (apiKey == null || accessToken == null) {
+            throw new IllegalArgumentException("Invalid parameters");
+        }
+
+        this.apiKey = apiKey;
+        this.accessToken = accessToken;
+        this.hostname = host;
+
+        String[] mechanisms = { "DIGEST-MD5" };
+        Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+        this.sc = Sasl.createSaslClient(mechanisms, null, "xmpp", host, props, this);
+        authenticate();
+    }
+
+    @Override
+    public void authenticate(String username, String host, CallbackHandler cbh) throws IOException, XMPPException {
+        String[] mechanisms = { "DIGEST-MD5" };
+        Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+        this.sc = Sasl.createSaslClient(mechanisms, null, "xmpp", host, props, cbh);
+        authenticate();
+    }
+
+    @Override
+    protected String getName() {
+        return NAME;
+    }
+
+    @Override
+    public void challengeReceived(String challenge) throws IOException {
+        byte[] response = null;
+
+        if (challenge != null) {
+            String decodedChallenge = new String(Base64.decode(challenge));
+            Map&lt;String, String&gt; parameters = getQueryMap(decodedChallenge);
+
+            String version = "1.0";
+            String nonce = parameters.get("nonce");
+            String method = parameters.get("method");
+
+            String composedResponse =
+                "method=" + URLEncoder.encode(method, "utf-8") +
+                        "&amp;nonce=" + URLEncoder.encode(nonce, "utf-8") +
+                        "&amp;access_token=" + URLEncoder.encode(accessToken, "utf-8") +
+                        "&amp;api_key=" + URLEncoder.encode(apiKey, "utf-8") +
+                        "&amp;call_id=0" +
+                        "&amp;v=" + URLEncoder.encode(version, "utf-8");
+            response = composedResponse.getBytes();
+        }
+
+        String authenticationText = "";
+
+        if (response != null) {
+            authenticationText = Base64.encodeBytes(response);
+        }
+
+        // Send the authentication to the server
+        getSASLAuthentication().send(new Response(authenticationText));
+    }
+
+    private Map&lt;String, String&gt; getQueryMap(String query) {
+        Map&lt;String, String&gt; map = new HashMap&lt;String, String&gt;();
+        String[] params = query.split("\\&amp;");
+
+        for (String param : params) {
+            String[] fields = param.split("=", 2);
+            map.put(fields[0], (fields.length &gt; 1 ? fields[1] : null));
+        }
+
+        return map;
+    }
+}
+</code></pre>
+
+<p>This version requires only application id and access token</p>
+
+<pre><code>ConnectionConfiguration config = new ConnectionConfiguration("chat.facebook.com", 5222);
+config.setSASLAuthenticationEnabled(true);
+mFbConnection = new XMPPConnection(config);
+
+try {
+    SASLAuthentication.registerSASLMechanism("X-FACEBOOK-PLATFORM", SASLXFacebookPlatformMechanism.class);
+    SASLAuthentication.supportSASLMechanism("X-FACEBOOK-PLATFORM", 0);
+    mFbConnection.connect();
+    mFbConnection.login(apiKey, accessToken, "Application");
+} catch (XMPPException e) {
+    mFbConnection.disconnect();
+    e.printStackTrace();
+}
+</code></pre>
+
+<p>I hope this will help.</p>

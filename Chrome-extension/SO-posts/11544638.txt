@@ -1,0 +1,94 @@
+<p>This is the code I use in a custom built AsyncTask and it works on 2.3, 3.1, and 4.03:</p>
+
+<pre><code>            ContentValues mInserts = new ContentValues();
+            mInserts.put(MediaStore.Audio.Playlists.NAME, mPrefs.getString(AM.MEDIASTORECHANGE_NEWPLAYLISTNAME, "New Playlist"));
+            mInserts.put(MediaStore.Audio.Playlists.DATE_ADDED, System.currentTimeMillis());
+            mInserts.put(MediaStore.Audio.Playlists.DATE_MODIFIED, System.currentTimeMillis());
+            mUri = mCR.insert(MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, mInserts);
+            if (mUri != null) {
+                mPlaylistId = -1;
+                mResult = FM.SUCCESS;
+                c = mCR.query(mUri, PROJECTION_PLAYLIST, null, null, null);
+                if (c != null) {
+                    // Save the newly created ID so it can be selected.  Names are allowed to be duplicated,
+                    // but IDs can never be.
+                    mPlaylistId = c.getInt(c.getColumnIndex(MediaStore.Audio.Playlists._ID));
+                    c.close();
+                }
+                if (DBG.AUDIO) {
+                    Log.d(TAG, "PLAYLIST_ADD - mPlaylistId: " + mPlaylistId 
+                            + "  mSelectString: " + mSelectString + "  mUri: "+ mUri.toString());
+                }
+
+            }
+
+public static final String[] PROJECTION_PLAYLIST = new String[] {
+    MediaStore.Audio.Playlists._ID,
+    MediaStore.Audio.Playlists.NAME,
+    MediaStore.Audio.Playlists.DATA
+};
+</code></pre>
+
+<p>To get the correct Uri to add playlist members, you need the Id.  To add songs to the playlist, you also need to know the current high water mark of PLAYORDER in the playlist's current state.  Otherwise the MediaStore ContentResolver will gag because you are trying to insert playlist members with the same play order.  So, you need to query the Playlist Uri first to get the highest PLAYORDER value, and use that as the starting point for your ContentValues inserts.</p>
+
+<p>I have only tried inserting one playlist member at a time, though in theory you might be able to do a bulk insert.  The code below is set up to convert to a bulk insert in the future, but currently only does one insert at a time.  It takes a cursor of MediaStore.Audio.Media songs and inserts them into a playlist Id that has been stored in SharedPreferences.</p>
+
+<pre><code>    private void addSongsInCursorToPlaylist(Cursor c) {
+    int mIdCol;
+    int mCount;
+    int mPercent = 0;
+    ContentResolver mCR = mContext.getContentResolver();
+    ContentProviderClient mCRC = null;
+    try {
+        mCount = c.getCount();
+        mIdCol = c.getColumnIndex(MediaStore.Audio.Media._ID);
+        ContentValues[] mInsertList = new ContentValues[1];
+        mInsertList[0] = new ContentValues();
+        int mPlaylistId  = mPrefs.getInt(AM.PLAYLIST_NOWPLAYING_ID, AM.PLAYLIST_ID_DEFAULT);
+        Uri mUri = MediaStore.Audio.Playlists.Members.getContentUri("external", mPlaylistId);
+        Cursor c2 = mCR.query(mUri, 
+                PROJECTION_PLAYLISTMEMBERS_PLAYORDER, null, null, MediaStore.Audio.Playlists.Members.PLAY_ORDER + " DESC ");
+        int mPlayOrder = 1;
+        if (c2 != null) {
+            if (c2.moveToFirst()) {
+                mPlayOrder = (c2.getInt(c2.getColumnIndex(MediaStore.Audio.Playlists.Members.PLAY_ORDER))) + 1;
+            }
+            c2.close();
+        }
+        mCRC = mCR.acquireContentProviderClient(mUri);
+        if (DBG.AUDIO) {
+            Log.d(TAG, "addSongsInCursorToPlaylist -Content Uri: " + mUri.toString() 
+                    + "  PlaylistID: " + mPlaylistId + " mPlayOrder: " + mPlayOrder);
+        }
+        for (int i=0; i&lt; mCount; i++) {
+            if (c.moveToPosition(i)) {
+                // Don't pollute with progress messages..has to be at least 1% increments
+                int mTemp = (i * 100) / (mCount );
+                if (mTemp &gt; mPercent) {
+                    mPercent = mTemp;
+                    publishProgress(mPercent);
+                }
+                mInsertList[0].put(MediaStore.Audio.Playlists.Members.AUDIO_ID, c.getLong(mIdCol));
+                mInsertList[0].put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, mPlayOrder++);
+                mCR.insert(mUri, mInsertList[0]);
+                if (DBG.AUDIO) {
+                    Log.d(TAG, "addSongsInCursorToPlaylist -Adding AudioID: " + c.getLong(mIdCol) + " to Uri: " + mUri.toString()  );
+                }
+            }
+            mCRC.release();
+        }
+    } catch (Throwable t) {
+        t.printStackTrace();
+    }
+
+}
+    // Projection to get high water mark of PLAY_ORDER in a particular playlist
+public static final String[] PROJECTION_PLAYLISTMEMBERS_PLAYORDER = new String[] {
+    MediaStore.Audio.Playlists.Members._ID,
+    MediaStore.Audio.Playlists.Members.PLAY_ORDER
+};
+// Projection to get the list of song IDs to be added to a playlist
+public static final String[] PROJECTION_SONGS_ADDTOPLAYLIST = new String[] {
+    MediaStore.Audio.Media._ID,
+};
+</code></pre>

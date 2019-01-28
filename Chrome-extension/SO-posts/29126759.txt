@@ -1,0 +1,211 @@
+<p>As mentioned in the <a href="https://bugs.openjdk.java.net/browse/JDK-6464450" rel="nofollow">bug description</a>, there are two classes that handle drag and drop:</p>
+
+<blockquote>
+  <ul>
+  <li><code>DropTargetAutoScroller</code>, a member class of <code>java.awt.dnd.DropTarget</code>, responsible of supporting components implementing the <code>Autoscroll</code> interface;</li>
+  <li><code>DropHandler</code>, a member class of <code>javax.swing.TransferHandler</code>, that automates d&amp;d autoscrolling on components implementing the <code>Scrollable</code> interface.</li>
+  </ul>
+</blockquote>
+
+<p>So, indeed, the workaround is not suitable for <code>JList</code>, which implements <code>Scrollable</code> and not <code>Autoscroll</code>. But, if you look in the source code for <code>DropTarget</code> and <code>TransferHandler</code>, you'll notice that the autoscroll code is basically the same, and in both cases wrong. The workaround is also very similar to the <code>DropTarget</code> code, with only a few lines added. Basically, the solution is to convert the location of the mouse cursor from the component coordinate system to the screen coordinate system. That way, when checking whether the mouse has moved, absolute coordinates are used. So we can copy the code from <code>TransferHandler</code> instead and add these few lines.</p>
+
+<p>That's great... but where do we put this code and how do we get it called?</p>
+
+<p>If we look in <code>setTransferHandler()</code> we see that it actually sets a <code>DropTarget</code>, which is a <strong>package-private static</strong> class called <code>SwingDropTarget</code> from the <code>TransferHandler</code> class. It delegates drag and drop events to a <strong>private static</strong> <code>DropTargetListener</code> called <code>DropHandler</code>. This class does all of the magic that happens during drag and drop, and of course it uses other private methods from <code>TransferHandler</code>. This means we can't just set our own <code>DropTarget</code> without losing everything already implemented in <code>TransferHandler</code>. We could rewrite <code>TransferHandler</code> (about 1800 lines) with our few lines added to fix the bug, but that's not very realistic.</p>
+
+<p>A simpler solution is to write a <code>DropTargetListener</code>, in which we simply copy the autoscroll-related code from <code>DropHandler</code> (which also implements this interface), with our lines added. This is the class:</p>
+
+<pre><code>import java.awt.Insets;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.Toolkit;
+import java.awt.dnd.DropTargetDragEvent;
+import java.awt.dnd.DropTargetDropEvent;
+import java.awt.dnd.DropTargetEvent;
+import java.awt.dnd.DropTargetListener;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.util.TooManyListenersException;
+
+import javax.swing.JComponent;
+import javax.swing.Scrollable;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+
+
+public class AutoscrollWorkaround implements DropTargetListener, ActionListener {
+
+    private JComponent component;
+
+    private Point lastPosition;
+
+    private Rectangle outer;
+    private Rectangle inner;
+
+    private Timer timer;
+    private int hysteresis = 10;
+
+    private static final int AUTOSCROLL_INSET = 10;
+
+    public AutoscrollWorkaround(JComponent component) {
+        if (!(component instanceof Scrollable)) {
+            throw new IllegalArgumentException("Component must be Scrollable for autoscroll to work!");
+        }
+        this.component = component;
+        outer = new Rectangle();
+        inner = new Rectangle();
+
+        Toolkit t = Toolkit.getDefaultToolkit();
+        Integer prop;
+
+        prop = (Integer)t.getDesktopProperty("DnD.Autoscroll.interval");
+        timer = new Timer(prop == null ? 100 : prop.intValue(), this);
+
+        prop = (Integer)t.getDesktopProperty("DnD.Autoscroll.initialDelay");
+        timer.setInitialDelay(prop == null ? 100 : prop.intValue());
+
+        prop = (Integer)t.getDesktopProperty("DnD.Autoscroll.cursorHysteresis");
+        if (prop != null) {
+            hysteresis = prop.intValue();
+        }
+    }
+
+    @Override
+    public void dragEnter(DropTargetDragEvent e) {
+        lastPosition = e.getLocation();
+        SwingUtilities.convertPointToScreen(lastPosition, component);
+        updateRegion();
+    }
+
+    @Override
+    public void dragOver(DropTargetDragEvent e) {
+        Point p = e.getLocation();
+        SwingUtilities.convertPointToScreen(p, component);
+
+        if (Math.abs(p.x - lastPosition.x) &gt; hysteresis
+                || Math.abs(p.y - lastPosition.y) &gt; hysteresis) {
+            // no autoscroll
+            if (timer.isRunning()) timer.stop();
+        } else {
+            if (!timer.isRunning()) timer.start();
+        }
+
+        lastPosition = p;
+    }
+
+    @Override
+    public void dragExit(DropTargetEvent dte) {
+        cleanup();
+    }
+
+    @Override
+    public void drop(DropTargetDropEvent dtde) {
+        cleanup();
+    }
+
+    @Override
+    public void dropActionChanged(DropTargetDragEvent e) {
+    }
+
+    private void updateRegion() {
+        // compute the outer
+        Rectangle visible = component.getVisibleRect();
+        outer.setBounds(visible.x, visible.y, visible.width, visible.height);
+
+        // compute the insets
+        Insets i = new Insets(0, 0, 0, 0);
+        if (component instanceof Scrollable) {
+            int minSize = 2 * AUTOSCROLL_INSET;
+
+            if (visible.width &gt;= minSize) {
+                i.left = i.right = AUTOSCROLL_INSET;
+            }
+
+            if (visible.height &gt;= minSize) {
+                i.top = i.bottom = AUTOSCROLL_INSET;
+            }
+        }
+
+        // set the inner from the insets
+        inner.setBounds(visible.x + i.left,
+                      visible.y + i.top,
+                      visible.width - (i.left + i.right),
+                      visible.height - (i.top  + i.bottom));
+    }
+
+    @Override
+    public void actionPerformed(ActionEvent e) {
+        updateRegion();
+        Point componentPosition = new Point(lastPosition);
+        SwingUtilities.convertPointFromScreen(componentPosition, component);
+        if (outer.contains(componentPosition) &amp;&amp; !inner.contains(componentPosition)) {
+            autoscroll(componentPosition);
+        }
+    }
+
+    private void autoscroll(Point position) {
+        Scrollable s = (Scrollable) component;
+        if (position.y &lt; inner.y) {
+            // scroll upward
+            int dy = s.getScrollableUnitIncrement(outer, SwingConstants.VERTICAL, -1);
+            Rectangle r = new Rectangle(inner.x, outer.y - dy, inner.width, dy);
+            component.scrollRectToVisible(r);
+        } else if (position.y &gt; (inner.y + inner.height)) {
+            // scroll downard
+            int dy = s.getScrollableUnitIncrement(outer, SwingConstants.VERTICAL, 1);
+            Rectangle r = new Rectangle(inner.x, outer.y + outer.height, inner.width, dy);
+            component.scrollRectToVisible(r);
+        }
+
+        if (position.x &lt; inner.x) {
+            // scroll left
+            int dx = s.getScrollableUnitIncrement(outer, SwingConstants.HORIZONTAL, -1);
+            Rectangle r = new Rectangle(outer.x - dx, inner.y, dx, inner.height);
+            component.scrollRectToVisible(r);
+        } else if (position.x &gt; (inner.x + inner.width)) {
+            // scroll right
+            int dx = s.getScrollableUnitIncrement(outer, SwingConstants.HORIZONTAL, 1);
+            Rectangle r = new Rectangle(outer.x + outer.width, inner.y, dx, inner.height);
+            component.scrollRectToVisible(r);
+        }
+    }
+
+    private void cleanup() {
+        timer.stop();
+    }
+}
+</code></pre>
+
+<p>(You'll notice that basically only the SwingUtilities.convertXYZ() calls are extra from the <code>TransferHandler</code> code)</p>
+
+<p>Next, we can add this listener to the <code>DropTarget</code> installed when setting the <code>TransferHandler</code>. (Note that a regular <code>DropTarget</code> only accepts one listener and will throw an exception if another one is added. <code>SwingDropTarget</code> uses <code>DropHandler</code>, but fortunately it also adds support for other listeners as well)</p>
+
+<p>So let's just add this static factory method to the <code>AutoscrollWorkaround</code> class, which does this for us:</p>
+
+<pre><code>    public static void applyTo(JComponent component) {
+        if (component.getTransferHandler() == null) {
+            throw new IllegalStateException("A TransferHandler must be set before calling this method!");
+        }
+        try {
+            component.getDropTarget().addDropTargetListener(new AutoscrollWorkaround(component));
+        } catch (TooManyListenersException e) {
+            throw new IllegalStateException("Something went wrong! DropTarget should have been " +
+                    "SwingDropTarget which accepts multiple listeners", e);
+        }
+    }
+</code></pre>
+
+<p>This provides an easy and very convenient way to apply the workaround to any component that suffers from this bug, by only calling this one method. Just make sure to call it after having <code>setTransferHandler()</code> on the component. So, we only have to add one line to the original program:</p>
+
+<pre><code>private static void setDragAndDrop(JList&lt;String&gt; jlist) {
+    jlist.setDragEnabled(true);
+    jlist.setDropMode(DropMode.INSERT);
+    jlist.setTransferHandler(new ListTransferHandler());
+    AutoscrollWorkaround.applyTo(jlist); // &lt;--- just this line added
+}
+</code></pre>
+
+<p>The autoscroll now works OK on both Windows and Linux. (Although on Linux the line for the drop location is not repainted until autoscroll works, but oh well.)</p>
+
+<p>This workaround should work also for <code>JTable</code> (I tested), <code>JTree</code> and probably any components that implement <code>Scrollable</code>.</p>

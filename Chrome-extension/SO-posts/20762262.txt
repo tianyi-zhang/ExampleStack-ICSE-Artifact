@@ -1,0 +1,71 @@
+<p>Finally I managed to find the solution. For the Controller in Play Framework, we need to use <code>BodyParser.Raw</code> so the we can extract the payload request as raw data, i.e. array of bytes. </p>
+
+<p>Here's the code for the controller in Play Framework:</p>
+
+<pre><code>@BodyParser.Of(BodyParser.Raw.class)
+public static Result receiveRawInstaData(){
+    Map&lt;String, String[]&gt; headers = request().headers();
+    RawBuffer jsonRaw = request().body().asRaw();
+
+    if(jsonRaw == null){
+        logger.warn("jsonRaw is null. Something is wrong with the payload");
+        return badRequest("Expecting serializable raw data");
+    }
+
+    String[] xHubSignature = headers.get(InstaSubscriptionUtils.HTTP_HEADER_X_HUB_SIGNATURE);
+    if(xHubSignature == null){
+        logger.error("Invalid POST. It does not contain {} in its header", InstaSubscriptionUtils.HTTP_HEADER_X_HUB_SIGNATURE);
+        return badRequest("You are not Instagram!\n");
+    }
+
+    String json;
+    byte[] jsonRawBytes;
+
+    jsonRawBytes = jsonRaw.asBytes();
+    json = new String(jsonRawBytes, StandardCharsets.UTF_8);
+
+    try {
+        String clientSecret = InstaSubscriptionUtils.getClientSecret(1);
+        VerificationResult verificationResult = SubscriptionUtil.verifySubscriptionPostRequestSignature
+                (clientSecret,jsonRawBytes, xHubSignature[0]);
+        if(verificationResult.isSuccess()){
+            logger.debug("Signature matches!. Received signature: {}, calculated signature: {}", xHubSignature[0], verificationResult.getCalculatedSignature());
+        }else{
+            logger.error("Signature doesn't match. Received signature: {}, calculated signature: {}", xHubSignature[0], verificationResult.getCalculatedSignature());
+            return badRequest("Signature does not match!\n");
+        }
+    } catch (InstagramException e) {
+        logger.error("Instagram exception.", e);
+        return internalServerError("Internal server error. We will attend to this problem ASAP!");
+    }
+
+    logger.debug("Received xHubSignature: {}", xHubSignature[0]);
+    logger.info("Sucessfully received json data: {}", json);
+
+    return ok("OK!");
+}
+</code></pre>
+
+<p>And for the code for method <code>verifySubscriptionPostRequestSignature</code> in <code>SubscriptionUtil</code></p>
+
+<pre><code>public static VerificationResult verifySubscriptionPostRequestSignature(String clientSecret, byte[] rawJsonData, String xHubSignature) throws InstagramException{
+    SecretKeySpec keySpec;
+    keySpec = new SecretKeySpec(clientSecret.getBytes(StandardCharsets.UTF_8), HMAC_SHA1);
+    Mac mac;
+
+    try {
+        mac = Mac.getInstance(HMAC_SHA1);
+        mac.init(keySpec);
+        byte[] result = mac.doFinal(rawJsonData);
+        String encodedResult = Hex.encodeHexString(result);
+
+        return new VerificationResult(encodedResult.equals(xHubSignature), encodedResult);
+    } catch (NoSuchAlgorithmException e) {
+        throw new InstagramException("Invalid algorithm name!", e);
+    } catch (InvalidKeyException e){
+        throw new InstagramException("Invalid key: " + clientSecret, e);
+    }
+}
+</code></pre>
+
+<p>I implemented this solution in <a href="https://github.com/sachin-handiekar/jInstagram" rel="nofollow">jInstagram</a>, here is the link to the source code: <a href="https://github.com/sachin-handiekar/jInstagram/blob/master/src/main/java/org/jinstagram/realtime/SubscriptionUtil.java#L44" rel="nofollow">SubscriptionUtil</a></p>

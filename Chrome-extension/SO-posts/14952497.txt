@@ -1,0 +1,47 @@
+<p>As far as I know, there are no easy way to get the list of app accessing LocationProvider. But a simple way to diagnose is to kill App who request ACCESS_FINE_LOCATION/ACCESS_COARSE_LOCATION permission one by one. </p>
+
+<p>Many app get location data through call backs like onLocationChanged(...), this make it almost impossible to identify your problem without modifying the Android system. You can modify the location service to record the uid(through Binder.getCallingUid()) to get the current app that using location service. It is not very difficult but heavy-weighted. </p>
+
+<p>EDIT:</p>
+
+<p>There is a LocationManagerService.java under frameworks/base/services/java/com/android/server.</p>
+
+<p>In general, there are several ways to get location in Android according to its <a href="http://developer.android.com/guide/topics/location/strategies.html" rel="nofollow">Location Strategies</a> . </p>
+
+<p><strong>LocationManager.requestLocationUpdates</strong></p>
+
+<p>You can look at the implementation of this in LocationManagerService.java. The method receive an ILocationListener(Binder object) from the client and call this listener later if it receives a location update. </p>
+
+<pre><code>@Override
+public void requestLocationUpdates(LocationRequest request, ILocationListener listener,
+        PendingIntent intent, String packageName) {
+    if (request == null) request = DEFAULT_LOCATION_REQUEST;
+    checkPackageName(packageName);
+    int allowedResolutionLevel = getCallerAllowedResolutionLevel();
+    checkResolutionLevelIsSufficientForProviderUse(allowedResolutionLevel,
+            request.getProvider());
+    LocationRequest sanitizedRequest = createSanitizedRequest(request, allowedResolutionLevel);
+
+    final int pid = Binder.getCallingPid();
+    final int uid = Binder.getCallingUid();
+    Receiver recevier = checkListenerOrIntent(listener, intent, pid, uid, packageName);
+
+    // providers may use public location API's, need to clear identity
+    long identity = Binder.clearCallingIdentity();
+    try {
+        synchronized (mLock) {
+            requestLocationUpdatesLocked(sanitizedRequest, recevier, pid, uid, packageName);
+        }
+    } finally {
+        Binder.restoreCallingIdentity(identity);
+    }
+}
+</code></pre>
+
+<p>Basically, you can get the uid of the application in this method to know how many apps are requesting location updates. But you should also remember to look at the removeUpdates method. </p>
+
+<p><strong>LocationManager.getLastKnownLocation</strong></p>
+
+<p>You can also log out the uid of the application in the implementation of this method. </p>
+
+<p>After modifying the code, you can compile the whole Android project, install your application, and get your result. </p>

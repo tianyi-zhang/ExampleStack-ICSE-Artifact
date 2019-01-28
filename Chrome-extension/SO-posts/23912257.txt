@@ -1,0 +1,32 @@
+<p>Although Tomcat does forcibly deregister the JDBC driver for you, it is nonetheless good practice to clean up all resources created by your webapp on context destruction in case you move to another servlet container which doesn't do the memory leak prevention checks that Tomcat does.</p>
+
+<p><strong>However, the methodology of blanket driver deregistration is dangerous.</strong>  Some drivers returned by the <code>DriverManager.getDrivers()</code> method may have been loaded by the parent ClassLoader (i.e., the servlet container's classloader) not the webapp context's ClassLoader (e.g., they may be in the container's lib folder, not the webapp's, and therefore shared across the whole container).  Deregistering these will affect any other webapps which may be using them (or even the container itself).</p>
+
+<p>Therefore, one should check that the ClassLoader for each driver is the webapp's ClassLoader before deregistering it.  So, in your ContextListener's contextDestroyed() method:</p>
+
+<pre><code>public final void contextDestroyed(ServletContextEvent sce) {
+    // ... First close any background tasks which may be using the DB ...
+    // ... Then close any DB connection pools ...
+
+    // Now deregister JDBC drivers in this context's ClassLoader:
+    // Get the webapp's ClassLoader
+    ClassLoader cl = Thread.currentThread().getContextClassLoader();
+    // Loop through all drivers
+    Enumeration&lt;Driver&gt; drivers = DriverManager.getDrivers();
+    while (drivers.hasMoreElements()) {
+        Driver driver = drivers.nextElement();
+        if (driver.getClass().getClassLoader() == cl) {
+            // This driver was registered by the webapp's ClassLoader, so deregister it:
+            try {
+                log.info("Deregistering JDBC driver {}", driver);
+                DriverManager.deregisterDriver(driver);
+            } catch (SQLException ex) {
+                log.error("Error deregistering JDBC driver {}", driver, ex);
+            }
+        } else {
+            // driver was not registered by the webapp's ClassLoader and may be in use elsewhere
+            log.trace("Not deregistering JDBC driver {} as it does not belong to this webapp's ClassLoader", driver);
+        }
+    }
+}
+</code></pre>

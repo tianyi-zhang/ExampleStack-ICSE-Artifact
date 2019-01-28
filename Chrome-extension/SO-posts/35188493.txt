@@ -1,0 +1,366 @@
+<p>maybe this , by the way with tint effect on drawables, if someone needs it:</p>
+
+<pre><code>import java.util.List;
+
+import com.nineoldandroids.animation.Animator;
+import com.nineoldandroids.animation.ObjectAnimator;
+import com.nineoldandroids.animation.ValueAnimator;
+import com.nineoldandroids.animation.Animator.AnimatorListener;
+
+import android.annotation.TargetApi;
+import android.content.Context;
+import android.content.res.TypedArray;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Paint.Align;
+import android.graphics.PorterDuff;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.inputmethodservice.Keyboard;
+import android.inputmethodservice.Keyboard.Key;
+import android.os.Build;
+import android.inputmethodservice.KeyboardView;
+import android.util.AttributeSet;
+import android.view.MotionEvent;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.graphics.Region.Op;
+
+public class RippleKeyboardView extends KeyboardView 
+{
+private Bitmap                      tintedBitmap,tintedBitmap2;
+private static final Bitmap.Config  BITMAP_CONFIG               = Bitmap.Config.ARGB_8888;
+private Paint                       mPaint                      = new Paint();
+private int                         tintcolor                   = 0xffff0000;
+private BitmapDrawable              mDrawable,mDrawable2;
+private int                         invalidatekeyindex          = -1;
+private static final int            NOT_A_KEY                   = -1;
+private float                       animationcircleProgress;
+private Paint                       circlePaint                 = new Paint();
+private ValueAnimator               circleAnimator;
+private static final int            ANIMATION_TIME_ID           = android.R.integer.config_shortAnimTime;
+private float                       ripplex,rippley;
+private float                       textoffsety;
+private int                         keytextsize;
+private int                         mLabelTextSize;
+private Rect                        mDirtyRect = new Rect();
+private boolean                     mDrawPending;
+private Bitmap                      mBuffer;
+private boolean                     mKeyboardChanged;
+private Canvas                      mCanvas;
+private Keyboard                    mKeyboard;
+private List&lt;Key&gt;                   mkeys;
+private Rect                        tobeinvalidated=new Rect();
+
+@SuppressWarnings("deprecation")
+@TargetApi(21)
+public                              RippleKeyboardView(Context context, AttributeSet attrs) 
+{
+    super(context, attrs);
+    if(android.os.Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.M)
+    {
+        tintedBitmap                    = generateIconBitmaps(getBitmapFromDrawable(getResources().getDrawable(R.drawable.sym_keyboard_delete,null)));
+        tintedBitmap2                   = generateIconBitmaps(getBitmapFromDrawable(getResources().getDrawable(R.drawable.sym_keyboard_feedback_return,null)));
+    }
+    else
+    {
+        tintedBitmap                    = generateIconBitmaps(getBitmapFromDrawable(getResources().getDrawable(R.drawable.sym_keyboard_delete)));
+        tintedBitmap2                   = generateIconBitmaps(getBitmapFromDrawable(getResources().getDrawable(R.drawable.sym_keyboard_feedback_return)));
+    }
+    mDrawable                       = new BitmapDrawable(getResources(), tintedBitmap);
+    mDrawable2                      = new BitmapDrawable(getResources(), tintedBitmap2);
+
+    TypedArray a                    = context.getTheme().obtainStyledAttributes(attrs, R.styleable.RippleKeyboardView, 0, 0);
+    keytextsize                     = a.getDimensionPixelSize(R.styleable.RippleKeyboardView_keytxtsize,60);
+    mLabelTextSize                  = a.getDimensionPixelSize(R.styleable.RippleKeyboardView_lblsize, 40);
+    a.recycle();
+
+    animationcircleProgress         = 0;
+
+    final int pressedAnimationTime  = getResources().getInteger(ANIMATION_TIME_ID);
+    circleAnimator                  = ObjectAnimator.ofFloat(this, "animationlayerProgress", 100, 0f);
+    circleAnimator.setDuration(pressedAnimationTime);
+    circleAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
+
+    mPaint.setColor(0xff000000);
+    mPaint.setAntiAlias(true);
+
+    mPaint.setTextAlign(Align.CENTER);
+    mPaint.setAlpha(255);
+    circlePaint.setColor(0x77989898);
+
+    super.setPreviewEnabled(false);
+
+    invalidateAllKeys();
+}
+private Bitmap                      getBitmapFromDrawable(Drawable drawable) 
+{
+    if (drawable == null) 
+        return null;
+
+    if (drawable instanceof BitmapDrawable) 
+        return ((BitmapDrawable) drawable).getBitmap();
+
+    try 
+    {
+        Bitmap bitmap = Bitmap.createBitmap(drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight(), BITMAP_CONFIG);
+        Canvas canvas = new Canvas(bitmap);
+
+        drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+        drawable.draw(canvas);
+
+        return bitmap;
+    } 
+    catch (OutOfMemoryError e) 
+    {
+        return null;
+    }
+}
+private Bitmap                      generateIconBitmaps(Bitmap origin)
+{
+    if (origin == null) 
+        return null;
+    Bitmap bmp      = origin.copy(Bitmap.Config.ARGB_8888, true);
+    Canvas canvas   = new Canvas(bmp);
+    canvas.drawColor(tintcolor &amp; 0x00ffffff | 0xff000000 , PorterDuff.Mode.SRC_IN);
+    origin.recycle();
+    return bmp;
+}
+@Override
+public void onSizeChanged(int w, int h, int oldw, int oldh) 
+{
+    super.onSizeChanged(w, h, oldw, oldh);
+    mBuffer = null;
+}
+@Override
+public void setKeyboard(Keyboard keyboard) 
+{
+    super.setKeyboard(keyboard);
+    mKeyboardChanged = true;
+    mKeyboard = keyboard;
+    invalidateAllKeys();
+}
+@Override
+public void onDraw(Canvas canvas)
+{
+    if (mDrawPending || mBuffer == null || mKeyboardChanged) 
+        onBufferDraw();
+    canvas.drawBitmap(mBuffer, 0, 0, null);
+}
+public void                         onBufferDraw() 
+{
+    if (mBuffer == null || mKeyboardChanged) 
+    {
+        if (mBuffer == null || mKeyboardChanged &amp;&amp; (mBuffer.getWidth() != getWidth() || mBuffer.getHeight() != getHeight())) 
+        {
+            final int width = Math.max(1, getWidth());
+            final int height = Math.max(1, getHeight());
+            mBuffer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            mCanvas = new Canvas(mBuffer);
+            mkeys = getKeyboard().getKeys();
+        }
+        invalidateAllKeys();
+        mKeyboardChanged = false;
+    }
+    final Canvas canvas = mCanvas;
+    canvas.clipRect(mDirtyRect, Op.REPLACE);
+    canvas.drawColor(0x00000000, PorterDuff.Mode.CLEAR);
+    if (mKeyboard == null) 
+        return;
+    List&lt;android.inputmethodservice.Keyboard.Key&gt; keys = mkeys;
+    for (android.inputmethodservice.Keyboard.Key key : keys) 
+    {
+        canvas.translate(key.x , key.y );
+        if (key.codes[0] == 67) 
+        {
+            final int drawableX = (key.width - 0 - key.icon.getIntrinsicWidth()) / 2 + 0;
+            final int drawableY = (key.height - 0 - key.icon.getIntrinsicHeight()) / 2 + 0;
+            canvas.translate(drawableX, drawableY);
+            mDrawable.setBounds(0, 0, key.icon.getIntrinsicWidth(), key.icon.getIntrinsicHeight());
+            mDrawable.draw(canvas);
+            canvas.translate(-drawableX, -drawableY);
+        }
+        else if (key.codes[0] == 66) 
+        {
+            final int drawableX = (key.width - 0 - key.icon.getIntrinsicWidth()) / 2 + 0;
+            final int drawableY = (key.height - 0 - key.icon.getIntrinsicHeight()) / 2 + 0;
+            canvas.translate(drawableX, drawableY);
+            mDrawable2.setBounds(0, 0, key.icon.getIntrinsicWidth(), key.icon.getIntrinsicHeight());
+            mDrawable2.draw(canvas);
+            canvas.translate(-drawableX, -drawableY);
+        }
+        else
+        {
+            String label = key.label.toString();
+            if (label.length()&gt;1 &amp;&amp; key.codes.length &lt; 2)
+            {
+                mPaint.setTextSize(mLabelTextSize);
+                mPaint.setTypeface(Typeface.DEFAULT_BOLD);
+            }
+            else
+            {
+                mPaint.setTextSize(keytextsize);
+                mPaint.setTypeface(Typeface.DEFAULT);
+            }
+            textoffsety= (mPaint.getTextSize() - mPaint.descent()) / 2;
+            canvas.drawText(label,(key.width ) / 2,(key.height ) / 2+ textoffsety, mPaint);
+        }
+        canvas.translate(-key.x , -key.y ); 
+    }
+    if (invalidatekeyindex!=-1)
+        canvas.drawCircle(ripplex , rippley, getAnimationlayerProgress(), circlePaint);
+    mDrawPending = false;
+    mDirtyRect.setEmpty();
+}
+@Override
+public void invalidateAllKeys() 
+{
+    mDirtyRect.union(0, 0, getWidth(), getHeight());
+    mDrawPending = true;
+}
+@Override
+public void invalidateKey(int keyIndex) 
+{
+    List&lt;android.inputmethodservice.Keyboard.Key&gt; mKeys = mkeys;
+    if (mKeys == null) return;
+    if (keyIndex &lt; 0 || keyIndex &gt;= mKeys.size()) 
+        return;
+    final Key key = mKeys.get(keyIndex);
+
+    mDirtyRect.union(key.x , key.y , key.x + key.width , key.y + key.height );
+    invalidate(key.x , key.y , key.x + key.width , key.y + key.height );
+}
+@Override
+public boolean                      performClick() 
+{
+    super.performClick();
+    return true;
+}
+@Override
+public boolean                      onTouchEvent(MotionEvent me) 
+{
+    boolean ret = super.onTouchEvent(me);
+    final int action = me.getAction();
+    int primaryIndex = NOT_A_KEY;
+    if (action == MotionEvent.ACTION_UP)
+    {
+        int [] nearestKeyIndices=getKeyboard().getNearestKeys((int)me.getX(),(int) me.getY());
+        final int keyCount = nearestKeyIndices.length;
+        List&lt;android.inputmethodservice.Keyboard.Key&gt; keys = mkeys;
+        for (int i = 0; i &lt; keyCount; i++) 
+        {
+            final android.inputmethodservice.Keyboard.Key key = keys.get(nearestKeyIndices[i]);
+            boolean isInside = key.isInside((int)me.getX(),(int)me.getY());
+            if (isInside) 
+                primaryIndex = nearestKeyIndices[i];
+        }
+    }
+    if (primaryIndex!=NOT_A_KEY)
+    {
+        DrawCustomRipple(primaryIndex);
+    }
+    performClick();
+    return ret;
+}
+private void                        DrawCustomRipple(int keyindex)
+{
+    if (circleAnimator.isRunning())
+    {
+        tobeinvalidated.set((int)(ripplex-animationcircleProgress-4),
+                            (int)(rippley-animationcircleProgress-4),
+                            (int)(ripplex+animationcircleProgress+4),
+                            (int)(rippley+animationcircleProgress+4));
+        circleAnimator.removeAllListeners();
+        invalidatekeyindex = -1;
+        mDrawPending = true;
+        invalidatekeyindex = -1;
+        mDirtyRect.union(tobeinvalidated);
+        invalidate(tobeinvalidated);
+    }
+    invalidatekeyindex=keyindex;
+    List&lt;android.inputmethodservice.Keyboard.Key&gt; keys = mkeys;
+    final android.inputmethodservice.Keyboard.Key cKey=keys.get(invalidatekeyindex);
+    if (cKey.label == null &amp;&amp; cKey.codes[0] != 67 &amp;&amp; cKey.codes[0] != 66)
+        return;
+
+    circleAnimator.setFloatValues(30.0f,100.0f);
+    circleAnimator.addListener(new AnimatorListener() 
+    {
+        @Override
+        public void onAnimationStart(Animator animation) 
+        {
+            final Rect bounds=new Rect();
+            if (cKey.label!=null)
+            {
+                String label = cKey.label.toString();
+                mPaint.getTextBounds(label, 0, 1, bounds);
+            }
+            ripplex =cKey.x+(cKey.width ) / 2+bounds.width()/2;
+            rippley = cKey.y + (cKey.height ) / 2;
+        }
+        @Override
+        public void onAnimationEnd(Animator animation) 
+        {
+            invalidatekeyindex = -1;
+            mDrawPending = true;
+            tobeinvalidated.set((int)(ripplex-animationcircleProgress-4),
+                                (int)(rippley-animationcircleProgress-4),
+                                (int)(ripplex+animationcircleProgress+4),
+                                (int)(rippley+animationcircleProgress+4));
+            mDirtyRect.union(tobeinvalidated);
+            onBufferDraw();
+            invalidate(tobeinvalidated);
+        }
+        @Override
+        public void onAnimationCancel(Animator animation) 
+        {
+        }
+        @Override
+        public void onAnimationRepeat(Animator animation) 
+        {
+        }
+    });
+    circleAnimator.start();
+}
+public float                        getAnimationlayerProgress()
+{
+    return animationcircleProgress;
+}
+public void                         setAnimationlayerProgress(float animationlayerProgress)
+{
+    this.animationcircleProgress = animationlayerProgress;
+
+    tobeinvalidated.set((int)(ripplex-animationcircleProgress-4),
+                        (int)(rippley-animationcircleProgress-4),
+                        (int)(ripplex+animationcircleProgress+4),
+                        (int)(rippley+animationcircleProgress+4));
+
+    mDirtyRect.union((int)(ripplex-animationcircleProgress-4),
+            (int)(rippley-animationcircleProgress-4),
+            (int)(ripplex+animationcircleProgress+4),
+            (int)(rippley+animationcircleProgress+4) );
+
+    mDrawPending = true;
+
+    invalidate( (int)(ripplex-animationcircleProgress-4),
+                (int)(rippley-animationcircleProgress-4),
+                (int)(ripplex+animationcircleProgress+4),
+                (int)(rippley+animationcircleProgress+4));
+}
+</code></pre>
+
+<p>}</p>
+
+<p>and add this attrs.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;!DOCTYPE resources &gt;
+&lt;resources&gt;
+    &lt;declare-styleable name="RippleKeyboardView"&gt;
+        &lt;attr name="keytxtsize" format="dimension" /&gt;   
+        &lt;attr name="lblsize"    format="dimension" /&gt;   
+    &lt;/declare-styleable&gt;
+&lt;/resources&gt;
+</code></pre>

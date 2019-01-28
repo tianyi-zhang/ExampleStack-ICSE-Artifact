@@ -1,0 +1,87 @@
+<p>Most System Services run as threads within the <code>system_server</code> process. At boot, they pass an invitation-to-call (see calls to <code>addService()</code> in <code>SystemServer.java</code>) to <code>servicemanager</code> which then is able to distribute the invitation to apps calling <code>getSystemService</code>.</p>
+
+<p>Once things are rolling, you can think of the whole setup as a kind of client-server architecture where your app is the client (remote or proxy side) and the server (local or stub side) is the system service that you're talking to. The client and server communicate through the inter-process communication (IPC) subsystem known as binder. There are different parts to the binder: Framework components perform the marshalling and unmarshalling of parcels, while the kernel driver does the actual memory copies to/from ioctl calls and keeps track of who's been invited to call at the process and thread level.</p>
+
+<p>Apps interface with the binder via a proxy. For example, when you use <code>LocationManagerService</code>, you get an instance of <code>android.location.ILocationManager</code>. One of the methods in the Proxy class is <code>getLastLocation()</code>:</p>
+
+<pre><code>...
+@Override public android.location.Location getLastLocation(android.location.LocationRequest request, java.lang.String packageName) throws android.os.RemoteException
+{
+android.os.Parcel _data = android.os.Parcel.obtain();
+android.os.Parcel _reply = android.os.Parcel.obtain();
+android.location.Location _result;
+try {
+_data.writeInterfaceToken(DESCRIPTOR);
+if ((request!=null)) {
+_data.writeInt(1);
+request.writeToParcel(_data, 0);
+}
+else {
+_data.writeInt(0);
+}
+_data.writeString(packageName);
+mRemote.transact(Stub.TRANSACTION_getLastLocation, _data, _reply, 0);
+_reply.readException();
+if ((0!=_reply.readInt())) {
+_result = android.location.Location.CREATOR.createFromParcel(_reply);
+}
+else {
+_result = null;
+}
+}
+finally {
+_reply.recycle();
+_data.recycle();
+}
+return _result;
+}
+...
+</code></pre>
+
+<p>Here you can see that the transaction code <code>TRANSACTION_getLastLocation</code> is written to the interface along with any necessary data, and a result is read.  On the stub side, there's an <code>onTransact()</code> method running in the service's process space which processes all of the incoming transactions according to the transaction code:</p>
+
+<pre><code>...
+case TRANSACTION_getLastLocation:
+{
+data.enforceInterface(DESCRIPTOR);
+android.location.LocationRequest _arg0;
+if ((0!=data.readInt())) {
+_arg0 = android.location.LocationRequest.CREATOR.createFromParcel(data);
+}
+else {
+_arg0 = null;
+}
+java.lang.String _arg1;
+_arg1 = data.readString();
+android.location.Location _result = this.getLastLocation(_arg0, _arg1);
+reply.writeNoException();
+if ((_result!=null)) {
+reply.writeInt(1);
+_result.writeToParcel(reply, android.os.Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+}
+else {
+reply.writeInt(0);
+}
+return true;
+}
+...
+</code></pre>
+
+<p>In a nutshell, the <code>system_service</code> process acts on behalf of the caller. This allows it to do what are usually privileged operations on hardware or other system resources. The security is based on 1) the app having the invitation to call (obtained from <code>service_manager</code> via <code>getSystemService</code>) and 2) passing whatever checks the service itself implements, such as checking <code>ACCESS_COARSE_LOCATION</code> or <code>ACCESS_FINE_LOCATION</code> in the case of <code>LocationManagerService</code> (declared in the manifest and approved at install-time by the end-user).</p>
+
+<p>UPDATE: In the case of location service, these hardware operations entail getting the actual NMEA data from the GPS hardware. The way this is currently accomplished is via the <code>GpsLocationProvider</code> class which interfaces to native code via JNI. This native code (<code>com_android_server_location_GpsLocationProvider.cpp</code>) is where the hardware device is opened (via an abstraction layer held in a <code>hw_module_t</code> struct), location callbacks are made (e.g., <code>location_callback()</code>), etc. All of this runs within the <code>system_server</code> process space with privileged UID <code>system</code>. You can verify this by running a location-enabled app, looking for <code>GpsLocationProvider</code> tags in the logcat and confirming that the logged PID is that of <code>system_server</code>. For example:</p>
+
+<pre><code>$ adb logcat | grep -i gps
+...
+D/GpsLocationProvider(  731): Reset GPS properties, previous size = 8
+...
+</code></pre>
+
+<p>and</p>
+
+<pre><code>$ adb shell ps | grep system_server
+system    731   441   1094884 89232 ffffffff b74d1d05 S system_server
+$
+</code></pre>
+
+<p>Finally, I highly recommend the video tutorial <a href="https://youtu.be/Jgampt1DOak" rel="nofollow">Deep Dive Into Android IPC/Binder Framework</a> to learn more about this. The talk's slides can be found <a href="http://events.linuxfoundation.org/images/stories/slides/abs2013_gargentas.pdf" rel="nofollow">here</a>.</p>

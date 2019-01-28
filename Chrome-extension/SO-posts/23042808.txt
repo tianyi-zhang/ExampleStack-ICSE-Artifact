@@ -1,0 +1,1060 @@
+<p>Here is the Wrapper off FFMPEG which works Perfectly : you have to follow these steps to make FFMPEG Wrapper for android .there are couple of classess which you have to create which are as follow : </p>
+
+<p><strong>ShellUtils.java</strong></p>
+
+<pre><code>package com.example.processvideo;
+
+public class ShellUtils {
+
+    //various console cmds
+        public final static String SHELL_CMD_CHMOD = "chmod";
+        public final static String SHELL_CMD_KILL = "kill -9";
+        public final static String SHELL_CMD_RM = "rm";
+        public final static String SHELL_CMD_PS = "ps";
+        public final static String SHELL_CMD_PIDOF = "pidof";
+
+        public final static String CHMOD_EXE_VALUE = "700";
+
+    public static boolean isRootPossible()
+    {
+
+        StringBuilder log = new StringBuilder();
+
+        try {
+
+            // Check if Superuser.apk exists
+            File fileSU = new File("/system/app/Superuser.apk");
+            if (fileSU.exists())
+                return true;
+
+            fileSU = new File("/system/bin/su");
+            if (fileSU.exists())
+                return true;
+
+            //Check for 'su' binary 
+            String[] cmd = {"which su"};
+            int exitCode = ShellUtils.doShellCommand(cmd, new ShellCallback ()
+            {
+
+                @Override
+                public void shellOut(char[] msg) {
+
+                    //System.out.print(msg);
+
+                }
+
+            }, false, true);
+
+            if (exitCode == 0) {
+                logMessage("Can acquire root permissions");
+                 return true;
+
+            }
+
+        } catch (IOException e) {
+            //this means that there is no root to be had (normally) so we won't log anything
+            logException("Error checking for root access",e);
+
+        }
+        catch (Exception e) {
+            logException("Error checking for root access",e);
+            //this means that there is no root to be had (normally)
+        }
+
+        logMessage("Could not acquire root permissions");
+
+
+        return false;
+    }
+
+
+    public static int findProcessId(String command) 
+    {
+        int procId = -1;
+
+        try
+        {
+            procId = findProcessIdWithPidOf(command);
+
+            if (procId == -1)
+                procId = findProcessIdWithPS(command);
+        }
+        catch (Exception e)
+        {
+            try
+            {
+                procId = findProcessIdWithPS(command);
+            }
+            catch (Exception e2)
+            {
+                logException("Unable to get proc id for: " + command,e2);
+            }
+        }
+
+        return procId;
+    }
+
+    //use 'pidof' command
+    public static int findProcessIdWithPidOf(String command) throws Exception
+    {
+
+        int procId = -1;
+
+        Runtime r = Runtime.getRuntime();
+
+        Process procPs = null;
+
+        String baseName = new File(command).getName();
+        //fix contributed my mikos on 2010.12.10
+        procPs = r.exec(new String[] {SHELL_CMD_PIDOF, baseName});
+        //procPs = r.exec(SHELL_CMD_PIDOF);
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(procPs.getInputStream()));
+        String line = null;
+
+        while ((line = reader.readLine())!=null)
+        {
+
+            try
+            {
+                //this line should just be the process id
+                procId = Integer.parseInt(line.trim());
+                break;
+            }
+            catch (NumberFormatException e)
+            {
+                logException("unable to parse process pid: " + line,e);
+            }
+        }
+
+
+        return procId;
+
+    }
+
+    //use 'ps' command
+    public static int findProcessIdWithPS(String command) throws Exception
+    {
+
+        int procId = -1;
+
+        Runtime r = Runtime.getRuntime();
+
+        Process procPs = null;
+
+        procPs = r.exec(SHELL_CMD_PS);
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(procPs.getInputStream()));
+        String line = null;
+
+        while ((line = reader.readLine())!=null)
+        {
+            if (line.indexOf(' ' + command)!=-1)
+            {
+
+                StringTokenizer st = new StringTokenizer(line," ");
+                st.nextToken(); //proc owner
+
+                procId = Integer.parseInt(st.nextToken().trim());
+
+                break;
+            }
+        }
+
+
+
+        return procId;
+
+    }
+
+
+    public static int doShellCommand(String[] cmds, ShellCallback sc, boolean runAsRoot, boolean waitFor) throws Exception
+    {
+
+        Process proc = null;
+        int exitCode = -1;
+
+        if (runAsRoot)
+            proc = Runtime.getRuntime().exec("su");
+        else
+            proc = Runtime.getRuntime().exec("sh");
+
+
+        OutputStreamWriter out = new OutputStreamWriter(proc.getOutputStream());
+
+        for (int i = 0; i &lt; cmds.length; i++)
+        {
+            logMessage("executing shell cmd: " + cmds[i] + "; runAsRoot=" + runAsRoot + ";waitFor=" + waitFor);
+
+            out.write(cmds[i]);
+            out.write("\n");
+        }
+
+        out.flush();
+        out.write("exit\n");
+        out.flush();
+
+        if (waitFor)
+        {
+
+            final char buf[] = new char[20];
+
+            // Consume the "stdout"
+            InputStreamReader reader = new InputStreamReader(proc.getInputStream());
+            int read=0;
+            while ((read=reader.read(buf)) != -1) {
+                if (sc != null) sc.shellOut(buf);
+            }
+
+            // Consume the "stderr"
+            reader = new InputStreamReader(proc.getErrorStream());
+            read=0;
+            while ((read=reader.read(buf)) != -1) {
+                if (sc != null) sc.shellOut(buf);
+            }
+
+            exitCode = proc.waitFor();
+
+        }
+
+
+        return exitCode;
+
+    }
+
+    public static void logMessage (String msg)
+    {
+
+    }
+
+    public static void logException (String msg, Exception e)
+    {
+
+    }
+
+    public interface ShellCallback
+    {
+        public void shellOut (char[] msg);
+    }
+}
+</code></pre>
+
+<p><strong>RegionTrail.java</strong>
+    public class RegionTrail {</p>
+
+<pre><code>    private HashMap&lt;Integer,ObscureRegion&gt; regionMap = new HashMap&lt;Integer,ObscureRegion&gt;();
+
+    private int startTime = 0;
+    private int endTime = 0;
+
+
+    public static final String OBSCURE_MODE_REDACT = "black";
+    public static final String OBSCURE_MODE_PIXELATE = "pixel";
+
+    private String obscureMode = OBSCURE_MODE_PIXELATE;
+
+    private boolean doTweening = true;
+
+    public boolean isDoTweening() {
+        return doTweening;
+    }
+
+    public void setDoTweening(boolean doTweening) {
+        this.doTweening = doTweening;
+    }
+
+    public String getObscureMode() {
+        return obscureMode;
+    }
+
+    public void setObscureMode(String obscureMode) {
+        this.obscureMode = obscureMode;
+    }
+
+    public RegionTrail (int startTime, int endTime)
+    {
+        this.startTime = startTime;
+        this.endTime = endTime;
+    }
+
+    public int getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(int startTime) {
+        this.startTime = startTime;
+    }
+
+    public int getEndTime() {
+        return endTime;
+    }
+
+    public void setEndTime(int endTime) {
+        this.endTime = endTime;
+    }
+
+    public void addRegion (ObscureRegion or)
+    {
+        regionMap.put(or.timeStamp,or);
+        or.setRegionTrail(this);
+    }
+
+    public void removeRegion (ObscureRegion or)
+    {
+        regionMap.remove(or.timeStamp);
+    }
+
+    public Iterator&lt;ObscureRegion&gt; getRegionsIterator ()
+    {
+        return regionMap.values().iterator();
+    }
+
+    public ObscureRegion getRegion (Integer key)
+    {
+        return regionMap.get(key);
+    }
+
+    public TreeSet&lt;Integer&gt; getRegionKeys ()
+    {
+        TreeSet&lt;Integer&gt; regionKeys = new TreeSet&lt;Integer&gt;(regionMap.keySet());
+
+        return regionKeys;
+    }
+
+    public boolean isWithinTime (int time)
+    {
+
+        if (time &lt; startTime || time &gt; endTime)
+            return false;
+        else
+            return true;
+    }
+
+    public ObscureRegion getCurrentRegion (int time, boolean doTween)
+    {
+
+        ObscureRegion regionResult = null;
+
+        if (time &lt; startTime || time &gt; endTime)
+            return null;
+        else if (regionMap.size() &gt; 0)
+        {
+
+
+            TreeSet&lt;Integer&gt; regionKeys = new TreeSet&lt;Integer&gt;(regionMap.keySet());
+
+            Integer lastRegionKey = -1, regionKey = -1;
+
+            Iterator&lt;Integer&gt; itKeys = regionKeys.iterator();
+
+            while (itKeys.hasNext())
+            {
+                regionKey = itKeys.next();
+                int comp = regionKey.compareTo(time);
+
+                if (comp == 0 || comp == 1)
+                {
+                    ObscureRegion regionThis = regionMap.get(regionKey);
+
+                    if (lastRegionKey != -1 &amp;&amp; doTween)
+                    {
+                        ObscureRegion regionLast = regionMap.get(lastRegionKey);
+
+                        float sx, sy, ex, ey;
+
+                        int timeDiff = regionThis.timeStamp - regionLast.timeStamp;
+                        int timePassed = time - regionLast.timeStamp;
+
+                        float d = ((float)timePassed) / ((float)timeDiff);
+
+                        sx = regionLast.sx + ((regionThis.sx-regionLast.sx)*d);
+                        sy = regionLast.sy + ((regionThis.sy-regionLast.sy)*d);
+
+                        ex = regionLast.ex + ((regionThis.ex-regionLast.ex)*d);
+                        ey = regionLast.ey + ((regionThis.ey-regionLast.ey)*d);
+
+                        regionResult = new ObscureRegion(time, sx, sy, ex, ey);
+
+                    }
+                    else
+                        regionResult = regionThis;
+
+
+                    break; //it is a match!
+                }
+
+
+                lastRegionKey = regionKey;
+
+            }
+
+            if (regionResult == null)
+                regionResult = regionMap.get(lastRegionKey);
+
+
+        }
+
+        return regionResult;
+    }
+}
+</code></pre>
+
+<p><strong>ObscureRegion.java</strong></p>
+
+<pre><code> public class ObscureRegion  {
+
+    /*
+     * Thinking about whether or not a region should contain multiple start/end times
+     * realizing that doing this would make editing a real pita
+     * Of course, it would make displaying be a 1000x better though.
+    class PositionTime {
+
+        int sx = 0; 
+        int sy = 0; 
+        int ex = 0;
+        int ey = 0;
+        int startTime = 0; 
+        int endTime = 0;
+
+        PositionTime(int _sx, int _sy, int _ex, int _ey, int _startTime, int _endTime) {
+
+        }
+    }
+    */
+
+
+
+    public static final float DEFAULT_X_SIZE = 150;
+    public static final float DEFAULT_Y_SIZE = 150;
+
+    public float sx = 0;
+    public float sy = 0;
+
+    public float ex = 0;
+    public float ey = 0;
+
+    public int timeStamp = 0;
+
+    public RegionTrail regionTrail;
+
+    private RectF rectF;
+
+    public ObscureRegion(int _timeStamp, float _sx, float _sy, float _ex, float _ey) {
+
+        timeStamp = _timeStamp;
+        sx = _sx;
+        sy = _sy;
+        ex = _ex;
+        ey = _ey;
+
+        if (sx &lt; 0) { 
+            sx = 0;
+        } else if (sy &lt; 0) {
+            sy = 0;
+        }
+
+
+    }
+
+    public ObscureRegion(int _startTime, float _sx, float _sy) {
+        this(_startTime, _sx - DEFAULT_X_SIZE/2, _sy - DEFAULT_Y_SIZE/2, _sx + DEFAULT_X_SIZE/2, _sy + DEFAULT_Y_SIZE/2);
+    }
+
+
+    public void moveRegion(float _sx, float _sy) {
+        moveRegion(_sx - DEFAULT_X_SIZE/2, _sy - DEFAULT_Y_SIZE/2, _sx + DEFAULT_X_SIZE/2, _sy + DEFAULT_Y_SIZE/2);
+    }
+
+    public void moveRegion(float _sx, float _sy, float _ex, float _ey) {
+        sx = _sx;
+        sy = _sy;
+        ex = _ex;
+        ey = _ey;
+
+        rectF = null;
+    }
+
+    public RectF getRectF() {
+
+        if (rectF == null)
+            rectF = new RectF(sx, sy, ex, ey);
+
+        return rectF;
+    }
+
+    public RectF getBounds() {
+        return getRectF();
+    }
+
+
+    public String getStringData(float widthMod, float heightMod, int startTime, int duration, String currentMode) {
+        //left, right, top, bottom
+        return "" + (float)startTime/(float)1000 + ',' + (float)(startTime+duration)/(float)1000 + ',' + (int)(sx*widthMod) + ',' + (int)(ex*widthMod) + ',' + (int)(sy*heightMod) + ',' + (int)(ey*heightMod) + ',' + currentMode;
+    }
+
+    public RegionTrail getRegionTrail() {
+        return regionTrail;
+    }
+
+    public void setRegionTrail(RegionTrail regionTrail) {
+        this.regionTrail = regionTrail;
+    }
+}
+</code></pre>
+
+<p><strong>FFMPEGWrapper.java</strong></p>
+
+<pre><code>public class FFMPEGWrapper {
+
+    String[] libraryAssets = {"ffmpeg"};
+    public File fileBinDir;
+    Context context;
+
+    private final static String FFMPEG_BINARY_VERSION = "0.10.4.1";
+    private final static String FFMPEG_VERSION_KEY = "ffmpegkey";
+
+    public FFMPEGWrapper(Context _context) throws FileNotFoundException, IOException {
+        context = _context;
+        fileBinDir = context.getDir("bin",0);
+
+        checkBinary();
+    }
+
+    private void checkBinary () throws FileNotFoundException, IOException
+    {
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        String currTorBinary = prefs.getString(FFMPEG_VERSION_KEY, null);
+
+        if ((currTorBinary == null || (!currTorBinary.equals(FFMPEG_BINARY_VERSION))) 
+                || !new File(fileBinDir,libraryAssets[0]).exists())
+        {
+            BinaryInstaller bi = new BinaryInstaller(context,fileBinDir);
+            bi.installFromRaw();
+        }
+    }
+
+    public void execProcess( String[] cmds, ShellCallback sc) throws Exception {        
+
+
+            ProcessBuilder pb = new ProcessBuilder(cmds);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();      
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+
+            String line;
+
+
+            /*switch(command_call_type)
+            {
+            case Keys.KEY_COMMANDEXE_TYPE_MERGEFRAME:
+
+            //  refincereference.updateLoadingbar(30);
+                break;
+
+            }*/
+
+            while ((line = reader.readLine()) != null)
+            {
+                if (sc != null)
+                {
+                    sc.shellOut(line.toCharArray());
+
+                Log.d("FFMPEG", line.toCharArray()+"");
+
+
+                }
+            }
+
+
+
+            /*switch(command_call_type)
+            {
+            case Keys.KEY_COMMANDEXE_TYPE_MERGEFRAME:
+
+                //refincereference.updateLoadingbar(40);
+                break;
+
+            case Keys.KEY_COMMANDEXE_TYPE_CLIPMP3:
+                //refincereference.updateLoadingbar(60);
+                break;
+            case Keys.KEY_COMMANDEXE_TYPE_MP3TOM4A:
+                //refincereference.updateLoadingbar(80);
+            break;
+
+            }*/
+
+
+            /*
+            if (process != null) {
+                process.destroy();        
+            }*/
+
+    }
+
+    public class FFMPEGArg
+    {
+        String key;
+        String value;
+
+        public static final String ARG_VIDEOCODEC = "vcodec";
+        public static final String ARG_VERBOSITY = "v";
+        public static final String ARG_FILE_INPUT = "i";
+        public static final String ARG_SIZE = "-s";
+        public static final String ARG_FRAMERATE = "-r";
+        public static final String ARG_FORMAT = "-f";
+
+    }
+
+    public void processVideo(File redactSettingsFile, 
+            ArrayList&lt;RegionTrail&gt; obscureRegionTrails, File inputFile, File outputFile, String format, int mDuration,
+            int iWidth, int iHeight, int oWidth, int oHeight, int frameRate, int kbitRate, String vcodec, String acodec, ShellCallback sc) throws Exception {
+
+        float widthMod = ((float)oWidth)/((float)iWidth);
+        float heightMod = ((float)oHeight)/((float)iHeight);
+
+        writeRedactData(redactSettingsFile, obscureRegionTrails, widthMod, heightMod, mDuration);
+
+        if (vcodec == null)
+            vcodec = "copy";//"libx264"
+
+        if (acodec == null)
+            acodec = "copy";
+
+        String ffmpegBin = new File(fileBinDir,"ffmpeg").getAbsolutePath();
+        Runtime.getRuntime().exec("chmod 700 " +ffmpegBin);
+
+
+
+        String[]    ffmpegCommand=new String[]{
+                ffmpegBin, "-h"
+            };
+   /*   String[] ffmpegCommand = {ffmpegBin, "-y", "-i", inputFile.getPath(), 
+                "-vcodec", vcodec, 
+                "-b", kbitRate+"k", 
+                "-s",  oWidth + "x" + oHeight, 
+                "-r", ""+frameRate,
+                "-acodec", acodec,
+                "-f", format,
+                "-vf","redact=" + redactSettingsFile.getAbsolutePath(),
+                outputFile.getPath()};*/
+
+        //./ffmpeg -y -i test.mp4 -vframes 999999  -vf 'redact=blurbox.txt [out] [d], [d]nullsink' -acodec copy outputa.mp4
+
+        //ffmpeg -v 10 -y -i /sdcard/org.witness.sscvideoproto/videocapture1042744151.mp4 -vcodec libx264
+        //-b 3000k -s 720x480 -r 30 -acodec copy -f mp4 -vf 'redact=/data/data/org.witness.sscvideoproto/redact_unsort.txt'
+        ///sdcard/org.witness.sscvideoproto/new.mp4
+
+        //"-vf" , "redact=" + Utils.getAvailiableStorageLocation() + "/" + PACKAGENAME + "/redact_unsort.txt",
+
+
+        // Need to make sure this will create a legitimate mp4 file
+        //"-acodec", "ac3", "-ac", "1", "-ar", "16000", "-ab", "32k",
+
+
+        /*
+        String[] ffmpegCommand = {"/data/data/"+PACKAGENAME+"/ffmpeg", "-v", "10", "-y", "-i", recordingFile.getPath(), 
+                        "-vcodec", "libx264", "-b", "3000k", "-vpre", "baseline", "-s", "720x480", "-r", "30",
+                        //"-vf", "drawbox=10:20:200:60:red@0.5",
+                        "-vf" , "\"movie="+ overlayImage.getPath() +" [logo];[in][logo] overlay=0:0 [out]\"",
+                        "-acodec", "copy",
+                        "-f", "mp4", savePath.getPath()+"/output.mp4"};
+        */
+
+    //  execProcess(ffmpegCommand, sc);
+
+
+
+
+
+
+    }
+
+    private void writeRedactData(File redactSettingsFile, ArrayList&lt;RegionTrail&gt; regionTrails, float widthMod, float heightMod, int mDuration) throws IOException {
+        // Write out the finger data
+
+        FileWriter redactSettingsFileWriter = new FileWriter(redactSettingsFile);
+        PrintWriter redactSettingsPrintWriter = new PrintWriter(redactSettingsFileWriter);
+        ObscureRegion or = null, lastOr = null;
+        String orData = "";
+
+        for (RegionTrail trail : regionTrails)
+        {
+
+            if (trail.isDoTweening())
+            {
+                int timeInc = 100;
+
+                for (int i = 0; i &lt; mDuration; i = i+timeInc)
+                {
+                    or = trail.getCurrentRegion(i, trail.isDoTweening());
+                    if (or != null)
+                    {
+                        orData = or.getStringData(widthMod, heightMod,i,timeInc, trail.getObscureMode());
+                        redactSettingsPrintWriter.println(orData);
+                    }
+                }
+
+            }
+            else
+            {
+
+                for (Integer orKey : trail.getRegionKeys())
+                {
+                    or = trail.getRegion(orKey);
+
+                    if (lastOr != null)
+                    {
+
+                        orData = lastOr.getStringData(widthMod, heightMod,or.timeStamp,or.timeStamp-lastOr.timeStamp, trail.getObscureMode());
+                    }
+
+                    redactSettingsPrintWriter.println(orData);
+
+                    lastOr = or;
+                }
+
+                if (or != null)
+                {
+                    orData = lastOr.getStringData(widthMod, heightMod,or.timeStamp,or.timeStamp-lastOr.timeStamp, trail.getObscureMode());
+                    redactSettingsPrintWriter.println(orData);
+                }
+            }
+        }
+
+        redactSettingsPrintWriter.flush();
+
+        redactSettingsPrintWriter.close();
+
+
+    }
+
+    class FileMover {
+
+        InputStream inputStream;
+        File destination;
+
+        public FileMover(InputStream _inputStream, File _destination) {
+            inputStream = _inputStream;
+            destination = _destination;
+        }
+
+        public void moveIt() throws IOException {
+
+            OutputStream destinationOut = new BufferedOutputStream(new FileOutputStream(destination));
+
+            int numRead;
+            byte[] buf = new byte[1024];
+            while ((numRead = inputStream.read(buf) ) &gt;= 0) {
+                destinationOut.write(buf, 0, numRead);
+            }
+
+            destinationOut.flush();
+            destinationOut.close();
+        }
+    }
+
+}
+</code></pre>
+
+<p><strong>BinaryInstaller.java</strong></p>
+
+<pre><code>public class BinaryInstaller  {
+
+
+    File installFolder;
+    Context context;
+
+    private static int isARMv6 = -1;
+    private static String CHMOD_EXEC = "700";
+
+    private final static int FILE_WRITE_BUFFER_SIZE = 32256;
+
+    public BinaryInstaller (Context context, File installFolder)
+    {
+        this.installFolder = installFolder;
+
+        this.context = context;
+    }
+
+    //      
+    /*
+     * Extract the Tor binary from the APK file using ZIP
+     */
+    public boolean installFromRaw () throws IOException, FileNotFoundException
+    {
+
+        InputStream is;
+        File outFile;
+
+        is = context.getResources().openRawResource(R.raw.ffmpeg);          
+        outFile = new File(installFolder, "ffmpeg");
+        streamToFile(is, outFile, false, false, "700");
+
+
+        return true;
+    }
+
+
+    private static void copyAssetFile(Context ctx, String asset, File file) throws IOException, InterruptedException
+    {
+
+        DataOutputStream out = new DataOutputStream(new FileOutputStream(file));
+        InputStream is = new GZIPInputStream(ctx.getAssets().open(asset));
+
+        byte buf[] = new byte[8172];
+        int len;
+        while ((len = is.read(buf)) &gt; 0) {
+            out.write(buf, 0, len);
+        }
+        out.close();
+        is.close();
+    }
+    /*
+     * Write the inputstream contents to the file
+     */
+    private static boolean streamToFile(InputStream stm, File outFile, boolean append, boolean zip, String mode) throws IOException
+
+    {
+        byte[] buffer = new byte[FILE_WRITE_BUFFER_SIZE];
+
+        int bytecount;
+
+
+        OutputStream stmOut = new FileOutputStream(outFile, append);
+
+        if (zip)
+        {
+            ZipInputStream zis = new ZipInputStream(stm);           
+            ZipEntry ze = zis.getNextEntry();
+            stm = zis;
+
+        }
+
+        while ((bytecount = stm.read(buffer)) &gt; 0)
+        {
+
+            stmOut.write(buffer, 0, bytecount);
+
+        }
+
+        stmOut.close();
+        stm.close();
+
+        Runtime.getRuntime().exec("chmod "+mode+" "+outFile.getAbsolutePath());
+
+
+        return true;
+
+    }
+
+    //copy the file from inputstream to File output - alternative impl
+    public void copyFile (InputStream is, File outputFile)
+    {
+
+        try {
+            outputFile.createNewFile();
+            DataOutputStream out = new DataOutputStream(new FileOutputStream(outputFile));
+            DataInputStream in = new DataInputStream(is);
+
+            int b = -1;
+            byte[] data = new byte[1024];
+
+            while ((b = in.read(data)) != -1) {
+                out.write(data);
+            }
+
+            if (b == -1); //rejoice
+
+            //
+            out.flush();
+            out.close();
+            in.close();
+            // chmod?
+
+
+
+        } catch (IOException ex) {
+            Log.e("SLIDEAGRAM", "error copying binary", ex);
+        }
+
+    }
+
+
+
+    /**
+     * Check if this is an ARMv6 device
+     * @return true if this is ARMv6
+     */
+    private static boolean isARMv6() {
+        if (isARMv6 == -1) {
+            BufferedReader r = null;
+            try {
+                isARMv6 = 0;
+                r = new BufferedReader(new FileReader("/proc/cpuinfo"));
+                for (String line = r.readLine(); line != null; line = r.readLine()) {
+                    if (line.startsWith("Processor") &amp;&amp; line.contains("ARMv6")) {
+                        isARMv6 = 1;
+                        break;
+                    } else if (line.startsWith("CPU architecture") &amp;&amp; (line.contains("6TE") || line.contains("5TE"))) {
+                        isARMv6 = 1;
+                        break;
+                    }
+                }
+            } catch (Exception ex) {
+            } finally {
+                if (r != null) try {r.close();} catch (Exception ex) {}
+            }
+        }
+        return (isARMv6 == 1);
+    }
+
+
+    private static void copyRawFile(Context ctx, int resid, File file, String mode, boolean isZipd) throws IOException, InterruptedException
+    {
+        final String abspath = file.getAbsolutePath();
+        // Write the iptables binary
+        final FileOutputStream out = new FileOutputStream(file);
+        InputStream is = ctx.getResources().openRawResource(resid);
+
+        if (isZipd)
+        {
+            ZipInputStream zis = new ZipInputStream(is);            
+            ZipEntry ze = zis.getNextEntry();
+            is = zis;
+        }
+
+        byte buf[] = new byte[1024];
+        int len;
+        while ((len = is.read(buf)) &gt; 0) {
+            out.write(buf, 0, len);
+        }
+        out.close();
+        is.close();
+        // Change the permissions
+        Runtime.getRuntime().exec("chmod "+mode+" "+abspath).waitFor();
+    }
+
+
+}
+</code></pre>
+
+<p><strong>FFMpegVideoProcess.java</strong></p>
+
+<pre><code>public class FFMpegVideoProcess
+{
+
+    public static void mergeFramesIntoVideo(Activity context,String duration_per_frame,String input_frame_path,String out_video_path)throws Exception
+    {
+        //Looper.prepare();
+
+         String  ffmpegBin;
+         FFMPEGWrapper ffmpeg = null;
+         ShellUtils.ShellCallback sc;
+
+                if (ffmpeg == null)
+                    ffmpeg = new FFMPEGWrapper(context);
+
+
+                 sc = new ShellUtils.ShellCallback ()
+                {
+                    int total = 0;
+                    int current = 0;
+
+                    @Override
+                    public void shellOut(char[] shellout) {
+
+                        String line = new String(shellout);
+
+
+                        int idx1;
+                        String newStatus = null;
+                        int progress = 0;
+
+                        if ((idx1 = line.indexOf("Duration:"))!=-1)
+                        {
+                            int idx2 = line.indexOf(",", idx1);
+                            String time = line.substring(idx1+10,idx2);
+
+                            int hour = Integer.parseInt(time.substring(0,2));
+                            int min = Integer.parseInt(time.substring(3,5));
+                            int sec = Integer.parseInt(time.substring(6,8));
+
+                            total = (hour * 60 * 60) + (min * 60) + sec;
+
+                            newStatus = line;
+                            progress = 0;
+                        }
+                        else if ((idx1 = line.indexOf("time="))!=-1)
+                        {
+                            int idx2 = line.indexOf(" ", idx1);
+                            String time = line.substring(idx1+5,idx2);
+                            newStatus = line;
+
+                            int hour = Integer.parseInt(time.substring(0,2));
+                            int min = Integer.parseInt(time.substring(3,5));
+                            int sec = Integer.parseInt(time.substring(6,8));
+
+                            current = (hour * 60 * 60) + (min * 60) + sec;
+
+                            progress = (int)( ((float)current) / ((float)total) *100f );
+                        }
+
+                        if (newStatus != null)
+                        {
+                        // Message msg = mHandler.obtainMessage(1);
+                     //    msg.getData().putInt("progress", progress);
+                       //  msg.getData().putString("status", newStatus);
+
+                       //  mHandler.sendMessage(msg);
+                        }
+                    }
+
+                };
+
+
+
+                 ffmpegBin = new File(ffmpeg.fileBinDir,"ffmpeg").getAbsolutePath();
+                Runtime.getRuntime().exec("chmod 700 " +ffmpegBin);
+
+
+            //  refincereference.updateLoadingbar(20);
+
+
+
+        ffmpeg.execProcess(new String[]{
+
+                ffmpegBin,
+                "-f",
+                "image2",
+                "-r",
+                duration_per_frame,
+                "-i",
+                input_frame_path,
+                "-s",
+                "640x640",
+                //"640x388",
+                "-vcodec",
+                "libx264",
+                "-y",
+                out_video_path
+
+
+
+
+            },sc);
+        //Looper.loop();    
+
+}
+
+
+}
+</code></pre>
+
+<p>After putting all files together call this function if you want to merge frames into Video as follow </p>
+
+<pre><code>  FFMpegVideoProcess.createFramesinFolder(this,DIR_IN_WHICH_YOU_WANT_TO_KEEP_FRAMES, "frame_%03d.jpg");
+        FFMpegVideoProcess.mergeFramesIntoVideo(args1,DIR_IN_WHICH_YOU_WANT_TO_KEEP_FRAMES/frame_%3d.jpg",argN...);
+</code></pre>
+
+<p>Feel Free to ask question if you have any Query . thanks </p>

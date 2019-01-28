@@ -1,0 +1,552 @@
+<p>Library to make the items in a <code>ListView</code> or <code>RecyclerView</code> dismissable with the possibility to undo it, using your own view to provide this functionality like the Gmail app for Android does.</p>
+
+<p><a href="https://github.com/hudomju/android-swipe-to-dismiss-undo" rel="nofollow">https://github.com/hudomju/android-swipe-to-dismiss-undo</a></p>
+
+<p>Here's a gist, just in case the page gets changed or link goes invalid:</p>
+
+<p>ListViewActivity:</p>
+
+<pre><code>public class ListViewActivity extends Activity {
+
+private static final int TIME_TO_AUTOMATICALLY_DISMISS_ITEM = 3000;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.list_view_activity);
+    init((ListView) findViewById(R.id.list_view));
+}
+
+private void init(ListView listView) {
+    final MyBaseAdapter adapter = new MyBaseAdapter();
+    listView.setAdapter(adapter);
+    final SwipeToDismissTouchListener&lt;ListViewAdapter&gt; touchListener =
+            new SwipeToDismissTouchListener&lt;&gt;(
+                    new ListViewAdapter(listView),
+                    new SwipeToDismissTouchListener.DismissCallbacks&lt;ListViewAdapter&gt;() {
+                        @Override
+                        public boolean canDismiss(int position) {
+                            return true;
+                        }
+
+                        @Override
+                        public void onPendingDismiss(ListViewAdapter recyclerView, int position) {
+
+                        }
+
+                        @Override
+                        public void onDismiss(ListViewAdapter view, int position) {
+                            adapter.remove(position);
+                        }
+                    });
+
+    touchListener.setDismissDelay(TIME_TO_AUTOMATICALLY_DISMISS_ITEM);
+    listView.setOnTouchListener(touchListener);
+    // Setting this scroll listener is required to ensure that during ListView scrolling,
+    // we don't look for swipes.
+    listView.setOnScrollListener((AbsListView.OnScrollListener) touchListener.makeScrollListener());
+    listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+        @Override
+        public void onItemClick(AdapterView&lt;?&gt; parent, View view, int position, long id) {
+            if (touchListener.existPendingDismisses()) {
+                touchListener.undoPendingDismiss();
+            } else {
+                Toast.makeText(ListViewActivity.this, "Position " + position, LENGTH_SHORT).show();
+            }
+        }
+    });
+}
+
+static class MyBaseAdapter extends BaseAdapter {
+
+    private static final int SIZE = 100;
+
+    private final List&lt;String&gt; mDataSet = new ArrayList&lt;&gt;();
+
+    MyBaseAdapter() {
+        for (int i = 0; i &lt; SIZE; i++)
+            mDataSet.add(i, "This is row number " + i);
+    }
+
+    @Override
+    public int getCount() {
+        return mDataSet.size();
+    }
+
+    @Override
+    public String getItem(int position) {
+        return mDataSet.get(position);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        return position;
+    }
+
+    public void remove(int position) {
+        mDataSet.remove(position);
+        notifyDataSetChanged();
+    }
+
+    static class ViewHolder {
+        TextView dataTextView;
+        ViewHolder(View view) {
+            dataTextView = (TextView) view.findViewById(R.id.txt_data);
+            view.setTag(this);
+        }
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+
+        ViewHolder viewHolder = convertView == null
+                ? new ViewHolder(convertView = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.list_item, parent, false))
+                : (ViewHolder) convertView.getTag();
+
+        viewHolder.dataTextView.setText(mDataSet.get(position));
+        return convertView;
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>SwipeToDismissTouchListener:</p>
+
+<pre><code>public class SwipeToDismissTouchListener&lt;SomeCollectionView extends ViewAdapter&gt; implements
+    View.OnTouchListener {
+
+// Cached ViewConfiguration and system-wide constant values
+private final int mSlop;
+private final int mMinFlingVelocity;
+private final int mMaxFlingVelocity;
+private final long mAnimationTime;
+
+// Fixed properties
+private final SomeCollectionView mRecyclerView;
+private final DismissCallbacks&lt;SomeCollectionView&gt; mCallbacks;
+private int mViewWidth = 1; // 1 and not 0 to prevent dividing by zero
+
+// Transient properties
+private PendingDismissData mPendingDismiss;
+private float mDownX;
+private float mDownY;
+private boolean mSwiping;
+private int mSwipingSlop;
+private VelocityTracker mVelocityTracker;
+private int mDownPosition;
+private RowContainer mRowContainer;
+private boolean mPaused;
+
+// Handler to dismiss pending items after a delay
+private final Handler mHandler;
+private final Runnable mDismissRunnable = new Runnable() {
+    @Override
+    public void run() {
+        processPendingDismisses();
+    }
+};
+private long mDismissDelayMillis = -1; // negative to disable automatic dismissing
+
+public class RowContainer {
+
+    final View container;
+    final View dataContainer;
+    final View undoContainer;
+    boolean dataContainerHasBeenDismissed;
+
+    public RowContainer(ViewGroup container) {
+        this.container = container;
+        dataContainer = container.getChildAt(0);
+        undoContainer = container.getChildAt(1);
+        dataContainerHasBeenDismissed = false;
+    }
+
+    View getCurrentSwipingView() {
+        return dataContainerHasBeenDismissed ? undoContainer: dataContainer;
+    }
+
+}
+
+/**
+ * The callback interface used by {@link SwipeToDismissTouchListener} to inform its client
+ * about a successful dismissal of one or more list item positions.
+ */
+public interface DismissCallbacks&lt;SomeCollectionView extends ViewAdapter&gt; {
+    /**
+     * Called to determine whether the given position can be dismissed.
+     */
+    boolean canDismiss(int position);
+
+    /**
+     * Called when an item is swiped away by the user and the undo layout is completely visible.
+     * Do NOT remove the list item yet, that should be done in {@link #onDismiss(com.hudomju.swipe.adapter.ViewAdapter, int)}
+     * This may also be called immediately before and item is completely dismissed.
+     *
+     * @param recyclerView The originating {@link android.support.v7.widget.RecyclerView}.
+     * @param position The position of the dismissed item.
+     */
+    void onPendingDismiss(SomeCollectionView recyclerView, int position);
+
+    /**
+     * Called when the item is completely dismissed and removed from the list, after the undo layout is hidden.
+     *
+     * @param recyclerView The originating {@link android.support.v7.widget.RecyclerView}.
+     * @param position The position of the dismissed item.
+     */
+    void onDismiss(SomeCollectionView recyclerView, int position);
+}
+
+/**
+ * Constructs a new swipe-to-dismiss touch listener for the given list view.
+ *
+ * @param recyclerView  The list view whose items should be dismissable.
+ * @param callbacks The callback to trigger when the user has indicated that she would like to
+ *                  dismiss one or more list items.
+ */
+public SwipeToDismissTouchListener(SomeCollectionView recyclerView,
+                                   DismissCallbacks&lt;SomeCollectionView&gt; callbacks) {
+    ViewConfiguration vc = ViewConfiguration.get(recyclerView.getContext());
+    mSlop = vc.getScaledTouchSlop();
+    mMinFlingVelocity = vc.getScaledMinimumFlingVelocity() * 16;
+    mMaxFlingVelocity = vc.getScaledMaximumFlingVelocity();
+    mAnimationTime = recyclerView.getContext().getResources().getInteger(
+            android.R.integer.config_shortAnimTime);
+    mRecyclerView = recyclerView;
+    mCallbacks = callbacks;
+    mHandler = new Handler();
+}
+
+/**
+ * Enables or disables (pauses or resumes) watching for swipe-to-dismiss gestures.
+ *
+ * @param enabled Whether or not to watch for gestures.
+ */
+public void setEnabled(boolean enabled) {
+    mPaused = !enabled;
+}
+
+/**
+ * Set the delay after which the pending items will be dismissed when there was no user action.
+ * Set to a negative value to disable automatic dismissing items.
+ * @param dismissDelayMillis The delay between onPendingDismiss and onDismiss calls, in milliseconds.
+ */
+public void setDismissDelay(long dismissDelayMillis) {
+    this.mDismissDelayMillis = dismissDelayMillis;
+}
+
+/**
+ * Returns an {@link android.widget.AbsListView.OnScrollListener} to be added to the {@link
+ * android.widget.ListView} using {@link android.widget.ListView#setOnScrollListener(android.widget.AbsListView.OnScrollListener)}.
+ * If a scroll listener is already assigned, the caller should still pass scroll changes through
+ * to this listener. This will ensure that this {@link SwipeToDismissTouchListener} is
+ * paused during list view scrolling.&lt;/p&gt;
+ *
+ * @see SwipeToDismissTouchListener
+ */
+public Object makeScrollListener() {
+    return mRecyclerView.makeScrollListener(new AbsListView.OnScrollListener() {
+        @Override
+        public void onScrollStateChanged(AbsListView absListView, int scrollState) {
+            processPendingDismisses();
+            setEnabled(scrollState != AbsListView.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL);
+        }
+
+        @Override
+        public void onScroll(AbsListView absListView, int i, int i1, int i2) {
+        }
+    });
+}
+
+@Override
+public boolean onTouch(View view, MotionEvent motionEvent) {
+    if (mViewWidth &lt; 2) {
+        mViewWidth = mRecyclerView.getWidth();
+    }
+
+    switch (motionEvent.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN: {
+            if (mPaused) {
+                return false;
+            }
+
+            // TODO: ensure this is a finger, and set a flag
+
+            // Find the child view that was touched (perform a hit test)
+            Rect rect = new Rect();
+            int childCount = mRecyclerView.getChildCount();
+            int[] listViewCoords = new int[2];
+            mRecyclerView.getLocationOnScreen(listViewCoords);
+            int x = (int) motionEvent.getRawX() - listViewCoords[0];
+            int y = (int) motionEvent.getRawY() - listViewCoords[1];
+            View child;
+            for (int i = 0; i &lt; childCount; i++) {
+                child = mRecyclerView.getChildAt(i);
+                child.getHitRect(rect);
+                if (rect.contains(x, y)) {
+                    assert child instanceof ViewGroup &amp;&amp;
+                            ((ViewGroup) child).getChildCount() == 2 :
+                            "Each child needs to extend from ViewGroup and have two children";
+
+                    boolean dataContainerHasBeenDismissed = mPendingDismiss != null &amp;&amp;
+                            mPendingDismiss.position == mRecyclerView.getChildPosition(child) &amp;&amp;
+                            mPendingDismiss.rowContainer.dataContainerHasBeenDismissed;
+                    mRowContainer = new RowContainer((ViewGroup) child);
+                    mRowContainer.dataContainerHasBeenDismissed = dataContainerHasBeenDismissed;
+                    break;
+                }
+            }
+
+            if (mRowContainer != null) {
+                mDownX = motionEvent.getRawX();
+                mDownY = motionEvent.getRawY();
+                mDownPosition = mRecyclerView.getChildPosition(mRowContainer.container);
+                if (mCallbacks.canDismiss(mDownPosition)) {
+                    mVelocityTracker = VelocityTracker.obtain();
+                    mVelocityTracker.addMovement(motionEvent);
+                } else {
+                    mRowContainer = null;
+                }
+            }
+            return false;
+        }
+
+        case MotionEvent.ACTION_CANCEL: {
+            if (mVelocityTracker == null) {
+                break;
+            }
+
+            if (mRowContainer != null &amp;&amp; mSwiping) {
+                // cancel
+                mRowContainer.getCurrentSwipingView()
+                        .animate()
+                        .translationX(0)
+                        .alpha(1)
+                        .setDuration(mAnimationTime)
+                        .setListener(null);
+            }
+            mVelocityTracker.recycle();
+            mVelocityTracker = null;
+            mDownX = 0;
+            mDownY = 0;
+            mRowContainer = null;
+            mDownPosition = ListView.INVALID_POSITION;
+            mSwiping = false;
+            break;
+        }
+
+        case MotionEvent.ACTION_UP: {
+            if (mVelocityTracker == null) {
+                break;
+            }
+
+            float deltaX = motionEvent.getRawX() - mDownX;
+            mVelocityTracker.addMovement(motionEvent);
+            mVelocityTracker.computeCurrentVelocity(1000);
+            float velocityX = mVelocityTracker.getXVelocity();
+            float absVelocityX = Math.abs(velocityX);
+            float absVelocityY = Math.abs(mVelocityTracker.getYVelocity());
+            boolean dismiss = false;
+            boolean dismissRight = false;
+            if (Math.abs(deltaX) &gt; mViewWidth / 2 &amp;&amp; mSwiping) {
+                dismiss = true;
+                dismissRight = deltaX &gt; 0;
+            } else if (mMinFlingVelocity &lt;= absVelocityX &amp;&amp; absVelocityX &lt;= mMaxFlingVelocity
+                    &amp;&amp; absVelocityY &lt; absVelocityX &amp;&amp; mSwiping) {
+                // dismiss only if flinging in the same direction as dragging
+                dismiss = (velocityX &lt; 0) == (deltaX &lt; 0);
+                dismissRight = mVelocityTracker.getXVelocity() &gt; 0;
+            }
+            if (dismiss &amp;&amp; mDownPosition != ListView.INVALID_POSITION) {
+                // dismiss
+                final RowContainer downView = mRowContainer; // mDownView gets null'd before animation ends
+                final int downPosition = mDownPosition;
+                mRowContainer.getCurrentSwipingView()
+                        .animate()
+                        .translationX(dismissRight ? mViewWidth : -mViewWidth)
+                        .alpha(0)
+                        .setDuration(mAnimationTime)
+                        .setListener(new AnimatorListenerAdapter() {
+                            @Override
+                            public void onAnimationEnd(Animator animation) {
+                                performDismiss(downView, downPosition);
+                            }
+                        });
+            } else {
+                // cancel
+                mRowContainer.getCurrentSwipingView()
+                        .animate()
+                        .translationX(0)
+                        .alpha(1)
+                        .setDuration(mAnimationTime)
+                        .setListener(null);
+            }
+            mVelocityTracker.recycle();
+            mVelocityTracker = null;
+            mDownX = 0;
+            mDownY = 0;
+            mRowContainer = null;
+            mDownPosition = ListView.INVALID_POSITION;
+            mSwiping = false;
+            break;
+        }
+
+        case MotionEvent.ACTION_MOVE: {
+            if (mVelocityTracker == null || mPaused) {
+                break;
+            }
+
+            mVelocityTracker.addMovement(motionEvent);
+            float deltaX = motionEvent.getRawX() - mDownX;
+            float deltaY = motionEvent.getRawY() - mDownY;
+            if (Math.abs(deltaX) &gt; mSlop &amp;&amp; Math.abs(deltaY) &lt; Math.abs(deltaX) / 2) {
+                mSwiping = true;
+                mSwipingSlop = deltaX &gt; 0 ? mSlop : -mSlop;
+                mRecyclerView.requestDisallowInterceptTouchEvent(true);
+
+                // Cancel ListView's touch (un-highlighting the item)
+                MotionEvent cancelEvent = MotionEvent.obtain(motionEvent);
+                cancelEvent.setAction(MotionEvent.ACTION_CANCEL |
+                        (motionEvent.getActionIndex()
+                                &lt;&lt; MotionEvent.ACTION_POINTER_INDEX_SHIFT));
+                mRecyclerView.onTouchEvent(cancelEvent);
+                cancelEvent.recycle();
+            }
+
+            if (mSwiping) {
+                mRowContainer.getCurrentSwipingView().setTranslationX(deltaX - mSwipingSlop);
+                mRowContainer.getCurrentSwipingView().setAlpha(Math.max(0f, Math.min(1f,
+                        1f - 2f * Math.abs(deltaX) / mViewWidth)));
+                return true;
+            }
+            break;
+        }
+    }
+    return false;
+}
+
+class PendingDismissData implements Comparable&lt;PendingDismissData&gt; {
+    public int position;
+    public RowContainer rowContainer;
+
+    public PendingDismissData(int position, RowContainer rowContainer) {
+        this.position = position;
+        this.rowContainer= rowContainer;
+    }
+
+    @Override
+    public int compareTo(@NonNull PendingDismissData other) {
+        // Sort by descending position
+        return other.position - position;
+    }
+}
+
+private void performDismiss(RowContainer dismissView, int dismissPosition) {
+    // Animate the dismissed list item to zero-height and fire the dismiss callback when
+    // all dismissed list item animations have completed. This triggers layout on each animation
+    // frame; in the future we may want to do something smarter and more performant.
+    if (mPendingDismiss != null) {
+        boolean dismissingDifferentRow = mPendingDismiss.position != dismissPosition;
+        int newPosition = mPendingDismiss.position &lt; dismissPosition ? dismissPosition-1 : dismissPosition;
+        processPendingDismisses();
+        if (dismissingDifferentRow) {
+            addPendingDismiss(dismissView, newPosition);
+        }
+    } else {
+        addPendingDismiss(dismissView, dismissPosition);
+    }
+}
+
+private void addPendingDismiss(RowContainer dismissView, int dismissPosition) {
+    dismissView.dataContainerHasBeenDismissed = true;
+    dismissView.undoContainer.setVisibility(View.VISIBLE);
+    mPendingDismiss = new PendingDismissData(dismissPosition, dismissView);
+    // Notify the callbacks
+    mCallbacks.onPendingDismiss(mRecyclerView, dismissPosition);
+    // Automatically dismiss the item after a certain delay
+    if(mDismissDelayMillis &gt;= 0)
+        mHandler.removeCallbacks(mDismissRunnable);
+        mHandler.postDelayed(mDismissRunnable, mDismissDelayMillis);
+}
+
+/**
+ * If a view was dismissed and the undo container is showing it will proceed with the final
+ * dismiss of the item.
+ * @return whether there were any pending rows to be dismissed.
+ */
+public boolean processPendingDismisses() {
+    boolean existPendingDismisses = existPendingDismisses();
+    if (existPendingDismisses) processPendingDismisses(mPendingDismiss);
+    return existPendingDismisses;
+}
+
+/**
+ * Whether a row has been dismissed and is waiting for confirmation
+ * @return whether there are any pending rows to be dismissed.
+ */
+public boolean existPendingDismisses() {
+    return mPendingDismiss != null &amp;&amp; mPendingDismiss.rowContainer.dataContainerHasBeenDismissed;
+}
+
+/**
+ * If a view was dismissed and the undo container is showing it will undo and make the data
+ * container reappear.
+ * @return whether there were any pending rows to be dismissed.
+ */
+public boolean undoPendingDismiss() {
+    boolean existPendingDismisses = existPendingDismisses();
+    if (existPendingDismisses) {
+        mPendingDismiss.rowContainer.undoContainer.setVisibility(View.GONE);
+        mPendingDismiss.rowContainer.dataContainer
+                .animate()
+                .translationX(0)
+                .alpha(1)
+                .setDuration(mAnimationTime)
+                .setListener(null);
+        mPendingDismiss = null;
+    }
+    return existPendingDismisses;
+}
+
+private void processPendingDismisses(final PendingDismissData pendingDismissData) {
+    mPendingDismiss = null;
+    final ViewGroup.LayoutParams lp = pendingDismissData.rowContainer.container.getLayoutParams();
+    final int originalHeight = pendingDismissData.rowContainer.container.getHeight();
+
+    ValueAnimator animator = ValueAnimator.ofInt(originalHeight, 1).setDuration(mAnimationTime);
+
+    animator.addListener(new AnimatorListenerAdapter() {
+        @Override
+        public void onAnimationEnd(Animator animation) {
+            if (mCallbacks.canDismiss(pendingDismissData.position))
+                mCallbacks.onDismiss(mRecyclerView, pendingDismissData.position);
+            pendingDismissData.rowContainer.dataContainer.post(new Runnable() {
+                @Override
+                public void run() {
+                    pendingDismissData.rowContainer.dataContainer.setTranslationX(0);
+                    pendingDismissData.rowContainer.dataContainer.setAlpha(1);
+                    pendingDismissData.rowContainer.undoContainer.setVisibility(View.GONE);
+                    pendingDismissData.rowContainer.undoContainer.setTranslationX(0);
+                    pendingDismissData.rowContainer.undoContainer.setAlpha(1);
+
+                    lp.height = originalHeight;
+                    pendingDismissData.rowContainer.container.setLayoutParams(lp);
+                }
+            });
+        }
+    });
+
+    animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+        @Override
+        public void onAnimationUpdate(ValueAnimator valueAnimator) {
+            lp.height = (Integer) valueAnimator.getAnimatedValue();
+            pendingDismissData.rowContainer.container.setLayoutParams(lp);
+        }
+    });
+
+    animator.start();
+}
+</code></pre>
+
+<p>}</p>

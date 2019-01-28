@@ -1,0 +1,633 @@
+<p>As <code>LocationClient</code> is deprected, I have used <code>GoogleApiClient</code>, Here is code for anyone who want to implement it. 
+Just Replacing <code>LocationClient</code> with <code>GoogleApiClient</code> else is same as @Sishin's code. </p>
+
+<pre><code>import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
+
+import android.app.Dialog;
+import android.content.IntentSender.SendIntentException;
+import android.location.Address;
+import android.location.Geocoder;
+import android.location.Location;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import com.app.anycabs.R;
+import com.app.common.GPSTracker;
+import com.app.modle.GData;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.PendingResult;
+import com.google.android.gms.common.api.ResultCallback;
+import com.google.android.gms.common.api.Status;
+import com.google.android.gms.location.LocationListener;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.GoogleMap.OnCameraChangeListener;
+import com.google.android.gms.maps.MapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.CameraPosition;
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Marker;
+import com.google.android.gms.maps.model.MarkerOptions;
+
+public class MainActivity extends AppCompatActivity implements
+        LocationListener, GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
+    // A request to connect to Location Services
+    private LocationRequest mLocationRequest;
+    GoogleMap mGoogleMap;
+
+    public static String ShopLat;
+    public static String ShopPlaceId;
+    public static String ShopLong;
+    // Stores the current instantiation of the location client in this object
+    private GoogleApiClient mGoogleApiClient;
+    boolean mUpdatesRequested = false;
+    private TextView markerText;
+    private LatLng center;
+    private LinearLayout markerLayout;
+    private Geocoder geocoder;
+    private List&lt;Address&gt; addresses;
+    private TextView Address;
+    double latitude;
+    double longitude;
+    private GPSTracker gps;
+    private LatLng curentpoint;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_curent_locations);
+        markerText = (TextView) findViewById(R.id.locationMarkertext);
+        Address = (TextView) findViewById(R.id.adressText);
+        markerLayout = (LinearLayout) findViewById(R.id.locationMarker);
+        // Getting Google Play availability status
+        int status = GooglePlayServicesUtil
+                .isGooglePlayServicesAvailable(getBaseContext());
+
+        if (status != ConnectionResult.SUCCESS) { // Google Play Services are
+                                                    // not available
+
+            int requestCode = 10;
+            Dialog dialog = GooglePlayServicesUtil.getErrorDialog(status, this,
+                    requestCode);
+            dialog.show();
+
+        } else { // Google Play Services are available
+
+            // Getting reference to the SupportMapFragment
+            // Create a new global location parameters object
+            mLocationRequest = LocationRequest.create();
+
+            /*
+             * Set the update interval
+             */
+            mLocationRequest.setInterval(GData.UPDATE_INTERVAL_IN_MILLISECONDS);
+
+            // Use high accuracy
+            mLocationRequest
+                    .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+
+            // Set the interval ceiling to one minute
+            mLocationRequest
+                    .setFastestInterval(GData.FAST_INTERVAL_CEILING_IN_MILLISECONDS);
+
+            // Note that location updates are off until the user turns them on
+            mUpdatesRequested = false;
+
+            /*
+             * Create a new location client, using the enclosing class to handle
+             * callbacks.
+             */
+            mGoogleApiClient = new GoogleApiClient.Builder(this)
+                    .addApi(LocationServices.API).addConnectionCallbacks(this)
+                    .addOnConnectionFailedListener(this).build();
+
+            mGoogleApiClient.connect();
+        }
+    }
+
+    private void stupMap() {
+        try {
+
+            mGoogleMap = ((MapFragment) getFragmentManager().findFragmentById(
+                    R.id.curentlocationmapfragment)).getMap();
+
+            // Enabling MyLocation in Google Map
+            mGoogleMap.setMyLocationEnabled(true);
+            mGoogleMap.getUiSettings().setZoomControlsEnabled(false);
+            mGoogleMap.getUiSettings().setMyLocationButtonEnabled(true);
+            mGoogleMap.getUiSettings().setCompassEnabled(true);
+            mGoogleMap.getUiSettings().setRotateGesturesEnabled(true);
+            mGoogleMap.getUiSettings().setZoomGesturesEnabled(true);
+
+            PendingResult&lt;Status&gt; result = LocationServices.FusedLocationApi
+                    .requestLocationUpdates(mGoogleApiClient, mLocationRequest,
+                            new LocationListener() {
+
+                                @Override
+                                public void onLocationChanged(Location location) {
+                                    markerText.setText("Location received: "
+                                            + location.toString());
+
+                                }
+                            });
+
+            Log.e("Reached", "here");
+
+            result.setResultCallback(new ResultCallback&lt;Status&gt;() {
+
+                @Override
+                public void onResult(Status status) {
+
+                    if (status.isSuccess()) {
+
+                        Log.e("Result", "success");
+
+                    } else if (status.hasResolution()) {
+                        // Google provides a way to fix the issue
+                        try {
+                            status.startResolutionForResult(MainActivity.this,
+                                    100);
+                        } catch (SendIntentException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            });
+            gps = new GPSTracker(this);
+
+            gps.canGetLocation();
+
+            latitude = gps.getLatitude();
+            longitude = gps.getLongitude();
+            curentpoint = new LatLng(latitude, longitude);
+
+            CameraPosition cameraPosition = new CameraPosition.Builder()
+                    .target(curentpoint).zoom(19f).tilt(70).build();
+
+            mGoogleMap.setMyLocationEnabled(true);
+            mGoogleMap.animateCamera(CameraUpdateFactory
+                    .newCameraPosition(cameraPosition));
+            // Clears all the existing markers
+            mGoogleMap.clear();
+
+            mGoogleMap.setOnCameraChangeListener(new OnCameraChangeListener() {
+
+                @Override
+                public void onCameraChange(CameraPosition arg0) {
+                    // TODO Auto-generated method stub
+                    center = mGoogleMap.getCameraPosition().target;
+
+                    markerText.setText(" Set your Location ");
+                    mGoogleMap.clear();
+                    markerLayout.setVisibility(View.VISIBLE);
+
+                    try {
+                        new GetLocationAsync(center.latitude, center.longitude)
+                                .execute();
+
+                    } catch (Exception e) {
+                    }
+                }
+            });
+
+            markerLayout.setOnClickListener(new OnClickListener() {
+
+                @Override
+                public void onClick(View v) {
+                    // TODO Auto-generated method stub
+
+                    try {
+
+                        LatLng latLng1 = new LatLng(center.latitude,
+                                center.longitude);
+
+                        Marker m = mGoogleMap.addMarker(new MarkerOptions()
+                                .position(latLng1)
+                                .title(" Set your Location ")
+                                .snippet("")
+                                .icon(BitmapDescriptorFactory
+                                        .fromResource(R.drawable.pin_last)));
+                        m.setDraggable(true);
+
+                        markerLayout.setVisibility(View.GONE);
+                    } catch (Exception e) {
+                    }
+
+                }
+            });
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    public void onConnectionFailed(ConnectionResult arg0) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    public void onConnected(Bundle arg0) {
+        // TODO Auto-generated method stub
+        stupMap();
+
+    }
+
+    private class GetLocationAsync extends AsyncTask&lt;String, Void, String&gt; {
+
+        // boolean duplicateResponse;
+        double x, y;
+        StringBuilder str;
+
+        public GetLocationAsync(double latitude, double longitude) {
+            // TODO Auto-generated constructor stub
+
+            x = latitude;
+            y = longitude;
+        }
+
+        @Override
+        protected void onPreExecute() {
+            Address.setText(" Getting location ");
+        }
+
+        @Override
+        protected String doInBackground(String... params) {
+
+            try {
+                geocoder = new Geocoder(MainActivity.this, Locale.ENGLISH);
+                addresses = geocoder.getFromLocation(x, y, 1);
+                str = new StringBuilder();
+                if (Geocoder.isPresent()) {
+                    Address returnAddress = addresses.get(0);
+
+                    String localityString = returnAddress.getLocality();
+                    String city = returnAddress.getCountryName();
+                    String region_code = returnAddress.getCountryCode();
+                    String zipcode = returnAddress.getPostalCode();
+
+                    str.append(localityString + "");
+                    str.append(city + "" + region_code + "");
+                    str.append(zipcode + "");
+
+                } else {
+                }
+            } catch (IOException e) {
+                Log.e("tag", e.getMessage());
+            }
+            return null;
+
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            try {
+                Address.setText(addresses.get(0).getAddressLine(0)
+                        + addresses.get(0).getAddressLine(1) + " ");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        protected void onProgressUpdate(Void... values) {
+
+        }
+    }
+
+    @Override
+    public void onConnectionSuspended(int arg0) {
+        // TODO Auto-generated method stub
+
+    }
+
+}
+</code></pre>
+
+<p>Where <code>GPSTracker</code> is as below:</p>
+
+<pre><code>public class GPSTracker extends Service implements LocationListener {
+
+    private final FragmentActivity mActivity;
+
+    // flag for GPS Status
+    boolean isGPSEnabled = false;
+
+    // flag for network status
+    boolean isNetworkEnabled = false;
+
+    boolean canGetLocation = false;
+
+    Location location;
+    double latitude;
+    double longitude;
+
+    // The minimum distance to change updates in metters
+    private static final long MIN_DISTANCE_CHANGE_FOR_UPDATES = 10; // 10
+                                                                    // metters
+
+    // The minimum time beetwen updates in milliseconds
+    private static final long MIN_TIME_BW_UPDATES = 1000 * 60 * 1; // 1 minute
+
+    // Declaring a Location Manager
+    protected LocationManager locationManager;
+
+    public GPSTracker(FragmentActivity activity) {
+        this.mActivity = activity;
+        getLocation();
+    }
+
+    public Location getLocation() {
+        try {
+            locationManager = (LocationManager) mActivity
+                    .getSystemService(LOCATION_SERVICE);
+
+            // getting GPS status
+            isGPSEnabled = locationManager
+                    .isProviderEnabled(LocationManager.GPS_PROVIDER);
+
+            // getting network status
+            isNetworkEnabled = locationManager
+                    .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+
+            if (!isGPSEnabled &amp;&amp; !isNetworkEnabled) {
+                // no network provider is enabled
+            } else {
+                this.canGetLocation = true;
+
+                // First get location from Network Provider
+                if (isNetworkEnabled) {
+                    locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER,
+                            MIN_TIME_BW_UPDATES,
+                            MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+
+                    if (locationManager != null) {
+                        location = locationManager
+                                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        updateGPSCoordinates();
+                    }
+                }
+                // if GPS Enabled get lat/long using GPS Services
+                if (isGPSEnabled) {
+                    if (location == null) {
+                        locationManager.requestLocationUpdates(
+                                LocationManager.GPS_PROVIDER,
+                                MIN_TIME_BW_UPDATES,
+                                MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+
+                        if (locationManager != null) {
+                            location = locationManager
+                                    .getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            updateGPSCoordinates();
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // e.printStackTrace();
+            Log.e("Error : Location",
+                    "Impossible to connect to LocationManager", e);
+        }
+
+        return location;
+    }
+
+    public void updateGPSCoordinates() {
+        if (location != null) {
+            latitude = location.getLatitude();
+            longitude = location.getLongitude();
+        }
+    }
+
+    /**
+     * Stop using GPS listener Calling this function will stop using GPS in your
+     * app
+     */
+
+    public void stopUsingGPS() {
+        if (locationManager != null) {
+            locationManager.removeUpdates(GPSTracker.this);
+            locationManager = null;
+        }
+    }
+
+    /**
+     * Function to get latitude
+     */
+    public double getLatitude() {
+        if (location != null) {
+            latitude = location.getLatitude();
+        }
+
+        return latitude;
+    }
+
+    /**
+     * Function to get longitude
+     */
+    public double getLongitude() {
+        if (location != null) {
+            longitude = location.getLongitude();
+        }
+
+        return longitude;
+    }
+
+    /**
+     * Function to check GPS/wifi enabled
+     */
+    public boolean canGetLocation() {
+        return this.canGetLocation;
+    }
+
+    /**
+     * Function to show settings alert dialog
+     */
+    public void showSettingsAlert() {
+
+        if (mActivity == null || mActivity.isFinishing()) {
+            return;
+        }
+
+        mActivity.runOnUiThread(new Runnable() {
+
+            @Override
+            public void run() {
+
+                AlertDialog.Builder alertDialog = new AlertDialog.Builder(
+                        mActivity);
+
+                // Setting Dialog Title
+                alertDialog.setTitle("GPS is settings");
+
+                // Setting Dialog Message
+                alertDialog
+                        .setMessage("Your GPS is disabled, Enable GPS in settings or continue with approximate location");
+
+                // On pressing Settings button
+                alertDialog.setPositiveButton("Settings",
+                        new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog,
+                                    int which) {
+                                Intent intent = new Intent(
+                                        Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                                mActivity.startActivity(intent);
+                            }
+                        });
+
+                // on pressing cancel button
+                alertDialog.setNegativeButton("Cancel",
+                        new DialogInterface.OnClickListener() {
+                            public void onClick(final DialogInterface dialog,
+                                    int which) {
+
+                                // UserSerch doSerch = new UserSerch();
+                                // doSerch.doserchOn();
+                                // dialog.cancel();
+                            }
+                        });
+
+                // Showing Alert Message
+                alertDialog.create().show();
+            }
+        });
+
+    }
+
+    /**
+     * Get list of address by latitude and longitude
+     * 
+     * @return null or List&lt;Address&gt;
+     */
+    public List&lt;Address&gt; getGeocoderAddress(Context context) {
+        if (location != null) {
+            Geocoder geocoder = new Geocoder(context, Locale.ENGLISH);
+            try {
+                List&lt;Address&gt; addresses = geocoder.getFromLocation(latitude,
+                        longitude, 1);
+                return addresses;
+            } catch (IOException e) {
+                // e.printStackTrace();
+                Log.e("Error : Geocoder", "Impossible to connect to Geocoder",
+                        e);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Try to get AddressLine
+     * 
+     * @return null or addressLine
+     */
+    public String getAddressLine(Context context) {
+        List&lt;Address&gt; addresses = getGeocoderAddress(context);
+        if (addresses != null &amp;&amp; addresses.size() &gt; 0) {
+            Address address = addresses.get(0);
+            String addressLine = address.getAddressLine(0);
+
+            return addressLine;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Try to get Locality
+     * 
+     * @return null or locality
+     */
+    public String getLocality(Context context) {
+        List&lt;Address&gt; addresses = getGeocoderAddress(context);
+        if (addresses != null &amp;&amp; addresses.size() &gt; 0) {
+            Address address = addresses.get(0);
+            String locality = address.getLocality();
+
+            return locality;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Try to get Postal Code
+     * 
+     * @return null or postalCode
+     */
+    public String getPostalCode(Context context) {
+        List&lt;Address&gt; addresses = getGeocoderAddress(context);
+        if (addresses != null &amp;&amp; addresses.size() &gt; 0) {
+            Address address = addresses.get(0);
+            String postalCode = address.getPostalCode();
+
+            return postalCode;
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Try to get CountryName
+     * 
+     * @return null or postalCode
+     */
+    public String getCountryName(Context context) {
+        List&lt;Address&gt; addresses = getGeocoderAddress(context);
+        if (addresses != null &amp;&amp; addresses.size() &gt; 0) {
+            Address address = addresses.get(0);
+            String countryName = address.getCountryName();
+
+            return countryName;
+        } else {
+            return null;
+        }
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {
+        showSettingsAlert();
+    }
+
+    @Override
+    public void onProviderEnabled(String provider) {
+    }
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+}
+</code></pre>
+
+<p>I hope it will be helpful to anyone. 
+<img src="http://i.stack.imgur.com/MWlkc.png" alt="Image"></p>

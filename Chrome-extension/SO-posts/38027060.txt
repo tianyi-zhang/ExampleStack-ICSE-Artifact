@@ -1,0 +1,53 @@
+<p>There's not really enough information to be sure about this. Is there a stack trace available? Can you tell if the crash is happening after roughly the same amount of data has been received? The easiest way to test if this is the case would be to slow the rate of data going to the app or intermittently interrupt the transfer of data. If slowing/interrupting the data does not reduce/remove the crashes, it is probably a memory leak so I'd suggest trying Leak Canary (<a href="https://github.com/square/leakcanary" rel="nofollow">https://github.com/square/leakcanary</a>). </p>
+
+<p>If slowing/disrupting the rate of data transfer does remove (or massively reduce) the crashes, I'm guessing the OutOfMemory is caused by your data getting added faster than garbage collection can free the memory used by unused data. </p>
+
+<p>The append data operation in the GraphView library looks like this: </p>
+
+<pre><code>public void appendData(E dataPoint, boolean scrollToEnd, int maxDataPoints) {
+    checkValueOrder(dataPoint);
+
+    if (!mData.isEmpty() &amp;&amp; dataPoint.getX() &lt; mData.get(mData.size()-1).getX()) {
+        throw new IllegalArgumentException("new x-value must be greater then the last value. x-values has to be ordered in ASC.");
+    }
+    synchronized (mData) {
+        int curDataCount = mData.size();
+        if (curDataCount &lt; maxDataPoints) {
+            // enough space
+            mData.add(dataPoint);
+        } else {
+            // we have to trim one data
+            mData.remove(0);
+            mData.add(dataPoint);
+        }
+    }
+
+    // recalc the labels when it was the first data
+    boolean keepLabels = mData.size() != 1;
+
+    // update linked graph views
+    // update graphview
+    for (GraphView gv : mGraphViews) {
+        gv.onDataChanged(keepLabels, scrollToEnd);
+        if (scrollToEnd) {
+            gv.getViewport().scrollToEnd();
+        }
+    }
+}
+</code></pre>
+
+<p>It is using <code>.remove()</code> on an ArrayList, which is not a very efficient operation. If you import the library source code to Android Studio and add your local copy to your project, replacing the ArrayList with a LinkedList (or possibly a more appropriate concurrent collection) may fix the problem. </p>
+
+<pre><code>final private List&lt;E&gt; mData = new ArrayList&lt;E&gt;();
+</code></pre>
+
+<p>to: </p>
+
+<pre><code>final private List&lt;E&gt; mData = new LinkedList&lt;E&gt;();
+</code></pre>
+
+<p>in <a href="https://github.com/jjoe64/GraphView/blob/master/src/main/java/com/jjoe64/graphview/series/BaseSeries.java" rel="nofollow">https://github.com/jjoe64/GraphView/blob/master/src/main/java/com/jjoe64/graphview/series/BaseSeries.java</a></p>
+
+<p>If this did fix it, it would be worth reporting it to the library's maintainer. </p>
+
+<p>Another alternative would be to throttle the rate of data transfer. For example by using RxJava: <a href="https://github.com/ReactiveX/RxJava/wiki/Backpressure" rel="nofollow">https://github.com/ReactiveX/RxJava/wiki/Backpressure</a></p>

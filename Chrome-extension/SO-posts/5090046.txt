@@ -1,0 +1,149 @@
+<pre><code>private static void play(String videoId, int format, String encoding,
+        String userAgent, File outputdir, String extension)
+        throws Throwable {
+    log.fine("Retrieving " + videoId);
+    List&lt;NameValuePair&gt; qparams = new ArrayList&lt;NameValuePair&gt;();
+    qparams.add(new BasicNameValuePair("video_id", videoId));
+    qparams.add(new BasicNameValuePair("fmt", "" + format));
+    URI uri = getUri("get_video_info", qparams);
+    System.out.println("************JavaYoutubeDownloade.play() Uri = "
+            + uri.toString());
+    System.out.println("JavaYoutubeDownloade.play() User Agent = "
+            + userAgent);
+    CookieStore cookieStore = new BasicCookieStore();
+    HttpContext localContext = new BasicHttpContext();
+    localContext.setAttribute(ClientContext.COOKIE_STORE, cookieStore);
+
+    HttpClient httpclient = new DefaultHttpClient();
+    HttpGet httpget = new HttpGet(uri);
+    if (userAgent != null &amp;&amp; userAgent.length() &gt; 0) {
+        httpget.setHeader("User-Agent", userAgent);
+    }
+
+    log.finer("Executing " + uri);
+    HttpResponse response = httpclient.execute(httpget, localContext);
+    HttpEntity entity = response.getEntity();
+    if (entity != null &amp;&amp; response.getStatusLine().getStatusCode() == 200) {
+        InputStream instream = entity.getContent();
+        String videoInfo = getStringFromInputStream(encoding, instream);
+        if (videoInfo != null &amp;&amp; videoInfo.length() &gt; 0) {
+            List&lt;NameValuePair&gt; infoMap = new ArrayList&lt;NameValuePair&gt;();
+            URLEncodedUtils
+                    .parse(infoMap, new Scanner(videoInfo), encoding);
+            String downloadUrl = null;
+            filename = videoId;
+
+            for (NameValuePair pair : infoMap) {
+                String key = pair.getName();
+                String val = pair.getValue();
+                log.finest(key + "=" + val);
+                if (key.equals("title")) {
+                    filename = val;
+                } else if (key.equals("fmt_url_map")) {
+                    String[] formats = commaPattern.split(val);
+                    boolean found = false;
+                    for (String fmt : formats) {
+                        String[] fmtPieces = pipePattern.split(fmt);
+                        if (fmtPieces.length == 2) {
+                            int pieceFormat = Integer
+                                    .parseInt(fmtPieces[0]);
+                            log.fine("Available format=" + pieceFormat);
+                            if (pieceFormat == format) {
+                                // found what we want
+                                downloadUrl = fmtPieces[1];
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found) {
+                        log.warning("Could not find video matching specified format, however some formats of the video do exist (use -verbose).");
+                    }
+                }
+            }
+
+            filename = cleanFilename(filename);
+            if (filename.length() == 0) {
+                filename = videoId;
+            } else {
+                filename += "_" + videoId;
+            }
+            filename += "." + extension;
+
+
+            File outputfile = new File(outputdir, filename);
+            if (!outputfile.exists()) {
+                outputfile.createNewFile();
+
+            }
+            //downloadedFile = outputdir.getPath() + "/" + filename;
+
+            if (downloadUrl != null) {
+                downloadWithHttpClient(userAgent, downloadUrl, outputfile);
+
+            } else {
+                log.severe("Could not find video");
+            }
+        } else {
+            log.severe("Did not receive content from youtube");
+        }
+    } else {
+        log.severe("Could not contact youtube: " + response.getStatusLine());
+    }
+}
+
+private static void downloadWithHttpClient(String userAgent,
+        String downloadUrl, File outputfile) throws Throwable {
+    HttpGet httpget2 = new HttpGet(downloadUrl);
+    if (userAgent != null &amp;&amp; userAgent.length() &gt; 0) {
+        httpget2.setHeader("User-Agent", userAgent);
+    }
+
+    log.finer("Executing " + httpget2.getURI());
+    HttpClient httpclient2 = new DefaultHttpClient();
+    HttpResponse response2 = httpclient2.execute(httpget2);
+    HttpEntity entity2 = response2.getEntity();
+    if (entity2 != null &amp;&amp; response2.getStatusLine().getStatusCode() == 200) {
+        double length = entity2.getContentLength();
+        if (length &lt;= 0) {
+            // Unexpected, but do not divide by zero
+            length = 1;
+        }
+        InputStream instream2 = entity2.getContent();
+
+        System.out.println("Writing "
+                + commaFormatNoPrecision.format(length) + " bytes to "
+                + outputfile);
+        if (outputfile.exists()) {
+            outputfile.delete();
+        }
+
+        FileOutputStream outstream = new FileOutputStream(outputfile);
+        try {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            double total = 0;
+            int count = -1;
+            int progress = 10;
+            long start = System.currentTimeMillis();
+            while ((count = instream2.read(buffer)) != -1) {
+                total += count;
+                int p = (int) ((total / length) * ONE_HUNDRED);
+                if (p &gt;= progress) {
+                    long now = System.currentTimeMillis();
+                    double s = (now - start) / 1000;
+                    int kbpers = (int) ((total / KB) / s);
+                    System.out.println(progress + "% (" + kbpers + "KB/s)");
+                    progress += 10;
+                }
+                outstream.write(buffer, 0, count);
+            }
+            outstream.flush();
+        } finally {
+            outstream.close();
+        }
+        System.out.println("Done");
+    }
+}
+</code></pre>
+
+<p>Atfirst, the URL that I gave for download was incorrect. Now, it is working...</p>

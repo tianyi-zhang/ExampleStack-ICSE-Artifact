@@ -1,0 +1,323 @@
+<p>Correct me if I'm wrong. You are writing an app, that can access data from a server, where the server/database belongs to a store?</p>
+
+<p>If my understanding of your question is correct, do the following:</p>
+
+<ul>
+<li>Create a connection broadcast that listens for changes in connectivity</li>
+<li>Create a GPS Manager that compares the current location to that based off the location from the stores</li>
+<li>If in range of one or more stores AND a connection is available, query the server via a restfull request, on the server side, fire a query, see if you get any result(I don't know if there exists a specific query to check for database connectivity from server-side code to database) If you get a result, the database is available, send a result back from the server to the client, and list the database/store as available.</li>
+</ul>
+
+<p>I personally would use JSON for the requests from client &lt;-> server. As it is lightweight and easy to use.</p>
+
+<p>For writing a broadcaster: <a href="http://developer.android.com/reference/android/content/BroadcastReceiver.html" rel="nofollow">BraodcastReciever</a></p>
+
+<p>Example:</p>
+
+<pre><code>private Context _context;
+private State _state;
+private boolean _listening;
+private String _reason;
+private boolean _isFailOver;
+
+private NetworkInfo _networkInfo;
+
+private NetworkInfo _otherNetworkInfo;
+private ConnectivityBroadcastReceiver _receiver;
+/**
+ * The broadcast that listens to connectivity changes(wifi, mobile network etc)
+ * */
+private class ConnectivityBroadcastReceiver extends BroadcastReceiver {
+    /**
+     * Called when connectivity state changes
+     * 
+     * @param Context the context
+     * @param Intent the intent containing the information about the change
+     * */
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+
+        if(!action.equals(ConnectivityManager.CONNECTIVITY_ACTION) || _listening == false) {
+            Log.w(TAG, "onReceived() called with " + _state.toString() + " and " + intent);
+            return;
+        }
+
+        boolean noConnectivity = intent.getBooleanExtra(ConnectivityManager.EXTRA_NO_CONNECTIVITY, false);
+
+        //Set the state according to current connectivity.
+        if(noConnectivity) {
+            _state = State.NOT_CONNECTED;
+        } else {
+            _state = State.CONNECTED;
+        }
+
+        //If current state is CONNECTED. Start background services, otherwise stop services.
+        switch(_state) {
+        case CONNECTED:
+            //Do stuff when connected
+            break;
+        case NOT_CONNECTED:
+            //Do stuff if not connected
+            break;
+        }
+
+        _networkInfo = (NetworkInfo)intent.getParcelableExtra(ConnectivityManager.EXTRA_NETWORK_INFO);
+        _otherNetworkInfo = (NetworkInfo)intent.getParcelableExtra(ConnectivityManager.EXTRA_OTHER_NETWORK_INFO);
+
+        _reason = intent.getStringExtra(ConnectivityManager.EXTRA_REASON);
+        _isFailOver = intent.getBooleanExtra(ConnectivityManager.EXTRA_IS_FAILOVER, false);
+
+        Log.d(TAG, "onRecieve(): _networkInfo= " + _networkInfo + " _otherNetworkInfo= " + (_otherNetworkInfo == null ? "[none]" : _otherNetworkInfo + 
+                " noConn= " + noConnectivity) + " _state= " + _state.toString());
+    }
+};
+</code></pre>
+
+<p>I am not posting the entire code. I wrote a wrapper around the ConnectivityBroadcastReceiver. But with the given code you should be able to get far enough.Note that in the code State is an <strong>enum</strong> containing 3 values: CONNECTED, NOT_CONNECTED, UNKNOWN</p>
+
+<p>As for the GPS manager:</p>
+
+<pre><code>    /**
+ * &lt;h1&gt;GPSManager&lt;/h1&gt;
+ * 
+ * &lt;p&gt;
+ * Manager for GPS tracking.
+ * Able to enable and disable GPS tracking for the application.
+ * &lt;/p&gt;
+ * */
+public class GPSManager {
+    public static final String TAG = "LocationFinder";
+    private double _lat;
+    private double _lon;
+    private float _accuracy;
+    private Context _context;
+    private LocationManager _locManager;
+    private LocationListener _locListener;
+
+    private static GPSManager _instance;
+
+    /**
+     * Constructor.
+     * 
+     * @param context The context of the caller.
+     * */
+    private GPSManager(Context context) {
+        this._context = context;
+        this._locListener = new LocationTracker();
+    }
+
+    /**
+     * GPSManager is singleton. Retrieve the shared instance.
+     * 
+     * @param context The context of the caller.
+     * @return GPSManager An instance of the GPSManager class.
+     * */
+    public static synchronized GPSManager getInstance(Context context) {
+        if(_instance == null) {
+            _instance = new GPSManager(context);
+        }
+        return _instance;
+    }
+
+    /**
+     * Start tracking GPS locations.
+     * */
+    public void startGpsTracking() {
+        _locManager = (LocationManager)_context.getSystemService(Context.LOCATION_SERVICE);
+        _locManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 
+                0, 0, _locListener);
+    }
+
+    /**
+     * Stop tracking GPS locations.
+     * */
+    public void stopGpsTracking() {
+        _locManager.removeUpdates(_locListener);
+        _locManager = null;
+    }
+
+    /**
+     * Retrieve the latitude from the GPSManager.
+     * 
+     * @return double The latitude.
+     * */
+    public double getLatitude() {
+        return _lat;
+    }
+
+    /**
+     * Retrieve the longitude from the GPSManager.
+     * 
+     * @return double The longitude.
+     * */
+    public double getLongitude() {
+        return _lon;
+    }
+
+    /**
+     * Check if the GPSManager has a fix on a location.
+     * 
+     * @return boolean True if GPSManager has a fix, otherwise false.
+     * */
+    public boolean hasFix() {
+        if(_lat != 0 &amp;&amp; _lon != 0)
+            return true;
+        else
+            return false;
+    }
+
+    /**
+     * Retrieve the accuracy of the fix.
+     * 
+     * @return float The accuracy.
+     * */
+    public float getAccuracy() {
+        return _accuracy;
+    }
+
+    /**
+     * Retrieve the last known location.
+     * 
+     * @return Location The last known location.
+     * */
+    public Location getLastLocation() {
+        return _locManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+    }
+
+    /**
+     * &lt;h1&gt;LocationTracker&lt;/h1&gt;
+     * 
+     * &lt;p&gt;Tracks the location for the GPSManager.&lt;/p&gt;
+     * */
+    private class LocationTracker implements LocationListener {
+        /** (non-Javadoc)
+         * @see android.location.LocationListener#onLocationChanged(android.location.Location)
+         */
+        @Override
+        public void onLocationChanged(Location location) {      
+            _lat = location.getLatitude();
+            _lon = location.getLongitude();
+            _accuracy = location.getAccuracy();
+        }
+
+        /** (non-Javadoc)
+         * @see android.location.LocationListener#onProviderDisabled(java.lang.String)
+         */
+        @Override
+        public void onProviderDisabled(String provider) {
+            Log.d(TAG, "Gps Disabled");     
+        }
+
+        /** (non-Javadoc)
+         * @see android.location.LocationListener#onProviderEnabled(java.lang.String)
+         */
+        @Override
+        public void onProviderEnabled(String provider) {
+            Log.d(TAG, "Gps Enabled");  
+        }
+
+        /** (non-Javadoc)
+         * @see android.location.LocationListener#onStatusChanged(java.lang.String, int, android.os.Bundle)
+         */
+        @Override
+        public void onStatusChanged(String provider, int status, Bundle extras) {};
+    };
+}
+</code></pre>
+
+<p>Expand this with your own needs. Most code in the gps manager is self explanatory.</p>
+
+<p>And for the restfull stuff, theres so many different approaches, you will have to look that up yourself.</p>
+
+<p>As answer to your comment, I will show you my implementation of the webrequest. 
+I personally use apache-mime4j-0.6.jar AND httpmime-4.0.1.jar.</p>
+
+<pre><code>WebService _service = new WebService();
+    @Override
+    protected String doInBackground(String... arg0) {
+        try {
+            MultipartEntity multipart = new MultipartEntity();
+            multipart.addPart("username", new StringBody(_inputName));
+            multipart.addPart("password", new StringBody(_inputPass));
+
+            _service.post(QfConfig.RESTFUL_LOGIN_URL, multipart);
+
+            long response = _service.getLongResponse();
+
+            if(response != 0) {
+                _pgUserId = response;
+                _onlineValidated = true;
+            }
+        } catch(Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+</code></pre>
+
+<p>I don't know wether you want to POST or GET. The above example uses POST.
+I create a MultipartEntity, and add 2 parts to it. The multipart will be send across to the server as a form where the name of the POST value is username, and the VALUE of the post where the name is username is new StringBody(_inputName).</p>
+
+<p>For the post section in my WebService class:</p>
+
+<pre><code>public void post(String url, MultipartEntity postData) {
+    HttpClient client = null;
+    HttpPost post = null;
+    HttpResponse httpResponse = null;
+    HttpEntity entity = null;
+    InputStream _inStream = null;
+
+    try {
+        client = new DefaultHttpClient();
+        post = new HttpPost();
+        URI uri = URI.create(url);
+        post.setURI(uri);
+        post.setEntity(postData);
+        //Execute the HttpPost request and store the response in httpResponse.
+        httpResponse = client.execute(post);
+        //Set the response code from the request's responst.
+        setResponseCode(httpResponse.getStatusLine().getStatusCode());
+        //Retrieve the entity from the response.
+        entity = httpResponse.getEntity();
+
+        if(entity != null) {
+            //Retrieve the content from the entity.
+            _inStream = entity.getContent();
+            //Convert the InputStream to String and set the String response to the returned value.
+            setStringResponse(IOUtility.convertStreamToString(_inStream));
+            //Close the InputStream.
+            Log.d(TAG, getStringResponse());
+        }   
+
+        //try to create a numeric value of the response result and store it if so
+        if(GeneralUtil.isNumeric(getStringResponse())) {
+            setLongResponse(Long.parseLong(getStringResponse()));
+        }
+
+        Log.d(TAG, httpResponse.getStatusLine().getReasonPhrase());
+    } catch(Exception e) {
+        e.printStackTrace();
+        setResponseCode(0);
+        setLongResponse(0);
+        setStringResponse("");
+    } finally {
+        try {
+            _inStream.close();
+        } catch (Exception ignore) {}
+    }
+}
+</code></pre>
+
+<p>I work via https, which is more complex so I left those things out. What I do here is, create a new httpClient and HttpPost, set the URI if the post, add the multipart data to post.setEntity() and then execute the request and save the response in a HttpResponse object.</p>
+
+<p>I then retrieve the entity and save it as HttpEntity, as to where I get the response content out of. Which can be a JSON string, a number, whatever you want basically.
+I then set some methods which helps me retrieve the results easily by getters and setters.</p>
+
+<p>For a HttpGet its even easier, you only need to pass an url , instead of a HttpPost object you create an HttpGet object, pass it the url, _client.execute([HttpGet object]) and retrieve the result the same way.</p>
+
+<p>In the php script, you can literally just use $_POST['username'] which would give the value of username that u set in StringBody in the above code.</p>
+
+<p>With a get, I would advise sending an url(with or without params, and then send back a JSON string as result to the get request.</p>
+
+<p>Let me know if you need more help. I think this is as far as I can go though. I can't show the php side cause I use a self designed framework.</p>

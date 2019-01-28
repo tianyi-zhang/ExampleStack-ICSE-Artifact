@@ -1,0 +1,231 @@
+<p>--</p>
+
+<p>EDIT: I've developed a component which lets you filter custom ListViews and change filters dynamically etc.  I think it has an easy implementation and you. Give it a try!</p>
+
+<p>I hope this would be nicer for all of you.</p>
+
+<p><a href="https://github.com/matessoftwaresolutions/AndroidFilterableList" rel="nofollow">https://github.com/matessoftwaresolutions/AndroidFilterableList</a></p>
+
+<p>--</p>
+
+<p>The easiest way for me:</p>
+
+<ol>
+<li>Define custom generic filter</li>
+<li>Define listeners required to make it generic</li>
+<li>Link all items to the view</li>
+</ol>
+
+<p>Example:</p>
+
+<ol>
+<li>My extends baseAdapter implements the two interfaces
+(IFilteredItem and IFilteredListListener. </li>
+</ol>
+
+<p>Its content is:</p>
+
+<pre><code>public class MenuListAdapter extends BaseAdapter implements IFilteredListListener&lt;PointOfInterest&gt;, IFilterableItem&lt;PointOfInterest&gt; {    
+public MenuListAdapter(Context context,List&lt;PointsOfInterest&gt; points) {
+        this.context = context;
+        //Elements for the list
+        this.points = points;
+    }
+....
+</code></pre>
+
+<p>BaseAdapter methods, and the other implementations:</p>
+
+<pre><code>@Override
+public int getCount() {
+    return points.size();
+}
+
+@Override
+public Object getItem(int position) {
+    return points.get(position);
+}
+
+@Override
+public long getItemId(int position) {
+    return position;
+}
+
+@Override
+public Filter getFilter() {
+    if (filter == null) {
+        filter = new ListFilter&lt;PointOfInterest&gt;(points, this, this,this);
+    }
+    return filter;
+}
+
+@Override
+public void onSearchResult(List&lt;PointOfInterest&gt; objects) {
+    if (objects.size() == 0) {
+        points = objects;
+        objects.add(mockedPointForEmptyList);
+    } else {
+        points = objects;
+    }
+}
+
+@Override
+public String getStringForFilter(PointOfInterest item) {
+    return item.getTitle();
+}
+....
+</code></pre>
+
+<p>In my activity, I have a list view. I set my custom adapter, and it will compare an filter by the title of the point of interest:</p>
+
+<p>In your activity, get the edit text which will be used to filter the list, and add the watcher:</p>
+
+<pre><code>filterText = (EditText) customActionBar.findViewById(R.id.searchText);
+filterText.addTextChangedListener(filterTextWatcher);
+</code></pre>
+
+<p>In your activity (attribute zone), define your watcher:</p>
+
+<pre><code>private TextWatcher filterTextWatcher = new TextWatcher() {
+
+    public void afterTextChanged(Editable s) {
+    }
+
+    public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+    }
+
+    public void onTextChanged(CharSequence s, int start, int before, int count) {
+        yourMenuAdapter.getFilter().filter(s);
+    }
+
+};
+</code></pre>
+
+<p>I recommend you to use my own implementation of filter (copy and paste and let me know if you find any mistakes please!):</p>
+
+<pre><code>public class ListFilter&lt;T&gt; extends Filter {
+
+private List&lt;T&gt; adapterFilterElements;
+private List&lt;T&gt; originalFilterElements;
+private final Object mLock = new Object();
+
+private List&lt;String&gt; originalFilterValues;
+private IFilteredListListener&lt;T&gt; listener;
+private BaseAdapter baseAdapter;
+private IFilterableItem&lt;T&gt; filterableItem;
+
+public ListFilter(List&lt;T&gt; originalElements, BaseAdapter baseAdapter, IFilteredListListener&lt;T&gt; listener, IFilterableItem&lt;T&gt; filterableItem) {
+    this.adapterFilterElements = originalElements;
+    this.originalFilterElements = originalElements;
+    this.baseAdapter = baseAdapter;
+    this.listener = listener;
+    this.filterableItem = filterableItem;
+}
+
+@Override
+protected FilterResults performFiltering(CharSequence prefix) {
+    FilterResults results = new FilterResults();
+    if (originalFilterValues == null) {
+        synchronized (mLock) {
+            originalFilterValues = fillListNamesFromItems(adapterFilterElements);
+        }
+    }
+    if (prefix == null || prefix.length() == 0) {
+        ArrayList&lt;String&gt; list;
+        synchronized (mLock) {
+            list = new ArrayList&lt;String&gt;(originalFilterValues);
+        }
+        results.values = list;
+        results.count = list.size();
+    } else {
+        String prefixString = prefix.toString().toLowerCase(Locale.UK);
+        ArrayList&lt;String&gt; values;
+        synchronized (mLock) {
+            values = new ArrayList&lt;String&gt;(originalFilterValues);
+        }
+        final int count = values.size();
+        final ArrayList&lt;String&gt; newValues = new ArrayList&lt;String&gt;();
+        for (int i = 0; i &lt; count; i++) {
+            final String value = values.get(i);
+            final String valueText = value.toString().toLowerCase(Locale.UK);
+            // First match against the whole, non-splitted value
+            if (valueText.startsWith(prefixString)) {
+                newValues.add(value);
+            } else {
+                final String[] words = valueText.split(" ");
+                final int wordCount = words.length;
+                // Start at index 0, in case valueText starts with
+                // space(s)
+                for (int k = 0; k &lt; wordCount; k++) {
+                    if (words[k].startsWith(prefixString)) {
+                        newValues.add(value);
+                        break;
+                    }
+                }
+            }
+        }
+        results.values = newValues;
+        results.count = newValues.size();
+    }
+    return results;
+}
+
+@SuppressWarnings("unchecked")
+@Override
+protected void publishResults(CharSequence constraint, FilterResults results) {
+    results.values = fillItemListFromNames((List&lt;String&gt;) results.values);
+    listener.onSearchResult((List&lt;T&gt;) results.values);
+    adapterFilterElements = (List&lt;T&gt;) results.values;
+    if (results.count &gt; 0) {
+        baseAdapter.notifyDataSetChanged();
+    } else {
+        baseAdapter.notifyDataSetInvalidated();
+    }
+}
+
+private List&lt;T&gt; fillItemListFromNames(List&lt;String&gt; names) {
+    List&lt;T&gt; ret = new ArrayList&lt;T&gt;();
+    if (names != null) {
+        for (String s : names) {
+            for (T p : originalFilterElements) {
+                if (filterableItem.getStringForFilter(p).equals(s)) {
+                    ret.add(p);
+                    break;
+                }
+            }
+        }
+    }
+
+    return ret;
+}
+
+private List&lt;String&gt; fillListNamesFromItems(List&lt;T&gt; items) {
+    List&lt;String&gt; ret = new ArrayList&lt;String&gt;();
+    if (items != null) {
+        for (T item : items) {
+            ret.add(filterableItem.getStringForFilter(item));
+        }
+    }
+    return ret;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>The constructor receives a base adapter and two implementations of these custom interfaces:</p>
+
+<pre><code>public interface IFilteredListListener&lt;T&gt; extends Filterable {
+public void onSearchResult(List&lt;T&gt; objects);
+</code></pre>
+
+<p>}</p>
+
+<p>And</p>
+
+<pre><code>public interface IFilterableItem&lt;T&gt; {
+public String getStringForFilter(T item);
+</code></pre>
+
+<p>}</p>
+
+<p>Hope this concrete example helps!!</p>

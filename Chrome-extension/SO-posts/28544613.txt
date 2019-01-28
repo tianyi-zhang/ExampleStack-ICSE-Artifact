@@ -1,0 +1,100 @@
+<p>You are getting the exception because none of RestTemplate's default MessageConverters know how to serialize the InputStream contained by the MultipartFile file. When sending objects via RestTemplate, in most cases you want to send POJOs. You can fix this by adding the bytes of the MultipartFile to the MultiValueMap instead of the MultipartFile itself.</p>
+
+<p>I think there is also something wrong with your servlet part. For instance</p>
+
+<pre><code>File file1 = (File) req.getAttribute("userfile1");
+</code></pre>
+
+<p>should always return null, as ServletRequest's getAttribute method does not return request/form parameters but <a href="http://docs.oracle.com/javaee/6/api/javax/servlet/ServletRequest.html#getAttribute(java.lang.String)">attributes set by the servlet context</a>. Are you sure it is actually working with your curl example?</p>
+
+<p>Here is an example of a Spring MVC method forwarding a file to a servlet:</p>
+
+<p>Servlet (though I tested it running in a Spring MVC container), adapted from <a href="http://docs.oracle.com/javaee/6/tutorial/doc/glraq.html">here</a>:</p>
+
+<pre><code>@RequestMapping("/pi")
+private void doPost(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+
+  final String path = request.getParameter("destination");
+  final Part filePart = request.getPart("file");
+  final String fileName = request.getParameter("filename");
+
+  OutputStream out = null;
+  InputStream fileContent = null;
+  final PrintWriter writer = response.getWriter();
+
+  try {
+    out = new FileOutputStream(new File(path + File.separator
+            + fileName));
+    fileContent = filePart.getInputStream();
+
+    int read = 0;
+    final byte[] bytes = new byte[1024];
+
+    while ((read = fileContent.read(bytes)) != -1) {
+      out.write(bytes, 0, read);
+    }
+    writer.println("New file " + fileName + " created at " + path);
+
+  } catch (FileNotFoundException fne) {
+    writer.println("You either did not specify a file to upload or are "
+            + "trying to upload a file to a protected or nonexistent "
+            + "location.");
+    writer.println("&lt;br/&gt; ERROR: " + fne.getMessage());
+
+  } finally {
+    if (out != null) {
+      out.close();
+    }
+    if (fileContent != null) {
+      fileContent.close();
+    }
+    if (writer != null) {
+      writer.close();
+    }
+  }
+}
+</code></pre>
+
+<p>Spring MVC method:</p>
+
+<pre><code>@ResponseBody
+@RequestMapping(value="/upload/", method=RequestMethod.POST, 
+        produces = "text/plain")
+public String uploadFile(MultipartHttpServletRequest request) 
+        throws IOException {
+
+  Iterator&lt;String&gt; itr = request.getFileNames();
+
+  MultipartFile file = request.getFile(itr.next());
+  MultiValueMap&lt;String, Object&gt; parts = 
+          new LinkedMultiValueMap&lt;String, Object&gt;();
+  parts.add("file", new ByteArrayResource(file.getBytes()));
+  parts.add("filename", file.getOriginalFilename());
+
+  RestTemplate restTemplate = new RestTemplate();
+  HttpHeaders headers = new HttpHeaders();
+  headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+  HttpEntity&lt;MultiValueMap&lt;String, Object&gt;&gt; requestEntity =
+          new HttpEntity&lt;MultiValueMap&lt;String, Object&gt;&gt;(parts, headers);
+
+  // file upload path on destination server
+  parts.add("destination", "./");
+
+  ResponseEntity&lt;String&gt; response =
+          restTemplate.exchange("http://localhost:8080/pi", 
+                  HttpMethod.POST, requestEntity, String.class);
+
+  if (response != null &amp;&amp; !response.getBody().trim().equals("")) {
+    return response.getBody();
+  }
+
+  return "error";
+}
+</code></pre>
+
+<p>Using these I can succesfully upload a file through the MVC method to the servlet by the following curl:</p>
+
+<pre><code>curl --form file=@test.dat localhost:8080/upload/
+</code></pre>

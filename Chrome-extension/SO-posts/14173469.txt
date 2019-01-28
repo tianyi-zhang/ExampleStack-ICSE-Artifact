@@ -1,0 +1,199 @@
+<p>Basically, you need to do four things:</p>
+
+<ol>
+<li>Get a Rotten Tomatoes API key for your Android application, which you can do <a href="http://developer.rottentomatoes.com/apps/register">here</a>. This key identifies your app to their service and gives you authorized access. You must use it every time you make a request to their API. That's all, nothing complicated.</li>
+<li>Make a <a href="http://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol">HTTP</a> request to their API's web server. The URL of the request will depend on what data you're trying to fetch. For example, to get a list of movies the URL is: <code>http://api.rottentomatoes.com/api/public/v1.0/movies.json?apikey=[your_api_key]&amp;q=[search_keyword]&amp;page_limit=[page_limit]</code>, as shown on <a href="http://developer.rottentomatoes.com/docs/read/json/v10/Movies_Search">this</a> page.</li>
+<li>Read the response from their web server. As shown on the last page I just linked, the response will be a <a href="http://en.wikipedia.org/wiki/JSON">JSON</a> object, because that's the data format Rotten Tomatoes' chose to use for their API.</li>
+<li>Get whatever values from the JSON object that you want (e.g. movie title) and update your app's UI accordingly.</li>
+</ol>
+
+<p>I've put together a small demo app that will do this. Please try out the code below.</p>
+
+<p><strong>MainActivity.java</strong></p>
+
+<pre><code>import android.app.Activity;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ListView;
+
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.StatusLine;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+
+public class MainActivity extends Activity
+{
+    // the Rotten Tomatoes API key of your application! get this from their website
+    private static final String API_KEY = &lt;your api key!&gt;; 
+
+    // the number of movies you want to get in a single request to their web server
+    private static final int MOVIE_PAGE_LIMIT = 10; 
+
+    private EditText searchBox;
+    private Button searchButton;
+    private ListView moviesList;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState)
+    {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        searchBox = (EditText) findViewById(R.id.text_search_box);
+        searchButton = (Button) findViewById(R.id.button_search);
+        searchButton.setOnClickListener(new OnClickListener()
+        {
+            // send an API request when the button is pressed
+            @Override
+            public void onClick(View arg0)
+            {
+                new RequestTask().execute("http://api.rottentomatoes.com/api/public/v1.0/movies.json?apikey=" + API_KEY + "&amp;q=" + searchBox.getText().toString().trim() + "&amp;page_limit=" + MOVIE_PAGE_LIMIT);
+            }
+        });
+        moviesList = (ListView) findViewById(R.id.list_movies);
+    }
+
+    private void refreshMoviesList(String[] movieTitles)
+    {
+        moviesList.setAdapter(new ArrayAdapter&lt;String&gt;(this, android.R.layout.simple_list_item_1, movieTitles));
+    }
+
+    private class RequestTask extends AsyncTask&lt;String, String, String&gt;
+    {
+        // make a request to the specified url
+        @Override
+        protected String doInBackground(String... uri)
+        {
+            HttpClient httpclient = new DefaultHttpClient();
+            HttpResponse response;
+            String responseString = null;
+            try
+            {
+                // make a HTTP request
+                response = httpclient.execute(new HttpGet(uri[0]));
+                StatusLine statusLine = response.getStatusLine();
+                if (statusLine.getStatusCode() == HttpStatus.SC_OK)
+                {
+                    // request successful - read the response and close the connection
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    response.getEntity().writeTo(out);
+                    out.close();
+                    responseString = out.toString();
+                }
+                else
+                {
+                    // request failed - close the connection
+                    response.getEntity().getContent().close();
+                    throw new IOException(statusLine.getReasonPhrase());
+                }
+            }
+            catch (Exception e)
+            {
+                Log.d("Test", "Couldn't make a successful request!");
+            }
+            return responseString;
+        }
+
+        // if the request above completed successfully, this method will 
+        // automatically run so you can do something with the response
+        @Override
+        protected void onPostExecute(String response)
+        {
+            super.onPostExecute(response);
+
+            if (response != null)
+            {
+                try
+                {
+                    // convert the String response to a JSON object,
+                    // because JSON is the response format Rotten Tomatoes uses
+                    JSONObject jsonResponse = new JSONObject(response);
+
+                    // fetch the array of movies in the response
+                    JSONArray movies = jsonResponse.getJSONArray("movies");
+
+                    // add each movie's title to an array
+                    String[] movieTitles = new String[movies.length()];
+                    for (int i = 0; i &lt; movies.length(); i++)
+                    {
+                        JSONObject movie = movies.getJSONObject(i);
+                        movieTitles[i] = movie.getString("title");
+                    }
+
+                    // update the UI
+                    refreshMoviesList(movieTitles);
+                }
+                catch (JSONException e)
+                {
+                    Log.d("Test", "Failed to parse the JSON response!");
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><strong>res/layouts/activity_main.xml</strong></p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical" &gt;
+
+    &lt;LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#E9E9E9"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:orientation="horizontal"
+        android:padding="3dip" &gt;
+
+        &lt;EditText
+            android:id="@+id/text_search_box"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1.0"
+            android:gravity="center" /&gt;
+
+        &lt;Button
+            android:id="@+id/button_search"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:drawableRight="@android:drawable/ic_search_category_default" /&gt;
+    &lt;/LinearLayout&gt;
+
+    &lt;ListView
+        android:id="@+id/list_movies"
+        android:layout_width="match_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1.0" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>And add this line to your <code>AndroidManifest.xml</code> (it gives your Android app permission to use the Internet, which you obviously need to make the request to Rotten Tomatoes' web server):</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+</code></pre>
+
+<hr>
+
+<p><strong>Bonus answer:</strong></p>
+
+<p>If you want "live" search results as you type the search keyword into the EditText field, add a TextWatcher via EditText's <code>addTextChangedListener()</code> method, and make it do the HTTP request in <code>onTextChanged()</code>.</p>

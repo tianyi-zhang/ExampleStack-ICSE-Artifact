@@ -1,0 +1,194 @@
+<p><strong>Note:</strong>  I'm the <a href="http://www.eclipse.org/eclipselink/moxy.php" rel="nofollow"><strong>EclipseLink JAXB (MOXy)</strong></a> lead and a member of the <a href="http://jcp.org/en/jsr/detail?id=222" rel="nofollow"><strong>JAXB (JSR-222)</strong></a> expert group.</p>
+
+<hr/>
+
+<p>Off hand I do not know the exact config for CXF, but below I have provided some links to using MOXy with Spring.  Please feel free to <a href="http://blog.bdoughan.com/p/contact_01.html" rel="nofollow"><strong>contact me</strong></a>, and I can help you implement this:</p>
+
+<ul>
+<li><a href="http://blog.bdoughan.com/p/contact_01.html" rel="nofollow">http://blog.bdoughan.com/p/contact_01.html</a></li>
+</ul>
+
+<blockquote>
+  <p>My problem is that now I have a new (additional) REST web service to
+  provide and I would like to use a different JAX-B XML binding for this
+  new web service. I understand that MOXy can do this, but I am unable
+  to figure out how to configure a CXF end point so that it will use
+  MOXy for marshalling/unmarshalling (and furthermore how to tell Moxy
+  about my custom XML mapping file).</p>
+</blockquote>
+
+<p>When using MOXy with a JAX-RS implementation you can use a <code>ContextResolver</code> to bootstrap from MOXy's external mapping file:</p>
+
+<pre><code>package blog.bindingfile.jaxrs;
+
+import java.io.*;
+import java.util.*;
+import javax.ws.rs.Produces;
+import javax.ws.rs.ext.*;
+import javax.xml.bind.*;     
+import org.eclipse.persistence.jaxb.JAXBContextFactory;
+
+import blog.bindingfile.Customer;
+
+@Provider
+@Produces({"application/xml", "application/json"})
+public class CustomerContextResolver implements ContextResolver&lt;JAXBContext&gt; {
+
+    private JAXBContext jc;
+
+    public CustomerContextResolver() {
+        ClassLoader cl = Customer.class.getClassLoader();
+        InputStream bindings =
+            cl.getResourceAsStream("blog/bindingfile/binding.xml");
+        try {
+            Map&lt;String, Object&gt; props = new HashMap&lt;String, Object&gt;(1);
+            props.put(JAXBContextFactory.ECLIPSELINK_OXM_XML_KEY, bindings);
+            jc = JAXBContext.newInstance(new Class[] {Customer.class} , props);
+        } catch(JAXBException e) {
+            throw new RuntimeException(e);
+        } finally {
+            try {
+                bindings.close();
+            } catch(IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public JAXBContext getContext(Class&lt;?&gt; clazz) {
+        if(Customer.class == clazz) {
+            return jc;
+        }
+        return null;
+    }
+
+} 
+</code></pre>
+
+<p><strong>For a Complext Example</strong></p>
+
+<ul>
+<li><a href="http://blog.bdoughan.com/2011/04/moxys-xml-metadata-in-jax-rs-service.html" rel="nofollow">http://blog.bdoughan.com/2011/04/moxys-xml-metadata-in-jax-rs-service.html</a></li>
+</ul>
+
+<p><strong>For More Information on Using MOXy with Spring</strong></p>
+
+<ul>
+<li><a href="http://wiki.eclipse.org/EclipseLink/Examples/MOXy/Spring" rel="nofollow">http://wiki.eclipse.org/EclipseLink/Examples/MOXy/Spring</a></li>
+</ul>
+
+<hr/>
+
+<blockquote>
+  <p>I also would like this new web service to return either XML or JSON
+  depending on the Accept header. I also have read that MOXy 2.4+ can
+  handle that too!</p>
+</blockquote>
+
+<p>Yes, JSON binding is being added to EclipseLink 2.4. To leverage this in your application it should be a simple matter of creating a <code>MessageBodyReader</code> and a <code>MessageBodyWriter</code>:</p>
+
+<pre><code>package org.example;
+
+import java.io.*;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.*;
+import javax.xml.transform.stream.StreamSource;
+
+import javax.ws.rs.*;
+import javax.ws.rs.core.*;
+import javax.ws.rs.ext.*;
+import javax.xml.bind.*;
+
+@Provider
+@Produces(MediaType.APPLICATION_JSON)
+@Consumes(MediaType.APPLICATION_JSON)
+public class MOXyJSONProvider implements 
+    MessageBodyReader&lt;Object&gt;, MessageBodyWriter&lt;Object&gt;{
+
+    @Context
+    protected Providers providers;
+
+    public boolean isReadable(Class&lt;?&gt; type, Type genericType,
+        Annotation[] annotations, MediaType mediaType) {
+        return true;
+    }
+
+    public Object readFrom(Class&lt;Object&gt; type, Type genericType,
+            Annotation[] annotations, MediaType mediaType,
+            MultivaluedMap&lt;String, String&gt; httpHeaders, InputStream entityStream)
+            throws IOException, WebApplicationException {
+            try {
+                Class&lt;?&gt; domainClass = getDomainClass(genericType);
+                Unmarshaller u = getJAXBContext(domainClass, mediaType).createUnmarshaller();
+                u.setProperty("eclipselink.media-type", mediaType.toString());
+                u.setProperty("eclipselink.json.include-root", false);
+                return u.unmarshal(new StreamSource(entityStream), domainClass).getValue();
+            } catch(JAXBException jaxbException) {
+                throw new WebApplicationException(jaxbException);
+            }
+    }
+
+    public boolean isWriteable(Class&lt;?&gt; type, Type genericType,
+        Annotation[] annotations, MediaType mediaType) {
+        return true;
+    }
+
+    public void writeTo(Object object, Class&lt;?&gt; type, Type genericType,
+        Annotation[] annotations, MediaType mediaType,
+        MultivaluedMap&lt;String, Object&gt; httpHeaders,
+        OutputStream entityStream) throws IOException,
+        WebApplicationException {
+        try {
+            Class&lt;?&gt; domainClass = getDomainClass(genericType);
+            Marshaller m = getJAXBContext(domainClass, mediaType).createMarshaller();
+            m.setProperty("eclipselink.media-type", mediaType.toString());
+            m.setProperty("eclipselink.json.include-root", false);
+            m.marshal(object, entityStream);
+        } catch(JAXBException jaxbException) {
+            throw new WebApplicationException(jaxbException);
+        }
+    }
+
+    public long getSize(Object t, Class&lt;?&gt; type, Type genericType,
+        Annotation[] annotations, MediaType mediaType) {
+        return -1;
+    }
+
+    private JAXBContext getJAXBContext(Class&lt;?&gt; type, MediaType mediaType) 
+        throws JAXBException {
+        ContextResolver&lt;JAXBContext&gt; resolver 
+            = providers.getContextResolver(JAXBContext.class, mediaType);
+        JAXBContext jaxbContext;
+        if(null == resolver || null == (jaxbContext = resolver.getContext(type))) {
+            return JAXBContext.newInstance(type);
+        } else {
+            return jaxbContext;
+        }
+    }
+
+    private Class&lt;?&gt; getDomainClass(Type genericType) {
+        if(genericType instanceof Class) {
+            return (Class&lt;?&gt;) genericType;
+        } else if(genericType instanceof ParameterizedType) {
+            return (Class&lt;?&gt;) ((ParameterizedType) genericType).getActualTypeArguments()[0];
+        } else {
+            return null;
+        }
+    }
+
+}
+</code></pre>
+
+<p>You may also be able to create an extension of <code>JSONProvider</code>:</p>
+
+<ul>
+<li><a href="http://cxf.apache.org/apidocs/org/apache/cxf/jaxrs/provider/JSONProvider.html" rel="nofollow">http://cxf.apache.org/apidocs/org/apache/cxf/jaxrs/provider/JSONProvider.html</a></li>
+</ul>
+
+<p><strong>For More Information</strong></p>
+
+<ul>
+<li><a href="http://blog.bdoughan.com/2012/03/moxy-as-your-jax-rs-json-provider_15.html" rel="nofollow">MOXy as Your JAX-RS JSON Provider - Client Side</a> </li>
+<li><a href="http://blog.bdoughan.com/2012/03/moxy-as-your-jax-rs-json-provider.html" rel="nofollow">MOXy as Your JAX-RS JSON Provider - Server Side</a> </li>
+<li><a href="http://blog.bdoughan.com/2011/05/specifying-eclipselink-moxy-as-your.html" rel="nofollow">Specifying EclipseLink MOXy as Your JAXB Provider</a> </li>
+</ul>

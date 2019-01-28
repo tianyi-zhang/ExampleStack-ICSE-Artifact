@@ -1,0 +1,139 @@
+<p>The <code>javax.mail.Service</code> does the <code>connect()</code> connecting to the specified host and port. In there, it uses the <code>javax.mail.Authenticator</code> for authentication.</p>
+
+<p>The code from <code>javax.mail.Service.connect()</code> method:</p>
+
+<pre><code>public synchronized void connect(String host, int port,
+        String user, String password) throws MessagingException {
+
+    // see if the service is already connected
+    if (isConnected())
+        throw new IllegalStateException("already connected");
+
+    PasswordAuthentication pw;
+    boolean connected = false;
+    boolean save = false;
+    String protocol = null;
+    String file = null;
+
+    // get whatever information we can from the URL
+    // XXX - url should always be non-null here, Session
+    //       passes it into the constructor
+    if (url != null) {
+        protocol = url.getProtocol();
+        if (host == null)
+        host = url.getHost();
+        if (port == -1)
+        port = url.getPort();
+
+        if (user == null) {
+        user = url.getUsername();
+        if (password == null)   // get password too if we need it
+            password = url.getPassword();
+        } else {
+        if (password == null &amp;&amp; user.equals(url.getUsername()))
+            // only get the password if it matches the username
+            password = url.getPassword();
+        }
+
+        file = url.getFile();
+    }
+
+    // try to get protocol-specific default properties
+    if (protocol != null) {
+        if (host == null)
+        host = session.getProperty("mail." + protocol + ".host");
+        if (user == null)
+        user = session.getProperty("mail." + protocol + ".user");
+    }
+
+    // try to get mail-wide default properties
+    if (host == null)
+        host = session.getProperty("mail.host");
+
+    if (user == null)
+        user = session.getProperty("mail.user");
+
+    // try using the system username
+    if (user == null) {
+        try {
+        user = System.getProperty("user.name");
+        } catch (SecurityException sex) {
+        if (debug)
+            sex.printStackTrace(session.getDebugOut());
+        }
+    }
+
+    // if we don't have a password, look for saved authentication info
+    if (password == null &amp;&amp; url != null) {
+        // canonicalize the URLName
+        setURLName(new URLName(protocol, host, port, file, user, null));
+        pw = session.getPasswordAuthentication(getURLName());
+        if (pw != null) {
+        if (user == null) {
+            user = pw.getUserName();
+            password = pw.getPassword();
+        } else if (user.equals(pw.getUserName())) {
+            password = pw.getPassword();
+        }
+        } else
+        save = true;
+    }
+
+    // try connecting, if the protocol needs some missing
+    // information (user, password) it will not connect.
+    // if it tries to connect and fails, remember why for later.
+    AuthenticationFailedException authEx = null;
+    try {
+        connected = protocolConnect(host, port, user, password);
+    } catch (AuthenticationFailedException ex) {
+        authEx = ex;
+    }
+
+    // if not connected, ask the user and try again
+    if (!connected) {
+        InetAddress addr;
+        try {
+        addr = InetAddress.getByName(host);
+        } catch (UnknownHostException e) {
+        addr = null;
+        }
+        pw = session.requestPasswordAuthentication(
+                addr, port,
+                protocol,
+                null, user);
+        if (pw != null) {
+        user = pw.getUserName();
+        password = pw.getPassword();
+
+        // have the service connect again
+        connected = protocolConnect(host, port, user, password);
+        }
+    }
+
+    // if we're not connected by now, we give up
+    if (!connected) {
+        if (authEx != null)
+        throw authEx;
+        else if (user == null)
+        throw new AuthenticationFailedException(
+            "failed to connect, no user name specified?");
+        else if (password == null)
+        throw new AuthenticationFailedException(
+            "failed to connect, no password specified?");
+        else
+        throw new AuthenticationFailedException("failed to connect");
+    }
+
+    setURLName(new URLName(protocol, host, port, file, user, password));
+
+    if (save)
+        session.setPasswordAuthentication(getURLName(),
+                new PasswordAuthentication(user, password));
+
+    // set our connected state
+    setConnected(true);
+
+    // finally, deliver the connection event
+    notifyConnectionListeners(ConnectionEvent.OPENED);
+    }
+</code></pre>

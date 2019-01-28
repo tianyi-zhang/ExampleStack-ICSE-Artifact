@@ -1,0 +1,226 @@
+<p>To some extent <code>Spring Security</code> supports user switch. It is more like a <code>su</code> under Linux.
+Nevertheless, you can reuse some code from <a href="http://docs.spring.io/spring-security/site/docs/4.0.0.M1/apidocs/org/springframework/security/web/authentication/switchuser/SwitchUserFilter.html" rel="nofollow"><code>SwitchUserFilter</code></a> to create your own user switch.</p>
+
+<p>Primarily, you need to create </p>
+
+<ul>
+<li>Custom Spring Security <a href="http://docs.spring.io/spring-security/site/docs/4.0.0.M1/apidocs/org/springframework/security/core/userdetails/UserDetails.html" rel="nofollow"><code>UserDetails</code></a> which holds a list of usernames a switch is allowed to</li>
+<li>Custom <a href="http://docs.spring.io/spring-security/site/docs/4.0.0.M1/apidocs/org/springframework/security/core/userdetails/UserDetailsService.html" rel="nofollow"><code>UserDetailsService</code></a> which populates your custom UserDetails</li>
+<li>Custom UserSwitchFilter based on Spring's SwitchUserFilter</li>
+</ul>
+
+<p>Custom <code>UserDetails</code> and <code>UserDetailsService</code> are just examples here and may differ from your own implementation. The idea is to hold a list of usernames in UserDetails for later processing in custom UserSwitchFilter.</p>
+
+<p>CustomUserDetails:</p>
+
+<pre><code>public class CustomUserDetails extends User {
+
+    private final Set&lt;String&gt; linkedAccounts;
+
+    public CustomUserDetails(String username, String password, Set&lt;String&gt; linkedAccounts, Collection&lt;? extends GrantedAuthority&gt; authorities) {
+        super(username, password, authorities);
+        this.linkedAccounts = linkedAccounts;
+    }
+
+    public Set&lt;String&gt; getLinkedAccounts() {
+        return linkedAccounts;
+    }
+}
+</code></pre>
+
+<p>CustomUserDetailsService:</p>
+
+<pre><code>public class CustomUserDetailsService implements UserDetailsService {
+
+    private UserDao userDao = ...;
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        BackendUser user = userDao.findUserByUsername(username);        
+        return new CustomUserDetails(user.getHane(), ......);
+    }
+}
+</code></pre>
+
+<p>Main differences to Spring Security UserSwitchFilter:</p>
+
+<ul>
+<li>Added method <code>checkSwitchAllowed</code> checks if a switch to that specific user from current authenticated user is allowed</li>
+<li>switch is based on query paramater and not url for better user experience (see <code>requiresSwitchUser</code>). hence <code>no need for switchUserUrl</code> and <code>targetUrl</code> </li>
+<li>Custom UserSwitchFilter ha no notion of a <code>exitUserUrl</code>. Hence no need for <code>exitUserUrl</code></li>
+<li><code>createSwitchUserToken</code> doesn't modify user authorities</li>
+</ul>
+
+<p>CustomSwitchUserFilter:</p>
+
+<pre><code>public class CustomSwitchUserFilter extends GenericFilterBean implements  ApplicationEventPublisherAware, MessageSourceAware {
+
+    public static final String SPRING_SECURITY_SWITCH_USERNAME_KEY = "j_switch_username";
+
+    private ApplicationEventPublisher eventPublisher;
+    private AuthenticationDetailsSource&lt;HttpServletRequest, ?&gt; authenticationDetailsSource = new WebAuthenticationDetailsSource();
+    protected MessageSourceAccessor messages = SpringSecurityMessageSource.getAccessor();
+    private String switchFailureUrl;
+    private String usernameParameter = SPRING_SECURITY_SWITCH_USERNAME_KEY;
+    private UserDetailsService userDetailsService;
+    private UserDetailsChecker userDetailsChecker = new AccountStatusUserDetailsChecker();
+    private AuthenticationFailureHandler failureHandler;
+
+    @Override
+    public void afterPropertiesSet() {
+        Assert.notNull(userDetailsService, "userDetailsService must be specified");
+        if (failureHandler == null) {
+            failureHandler = switchFailureUrl == null ? new SimpleUrlAuthenticationFailureHandler() :
+                    new SimpleUrlAuthenticationFailureHandler(switchFailureUrl);
+        } else {
+            Assert.isNull(switchFailureUrl, "You cannot set both a switchFailureUrl and a failureHandler");
+        }
+    }
+
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
+        HttpServletRequest request = (HttpServletRequest) req;
+        HttpServletResponse response = (HttpServletResponse) res;
+
+        // check for switch or exit request
+        if (requiresSwitchUser(request)) {
+            // if set, attempt switch and store original
+            try {
+                Authentication targetUser = attemptSwitchUser(request);
+
+                // update the current context to the new target user
+                SecurityContextHolder.getContext().setAuthentication(targetUser);
+            } catch (AuthenticationException e) {
+                logger.debug("Switch User failed", e);
+                failureHandler.onAuthenticationFailure(request, response, e);
+                return;
+            }
+        }
+
+        chain.doFilter(request, response);
+    }
+
+    protected Authentication attemptSwitchUser(HttpServletRequest request) throws AuthenticationException {
+        UsernamePasswordAuthenticationToken targetUserRequest;
+
+        String username = request.getParameter(usernameParameter);
+
+        if (username == null) {
+            username = "";
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Attempt to switch to user [" + username + "]");
+        }
+
+        UserDetails targetUser = userDetailsService.loadUserByUsername(username);
+        userDetailsChecker.check(targetUser);
+
+        checkSwitchAllowed(targetUser);
+
+        // OK, create the switch user token
+        targetUserRequest = createSwitchUserToken(request, targetUser);
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Switch User Token [" + targetUserRequest + "]");
+        }
+
+        // publish event
+        if (this.eventPublisher != null) {
+            eventPublisher.publishEvent(new AuthenticationSwitchUserEvent(SecurityContextHolder.getContext().getAuthentication(), targetUser));
+        }
+
+        return targetUserRequest;
+    }
+
+    private void checkSwitchAllowed(UserDetails targetUser) {
+        CustomUserDetails details = (CustomUserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        String targetUsername = targetUser.getUsername();
+
+        //target username has to be in linked accounts otherwise this is an unauthorized switch
+        if(!details.getLinkedAccounts().contains(targetUsername)) {
+            throw new InsufficientAuthenticationException("user switch not allowed");
+        }
+    }
+
+    private UsernamePasswordAuthenticationToken createSwitchUserToken(HttpServletRequest request, UserDetails targetUser) {
+        UsernamePasswordAuthenticationToken targetUserRequest;
+
+        // get the original authorities
+        Collection&lt;? extends GrantedAuthority&gt; orig = targetUser.getAuthorities();
+
+        // add the new switch user authority
+        List&lt;GrantedAuthority&gt; newAuths = new ArrayList&lt;GrantedAuthority&gt;(orig);
+
+        // create the new authentication token
+        targetUserRequest = new UsernamePasswordAuthenticationToken(targetUser, targetUser.getPassword(), newAuths);
+
+        // set details
+        targetUserRequest.setDetails(authenticationDetailsSource.buildDetails(request));
+
+        return targetUserRequest;
+    }
+
+    protected boolean requiresSwitchUser(HttpServletRequest request) {
+        Map&lt;String, String[]&gt; parameterMap = request.getParameterMap();
+        return parameterMap.containsKey(usernameParameter);
+    }
+
+    public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher)
+            throws BeansException {
+        this.eventPublisher = eventPublisher;
+    }
+
+    public void setAuthenticationDetailsSource(AuthenticationDetailsSource&lt;HttpServletRequest,?&gt; authenticationDetailsSource) {
+        Assert.notNull(authenticationDetailsSource, "AuthenticationDetailsSource required");
+        this.authenticationDetailsSource = authenticationDetailsSource;
+    }
+
+    public void setMessageSource(MessageSource messageSource) {
+        Assert.notNull(messageSource, "messageSource cannot be null");
+        this.messages = new MessageSourceAccessor(messageSource);
+    }
+
+    public void setUserDetailsService(UserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    public void setSwitchFailureUrl(String switchFailureUrl) {
+        Assert.isTrue(StringUtils.hasText(usernameParameter) &amp;&amp; UrlUtils.isValidRedirectUrl(switchFailureUrl),
+                "switchFailureUrl cannot be empty and must be a valid redirect URL");
+        this.switchFailureUrl = switchFailureUrl;
+    }
+
+    public void setFailureHandler(AuthenticationFailureHandler failureHandler) {
+        Assert.notNull(failureHandler, "failureHandler cannot be null");
+        this.failureHandler = failureHandler;
+    }
+
+    public void setUserDetailsChecker(UserDetailsChecker userDetailsChecker) {
+        this.userDetailsChecker = userDetailsChecker;
+    }
+
+    public void setUsernameParameter(String usernameParameter) {
+        this.usernameParameter = usernameParameter;
+    }
+}
+</code></pre>
+
+<p>Add <code>CustomSwitchUserFilter</code> to your security filter chain. It has to be placed after <code>FILTER_SECURITY_INTERCEPTOR</code>.</p>
+
+<pre><code>&lt;security:authentication-manager alias="authenticationManager"&gt;
+    &lt;security:authentication-provider user-service-ref="userDetailsService"/&gt;
+&lt;/security:authentication-manager&gt;
+
+&lt;security:http use-expressions="true"&gt;
+    &lt;security:intercept-url pattern="/**" access="isFullyAuthenticated()" /&gt;
+    &lt;security:form-login login-page="/login.do" /&gt;
+    &lt;security:logout logout-success-url="/login.do" /&gt;
+    &lt;security:custom-filter ref="switchUserProcessingFilter" after="FILTER_SECURITY_INTERCEPTOR" /&gt;
+&lt;/security:http&gt;
+
+&lt;bean id="switchUserProcessingFilter" class="security.CustomSwitchUserFilter"&gt;
+    &lt;property name="userDetailsService" ref="userDetailsService" /&gt;
+&lt;/bean&gt;
+</code></pre>
+
+<p>You can find a working example <a href="https://github.com/ksokol/spring-sandbox/tree/user-switch" rel="nofollow">here</a>. </p>

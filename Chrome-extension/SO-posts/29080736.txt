@@ -1,0 +1,89 @@
+<p>I ended up solving my problems by using different callback and connectionFailed listeners for each one of the clients. </p>
+
+<p>My builder for the GoogleFitClient ended up looking like this:</p>
+
+<pre><code>public void startFitnessClient() {
+    mGoogleFitClient = new GoogleApiClient.Builder(this)
+            .addApi(Fitness.API)
+            .addScope(new Scope(Scopes.FITNESS_ACTIVITY_READ_WRITE))
+            .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
+                @Override
+                public void onConnected(Bundle bundle) {
+                    if (hasWearDevice) mGoogleFitClient.connect();
+                }
+
+                @Override
+                public void onConnectionSuspended(int i) {
+                    if (i == GoogleApiClient.ConnectionCallbacks.CAUSE_NETWORK_LOST) {
+                        Log.i(LOG_TAG, "Connection lost.  Cause: Network Lost.");
+                    } else if (i == GoogleApiClient.ConnectionCallbacks.CAUSE_SERVICE_DISCONNECTED) {
+                        Log.i(LOG_TAG, "Connection lost.  Reason: Service Disconnected");
+                    }
+                }
+            })
+            .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
+                @Override
+                public void onConnectionFailed(ConnectionResult connectionResult) {
+                    // The failure has a resolution. Resolve it.
+                    // Called typically when the app is not yet authorized, and an
+                    // authorization dialog is displayed to the user.
+                    if (!authInProgress) {
+                        try {
+                            Log.i(LOG_TAG, "Attempting to resolve failed connection");
+                            authInProgress = true;
+                            connectionResult.startResolutionForResult(BaseActivity.this, REQUEST_OAUTH);
+                        } catch (IntentSender.SendIntentException e) {
+                            Log.e(LOG_TAG, "Exception while starting resolution activity", e);
+                            Crashlytics.logException(e);
+                        }
+                    }
+                }
+            })
+            .build();
+}
+</code></pre>
+
+<p>And this is my client for the Google+ client.</p>
+
+<pre><code>private void buildGoogleApiClient() {
+    mGooglePlusClient = new GoogleApiClient.Builder(this)
+            .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
+                @Override
+                public void onConnected(Bundle bundle) {
+                    mSignInClicked = false;
+
+                    if(mGooglePlusClient != null) {
+                        Plus.PeopleApi.loadVisible(mGooglePlusClient, null).setResultCallback(BaseActivity.this);
+                        userData = getProfileInformation();
+                    }
+                }
+
+                @Override
+                public void onConnectionSuspended(int i) {
+                    mGooglePlusClient.connect();
+                }
+            })
+            .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
+                @Override
+                public void onConnectionFailed(ConnectionResult connectionResult) {
+                    mConnectionResult = connectionResult;
+                    if (!connectionResult.hasResolution()) {
+                        GooglePlayServicesUtil.getErrorDialog(connectionResult.getErrorCode(), BaseActivity.this, 0).show();
+                        return;
+                    }
+
+                    if (!mIntentInProgress) {
+                        if (mSignInClicked) {
+                            resolveSignInError();
+                        }
+                    }
+                }
+            })
+            .addApi(Plus.API)
+            .addScope(Plus.SCOPE_PLUS_LOGIN)
+            .addScope(Plus.SCOPE_PLUS_PROFILE)
+            .build();
+}
+</code></pre>
+
+<p>For what I observed by Logging every step of the process while debugging is that the authentication intent call happens inside <code>onConnectionFailed</code> with the call to <code>startResolutionForResult</code> and when they were sharing the same callback listeners once the Google+ client was connected that callback was never made by the GoogleFit client. By splitting both of them it's being guarantee that they are being called now. </p>

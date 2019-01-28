@@ -1,0 +1,45 @@
+<p>After a few hours of unsuccessfully feeding generic, base response classes to GSON, I ended up passing on that route and settling on a solution that I implemented a few days ago (minus the status check conditionals).</p>
+
+<p>GSON provides the ability to add a <code>TypeAdapter</code> to all responses by defining deserialization logic in a generic <code>TypeAdapterFactory</code>. This entity is not as clean and ignorant as I was hoping for it to be, but it does the job in achieving a reduction in the number of necessary response model classes while also maintaining a single adapter.</p>
+
+<pre><code>private static class ResponseTypeAdapterFactory implements TypeAdapterFactory {
+
+    private static final String STATUS = "status";
+    private static final String SUCCESS = "success";
+    private static final String DATA = "data";
+
+    @Override
+    public &lt;T&gt; TypeAdapter&lt;T&gt; create(Gson gson, TypeToken&lt;T&gt; type) {
+        final TypeAdapter&lt;T&gt; delegateAdapter = gson.getDelegateAdapter(this, type);
+        final TypeAdapter&lt;JsonElement&gt; jsonElementAdapter = gson.getAdapter(JsonElement.class);
+
+        return new TypeAdapter&lt;T&gt;() {
+            @Override
+            public void write(JsonWriter out, T value) throws IOException {
+                delegateAdapter.write(out, value);
+            }
+
+            @Override
+            public T read(JsonReader in) throws IOException {
+                // Ignore extraneous data and read in only the response data when the response is a success
+                JsonElement jsonElement = jsonElementAdapter.read(in);
+                if (jsonElement.isJsonObject()) {
+                    JsonObject jsonObject = jsonElement.getAsJsonObject();
+                    if (jsonObject.has(STATUS)) {
+                        if (jsonObject.get(STATUS).getAsString().equals(SUCCESS)) {
+                            if (jsonObject.has(DATA) &amp;&amp; jsonObject.get(DATA).isJsonObject()) {
+                                jsonElement = jsonObject.get(DATA);
+                            }
+                        }
+                    }
+                }
+                return delegateAdapter.fromJsonTree(jsonElement);
+            }
+        }.nullSafe();
+    }
+}
+</code></pre>
+
+<p>In a nutshell, I'm telling GSON to grab the "data" JSON object if the response was successful. Otherwise, return the entire response body so that my custom, Retrofit error handler can make use of the "error_title" and "error_message" fields returned from the server.</p>
+
+<p>A huge shoutout to @david.mihola for the great suggestions and eventually directing my attention back to the <code>TypeAdapterFactory</code> solution.</p>

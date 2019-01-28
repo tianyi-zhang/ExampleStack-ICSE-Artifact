@@ -1,0 +1,115 @@
+<p>Both <code>HttpResponseCache</code> and <code>volley</code> are poorly documented. However, I have found that you 
+can very easily extend and tweak <code>volley</code>. If you explore source code of volley, especially of:  <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/Cache.java" rel="nofollow"><code>CacheEntry</code></a>, <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/CacheDispatcher.java" rel="nofollow"><code>CacheDispatcher</code></a> and <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/toolbox/HttpHeaderParser.java" rel="nofollow"><code>HttpHeaderParser</code></a>, you can see how it is implemented.</p>
+
+<p>A <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/Cache.java" rel="nofollow"><code>CacheEntry</code></a> holds <code>serverDate</code>, <code>etag</code>, <code>ttl</code> and <code>sofTtl</code> which can represent cache state pretty well, also it has <code>isExpired()</code> and <code>refreshNeeded()</code> methods as convenience.</p>
+
+<p><a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/CacheDispatcher.java" rel="nofollow"><code>CacheDispatcher</code></a> is implemented accurately as well:</p>
+
+<pre><code>// Attempt to retrieve this item from cache.
+Cache.Entry entry = mCache.get(request.getCacheKey());
+
+if (entry == null) {
+    request.addMarker("cache-miss");
+    // Cache miss; send off to the network dispatcher.
+    mNetworkQueue.put(request);
+    continue;
+}
+
+// If it is completely expired, just send it to the network.
+if (entry.isExpired()) {
+    request.addMarker("cache-hit-expired");
+    request.setCacheEntry(entry);
+    mNetworkQueue.put(request);
+    continue;
+}
+
+// We have a cache hit; parse its data for delivery back to the request.
+request.addMarker("cache-hit");
+Response&lt;?&gt; response = request.parseNetworkResponse(
+        new NetworkResponse(entry.data, entry.responseHeaders));
+request.addMarker("cache-hit-parsed");
+
+if (!entry.refreshNeeded()) {
+    // Completely unexpired cache hit. Just deliver the response.
+    mDelivery.postResponse(request, response);
+} else {
+    // Soft-expired cache hit. We can deliver the cached response,
+    // but we need to also send the request to the network for
+    // refreshing.
+    request.addMarker("cache-hit-refresh-needed");
+    request.setCacheEntry(entry);
+
+    // Mark the response as intermediate.
+    response.intermediate = true;
+
+    // Post the intermediate response back to the user and have
+    // the delivery then forward the request along to the network.
+    mDelivery.postResponse(request, response, new Runnable() {
+        @Override
+        public void run() {
+            try {
+                mNetworkQueue.put(request);
+            } catch (InterruptedException e) {
+                // Not much we can do about this.
+            }
+        }
+    });
+}
+</code></pre>
+
+<p>One interesting tidbit: If cache is "soft expired", volley will deliver data from local cache immediately, and re-deliver it from server again after some time, for single request.</p>
+
+<p>Finally, <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/toolbox/HttpHeaderParser.java" rel="nofollow"><code>HttpHeaderParser</code></a> does its best to cope to server headers:</p>
+
+<pre><code>headerValue = headers.get("Date");
+if (headerValue != null) {
+    serverDate = parseDateAsEpoch(headerValue);
+}
+
+headerValue = headers.get("Cache-Control");
+if (headerValue != null) {
+    hasCacheControl = true;
+    String[] tokens = headerValue.split(",");
+    for (int i = 0; i &lt; tokens.length; i++) {
+        String token = tokens[i].trim();
+        if (token.equals("no-cache") || token.equals("no-store")) {
+            return null;
+        } else if (token.startsWith("max-age=")) {
+            try {
+                maxAge = Long.parseLong(token.substring(8));
+            } catch (Exception e) {
+            }
+        } else if (token.equals("must-revalidate") || token.equals("proxy-revalidate")) {
+            maxAge = 0;
+        }
+    }
+}
+
+headerValue = headers.get("Expires");
+if (headerValue != null) {
+    serverExpires = parseDateAsEpoch(headerValue);
+}
+
+serverEtag = headers.get("ETag");
+
+// Cache-Control takes precedence over an Expires header, even if both exist and Expires
+// is more restrictive.
+if (hasCacheControl) {
+    softExpire = now + maxAge * 1000;
+} else if (serverDate &gt; 0 &amp;&amp; serverExpires &gt;= serverDate) {
+    // Default semantic for Expire header in HTTP specification is softExpire.
+    softExpire = now + (serverExpires - serverDate);
+}
+
+Cache.Entry entry = new Cache.Entry();
+entry.data = response.data;
+entry.etag = serverEtag;
+entry.softTtl = softExpire;
+entry.ttl = entry.softTtl;
+entry.serverDate = serverDate;
+entry.responseHeaders = headers;
+</code></pre>
+
+<p>So, ensure the server sends proper headers as well as honors etag,time-stamp and cache control headers.</p>
+
+<p>Finally, you can override <code>getCacheEntry()</code> of <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/Request.java" rel="nofollow"><code>Request</code></a> class to return custom <a href="https://android.googlesource.com/platform/frameworks/volley/+/master/src/com/android/volley/Cache.java" rel="nofollow"><code>CacheEntry</code></a> make cache behave exactly according to your needs. </p>

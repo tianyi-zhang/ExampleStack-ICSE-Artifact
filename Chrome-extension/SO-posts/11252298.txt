@@ -1,0 +1,575 @@
+<p>And here is the updated code that implements the solution to my problem.</p>
+
+<pre><code>package spellingbee;
+
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.io.*;
+import java.util.ArrayList;
+import java.util.Random;
+import javax.sound.sampled.*;
+import javax.swing.*;
+import javax.swing.event.ListSelectionEvent;
+import javax.swing.event.ListSelectionListener;
+
+public class SpellingBee {
+
+    public static void main(String[] args) {
+        //create objects
+        GUI gui = new GUI();
+        Logic logic = new Logic();
+
+        //link objects
+        gui.logic = logic;
+        logic.gui = gui;
+        AudioRecorder.logic = logic;
+
+
+        //start program
+        AudioRecorder.init();
+        gui.initialize();
+
+        logic.load_words_from_disk();
+        logic.choose_word();
+        logic.prompt_word();
+    }
+}
+
+class GUI {
+
+    //this link is set externally
+    public Logic logic = null;
+    public WordManager word_manager = null;
+    public MainGUI main_gui = null;
+
+    public void initialize() {
+
+
+
+        main_gui = new MainGUI();
+        word_manager = new WordManager();
+
+    }
+
+    public void show_word_manager() {
+        word_manager.populate_list_on_new_thread();
+        word_manager.window.setLocationRelativeTo(main_gui.window);
+        word_manager.window.setVisible(true);
+    }
+
+    class MainGUI {
+
+        public JLabel input_label = null;
+        public JLabel last_word_label = null;
+        JFrame window = null;
+
+        public MainGUI() {
+            window = new JFrame("Spelling Bee");
+            window.addKeyListener(new Keyboard());
+            window.setLayout(new BorderLayout());
+
+            input_label = new JLabel("", JLabel.CENTER);
+            input_label.setFont(new Font("", Font.PLAIN, 32));
+            input_label.setFocusable(false);
+            input_label.setPreferredSize(new Dimension(400, 100));
+
+            last_word_label = new JLabel("", JLabel.CENTER);
+            last_word_label.setFont(new Font("", Font.ITALIC, 16));
+            last_word_label.setFocusable(false);
+            last_word_label.setPreferredSize(new Dimension(400, 30));
+
+            JLabel help_label_1 = new JLabel("Press '0' to hear the current word.", JLabel.CENTER);
+            JLabel help_label_2 = new JLabel("Press '1' to manage word list.", JLabel.CENTER);
+
+            JPanel help_panel = new JPanel(new GridLayout(2, 1));
+            help_panel.add(help_label_1);
+            help_panel.add(help_label_2);
+
+            window.getContentPane().add(input_label, BorderLayout.CENTER);
+            window.getContentPane().add(last_word_label, BorderLayout.NORTH);
+            window.getContentPane().add(help_panel, BorderLayout.SOUTH);
+
+            window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            window.pack();
+            window.setLocationRelativeTo(null);
+            window.setVisible(true);
+        }
+    }
+
+    class WordManager {
+
+        public JDialog window = null;
+        public JList word_list = null;
+        public DefaultListModel list_model = null;
+        public JButton delete_button = null;
+        public JButton record_button = null;
+        public int list_selection;
+        public JTextField input_field = null;
+
+        public WordManager() {
+
+            window = new JDialog(main_gui.window, "Word Viewer", true);
+            //window.setPreferredSize(new Dimension(300, 300));
+
+            list_model = new DefaultListModel();
+            DefaultListSelectionModel dlsm = new DefaultListSelectionModel();
+            dlsm.clearSelection();
+            word_list = new JList(list_model);
+            word_list.setSelectionModel(dlsm);
+            word_list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            word_list.addListSelectionListener(new SelectionManager());
+
+            JScrollPane word_list_scroll_pane = new JScrollPane(word_list);
+            word_list_scroll_pane.setPreferredSize(new Dimension(150, 300));
+
+            ButtonManager button_manager = new ButtonManager();
+
+            delete_button = new JButton("Delete");
+            delete_button.setActionCommand("delete_button");
+            delete_button.addActionListener(button_manager);
+            //delete_button.setPreferredSize(new Dimension(100,30));
+
+            record_button = new JButton("Record");
+            record_button.setActionCommand("start_record");
+            record_button.addActionListener(button_manager);
+
+            input_field = new JTextField(15);
+
+            JPanel record_panel = new JPanel(new GridLayout(2, 1));
+            record_panel.add(input_field);
+            record_panel.add(record_button);
+
+            JPanel east_panel = new JPanel(new BorderLayout());
+            east_panel.add(delete_button, BorderLayout.SOUTH);
+            east_panel.add(record_panel, BorderLayout.NORTH);
+
+
+            window.setLayout(new BorderLayout());
+            window.add(word_list_scroll_pane, BorderLayout.WEST);
+            window.add(east_panel, BorderLayout.EAST);
+
+            window.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
+            window.pack();
+            window.setLocationRelativeTo(main_gui.window);
+
+
+        }
+
+
+
+
+
+        //CODE REVISIONS START HERE*********************************
+        //(see code within ButtonManager below for additional changes)
+
+        public void populate_list_on_new_thread() {
+
+            //this code creates a thread on the event dispatch thread
+            //which is needed for gui actions. not doing this for gui
+            //operations can cause unpredictable errors that are
+            //difficult to reproduce
+            EventQueue.invokeLater(new Runnable() {
+
+                @Override
+                public void run() {
+                    populate_list();
+                }
+            });
+        }
+
+
+        //this method populates the list without creating a new thread
+        public void populate_list() {
+            //this line will determine whether or not a block of code is running
+            //on the event dispatching thread
+            //System.out.println(javax.swing.SwingUtilities.isEventDispatchThread());
+
+            list_model.clear();
+
+            for (Word w : logic.words) {
+                list_model.addElement(w.spelling);
+            }
+        }
+
+        //CODE REVISIONS END HERE*********************************
+
+
+
+
+
+        class SelectionManager implements ListSelectionListener {
+
+            @Override
+            public void valueChanged(ListSelectionEvent e) {
+                list_selection = e.getFirstIndex();
+            }
+        }
+
+        class ButtonManager implements ActionListener {
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                String action_command = e.getActionCommand();
+                if (action_command.equals("delete_button")) {
+                    int selection = list_selection;
+                    if (selection != -1) {
+                        String selected_string = word_list.getModel().getElementAt(selection).toString();
+
+                        for (Word w : logic.words) {
+                            if (w.spelling.equals(selected_string)) {
+                                logic.words.remove(w);
+                                logic.save_words_to_disk();
+
+
+                                //CODE REVISIONS START HERE*********************************
+                                //(see populate_list() and populate_list_on_new_thread() definitions above for additional changes
+
+                                populate_list(); //doesn't invoke a new thread; should finish before selection is made, so as not to clear the selection once the list is repopulated
+
+                                //this makes sure something is selected
+                                if(selection &gt;= word_list.getModel().getSize()) {
+                                    selection = word_list.getModel().getSize() - 1;
+                                }
+
+                                word_list.setSelectedIndex(selection);
+
+                                //CODE REVISIONS END HERE*********************************
+
+
+                                return;
+                            }
+                        }
+                    }
+                } else if (action_command.equals("start_record")) {
+                    if (!input_field.getText().isEmpty()) {
+                        record_button.setActionCommand("stop_record");
+                        record_button.setText("Stop Recording");
+                        logic.start_recording();
+                    } else {
+                        SoundPlayer.play("wrong.wav");
+                    }
+                } else if (action_command.equals("stop_record")) {
+                    record_button.setActionCommand("start_record");
+                    logic.stop_recording();
+                    record_button.setText("Record");
+                    input_field.grabFocus();
+                    input_field.selectAll();
+                }
+            }
+        }
+    }
+
+    class Keyboard extends KeyAdapter {
+
+        @Override
+        public void keyTyped(KeyEvent e) {
+            logic.process_keyboard_input(e);
+        }
+    }
+}
+
+class Logic {
+
+    public GUI gui = null;
+    ArrayList&lt;Word&gt; words = new ArrayList&lt;Word&gt;();
+    Word current_word = null;
+    //public byte[] sound_data = null;
+
+    public void save_words_to_disk() {
+        try {
+            FileOutputStream fos = new FileOutputStream("src\\spellingbee\\words.dat");
+            ObjectOutputStream oos = new ObjectOutputStream(fos);
+
+            oos.writeObject(words);
+
+            oos.close();
+        } catch (Exception e) {
+            System.err.println("save_words_to_disk: " + e);
+        }
+
+    }
+
+    public void load_words_from_disk() {
+        try {
+            FileInputStream fis = new FileInputStream("src\\spellingbee\\words.dat");
+            ObjectInputStream ois = new ObjectInputStream(fis);
+
+            words = (ArrayList&lt;Word&gt;) ois.readObject();
+
+            ois.close();
+        } catch (Exception e) {
+            System.err.println("load_words_from_disk: " + e);
+        }
+    }
+
+    public void start_recording() {
+        AudioRecorder.captureAudio();
+    }
+
+    public void stop_recording() {
+        AudioRecorder.stopCapture = true;
+    }
+
+    public void process_new_word(byte[] sound_data) {
+        Word temp_word = new Word(gui.word_manager.input_field.getText(), sound_data);
+        words.add(temp_word);
+        temp_word.play();
+
+        if (words.size() == 1) {
+            choose_word();
+        }
+
+        gui.word_manager.populate_list_on_new_thread();
+        save_words_to_disk();
+    }
+
+    public void choose_word() {
+        if (current_word != null) {
+            String old_word = current_word.spelling;
+
+            if (words.size() &gt; 1) {
+                while (old_word.equals(current_word.spelling)) {
+                    current_word = words.get(new Random().nextInt(words.size()));
+                }
+            } else {
+                current_word = words.get(0);
+            }
+        } else {
+            if (words.size() &gt; 0) {
+                current_word = words.get(new Random().nextInt(words.size()));
+            }
+
+        }
+    }
+
+    public void prompt_word() {
+        if (current_word != null) {
+            current_word.play();
+        }
+    }
+
+    public void process_keyboard_input(KeyEvent e) {
+        char user_input = e.getKeyChar();
+
+        //verify input
+        if (!input_ok(user_input)) {
+            return;
+        }
+
+        switch (user_input) {
+            case '0':
+                prompt_word();
+                return;
+            case '1':
+                gui.show_word_manager();
+                return;
+            default:
+                break;
+        }
+
+        String result_string = gui.main_gui.input_label.getText();
+
+        gui.main_gui.input_label.setText(result_string + Character.toString(user_input));
+
+        result_string = gui.main_gui.input_label.getText();
+
+        String answer_string = current_word.spelling;
+
+        if (result_string.equalsIgnoreCase(answer_string)) {
+            SoundPlayer.play("ding.wav");
+            gui.main_gui.last_word_label.setText(gui.main_gui.input_label.getText().toLowerCase());
+            gui.main_gui.input_label.setText("");
+            choose_word();
+            prompt_word();
+        }
+
+        //check to see if input is correct so far
+        int result_length = result_string.length();
+        String partial_result = result_string.substring(0, result_length);
+        String partial_answer = answer_string.substring(0, result_length);
+        if (!partial_result.equalsIgnoreCase(partial_answer)) {
+            SoundPlayer.play("wrong.wav");
+            gui.main_gui.input_label.setText("");
+        }
+
+
+    }
+
+    public boolean input_ok(char input_value) {
+        boolean result = false;
+
+        switch (new Character(input_value).toString().toLowerCase().charAt(0)) {
+            case 'a':
+            case 'b':
+            case 'c':
+            case 'd':
+            case 'e':
+            case 'f':
+            case 'g':
+            case 'h':
+            case 'i':
+            case 'j':
+            case 'k':
+            case 'l':
+            case 'm':
+            case 'n':
+            case 'o':
+            case 'p':
+            case 'q':
+            case 'r':
+            case 's':
+            case 't':
+            case 'u':
+            case 'v':
+            case 'w':
+            case 'x':
+            case 'y':
+            case 'z':
+            case '0':
+            case '1':
+                result = true;
+        }
+
+        return result;
+    }
+}
+
+class Word implements Serializable {
+
+    public String spelling = null;
+    public byte[] audio_data = null;
+
+    public Word(String spelling, byte[] audio_data) {
+        this.spelling = spelling;
+        this.audio_data = audio_data;
+        System.out.println("");
+    }
+
+    public void play() {
+        SoundPlayer.play_data(audio_data);
+    }
+}
+
+class SoundPlayer {
+
+    static AudioFormat audio_format = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100.0F, 16, 2, 4, 44100.0F, false);
+
+    static public void play(String path) {
+        try {
+            Clip clip = AudioSystem.getClip();
+
+            InputStream audio_src = SpellingBee.class.getResourceAsStream(path);
+            InputStream buffered_in = new BufferedInputStream(audio_src);
+            AudioInputStream audioStream = AudioSystem.getAudioInputStream(buffered_in);
+
+            clip.open(audioStream);
+            clip.start();
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+        }
+    }
+
+    static public void play_data(byte[] data) {
+        Clip clip = null;
+        try {
+            clip = AudioSystem.getClip();
+        } catch (Exception e) {
+            System.err.println("1 " + e.getMessage());
+        }
+
+        try {
+
+            clip.open(audio_format, data, 0, data.length);
+
+        } catch (LineUnavailableException e) {
+            System.err.println("2a " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            System.err.println("2b " + e.getMessage());
+        } catch (IllegalStateException e) {
+            System.err.println("2c " + e.getMessage());
+        } catch (SecurityException e) {
+            System.err.println("2d " + e.getMessage());
+        }
+
+        try {
+            clip.start();
+        } catch (Exception e) {
+            System.err.println("3 " + e.getMessage());
+        }
+
+
+
+    }
+}
+
+class AudioRecorder {
+
+    static boolean stopCapture = false;
+    static ByteArrayOutputStream byteArrayOutputStream;
+    static AudioFormat audioFormat = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100.0F, 16, 2, 4, 44100.0F, false);
+    static TargetDataLine targetDataLine;
+    static private byte[] audioData = null;
+    public static Logic logic = null;
+
+    static public byte[] get_audio_data() {
+        return audioData;
+    }
+
+    static public void init() {
+        try {
+            DataLine.Info dataLineInfo = new DataLine.Info(TargetDataLine.class, audioFormat);
+            targetDataLine = (TargetDataLine) AudioSystem.getLine(dataLineInfo);
+            targetDataLine.open(audioFormat);
+        } catch (Exception e) {
+            System.err.println(e);
+        }
+    }
+
+    static public void captureAudio() {
+        try {
+            targetDataLine.start();
+            //Create a thread to capture the microphone data and start it
+            //running. It will run until the Stop button is clicked.
+            Thread captureThread = new Thread(new CaptureThread());
+            captureThread.start();
+        } catch (Exception e) {
+            System.out.println("4 " + e);
+            System.exit(0);
+        }//end catch
+    }//end captureAudio method
+
+    static class CaptureThread extends Thread {
+        //An arbitrary-size temporary holding buffer
+
+        byte tempBuffer[] = new byte[10000];
+
+        @Override
+        public void run() {
+            byteArrayOutputStream = new ByteArrayOutputStream();
+            stopCapture = false;
+            try {
+                //stopCapture will be set by another thread
+                while (!stopCapture) {
+                    //Read data from the internal buffer of the data line.
+                    int cnt = targetDataLine.read(tempBuffer, 0, tempBuffer.length);
+                    if (cnt &gt; 0) {
+                        byteArrayOutputStream.write(tempBuffer, 0, cnt);
+                    }
+                }
+
+                byteArrayOutputStream.close();
+                audioData = byteArrayOutputStream.toByteArray();
+                logic.process_new_word(audioData);
+                System.out.println();
+
+            } catch (Exception e) {
+                System.out.println("capture thread " + e);
+                System.exit(0);
+            }//end catch
+        }//end run
+    }//end inner class CaptureThread
+}//end outer class AudioCapture01.java
+</code></pre>

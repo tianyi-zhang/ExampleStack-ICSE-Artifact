@@ -1,0 +1,388 @@
+<p>there are no need to install zxing for implementing qr reader, Just create a class <strong>IntentIntegrator.java</strong>    and  IntentResult.java file and call from your activity.</p>
+
+<p>Here is the source code for this....</p>
+
+<p><a href="https://code.google.com/p/dwivedi-ji-qr-code-reader/source/checkout">Checkout full source code here</a></p>
+
+<pre><code>import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.net.Uri;
+import android.util.Log;
+
+
+public final class IntentIntegrator {
+
+  public static final int REQUEST_CODE = 0x0000c0de; // Only use bottom 16 bits
+  private static final String TAG = IntentIntegrator.class.getSimpleName();
+
+  public static final String DEFAULT_TITLE = "Install Barcode Scanner?";
+  public static final String DEFAULT_MESSAGE =
+      "This application requires Barcode Scanner. Would you like to install it?";
+  public static final String DEFAULT_YES = "Yes";
+  public static final String DEFAULT_NO = "No";
+
+  private static final String BS_PACKAGE = "com.google.zxing.client.android";
+
+  // supported barcode formats
+  public static final Collection&lt;String&gt; PRODUCT_CODE_TYPES = list("UPC_A", "UPC_E", "EAN_8", "EAN_13", "RSS_14");
+  public static final Collection&lt;String&gt; ONE_D_CODE_TYPES =
+      list("UPC_A", "UPC_E", "EAN_8", "EAN_13", "CODE_39", "CODE_93", "CODE_128",
+           "ITF", "RSS_14", "RSS_EXPANDED");
+  public static final Collection&lt;String&gt; QR_CODE_TYPES = Collections.singleton("QR_CODE");
+  public static final Collection&lt;String&gt; DATA_MATRIX_TYPES = Collections.singleton("DATA_MATRIX");
+
+  public static final Collection&lt;String&gt; ALL_CODE_TYPES = null;
+
+  public static final Collection&lt;String&gt; TARGET_BARCODE_SCANNER_ONLY = Collections.singleton(BS_PACKAGE);
+  public static final Collection&lt;String&gt; TARGET_ALL_KNOWN = list(
+          BS_PACKAGE, // Barcode Scanner
+          "com.srowen.bs.android", // Barcode Scanner+
+          "com.srowen.bs.android.simple" // Barcode Scanner+ Simple
+          // TODO add more -- what else supports this intent?
+      );
+
+  private final Activity activity;
+  private String title;
+  private String message;
+  private String buttonYes;
+  private String buttonNo;
+  private Collection&lt;String&gt; targetApplications;
+
+  public IntentIntegrator(Activity activity) {
+    this.activity = activity;
+    title = DEFAULT_TITLE;
+    message = DEFAULT_MESSAGE;
+    buttonYes = DEFAULT_YES;
+    buttonNo = DEFAULT_NO;
+    targetApplications = TARGET_ALL_KNOWN;
+  }
+
+  public String getTitle() {
+    return title;
+  }
+
+  public void setTitle(String title) {
+    this.title = title;
+  }
+
+  public void setTitleByID(int titleID) {
+    title = activity.getString(titleID);
+  }
+
+  public String getMessage() {
+    return message;
+  }
+
+  public void setMessage(String message) {
+    this.message = message;
+  }
+
+  public void setMessageByID(int messageID) {
+    message = activity.getString(messageID);
+  }
+
+  public String getButtonYes() {
+    return buttonYes;
+  }
+
+  public void setButtonYes(String buttonYes) {
+    this.buttonYes = buttonYes;
+  }
+
+  public void setButtonYesByID(int buttonYesID) {
+    buttonYes = activity.getString(buttonYesID);
+  }
+
+  public String getButtonNo() {
+    return buttonNo;
+  }
+
+  public void setButtonNo(String buttonNo) {
+    this.buttonNo = buttonNo;
+  }
+
+  public void setButtonNoByID(int buttonNoID) {
+    buttonNo = activity.getString(buttonNoID);
+  }
+
+  public Collection&lt;String&gt; getTargetApplications() {
+    return targetApplications;
+  }
+
+  public void setTargetApplications(Collection&lt;String&gt; targetApplications) {
+    this.targetApplications = targetApplications;
+  }
+
+  public void setSingleTargetApplication(String targetApplication) {
+    this.targetApplications = Collections.singleton(targetApplication);
+  }
+
+  /**
+   * Initiates a scan for all known barcode types.
+   */
+  public AlertDialog initiateScan() {
+    return initiateScan(ALL_CODE_TYPES);
+  }
+
+  /**
+   * Initiates a scan only for a certain set of barcode types, given as strings corresponding
+   * to their names in ZXing's {@code BarcodeFormat} class like "UPC_A". You can supply constants
+   * like {@link #PRODUCT_CODE_TYPES} for example.
+   */
+  public AlertDialog initiateScan(Collection&lt;String&gt; desiredBarcodeFormats) {
+    Intent intentScan = new Intent(BS_PACKAGE + ".SCAN");
+    intentScan.addCategory(Intent.CATEGORY_DEFAULT);
+
+    // check which types of codes to scan for
+    if (desiredBarcodeFormats != null) {
+      // set the desired barcode types
+      StringBuilder joinedByComma = new StringBuilder();
+      for (String format : desiredBarcodeFormats) {
+        if (joinedByComma.length() &gt; 0) {
+          joinedByComma.append(',');
+        }
+        joinedByComma.append(format);
+      }
+      intentScan.putExtra("SCAN_FORMATS", joinedByComma.toString());
+    }
+
+    String targetAppPackage = findTargetAppPackage(intentScan);
+    if (targetAppPackage == null) {
+      return showDownloadDialog();
+    }
+    intentScan.setPackage(targetAppPackage);
+    intentScan.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    intentScan.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
+    activity.startActivityForResult(intentScan, REQUEST_CODE);
+    return null;
+  }
+
+  private String findTargetAppPackage(Intent intent) {
+    PackageManager pm = activity.getPackageManager();
+    List&lt;ResolveInfo&gt; availableApps = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
+    if (availableApps != null) {
+      for (ResolveInfo availableApp : availableApps) {
+        String packageName = availableApp.activityInfo.packageName;
+        if (targetApplications.contains(packageName)) {
+          return packageName;
+        }
+      }
+    }
+    return null;
+  }
+
+  private AlertDialog showDownloadDialog() {
+    AlertDialog.Builder downloadDialog = new AlertDialog.Builder(activity);
+    downloadDialog.setTitle(title);
+    downloadDialog.setMessage(message);
+    downloadDialog.setPositiveButton(buttonYes, new DialogInterface.OnClickListener() {
+      @Override
+      public void onClick(DialogInterface dialogInterface, int i) {
+        Uri uri = Uri.parse("market://details?id=" + BS_PACKAGE);
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+        try {
+          activity.startActivity(intent);
+        } catch (ActivityNotFoundException anfe) {
+          // Hmm, market is not installed
+          Log.w(TAG, "Android Market is not installed; cannot install Barcode Scanner");
+        }
+      }
+    });
+    downloadDialog.setNegativeButton(buttonNo, new DialogInterface.OnClickListener() {
+      @Override
+      public void onClick(DialogInterface dialogInterface, int i) {}
+    });
+    return downloadDialog.show();
+  }
+
+
+  /**
+   * &lt;p&gt;Call this from your {@link Activity}'s
+   * {@link Activity#onActivityResult(int, int, Intent)} method.&lt;/p&gt;
+   *
+   * @return null if the event handled here was not related to this class, or
+   *  else an {@link IntentResult} containing the result of the scan. If the user cancelled scanning,
+   *  the fields will be null.
+   */
+  public static IntentResult parseActivityResult(int requestCode, int resultCode, Intent intent) {
+    if (requestCode == REQUEST_CODE) {
+      if (resultCode == Activity.RESULT_OK) {
+        String contents = intent.getStringExtra("SCAN_RESULT");
+        String formatName = intent.getStringExtra("SCAN_RESULT_FORMAT");
+        byte[] rawBytes = intent.getByteArrayExtra("SCAN_RESULT_BYTES");
+        int intentOrientation = intent.getIntExtra("SCAN_RESULT_ORIENTATION", Integer.MIN_VALUE);
+        Integer orientation = intentOrientation == Integer.MIN_VALUE ? null : intentOrientation;
+        String errorCorrectionLevel = intent.getStringExtra("SCAN_RESULT_ERROR_CORRECTION_LEVEL");
+        return new IntentResult(contents,
+                                formatName,
+                                rawBytes,
+                                orientation,
+                                errorCorrectionLevel);
+      }
+      return new IntentResult();
+    }
+    return null;
+  }
+
+
+  /**
+   * Shares the given text by encoding it as a barcode, such that another user can
+   * scan the text off the screen of the device.
+   *
+   * @param text the text string to encode as a barcode
+   */
+  public void shareText(CharSequence text) {
+    Intent intent = new Intent();
+    intent.addCategory(Intent.CATEGORY_DEFAULT);
+    intent.setAction(BS_PACKAGE + ".ENCODE");
+    intent.putExtra("ENCODE_TYPE", "TEXT_TYPE");
+    intent.putExtra("ENCODE_DATA", text);
+    String targetAppPackage = findTargetAppPackage(intent);
+    if (targetAppPackage == null) {
+      showDownloadDialog();
+    } else {
+      intent.setPackage(targetAppPackage);
+      intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+      intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
+      activity.startActivity(intent);
+    }
+  }
+
+  private static Collection&lt;String&gt; list(String... values) {
+    return Collections.unmodifiableCollection(Arrays.asList(values));
+  }
+
+}
+</code></pre>
+
+<p>And IntentResult.java for cantaining the info of the selected bar code or qr code.</p>
+
+<p>/**
+ * 
+ */</p>
+
+<pre><code>public final class IntentResult {
+
+      private final String contents;
+      private final String formatName;
+      private final byte[] rawBytes;
+      private final Integer orientation;
+      private final String errorCorrectionLevel;
+
+      IntentResult() {
+        this(null, null, null, null, null);
+      }
+
+      IntentResult(String contents,
+                   String formatName,
+                   byte[] rawBytes,
+                   Integer orientation,
+                   String errorCorrectionLevel) {
+        this.contents = contents;
+        this.formatName = formatName;
+        this.rawBytes = rawBytes;
+        this.orientation = orientation;
+        this.errorCorrectionLevel = errorCorrectionLevel;
+      }
+
+      /**
+       * @return raw content of barcode
+       */
+      public String getContents() {
+        return contents;
+      }
+
+      /**
+       * @return name of format, like "QR_CODE", "UPC_A". See {@code BarcodeFormat} for more format names.
+       */
+      public String getFormatName() {
+        return formatName;
+      }
+
+      /**
+       * @return raw bytes of the barcode content, if applicable, or null otherwise
+       */
+      public byte[] getRawBytes() {
+        return rawBytes;
+      }
+
+      /**
+       * @return rotation of the image, in degrees, which resulted in a successful scan. May be null.
+       */
+      public Integer getOrientation() {
+        return orientation;
+      }
+
+      /**
+       * @return name of the error correction level used in the barcode, if applicable
+       */
+      public String getErrorCorrectionLevel() {
+        return errorCorrectionLevel;
+      }
+
+      @Override
+      public String toString() {
+        StringBuilder dialogText = new StringBuilder(100);
+        dialogText.append("Format: ").append(formatName).append('\n');
+        dialogText.append("Contents: ").append(contents).append('\n');
+        int rawBytesLength = rawBytes == null ? 0 : rawBytes.length;
+        dialogText.append("Raw bytes: (").append(rawBytesLength).append(" bytes)\n");
+        dialogText.append("Orientation: ").append(orientation).append('\n');
+        dialogText.append("EC level: ").append(errorCorrectionLevel).append('\n');
+        return dialogText.toString();
+      }
+
+    }
+</code></pre>
+
+<p>now how to call these classes from your Activity</p>
+
+<pre><code>  btnScanBarCode.setOnClickListener(new View.OnClickListener() {
+
+                    @Override
+                    public void onClick(View v) {
+                        // TODO Auto-generated method stub
+                    IntentIntegrator integrator = new IntentIntegrator(BarCodeReaderActivity.this);
+                integrator.initiateScan();  
+
+
+
+                    }
+                });
+</code></pre>
+
+<p>And in onActivityResult</p>
+
+<pre><code> @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // TODO Auto-generated method stub
+
+        IntentResult scanResult = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+          if (scanResult != null) {
+
+            // handle scan result
+             contantsString =  scanResult.getContents()==null?"0":scanResult.getContents();
+             if (contantsString.equalsIgnoreCase("0")) {
+                 Toast.makeText(this, "Problem to get the  contant Number", Toast.LENGTH_LONG).show();
+
+             }else {
+                 Toast.makeText(this, contantsString, Toast.LENGTH_LONG).show();
+
+            }
+
+          }
+          else{
+              Toast.makeText(this, "Problem to secan the barcode.", Toast.LENGTH_LONG).show();
+          }
+    }
+</code></pre>

@@ -1,0 +1,285 @@
+<p>I adapted some code to create a TouchImageView that supports multitouch (>2.1).
+It is inspired by the book <a href="http://pragprog.com/titles/eband3/hello-android">Hello, Android! (3rd edition)</a></p>
+
+<p>It is contained within the following 3 files
+TouchImageView.java
+WrapMotionEvent.java
+EclairMotionEvent.java</p>
+
+<p><strong>TouchImageView.java</strong></p>
+
+<pre><code>import se.robertfoss.ChanImageBrowser.Viewer;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.graphics.PointF;
+import android.util.FloatMath;
+import android.util.Log;
+import android.view.MotionEvent;
+import android.view.View;
+import android.widget.ImageView;
+
+public class TouchImageView extends ImageView {
+
+    private static final String TAG = "Touch";
+    // These matrices will be used to move and zoom image
+    Matrix matrix = new Matrix();
+    Matrix savedMatrix = new Matrix();
+
+    // We can be in one of these 3 states
+    static final int NONE = 0;
+    static final int DRAG = 1;
+    static final int ZOOM = 2;
+    int mode = NONE;
+
+    // Remember some things for zooming
+    PointF start = new PointF();
+    PointF mid = new PointF();
+    float oldDist = 1f;
+
+    Context context;
+
+
+    public TouchImageView(Context context) {
+        super(context);
+        super.setClickable(true);
+        this.context = context;
+
+        matrix.setTranslate(1f, 1f);
+        setImageMatrix(matrix);
+        setScaleType(ScaleType.MATRIX);
+
+        setOnTouchListener(new OnTouchListener() {
+
+            @Override
+            public boolean onTouch(View v, MotionEvent rawEvent) {
+                WrapMotionEvent event = WrapMotionEvent.wrap(rawEvent);
+
+                // Dump touch event to log
+                if (Viewer.isDebug == true){
+                    dumpEvent(event);
+                }
+
+                // Handle touch events here...
+                switch (event.getAction() &amp; MotionEvent.ACTION_MASK) {
+                case MotionEvent.ACTION_DOWN:
+                    savedMatrix.set(matrix);
+                    start.set(event.getX(), event.getY());
+                    Log.d(TAG, "mode=DRAG");
+                    mode = DRAG;
+                    break;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    oldDist = spacing(event);
+                    Log.d(TAG, "oldDist=" + oldDist);
+                    if (oldDist &gt; 10f) {
+                        savedMatrix.set(matrix);
+                        midPoint(mid, event);
+                        mode = ZOOM;
+                        Log.d(TAG, "mode=ZOOM");
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                    int xDiff = (int) Math.abs(event.getX() - start.x);
+                    int yDiff = (int) Math.abs(event.getY() - start.y);
+                    if (xDiff &lt; 8 &amp;&amp; yDiff &lt; 8){
+                        performClick();
+                    }
+                case MotionEvent.ACTION_POINTER_UP:
+                    mode = NONE;
+                    Log.d(TAG, "mode=NONE");
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (mode == DRAG) {
+                        // ...
+                        matrix.set(savedMatrix);
+                        matrix.postTranslate(event.getX() - start.x, event.getY() - start.y);
+                    } else if (mode == ZOOM) {
+                        float newDist = spacing(event);
+                        Log.d(TAG, "newDist=" + newDist);
+                        if (newDist &gt; 10f) {
+                            matrix.set(savedMatrix);
+                            float scale = newDist / oldDist;
+                            matrix.postScale(scale, scale, mid.x, mid.y);
+                        }
+                    }
+                    break;
+                }
+
+                setImageMatrix(matrix);
+                return true; // indicate event was handled
+            }
+
+        });
+    }
+
+
+    public void setImage(Bitmap bm, int displayWidth, int displayHeight) { 
+        super.setImageBitmap(bm);
+
+        //Fit to screen.
+        float scale;
+        if ((displayHeight / bm.getHeight()) &gt;= (displayWidth / bm.getWidth())){
+            scale =  (float)displayWidth / (float)bm.getWidth();
+        } else {
+            scale = (float)displayHeight / (float)bm.getHeight();
+        }
+
+        savedMatrix.set(matrix);
+        matrix.set(savedMatrix);
+        matrix.postScale(scale, scale, mid.x, mid.y);
+        setImageMatrix(matrix);
+
+
+        // Center the image
+        float redundantYSpace = (float)displayHeight - (scale * (float)bm.getHeight()) ;
+        float redundantXSpace = (float)displayWidth - (scale * (float)bm.getWidth());
+
+        redundantYSpace /= (float)2;
+        redundantXSpace /= (float)2;
+
+
+        savedMatrix.set(matrix);
+        matrix.set(savedMatrix);
+        matrix.postTranslate(redundantXSpace, redundantYSpace);
+        setImageMatrix(matrix);
+    }
+
+
+    /** Show an event in the LogCat view, for debugging */
+    private void dumpEvent(WrapMotionEvent event) {
+        // ...
+        String names[] = { "DOWN", "UP", "MOVE", "CANCEL", "OUTSIDE",
+            "POINTER_DOWN", "POINTER_UP", "7?", "8?", "9?" };
+        StringBuilder sb = new StringBuilder();
+        int action = event.getAction();
+        int actionCode = action &amp; MotionEvent.ACTION_MASK;
+        sb.append("event ACTION_").append(names[actionCode]);
+        if (actionCode == MotionEvent.ACTION_POINTER_DOWN
+                || actionCode == MotionEvent.ACTION_POINTER_UP) {
+            sb.append("(pid ").append(
+                    action &gt;&gt; MotionEvent.ACTION_POINTER_ID_SHIFT);
+            sb.append(")");
+        }
+        sb.append("[");
+        for (int i = 0; i &lt; event.getPointerCount(); i++) {
+            sb.append("#").append(i);
+            sb.append("(pid ").append(event.getPointerId(i));
+            sb.append(")=").append((int) event.getX(i));
+            sb.append(",").append((int) event.getY(i));
+            if (i + 1 &lt; event.getPointerCount())
+            sb.append(";");
+        }
+        sb.append("]");
+        Log.d(TAG, sb.toString());
+    }
+
+    /** Determine the space between the first two fingers */
+    private float spacing(WrapMotionEvent event) {
+        // ...
+        float x = event.getX(0) - event.getX(1);
+        float y = event.getY(0) - event.getY(1);
+        return FloatMath.sqrt(x * x + y * y);
+    }
+
+    /** Calculate the mid point of the first two fingers */
+    private void midPoint(PointF point, WrapMotionEvent event) {
+        // ...
+        float x = event.getX(0) + event.getX(1);
+        float y = event.getY(0) + event.getY(1);
+        point.set(x / 2, y / 2);
+    }
+}
+</code></pre>
+
+<p><strong>WrapMotionEvent.java</strong></p>
+
+<pre><code>import android.view.MotionEvent;
+
+public class WrapMotionEvent {
+protected MotionEvent event;
+
+
+
+
+    protected WrapMotionEvent(MotionEvent event) {
+        this.event = event;
+    }
+
+    static public WrapMotionEvent wrap(MotionEvent event) {
+            try {
+                return new EclairMotionEvent(event);
+            } catch (VerifyError e) {
+                return new WrapMotionEvent(event);
+            }
+    }
+
+
+
+    public int getAction() {
+            return event.getAction();
+    }
+
+    public float getX() {
+            return event.getX();
+    }
+
+    public float getX(int pointerIndex) {
+            verifyPointerIndex(pointerIndex);
+            return getX();
+    }
+
+    public float getY() {
+            return event.getY();
+    }
+
+    public float getY(int pointerIndex) {
+            verifyPointerIndex(pointerIndex);
+            return getY();
+    }
+
+    public int getPointerCount() {
+            return 1;
+    }
+
+    public int getPointerId(int pointerIndex) {
+            verifyPointerIndex(pointerIndex);
+            return 0;
+    }
+
+    private void verifyPointerIndex(int pointerIndex) {
+            if (pointerIndex &gt; 0) {
+                throw new IllegalArgumentException(
+                    "Invalid pointer index for Donut/Cupcake");
+            }
+    }
+
+}
+</code></pre>
+
+<p><strong>EclairMotionEvent.java</strong></p>
+
+<pre><code>import android.view.MotionEvent;
+
+public class EclairMotionEvent extends WrapMotionEvent {
+
+    protected EclairMotionEvent(MotionEvent event) {
+            super(event);
+    }
+
+    public float getX(int pointerIndex) {
+            return event.getX(pointerIndex);
+    }
+
+    public float getY(int pointerIndex) {
+            return event.getY(pointerIndex);
+    }
+
+    public int getPointerCount() {
+            return event.getPointerCount();
+    }
+
+    public int getPointerId(int pointerIndex) {
+            return event.getPointerId(pointerIndex);
+    }
+}
+</code></pre>

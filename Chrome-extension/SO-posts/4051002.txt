@@ -1,0 +1,218 @@
+<p>I use the lib xmlpull_1_1_3_4c.jar and for example read twitter feeds (rss) like below.</p>
+
+<p>XML Pull is open source. You just need to adjust the tags according to your feed. If you cannot find the jar online, I can email it to you. I don't remember where I got it from, it used to be at xmlpull.org, but not sure where it is now.
+I got it somewhere linked from <a href="http://www.ibm.com/developerworks/opensource/library/x-android/" rel="nofollow">http://www.ibm.com/developerworks/opensource/library/x-android/</a></p>
+
+<pre><code>import org.developerworks.android.FeedParser;
+import org.developerworks.android.FeedParserFactory;
+import org.developerworks.android.Message;
+import org.developerworks.android.ParserType;
+import org.xmlpull.v1.XmlSerializer;
+
+....
+loadFeed(ParserType.ANDROID_SAX);
+....
+
+
+
+private void loadFeed(ParserType type){
+     try{
+      Log.i("AndroidNews", "ParserType="+type.name());
+      FeedParser parser = FeedParserFactory.getParser(type);
+      long start = System.currentTimeMillis();
+      messages = parser.parse();
+      long duration = System.currentTimeMillis() - start;
+      String xml = writeXml();      
+      titles = new ArrayList&lt;String&gt;(messages.size());
+      for (Message msg : messages){
+       titles.add(msg.getTitle());
+      }
+     } catch (Throwable t){
+      Log.e("AndroidNews",t.getMessage(),t);
+     }
+    }
+
+private String writeXml() {
+
+
+ XmlSerializer serializer = Xml.newSerializer();
+  StringWriter writer = new StringWriter();
+  try {
+   serializer.setOutput(writer);
+   serializer.startDocument("UTF-8", true);
+   serializer.startTag("", "messages");
+   serializer.attribute("", "number", String.valueOf(messages.size()));
+   for (Message msg: messages){
+    serializer.startTag("", "message");
+    serializer.attribute("", "date", msg.getDate());
+    serializer.startTag("", "title");
+    serializer.text(msg.getTitle());
+    serializer.endTag("", "title");
+    serializer.startTag("", "url");
+    serializer.text(msg.getLink().toExternalForm());
+    serializer.endTag("", "url");
+    serializer.startTag("", "body");
+    serializer.text(msg.getDescription());
+    serializer.endTag("", "body");
+    serializer.endTag("", "message");
+   }
+   serializer.endTag("", "messages");
+   serializer.endDocument();
+   return writer.toString();
+  } catch (Exception e) {
+   throw new RuntimeException(e);
+  }
+ }
+</code></pre>
+
+<p><strong>Edit:</strong></p>
+
+<p>This is the entire class that populates the feeds to a list view, using a ArrayAdapter, there's no cursor on any database though, since I don't store the feeds locally:</p>
+
+<pre><code>import android.app.ProgressDialog;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.text.Html;
+import android.util.Log;
+import android.util.Xml;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.*;
+import org.developerworks.android.FeedParser;
+import org.developerworks.android.FeedParserFactory;
+import org.developerworks.android.Message;
+import org.developerworks.android.ParserType;
+import org.xmlpull.v1.XmlSerializer;
+
+import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.List;
+
+public class Twitter extends BaseActivity implements
+        AdapterView.OnItemClickListener {
+
+    private List&lt;Message&gt; messages;
+    private List&lt;String&gt; titles;
+
+    //TweetsAdapter ta = new TweetsAdapter(this);
+    public ListView lstTweets = null;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.twitter);
+
+        // set header title
+        ((TextView)findViewById(R.id.txtHeaderTitle)).setText( Html.fromHtml("&lt;b&gt;" + getResources().getString(R.string.activity_title_twitter) +"&lt;/b&gt;"));
+
+        // highlight icon
+        ImageButton btn = (ImageButton)findViewById(R.id.btnTwitter);
+        btn.setBackgroundResource(R.drawable.menu_icon_twitter_active);
+
+        // load list of tweets
+        lstTweets = (ListView)findViewById(R.id.lstTweets);
+        lstTweets.setOnItemClickListener(this);
+
+        new AsyncTask&lt;Void, Void, Void&gt;() {
+
+            ProgressDialog p;
+            boolean success = false;
+
+            @Override
+            protected void onPostExecute(Void aVoid) {
+                p.dismiss();
+                if (!success) {
+
+                    Twitter.this.runOnUiThread(new Runnable() {
+                        public void run() {
+                            Toast toast = Toast.makeText(Twitter.this, "Sorry, could not connect to Twitter.", Toast.LENGTH_LONG);
+                            toast.setGravity(Gravity.CENTER_VERTICAL|Gravity.CENTER_HORIZONTAL, 0, 0);
+                            toast.show();
+                        }
+                    });
+
+                } else {
+                    ArrayAdapter&lt;String&gt; adapter =
+                        new ArrayAdapter&lt;String&gt;(Twitter.this, R.layout.twitter_list_row,titles);
+                    lstTweets.setAdapter(adapter);
+                }
+            }
+
+            @Override
+            protected void onPreExecute() {
+                p  = ProgressDialog.show(Twitter.this,"Loading...","...please wait a moment.");
+            }
+
+            @Override
+            protected Void doInBackground(Void... params) {
+                try {
+                    loadFeed(ParserType.ANDROID_SAX);
+                    if (messages!=null&amp;&amp;messages.size()&gt;0) success = true;
+                } catch (RuntimeException e) {}
+                catch (Exception e) {}
+                return null;
+            }
+        }.execute();
+
+
+
+    }
+
+
+    public void onItemClick(AdapterView&lt;?&gt; adapterView, View view, int position, long l) {
+  Intent viewMessage = new Intent(Intent.ACTION_VIEW,
+    Uri.parse(messages.get(position).getLink().toExternalForm()));
+  this.startActivity(viewMessage);
+    }
+
+
+ private void loadFeed(ParserType type){
+     try{
+      Log.i("AndroidNews", "ParserType="+type.name());
+      FeedParser parser = FeedParserFactory.getParser(type);
+      long start = System.currentTimeMillis();
+      messages = parser.parse();
+      long duration = System.currentTimeMillis() - start;
+      String xml = writeXml();      
+      titles = new ArrayList&lt;String&gt;(messages.size());
+      for (Message msg : messages){
+       titles.add(msg.getTitle());
+      }
+     } catch (Throwable t){
+      Log.e("AndroidNews",t.getMessage(),t);
+     }
+    }
+
+    private String writeXml(){
+  XmlSerializer serializer = Xml.newSerializer();
+  StringWriter writer = new StringWriter();
+  try {
+   serializer.setOutput(writer);
+   serializer.startDocument("UTF-8", true);
+   serializer.startTag("", "messages");
+   serializer.attribute("", "number", String.valueOf(messages.size()));
+   for (Message msg: messages){
+    serializer.startTag("", "message");
+    serializer.attribute("", "date", msg.getDate());
+    serializer.startTag("", "title");
+    serializer.text(msg.getTitle());
+    serializer.endTag("", "title");
+    serializer.startTag("", "url");
+    serializer.text(msg.getLink().toExternalForm());
+    serializer.endTag("", "url");
+    serializer.startTag("", "body");
+    serializer.text(msg.getDescription());
+    serializer.endTag("", "body");
+    serializer.endTag("", "message");
+   }
+   serializer.endTag("", "messages");
+   serializer.endDocument();
+   return writer.toString();
+  } catch (Exception e) {
+   throw new RuntimeException(e);
+  }
+ }
+}
+</code></pre>

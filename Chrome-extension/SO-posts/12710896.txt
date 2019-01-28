@@ -1,0 +1,157 @@
+<p>I got it working! The steps I followed:</p>
+
+<h2>Prerequisite</h2>
+
+<p>Before start, we need to generate a refresh token. To do this first we have to create an APIs console project:</p>
+
+<ol>
+<li>Go to the <a href="https://code.google.com/apis/console">APIs Console</a> and log in with your Android developer
+account (the same account used in <a href="https://play.google.com/apps/publish/Home">Android Developer Console</a> to upload the APK).</li>
+<li>Select Create project.</li>
+<li>Go to Services in the left-hand navigation panel.</li>
+<li>Turn the <em>Google Play Android Developer API</em> on.</li>
+<li>Accept the Terms of Service.</li>
+<li>Go to API Access in the left-hand navigation panel.</li>
+<li>Select Create an OAuth 2.0 client ID:
+<ul>
+<li>On the first page, you will need to fill in the product name, but a 
+logo is not required.</li>
+<li>On the second page, select <strong>web application</strong> and set the <strong>redirect URI</strong>
+and Javascript origins. We will use it later the redirect URI.</li>
+</ul></li>
+<li>Select Create client ID. Keep in mind the <strong>Client ID</strong> and the <strong>Client secret</strong>, we will use them later.</li>
+</ol>
+
+<p>So, now we can generate the refresh token:</p>
+
+<ol>
+<li>Go to the following URI (note that the redirect URI must match the value entered in the client ID exactly, including any trailing backslashes):</li>
+</ol>
+
+<p><a href="https://accounts.google.com/o/oauth2/auth?scope=https://www.googleapis.com/auth/androidpublisher&amp;response_type=code&amp;access_type=offline&amp;redirect_uri=REDIRECT_URI&amp;client_id=CLIENT_ID">https://accounts.google.com/o/oauth2/auth?scope=https://www.googleapis.com/auth/androidpublisher&amp;response_type=code&amp;access_type=offline&amp;redirect_uri=REDIRECT_URI&amp;client_id=CLIENT_ID</a></p>
+
+<ol>
+<li>Select Allow access when prompted.</li>
+<li>The browser will be redirected to your redirect URI with a <strong>code</strong> parameter, which will look similar to 4/eWdxD7b-YSQ5CNNb-c2iI83KQx19.wp6198ti5Zc7dJ3UXOl0T3aRLxQmbwI. Copy this value.</li>
+</ol>
+
+<p>Create a main class with:</p>
+
+<pre><code>public static String getRefreshToken(String code)
+{
+
+    HttpClient client = new DefaultHttpClient();
+    HttpPost post = new HttpPost("https://accounts.google.com/o/oauth2/token");
+    try 
+    {
+        List&lt;NameValuePair&gt; nameValuePairs = new ArrayList&lt;NameValuePair&gt;(5);
+        nameValuePairs.add(new BasicNameValuePair("grant_type",    "authorization_code"));
+        nameValuePairs.add(new BasicNameValuePair("client_id",     GOOGLE_CLIENT_ID));
+        nameValuePairs.add(new BasicNameValuePair("client_secret", GOOGLE_CLIENT_SECRET));
+        nameValuePairs.add(new BasicNameValuePair("code", code));
+        nameValuePairs.add(new BasicNameValuePair("redirect_uri", GOOGLE_REDIRECT_URI));
+        post.setEntity(new UrlEncodedFormEntity(nameValuePairs));
+
+        org.apache.http.HttpResponse response = client.execute(post);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
+        StringBuffer buffer = new StringBuffer();
+        for (String line = reader.readLine(); line != null; line = reader.readLine())
+        {
+            buffer.append(line);
+        }
+
+        JSONObject json = new JSONObject(buffer.toString());
+        String refreshToken = json.getString("refresh_token");                      
+        return refreshToken;
+    }
+    catch (Exception e) { e.printStackTrace(); }
+
+    return null;
+}
+</code></pre>
+
+<p><code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> and <code>GOOGLE_REDIRECT_URI</code> are the previously values.</p>
+
+<p>Finally, we have our refresh token! This value does not expire, so we can store in some site, like a property file.</p>
+
+<h2>Accessing to Google Play Android Developer API</h2>
+
+<ol>
+<li><p>Getting the access token. We will need our previosly refresh token:</p>
+
+<pre><code>private static String getAccessToken(String refreshToken){
+
+HttpClient client = new DefaultHttpClient();
+HttpPost post = new HttpPost("https://accounts.google.com/o/oauth2/token");
+try 
+{
+    List&lt;NameValuePair&gt; nameValuePairs = new ArrayList&lt;NameValuePair&gt;(4);
+    nameValuePairs.add(new BasicNameValuePair("grant_type",    "refresh_token"));
+    nameValuePairs.add(new BasicNameValuePair("client_id",     GOOGLE_CLIENT_ID));
+    nameValuePairs.add(new BasicNameValuePair("client_secret", GOOGLE_CLIENT_SECRET));
+    nameValuePairs.add(new BasicNameValuePair("refresh_token", refreshToken));
+    post.setEntity(new UrlEncodedFormEntity(nameValuePairs));
+
+    org.apache.http.HttpResponse response = client.execute(post);
+    BufferedReader reader = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
+    StringBuffer buffer = new StringBuffer();
+    for (String line = reader.readLine(); line != null; line = reader.readLine())
+    {
+        buffer.append(line);
+    }
+
+    JSONObject json = new JSONObject(buffer.toString());
+    String accessToken = json.getString("access_token");
+
+    return accessToken;
+
+}
+catch (IOException e) { e.printStackTrace(); }
+
+return null;
+</code></pre>
+
+<p>}</p></li>
+<li><p>Now, we can access to the Android API. I'm interesting in the expiration time of a subscription, so:</p>
+
+<pre><code>private static HttpTransport HTTP_TRANSPORT = new NetHttpTransport();
+private static JsonFactory JSON_FACTORY = new com.google.api.client.json.jackson2.JacksonFactory();
+
+private static Long getSubscriptionExpire(String accessToken, String refreshToken, String subscriptionId, String purchaseToken){
+
+try{
+
+    TokenResponse tokenResponse = new TokenResponse();
+    tokenResponse.setAccessToken(accessToken);
+    tokenResponse.setRefreshToken(refreshToken);
+    tokenResponse.setExpiresInSeconds(3600L);
+    tokenResponse.setScope("https://www.googleapis.com/auth/androidpublisher");
+    tokenResponse.setTokenType("Bearer");
+
+    HttpRequestInitializer credential =  new GoogleCredential.Builder().setTransport(HTTP_TRANSPORT)
+            .setJsonFactory(JSON_FACTORY)
+            .setClientSecrets(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
+            .build()
+            .setFromTokenResponse(tokenResponse);
+
+    Androidpublisher publisher = new Androidpublisher.Builder(HTTP_TRANSPORT, JSON_FACTORY, credential).
+            setApplicationName(GOOGLE_PRODUCT_NAME).
+            build();
+
+    Androidpublisher.Purchases purchases = publisher.purchases();
+    Get get = purchases.get(GOOGLE_PACKAGE_NAME, subscriptionId, purchaseToken);
+    SubscriptionPurchase subscripcion = get.execute();
+
+    return subscripcion.getValidUntilTimestampMsec();
+
+}
+catch (IOException e) { e.printStackTrace(); }
+return null;
+</code></pre>
+
+<p>}</p></li>
+</ol>
+
+<p>And that's all!</p>
+
+<p>Some steps are from <a href="https://developers.google.com/android-publisher/authorization">https://developers.google.com/android-publisher/authorization</a>.</p>

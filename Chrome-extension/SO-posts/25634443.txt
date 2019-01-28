@@ -1,0 +1,105 @@
+<p><strong>Update:</strong> with Hibernate 5 <a href="https://hibernate.atlassian.net/browse/HHH-9562" rel="nofollow">I was able to get more cross database compatible UUID's included</a> (note: I am not the implementor, though I did give it a stab).</p>
+
+<pre><code>@Entity
+public class MyEntity {
+    @Id
+    @GeneratedValue
+    @Column( columnDefinition = "uuid", updatable = false )
+    public UUID getId() {
+        return id;
+    }
+}
+</code></pre>
+
+<p><strong>Original</strong></p>
+
+<p><a href="http://java.dzone.com/articles/hibernate-and-uuid-identifiers" rel="nofollow">Dzone posted an article about a second version of the UUID generator last year</a></p>
+
+<p>first create your own usertype (at least until hibernate implements similar)</p>
+
+<pre><code>public class UUIDType extends AbstractSingleColumnStandardBasicType&lt;UUID&gt; {
+public static final String NAME = "uuid-name";
+public static final UUIDType INSTANCE = new UUIDType();
+
+public UUIDType() {
+    super( UUIDSqlTypeDescriptor.INSTANCE, UUIDTypeDescriptor.INSTANCE );
+}
+
+public String getName() {
+    return NAME;
+}
+
+public static class UUIDSqlTypeDescriptor implements SqlTypeDescriptor {
+    public static final UUIDSqlTypeDescriptor INSTANCE = new UUIDSqlTypeDescriptor();
+
+    public int getSqlType() {
+        // ugh
+        return Types.VARCHAR;
+    }
+
+    @Override
+    public boolean canBeRemapped() {
+        return true;
+    }
+
+    public &lt;X&gt; ValueBinder&lt;X&gt; getBinder( final JavaTypeDescriptor&lt;X&gt; javaTypeDescriptor ) {
+        return new BasicBinder&lt;X&gt;( javaTypeDescriptor, this ) {
+            @Override
+            protected void doBind( PreparedStatement st, X value, int index, WrapperOptions options )
+                    throws SQLException {
+                st.setObject( index, javaTypeDescriptor.unwrap( value, UUID.class, options ) );
+            }
+        };
+    }
+
+    public &lt;X&gt; ValueExtractor&lt;X&gt; getExtractor( final JavaTypeDescriptor&lt;X&gt; javaTypeDescriptor ) {
+        return new BasicExtractor&lt;X&gt;( javaTypeDescriptor, this ) {
+            @Override
+            protected X doExtract( ResultSet rs, String name, WrapperOptions options ) throws SQLException {
+                return javaTypeDescriptor.wrap( rs.getObject( name ), options );
+            }
+
+            @Override
+            protected X doExtract( CallableStatement statement, int index, WrapperOptions options )
+                    throws SQLException {
+                return javaTypeDescriptor.wrap( statement.getObject( index ), options );
+            }
+
+            @Override
+            protected X doExtract( CallableStatement statement, String name, WrapperOptions options )
+                    throws SQLException {
+                return javaTypeDescriptor.wrap( statement.getObject( name ), options );
+            }
+        };
+    }
+}
+}
+</code></pre>
+
+<p>Then annotate your models <code>package-info.java</code></p>
+
+<pre><code> @TypeDef(
+    name = UUIDType.NAME,
+    defaultForType = UUID.class,
+    typeClass = UUIDType.class
+)
+package com.xenoterracide.rpf.model;
+
+
+import org.hibernate.annotations.TypeDef;
+import org.hibernate.type.UUIDType;
+
+import java.util.UUID;
+</code></pre>
+
+<p>finally in your entity</p>
+
+<pre><code>@Id
+@Override
+@GeneratedValue(generator = "uuid2")
+@GenericGenerator(name = "uuid2", strategy = "uuid2")
+@Column(name = "id", columnDefinition = "uuid")
+public UUID getId() {
+    return id;
+}
+</code></pre>

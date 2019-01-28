@@ -1,0 +1,131 @@
+<p>Before I get to your question, here's a brief explanation of the two storage types:</p>
+
+<h2>Cache</h2>
+
+<p>This is an app-specific directory on the filesystem. The intent for this directory is store temporary data your application may need to keep around between sessions, but may not be vital to keep them forever. You typically access this directory with <a href="http://developer.android.com/reference/android/content/ContextWrapper.html#getCacheDir%28%29"><code>Context.getCacheDir()</code></a>. This will show up as "Cache" on your app settings.</p>
+
+<h2>Files</h2>
+
+<p>Like the cache directory, your app also has an app-specific directory for holding files. Files in this directory will exist until the app explicitly deletes them or the app is uninstalled. You typically access this directory with <a href="http://developer.android.com/reference/android/content/Context.html#getFilesDir%28%29"><code>Context.getFilesDir()</code></a>. This can show up as various things on the app info screen, but in your screenshot this is "USB Storage Data". </p>
+
+<p><strong>NOTE:</strong> If you want to explicitly place on external media (typically SD card), you can use <a href="http://developer.android.com/reference/android/content/Context.html#getExternalFilesDir%28java.lang.String%29"><code>Context.getExternalFilesDir(String type)</code></a>.</p>
+
+<h2>The Difference</h2>
+
+<p>Both directories are specific only to your application (other apps do not have access). One of the differences between the cache and files directory is that if the system gets low on storage, the first place it is going to free resources is from your cache directory. The system will not clear any data from the files directory. Another difference is that the cache directory can typically be cleared manually from the app info screen. The files directory typically can as well, but clearing the files directory will also clear the cache directory.</p>
+
+<h2>Which one do I use?</h2>
+
+<p>It depends on how vital that data is compared to the lifetime of your app. If you only need data for one session and you doubt you'll ever need to use that data again, then don't use either. Just keep it in memory until you don't need it. If you suspect you'll need to reuse the data between multiple sessions, but you don't <em>have</em> to keep a hard copy, use the cache directory. If you must have this data no matter what, or if it's rather large data that needs persistent storage, use the files directory. Here's some examples I can think of:</p>
+
+<ul>
+<li>Cache - A recently opened email
+<ul>
+<li>Once opened, cache the data so when the user wants to read that email again, it loads instantly rather using the network again to retrieve the same data. I don't need to keep this forever, because eventually the user will be finished with the email.</li>
+</ul></li>
+<li>Files - An attachment downloaded from an email
+<ul>
+<li>This is an action by the user who is saying "I want to keep this data so I can pull it back up whenever I need it." Therefore, put it in files directory as I don't ever want to delete this file until the user wants it deleted.</li>
+</ul></li>
+</ul>
+
+<h2>When should I clear the cache directory?</h2>
+
+<p>From the <code>Context.getCacheDir()</code> javadocs:</p>
+
+<blockquote>
+  <p>Note: you should not rely on the system deleting these files for you;
+  you should always have a reasonable maximum, such as 1 MB, for the
+  amount of space you consume with cache files, and prune those files
+  when exceeding that space.</p>
+</blockquote>
+
+<p>It uses the example of 1 MB, but that may or may not be reasonable for your app. Regardless, you need to set a hard maximum. The reason for this simply comes down to designing a responsible app. So when should you check? I would recommend checking every time you want to put something in the cache directory. Here's a very simple cache manager:</p>
+
+<pre><code>public class CacheManager {
+
+    private static final long MAX_SIZE = 5242880L; // 5MB
+
+    private CacheManager() {
+
+    }
+
+    public static void cacheData(Context context, byte[] data, String name) throws IOException {
+
+        File cacheDir = context.getCacheDir();
+        long size = getDirSize(cacheDir);
+        long newSize = data.length + size;
+
+        if (newSize &gt; MAX_SIZE) {
+            cleanDir(cacheDir, newSize - MAX_SIZE);
+        }
+
+        File file = new File(cacheDir, name);
+        FileOutputStream os = new FileOutputStream(file);
+        try {
+            os.write(data);
+        }
+        finally {
+            os.flush();
+            os.close();
+        }
+    }
+
+    public static byte[] retrieveData(Context context, String name) throws IOException {
+
+        File cacheDir = context.getCacheDir();
+        File file = new File(cacheDir, name);
+
+        if (!file.exists()) {
+            // Data doesn't exist
+            return null;
+        }
+
+        byte[] data = new byte[(int) file.length()];
+        FileInputStream is = new FileInputStream(file);
+        try {
+            is.read(data);
+        }
+        finally {
+            is.close();
+        }
+
+        return data;
+    }
+
+    private static void cleanDir(File dir, long bytes) {
+
+        long bytesDeleted = 0;
+        File[] files = dir.listFiles();
+
+        for (File file : files) {
+            bytesDeleted += file.length();
+            file.delete();
+
+            if (bytesDeleted &gt;= bytes) {
+                break;
+            }
+        }
+    }
+
+    private static long getDirSize(File dir) {
+
+        long size = 0;
+        File[] files = dir.listFiles();
+
+        for (File file : files) {
+            if (file.isFile()) {
+                size += file.length();
+            }
+        }
+
+        return size;
+    }
+}
+</code></pre>
+
+<p>Of course, this could be an expensive operation, so you should plan on caching on a background thread.</p>
+
+<p>Also, this could be as complicated as you need it to be. In my example, I'm assuming all cached files are placed at the root of the cache directory, so I don't check for potential sub-directories. The routine for deleting files can also become more sophisticated, such as deleting files by oldest access date.</p>
+
+<p>One thing to keep in mind when deciding to cache data is that you need to always plan for the case that your cached data no longer exists. Always have a routine in place to retrieve data by external means when your cache doesn't have it in storage. Likewise, always check your cache before retrieve data externally. The purpose of the cache is to cut down on network activity, long processes, and provide a responsive UI in your app. So use it responsibly :)</p>

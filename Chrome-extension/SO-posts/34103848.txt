@@ -1,0 +1,132 @@
+<p>You can use <code>cleanup()</code> method of the reducer to achieve this (assuming, you have just one reducer). It is called once at the end of the reduce task.</p>
+
+<p>I will explain this for "city" data.</p>
+
+<p>Following is the code:</p>
+
+<pre><code>package com.hadooptests;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+public class Cities {
+
+    public static class CityMapper
+            extends Mapper&lt;LongWritable, Text, Text, IntWritable&gt; {
+
+        private Text outKey = new Text();
+        private IntWritable outValue = new IntWritable(1);
+
+        public void map(LongWritable key, Text value, Context context
+        ) throws IOException, InterruptedException {
+              outKey.set(value);
+              context.write(outKey, outValue);
+        }
+    }
+
+    public static class CityReducer
+            extends Reducer&lt;Text,IntWritable,Text,Text&gt; {
+
+        HashMap&lt;String, Integer&gt; cityCount = new HashMap&lt;String, Integer&gt;();
+
+        public void reduce(Text key, Iterable&lt;IntWritable&gt;values,
+                           Context context
+        ) throws IOException, InterruptedException {
+
+            for (IntWritable val : values) {
+                String keyStr = key.toString();
+                if(keyStr.toLowerCase().startsWith("city|")) {
+                    String[] tokens = keyStr.split("\\|");
+
+                    if(cityCount.containsKey(tokens[1])) {
+                        int count = cityCount.get(tokens[1]);
+                        cityCount.put(tokens[1], ++count);
+                    }
+                    else
+                        cityCount.put(tokens[1], val.get());
+                }
+            }
+        }
+
+        @Override
+        public void cleanup(org.apache.hadoop.mapreduce.Reducer.Context context)
+                throws IOException,
+                InterruptedException
+        {
+            String output = "{\"city\":{";
+            Iterator iterator = cityCount.entrySet().iterator();
+            while(iterator.hasNext())
+            {
+                Map.Entry entry = (Map.Entry) iterator.next();
+                output = output.concat("\"" + entry.getKey() + "\":" + Integer.toString((Integer) entry.getValue()) + ", ");
+            }
+
+            output = output.substring(0, output.length() - 2);
+            output = output.concat("}}");
+            context.write(output, "");
+        }
+    }
+
+
+    public static void main(String[] args) throws Exception {
+
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "KeyValue");
+
+        job.setJarByClass(Cities.class);
+        job.setMapperClass(CityMapper.class);
+        job.setReducerClass(CityReducer.class);
+
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+
+        FileInputFormat.addInputPath(job, new Path("/in/in.txt"));
+        FileOutputFormat.setOutputPath(job, new Path("/out/"));
+
+        System.exit(job.waitForCompletion(true) ? 0:1);
+
+    }
+}
+</code></pre>
+
+<p><strong>Mapper:</strong></p>
+
+<ol>
+<li>It just outputs count for each key it encounters. For e.g. if it encounters record <strong>"city|new york"</strong>, then it will output <strong>(key, value)</strong> as <strong>("city|new york", 1)</strong></li>
+</ol>
+
+<p><strong>Reducer:</strong></p>
+
+<ol>
+<li>For each record, it checks if the key contains <strong>"city|"</strong>. It splits the key on pipe ("|"). And stores the count for each city in a HashMap.</li>
+<li>Reducer also overrides <code>cleanup</code> method. This method gets called once the reduce task is over. In this task, the contents of the HashMap are composed into the desired output.</li>
+<li>In the <code>cleanup()</code>, the key is output as the contents of HashMap and value is output as empty string.</li>
+</ol>
+
+<p>For e.g. I took the following data as input:</p>
+
+<pre><code>city|new york
+city|London
+city|new york
+city|new york
+city|Paris
+city|Paris
+</code></pre>
+
+<p>I got the following output:</p>
+
+<pre><code>{"city":{"London":1, "new york":3, "Paris":2}}
+</code></pre>

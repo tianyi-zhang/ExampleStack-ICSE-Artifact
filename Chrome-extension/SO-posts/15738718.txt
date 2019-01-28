@@ -1,0 +1,64 @@
+<p>This is a slow process and cannot process every frame of data delivered to the preview callback. It should only be used if your requirements for a live preview application make it impossible to display video from the camera or video from the camera with a <em>stencil</em> type overlay, and your display can tolerate only a few frames per second with some latency.</p>
+
+<p><strong>Some important steps</strong>:</p>
+
+<ol>
+<li>Your Activity must extend Surface Holder, and you shouldn't  start
+the camera until the surface is created.</li>
+<li>Preview only supports a specific size on each device (<em>480 x 320 on the last device I checked - some time ago</em>), but 
+your request will not cause any problems, it will just get ignored. 
+When you finally do receive the preview callback, check the actual 
+frame size in <code>onPreviewFrame()</code>. </li>
+<li>The <code>byte[]</code> array data sent to <code>onPreviewFrame()</code> is in YCbCr_422_SP 
+format.  No other formats are available, even if you attempt to set 
+them.  The data is described here: <a href="http://groups.google.com/group/android-developers/msg/d3b29d3ddc8abf9b" rel="nofollow">http://groups.google.com/group/android-developers/msg/d3b29d3ddc8abf9b</a> </li>
+<li>Don't try to decode the data in <code>onPreviewFrame()</code>.  There isn't enough 
+time - you will hose the camera if you try to hold up the system in 
+that function for so long.  Copy the data to your own buffer and 
+decode in a separate <code>Thread</code>.</li>
+<li>You will have to skip processing of new frames received while your <code>Thread</code> 
+is processing any particular frame. Wait until the <code>Thread</code> is finished before 
+using the data from the next available frame.</li>
+</ol>
+
+<p><strong>Decode the YUV Preview Data</strong>:</p>
+
+<pre><code>// decode Y, U, and V values on the YUV 420 buffer 
+// described as YCbCr_422_SP by Android - David Manpearl
+public static void decodeYUV(int[] out, byte[] fg, int width, int 
+height) throws NullPointerException, IllegalArgumentException { 
+        final int sz = width * height; 
+        if(out == null) throw new NullPointerException("buffer 'out' is null"); 
+        if(out.length &lt; sz) throw new IllegalArgumentException("buffer 'out' size " + out.length + " &lt; minimum " + sz); 
+        if(fg == null) throw new NullPointerException("buffer 'fg' is null"); 
+        if(fg.length &lt; sz) throw new IllegalArgumentException("buffer 'fg' size " + fg.length + " &lt; minimum " + sz * 3/ 2); 
+        int i, j; 
+        int Y, Cr = 0, Cb = 0; 
+        for(j = 0; j &lt; height; j++) { 
+                int pixPtr = j * width; 
+                final int jDiv2 = j &gt;&gt; 1; 
+                for(i = 0; i &lt; width; i++) { 
+                        Y = fg[pixPtr]; if(Y &lt; 0) Y += 255; 
+                        if((i &amp; 0x1) != 1) { 
+                                final int cOff = sz + jDiv2 * width + (i &gt;&gt; 1) * 2; 
+                                Cb = fg[cOff]; 
+                                if(Cb &lt; 0) Cb += 127; else Cb -= 128; 
+                                Cr = fg[cOff + 1]; 
+                                if(Cr &lt; 0) Cr += 127; else Cr -= 128; 
+                        } 
+                        int R = Y + Cr + (Cr &gt;&gt; 2) + (Cr &gt;&gt; 3) + (Cr &gt;&gt; 5); 
+                        if(R &lt; 0) R = 0; else if(R &gt; 255) R = 255; 
+                        int G = Y - (Cb &gt;&gt; 2) + (Cb &gt;&gt; 4) + (Cb &gt;&gt; 5) - (Cr &gt;&gt; 1) + (Cr &gt;&gt; 3) + (Cr &gt;&gt; 4) + (Cr &gt;&gt; 5); 
+                        if(G &lt; 0) G = 0; else if(G &gt; 255) G = 255; 
+                        int B = Y + Cb + (Cb &gt;&gt; 1) + (Cb &gt;&gt; 2) + (Cb &gt;&gt; 6); 
+                        if(B &lt; 0) B = 0; else if(B &gt; 255) B = 255; 
+                        out[pixPtr++] = 0xff000000 + (B &lt;&lt; 16) + (G &lt;&lt; 8) + R; 
+                } 
+        } 
+} 
+</code></pre>
+
+<p><strong>Convert <code>byte[]</code> Array to <code>Bitmap</code></strong>:</p>
+
+<pre><code>Bitmap bitmap = BitmapFactory.decodeByteArray(out , 0, out.length);
+</code></pre>

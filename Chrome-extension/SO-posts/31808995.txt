@@ -1,0 +1,115 @@
+<p>1) A valid GCM registration id starts with "APA..". So print it and check this value;</p>
+
+<p>2) The old documentation suggested a class called <em>GcmManager</em> to deal with the device registration and it was something like this:</p>
+
+<pre><code>public class GcmManager {
+
+    private static final String PROPERTY_REG_ID = "registration_id";
+    private static final String PROPERTY_APP_VERSION = "appVersion";
+    private static final String TAG = GcmManager.class.getSimpleName();
+    private GoogleCloudMessaging gcm;
+    private Context mContext;
+
+    public GcmManager(Context context) {
+        this.mContext = context.getApplicationContext();
+    }
+
+    public void registerIfNeeded() {
+        final String regId = getRegistrationId();
+        Log.d(TAG, "regId: " + regId);
+        if (regId.isEmpty()) {
+            registerInBackground();
+        }
+        else {
+            new Thread(new Runnable() {
+                public void run() {
+                    sendRegistrationIdToBackend(regId);
+                }
+            }).run();
+        }
+    }
+
+    private void storeRegistrationId(Context context, String regId) {
+        final SharedPreferences prefs = getGcmPreferences(context);
+        int appVersion = getAppVersion(context);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putString(PROPERTY_REG_ID, regId);
+        editor.putInt(PROPERTY_APP_VERSION, appVersion);
+        editor.apply();
+    }
+
+    public String getRegistrationId() {
+        final SharedPreferences prefs = getGcmPreferences(mContext);
+        String registrationId = prefs.getString(PROPERTY_REG_ID, "");
+        if (registrationId.isEmpty()) {
+            Log.i(TAG, "Registration not found.");
+            return "";
+        }
+
+        int registeredVersion = prefs.getInt(PROPERTY_APP_VERSION, Integer.MIN_VALUE);
+        int currentVersion = getAppVersion(mContext);
+        if (registeredVersion != currentVersion) {
+            Log.i(TAG, "App version changed.");
+            return "";
+        }
+        return registrationId;
+    }
+
+    private void registerInBackground() {
+        new AsyncTask&lt;Void, Void, String&gt;() {
+            @Override
+            protected String doInBackground(Void... params) {
+                String msg = "";
+                try {
+                    if (gcm == null) {
+                        gcm = GoogleCloudMessaging.getInstance(mContext);
+                    }
+                    String regId = gcm.register(Constants.GCM_SENDER_ID);
+                    storeRegistrationId(mContext, regId);
+                } catch (IOException ex) {
+                    msg = "Error :" + ex.getMessage();
+                }
+                return msg;
+            }
+
+            @Override
+            protected void onPostExecute(String msg) {
+                final String regId = getRegistrationId();
+                if (!regId.isEmpty()) {
+                    sendRegistrationIdToBackend(regId);
+                }
+            }
+
+        }.execute(null, null, null);
+    }
+
+    private static int getAppVersion(Context context) {
+        try {
+            PackageInfo packageInfo = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0);
+            return packageInfo.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            throw new RuntimeException("Could not get package name: " + e);
+        }
+    }
+
+    private SharedPreferences getGcmPreferences(Context context) {
+        return context.getSharedPreferences(GcmManager.class.getSimpleName(),
+                Context.MODE_PRIVATE);
+    }
+
+    private void sendRegistrationIdToBackend(String regId) {
+        // Send registration Id to your API
+    }
+}
+</code></pre>
+
+<p>Then you should call the method <code>registerIfNeeded</code> to check if the device is already registered, as the name suggests;</p>
+
+<p>3) The official documentation of <a href="https://developer.android.com/reference/android/support/v4/content/WakefulBroadcastReceiver.html" rel="nofollow">WakefulBroadcastReceiver</a> states: </p>
+
+<blockquote>
+  <p>Helper for the common pattern of implementing a BroadcastReceiver that receives a device wakeup event and then passes the work off to a Service, while ensuring that the device does not go back to sleep during the transition.</p>
+</blockquote>
+
+<p>4 and 5) <a href="http://stackoverflow.com/a/27874454/3280779">This answer</a> shows how to easily do a request directly to GCM using <a href="https://www.getpostman.com/" rel="nofollow">Postman</a>. This is a good approach for testing and you can use the request as an example for your own API</p>

@@ -1,0 +1,288 @@
+<p>On android, I have seen different devices exibit different behaviour for choosing image with camera and gallery. I find the better way is to:</p>
+
+<ol>
+<li>Create a content provider in your app.</li>
+<li>Get a Uri from your content provider and pass it to camera intent.</li>
+<li>The camera will write the captured image to your Uri.</li>
+<li>Read it using context.getContentResolver().openInputStream(). </li>
+</ol>
+
+<p>This method make your code independent of the returned Uri in intent since you own the Uri. Also, this supports gallery image pick too with small modifications.</p>
+
+<p>I see you have device orientation issues too with camera. This (unfortunately) needs to be processed in your app one you acquire the image in a post processing step. I have outlined the code for it below as well. Mostly, orientation issues happened on Samsung devices where camera only captured images in landscape mode.</p>
+
+<p><strong>Creating Uri for image:</strong></p>
+
+<pre><code>string imageId = "IMG" + System.currentTimeMillis();
+Uri attachmentUri = Uri.parse("content://"+ AttachmentContentProvider.AUTHORITY + "/images/" + imageId); 
+// Store this as a member in your activity/fragment as mAttachmentUri
+</code></pre>
+
+<p><strong>Note</strong> : Its important that you persist <code>mAttachmentUri</code> using shared preferences or activity bundle using onSaveInstanceState() otherwise the Uri may be lost when your app gets killed.</p>
+
+<p><strong>Getting the camera intent:</strong></p>
+
+<pre><code>public static Intent getImageCaptureIntent(Context context, Uri outputFileUri)
+{
+    Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, outputFileUri);
+    return cameraIntent;
+}
+</code></pre>
+
+<p><strong>Reading the image:</strong></p>
+
+<pre><code>@Override
+public void onActivityResult(int requestCode, int resultCode, Intent data) 
+{
+    if (resultCode != Activity.RESULT_OK) {
+        return;
+    }
+
+    if (requestCode == REQUEST_IMAGE_CAPTURE) 
+    {
+
+        try {
+            Bitmap bitmap = decodeSampledBitmapFromResource(getActivity(), mAttachmentUri, Config.RGB_565);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+    public static Bitmap decodeSampledBitmapFromResource(Context context, Uri uri, Config config)
+    { 
+        Bitmap bmp = null;
+        InputStream is = null;
+        if (uri != null)
+        {
+            try
+            {
+                is = context.getContentResolver().openInputStream(uri);
+
+                boolean resize = true;
+                // First decode with inJustDecodeBounds=true to check dimensions
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeStream(is, null, options);
+                mLogger.d("Image Original Width:" + options.outWidth + " Height:" + options.outHeight );
+                // close and open the stream again
+                is.close();
+
+                is = context.getContentResolver().openInputStream(uri);
+                int reqWidth = options.outWidth;
+                int reqHeight = options.outHeight;
+
+                // Decode bitmap with inSampleSize set
+                options.inJustDecodeBounds = false;
+                options.inPreferredConfig = config;     
+                bmp = BitmapFactory.decodeStream(is, null, options);
+
+                if(bmp != null)
+                {
+                    bmp = correctImageRotation(context, bmp, uri);
+                }
+                else
+                {
+                    mLogger.e("BitmapFactory.decodeStream returned null bitmap , skip correctImageRotation");
+                }
+            }
+            catch (FileNotFoundException fnfex)
+            {
+                mLogger.e("FileNotFoundException : while decoding inline image bitmap: " + fnfex.getMessage());
+            }
+            catch (IOException ioex)
+            {
+                mLogger.e("IOException : while decoding inline image bitmap: " + ioex.getMessage());
+            }
+            catch (OutOfMemoryError e)
+            {
+                mLogger.e("OutOfMemoryError : in decodeSampledBitmapFromResource BitmapFactory.decodeStream . Skip loading Resource");
+            }
+            finally
+            {
+                try
+                {
+                    if (is != null)
+                    {
+                        is.close();
+                    }
+                }
+                catch (IOException ioex2)
+                {
+                    mLogger.e("IOException2 : while decoding inline image bitmap: " + ioex2.getMessage());
+                }
+            }
+        }
+        return bmp;
+    }
+
+    // Seemed necessary on a lot of Samsung devices
+    public static Bitmap correctImageRotation( Context context, Bitmap bitmap , Uri inputUri ) throws FileNotFoundException
+    {
+        int orientation = ExifInterface.ORIENTATION_UNDEFINED;
+
+        try
+        {
+            String appfilesDir = context.getApplicationContext().getFilesDir().getAbsolutePath();
+            String attachmentDirPath = appfilesDir + ('/') + "images");
+            String fileName = ContentUris.parseId(uri) + ".jpg";
+            String absolutePath = attachmentDirPath + ('/') + fileName;
+            ExifInterface exif = new ExifInterface(path);
+            orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED);
+        }
+        catch (IOException e)
+        {
+        }
+
+        return rotateBitmap(bitmap, orientation);
+    }
+
+    /**
+     * rotate bitmap code reference:
+     * http://stackoverflow.com/questions/20478765/how-to-get-the-correct-orientation-of-the-image-selected-from-the-default-image
+     */
+    private static Bitmap rotateBitmap(Bitmap bitmap, int orientation)
+    {
+        Matrix matrix = new Matrix();
+        switch (orientation)
+        {
+        case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
+            matrix.setScale(-1, 1);
+            break;
+        case ExifInterface.ORIENTATION_ROTATE_180:
+            matrix.setRotate(180);
+            break;
+        case ExifInterface.ORIENTATION_FLIP_VERTICAL:
+            matrix.setRotate(180);
+            matrix.postScale(-1, 1);
+            break;
+        case ExifInterface.ORIENTATION_TRANSPOSE:
+            matrix.setRotate(90);
+            matrix.postScale(-1, 1);
+            break;
+        case ExifInterface.ORIENTATION_ROTATE_90:
+            matrix.setRotate(90);
+            break;
+        case ExifInterface.ORIENTATION_TRANSVERSE:
+            matrix.setRotate(-90);
+            matrix.postScale(-1, 1);
+            break;
+        case ExifInterface.ORIENTATION_ROTATE_270:
+            matrix.setRotate(-90);
+            break;
+        case ExifInterface.ORIENTATION_NORMAL:
+        case ExifInterface.ORIENTATION_UNDEFINED:
+        default:
+            return bitmap;
+        }
+        try
+        {
+            Bitmap bmRotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            bitmap.recycle();
+            return bmRotated;
+        }
+        catch (OutOfMemoryError e)
+        {
+            mLogger.e("OutOfMemoryError occured while rotating the image");
+            return bitmap;
+        }
+    }
+</code></pre>
+
+<p><strong>Content provider:</strong></p>
+
+<p>For the content provider implementation, you can use a android's FileProvider or implement a content provider like below. This content provider will open a file in your apps container for the camera app to write to.</p>
+
+<pre><code>public class AttachmentContentProvider extends ContentProvider 
+{
+    public static final String AUTHORITY = "com.yourcompany.yourapp.AttachmentContentProvider";
+    public static final int ENTITY_ATTACHMENT = 1;
+    public static final int ENTITY_ATTACHMENT_ID = 2;
+
+    private static final UriMatcher sUriMatcher;
+    static 
+    {
+        sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
+        sUriMatcher.addURI(AUTHORITY, "images", ENTITY_ATTACHMENT);
+        sUriMatcher.addURI(AUTHORITY, "images"+"/#", ENTITY_ATTACHMENT_ID);
+    }
+
+    @Override
+    public boolean onCreate()
+    {
+        return true;
+    }
+
+    @Override
+    public int delete(Uri uri, String where, String[] whereArgs)
+    {
+        return 0;
+    }
+
+    @Override
+    public String getType(Uri uri)
+    {
+        int match = sUriMatcher.match(uri);
+        switch (match) 
+        {
+        case ENTITY_ATTACHMENT:
+        case ENTITY_ATTACHMENT_ID:
+            return "image/jpeg";
+
+        default:
+            return null;
+        }
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues initialValues)
+    {
+        return null;
+    }
+
+    @Override
+    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder)
+    {
+        return null;
+    }
+
+    @Override
+    public int update(Uri uri, ContentValues values, String where, String[] whereArgs)
+    {
+        return 0;
+    }
+
+    public static File getAttachmentFile(String fileName)
+    {
+        String appfilesDir = context.getApplicationContext().getFilesDir().getAbsolutePath();
+        String attachmentDirPath = appfilesDir + ('/') + "images");
+        File newFile = new File(AttachmentHelper.getAttachmentsDir() + File.separator + fileName);
+        newFile.getParentFile().mkdirs();
+        return newFile;
+    }
+
+
+    @Override
+    public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException 
+    {
+        long id = -1;
+        try
+        {
+            id = ContentUris.parseId(uri);
+        }
+        catch (NumberFormatException e)
+        {
+            m_logger.e("Invalid id for Uri : " + uri );
+        }
+
+        String filename  = id + ".jpg"; // id will be IMG+current time millis
+        File imageFile = getAttachmentFile(id); 
+        return (ParcelFileDescriptor.open(file, parseMode(mode)));
+    }
+}
+</code></pre>
+
+<p>To summarize, this code should work on most devices tested and does correction on the image received from camera if needed.</p>

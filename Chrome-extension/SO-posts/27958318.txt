@@ -1,0 +1,59 @@
+<p>You're doing it all wrong. The Hibernate session should only be connected to the database for the lifetime of a single transaction. Once you are done with a transaction you should close the session too.</p>
+
+<p>You can define a TransactionCallback first:</p>
+
+<pre><code>public interface TransactionCallable&lt;T&gt; {
+    public abstract T execute(Session session);
+}
+</code></pre>
+
+<p>Then you define a Helper session management method:</p>
+
+<pre><code>protected &lt;T&gt; T doInTransaction(TransactionCallable&lt;T&gt; callable) {
+    T result = null;
+    Session session = null;
+    Transaction txn = null;
+    try {
+        session = sf.openSession();
+        txn = session.beginTransaction();
+
+        session.doWork(new Work() {
+            @Override
+            public void execute(Connection connection) throws SQLException {
+
+            }
+        });
+
+        result = callable.execute(session);
+        txn.commit();
+    } catch (RuntimeException e) {
+        if ( txn != null &amp;&amp; txn.isActive() ) txn.rollback();
+        throw e;
+    } finally {
+        if (session != null) {
+            session.close();
+        }
+    }
+    return result;
+}
+</code></pre>
+
+<p>So you can even run native queries as you suggested:</p>
+
+<pre><code>final String sql = ...;
+
+doInTransaction(new TransactionCallable&lt;Object&gt;() {
+    Boolean result;
+    @Override
+    public Object execute(Session session) {
+        session.doWork(new Work() {
+            @Override
+            public void execute(Connection connection) throws SQLException {
+                Statement statement = connection.createStatement();
+                result = statement.execute(sql);
+            }
+        });
+        return result;
+    }
+});
+</code></pre>

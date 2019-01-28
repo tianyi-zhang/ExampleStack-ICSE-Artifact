@@ -1,0 +1,458 @@
+<p>Try to use LruCache</p>
+
+<p>This code is working</p>
+
+<pre><code>package com.example.fileexplorer;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+
+
+import android.app.Activity;
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.Matrix;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.Log;
+import android.util.LruCache;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.AdapterView.OnItemClickListener;
+import android.widget.ArrayAdapter;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+public class FileExplorer extends Activity implements OnItemClickListener {
+    EditText et;
+    ListView lv;
+    ArrayList&lt;Data&gt; list;
+    ArrayAdapter&lt;Data&gt; aa;
+    LayoutInflater li;
+    Context cv = this;
+    String main_path = "/storage";
+    File[] list_files;
+    int exit_count = 0; // Double tap back key to exit
+    ArrayList&lt;Data&gt;list_search;
+    View v;
+
+    private LruCache&lt;Integer, Bitmap&gt; mLrucatche;
+
+
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_file_explorer);
+
+
+        final int maxMemory=(int) (Runtime.getRuntime().maxMemory()/1024);
+        final int cacheSize=maxMemory/8;
+        mLrucatche=new LruCache&lt;Integer,Bitmap&gt;(cacheSize){
+
+            @Override
+            protected int sizeOf(Integer key, Bitmap value) {
+                // TODO Auto-generated method stub
+                return value.getByteCount()/1024;
+            }
+        };
+
+
+        et = (EditText) findViewById(R.id.et_main);
+        et.setVisibility(View.GONE);
+        lv = (ListView) findViewById(R.id.lv_main);
+        list = new ArrayList&lt;Data&gt;();
+        list_search=new ArrayList&lt;Data&gt;();
+        lv.setOnItemClickListener(this);
+
+
+        new FileHandlingAsync().execute(main_path);
+        // readFiles(main_path);
+
+        li = (LayoutInflater) this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        aa = new ArrayAdapter&lt;Data&gt;(cv, android.R.layout.simple_list_item_1, list) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                // TODO Auto-generated method stub
+                Data d = list.get(position);
+
+                v = li.inflate(R.layout.list_inflate, null);
+
+                ImageView iv = (ImageView) v.findViewById(R.id.iv_inflate);
+                TextView tv = (TextView) v.findViewById(R.id.tv_inflate);
+
+                Bitmap thumnailImage=null;
+
+//              Bitmap icon = BitmapFactory.decodeResource(getResources(), d.id);
+//              icon = getdecodedimage(icon, 50, 50);
+//              iv.setImageBitmap(icon);
+
+                // Making text short if more than 25 words...only for files
+                if (d.f_name.length() &gt; 25) {
+                    if (!(list_files[position]).isDirectory()) {
+                        d.f_name = d.f_name.substring(0, 22);
+                        d.f_name = d.f_name + "...";
+                    }
+                }
+
+                tv.setText(d.f_name);
+                tv.setTextColor(Color.BLACK);
+                //mayu
+                int key=d.id;
+                thumnailImage=getBitmapFromMcache(key);
+                if(thumnailImage==null)
+                {
+                    BitmapWorkerTask task=new BitmapWorkerTask(iv);
+                    task.execute(key);
+                }
+                iv.setImageBitmap(thumnailImage);
+                return v;
+            }
+
+        };lv.setAdapter(aa);
+
+
+
+        //Search feature
+        et.addTextChangedListener(watcher);
+    }
+
+    public Bitmap getBitmapFromMcache(Integer id)
+    {
+        return mLrucatche.get(id);
+    }
+
+    public void addBitmapToMcache(Integer id,Bitmap bitmap)
+    {
+        if(getBitmapFromMcache(id)==null)
+        {
+            mLrucatche.put(id, bitmap);
+        }
+    }
+
+    private void readFiles(String path) {
+        File f = new File(path);
+        list_files = f.listFiles();
+        Data d;
+        for (int i = 0; i &lt; list_files.length; i++) {
+            d = new Data();
+            if (list_files[i].isDirectory()) {
+
+                String name1=list_files[i].getName();
+                name1=name1.substring(0, 1);
+
+                //Removing directories which starts from "." or "$"
+                if(name1.equals(".")||name1.equals("$"))
+                {
+
+                }else{
+                d.f_name = list_files[i].getName().toString();
+                d.id = R.drawable.folder;
+
+                list.add(d);
+                }
+            }
+
+            // Detecting file extentions and giving appropriate image to it
+            else if (list_files[i].isFile()) {
+
+                int temp = (list_files[i].getName().lastIndexOf(".")) + 1;
+                String extention = list_files[i].getName().substring(temp);
+
+                switch (extention) {
+                case "img":
+                case "jpg":
+                case "jpeg":
+                case "png": d.f_name = list_files[i].getName().toString();
+                d.id = R.drawable.images;
+                    break;
+
+                    case "mp3":
+                    case "wav":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.music;
+                        break;
+                    case "mp4":
+                    case "3gp":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.video;
+                        break;
+                    case "doc":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.docx;
+                        break;
+                    case "pdf":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.pdf;
+                        break;
+                    case "txt":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.txt;
+                        break;
+                    case "apk":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.apk;
+                        break;
+                    case "xlsx":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.exel;
+                        break;
+                    case "pptx":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.pptx;
+                        break;
+                    case "zip":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.zip;
+                        break;
+                    case "rar":
+                        d.f_name = list_files[i].getName().toString();
+                        d.id = R.drawable.rar;
+                        break;
+
+                default:
+                    d.f_name = list_files[i].getName().toString();
+                    d.id = R.drawable.unknown;
+                    break;
+                }
+                list.add(d);
+
+            }
+        }
+
+
+    }
+
+    //For search feature
+    TextWatcher watcher=new TextWatcher() {
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {
+            // TODO Auto-generated method stub
+
+
+
+        }
+
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            // TODO Auto-generated method stub
+
+        }
+
+        @Override
+        public void afterTextChanged(Editable s) {
+            // TODO Auto-generated method stub
+
+        }
+    };
+
+
+    @Override
+    public void onItemClick(AdapterView&lt;?&gt; parent, View view, int position, long id) {
+        // TODO Auto-generated method stub
+
+        if (list_files[position].isDirectory()) {
+            Data d = list.get(position);
+            String name = d.f_name;
+            main_path = main_path + "/" + name;
+            ArrayList&lt;Data&gt; temp_list = new ArrayList&lt;Data&gt;();
+            temp_list.addAll(list);
+
+            try {
+                list.clear();
+                new FileHandlingAsync().execute(main_path);
+                // readFiles(main_path);
+            } catch (Exception e) {
+                list.addAll(temp_list);
+                Toast.makeText(cv, "Cannot open", Toast.LENGTH_SHORT).show();
+            }
+            aa.notifyDataSetChanged();
+        } else {
+            Toast.makeText(cv, "Not a directory", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        // Inflate the menu; this adds items to the action bar if it is present.
+        getMenuInflater().inflate(R.menu.file_explorer, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        // Handle action bar item clicks here. The action bar will
+        // automatically handle clicks on the Home/Up button, so long
+        // as you specify a parent activity in AndroidManifest.xml.
+        int id = item.getItemId();
+        if (id == R.id.action_search) {
+
+            et.setVisibility(View.VISIBLE);
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onBackPressed() {
+        // TODO Auto-generated method stub
+
+        if (!(exit_count == 1)) {
+            if (!main_path.equals("/storage")) {
+                int index = main_path.lastIndexOf("/");
+                main_path = main_path.substring(0, index);
+                list.clear();
+                readFiles(main_path);
+                aa.notifyDataSetChanged();
+            } else {
+                exit_count++;
+                Toast.makeText(cv, "Tap again to exit", Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            System.exit(0);
+        }
+
+    }
+
+    class FileHandlingAsync extends AsyncTask&lt;String, Void, Void&gt; {
+
+        ProgressDialog pd;
+
+        @Override
+        protected void onPreExecute() {
+            // TODO Auto-generated method stub
+            pd = new ProgressDialog(cv);
+            pd.setMessage("Getting list of files...");
+            pd.setCancelable(false);
+            pd.show();
+        }
+
+        @Override
+        protected Void doInBackground(String... params) {
+            // TODO Auto-generated method stub
+            String m_path = params[0];
+            readFiles(m_path);
+
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            // TODO Auto-generated method stub
+            aa.notifyDataSetChanged();
+            pd.dismiss();
+        }
+
+    }
+
+    public Bitmap getResizedBitmap(Bitmap bm, int newWidth, int newHeight) {
+
+        int width = bm.getWidth();
+        int height = bm.getHeight();
+        float scaleWidth = ((float) newWidth) / width;
+        float scaleHeight = ((float) newHeight) / height;
+        // CREATE A MATRIX FOR THE MANIPULATION
+        Matrix matrix = new Matrix();
+        // RESIZE THE BIT MAP
+        matrix.postScale(scaleWidth, scaleHeight);
+
+        // "RECREATE" THE NEW BITMAP
+        Bitmap resizedBitmap = Bitmap.createBitmap(bm, 0, 0, width, height, matrix, false);
+
+        // Mayur must
+        // watch.........................................................
+        // bm.recycle();
+        // .....................................................................
+
+        return resizedBitmap;
+    }
+
+    public static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        // Raw height and width of image
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height &gt; reqHeight || width &gt; reqWidth) {
+
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+
+            // Calculate the largest inSampleSize value that is a power of 2 and
+            // keeps both
+            // height and width larger than the requested height and width.
+            while ((halfHeight / inSampleSize) &gt; reqHeight &amp;&amp; (halfWidth / inSampleSize) &gt; reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+
+        return inSampleSize;
+    }
+
+    Bitmap getdecodedimage(Bitmap bmp, int reqWidth, int reqHeight) {
+        final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        ByteArrayOutputStream byteArrayBitmapStream = new ByteArrayOutputStream();
+        bmp.compress(Bitmap.CompressFormat.PNG, 85, byteArrayBitmapStream);
+        byte[] b = byteArrayBitmapStream.toByteArray();
+        BitmapFactory.decodeByteArray(b, 0, b.length, options);
+
+        options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false;
+        return BitmapFactory.decodeByteArray(b, 0, b.length, options);
+
+    }
+
+    class BitmapWorkerTask extends AsyncTask&lt;Integer, Void, Bitmap&gt;
+    {
+        private final WeakReference&lt;ImageView&gt; ivReference;
+
+        public BitmapWorkerTask(ImageView imageview) {
+            // TODO Auto-generated constructor stub
+            ivReference=new WeakReference&lt;ImageView&gt;(imageview);
+        }
+
+        @Override
+        protected Bitmap doInBackground(Integer... params) {
+            // TODO Auto-generated method stub
+            Bitmap bitmap=BitmapFactory.decodeResource(cv.getResources(),params[0]);
+            addBitmapToMcache(Integer.valueOf(params[0]), bitmap);
+            return bitmap;
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap result) {
+            // TODO Auto-generated method stub
+            if(ivReference!=null || result!=null)
+            {
+                final ImageView imageview=(ImageView)ivReference.get();
+                if(imageview!=null)
+                {
+                    imageview.setImageBitmap(result);
+                }
+            }
+
+        }
+    }
+
+}
+</code></pre>
+
+<p>hope this helps u</p>

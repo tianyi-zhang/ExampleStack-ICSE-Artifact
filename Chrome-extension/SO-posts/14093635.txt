@@ -1,0 +1,137 @@
+<p>There are THREE show-stoppers in this situation. The root reason is that when you call <code>setMovementMethod</code> or <code>setKeyListener</code>, <code>TextView</code> "fixes" it's settings:</p>
+
+<pre><code>setFocusable(true);
+setClickable(true);
+setLongClickable(true);
+</code></pre>
+
+<p>The first problem is that when a View is clickable - it always consumes <code>ACTION_UP</code> event (it returns true in <code>onTouchEvent(MotionEvent event)</code>).<br>
+To fix that you should return true in that method only if the user actually clicks the URL.</p>
+
+<p>But the <code>LinkMovementMethod</code> doesn't tell us, if the user actually clicked a link. It returns "true" in it's <code>onTouch</code> if the user clicks the link, but also in many other cases.</p>
+
+<p>So, actually I did a trick here:</p>
+
+<pre><code>public class TextViewFixTouchConsume extends TextView {
+
+    boolean dontConsumeNonUrlClicks = true;
+    boolean linkHit;
+
+    public TextViewFixTouchConsume(Context context) {
+        super(context);
+    }
+
+    public TextViewFixTouchConsume(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    public TextViewFixTouchConsume(
+        Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        linkHit = false;
+        boolean res = super.onTouchEvent(event);
+
+        if (dontConsumeNonUrlClicks)
+            return linkHit;
+        return res;
+
+    }
+
+    public void setTextViewHTML(String html)
+    {
+        CharSequence sequence = Html.fromHtml(html);
+        SpannableStringBuilder strBuilder = 
+            new SpannableStringBuilder(sequence);
+        setText(strBuilder);
+    }
+
+    public static class LocalLinkMovementMethod extends LinkMovementMethod{
+        static LocalLinkMovementMethod sInstance;
+
+
+        public static LocalLinkMovementMethod getInstance() {
+            if (sInstance == null)
+                sInstance = new LocalLinkMovementMethod();
+
+            return sInstance;
+        }
+
+        @Override
+        public boolean onTouchEvent(TextView widget, 
+            Spannable buffer, MotionEvent event) {
+            int action = event.getAction();
+
+            if (action == MotionEvent.ACTION_UP ||
+                    action == MotionEvent.ACTION_DOWN) {
+                int x = (int) event.getX();
+                int y = (int) event.getY();
+
+                x -= widget.getTotalPaddingLeft();
+                y -= widget.getTotalPaddingTop();
+
+                x += widget.getScrollX();
+                y += widget.getScrollY();
+
+                Layout layout = widget.getLayout();
+                int line = layout.getLineForVertical(y);
+                int off = layout.getOffsetForHorizontal(line, x);
+
+                ClickableSpan[] link = buffer.getSpans(
+                    off, off, ClickableSpan.class);
+
+                if (link.length != 0) {
+                    if (action == MotionEvent.ACTION_UP) {
+                        link[0].onClick(widget);
+                    } else if (action == MotionEvent.ACTION_DOWN) {
+                        Selection.setSelection(buffer,
+                                buffer.getSpanStart(link[0]),
+                                buffer.getSpanEnd(link[0]));
+                    }
+
+                    if (widget instanceof TextViewFixTouchConsume){
+                        ((TextViewFixTouchConsume) widget).linkHit = true;
+                    }
+                    return true;
+                } else {
+                    Selection.removeSelection(buffer);
+                    Touch.onTouchEvent(widget, buffer, event);
+                    return false;
+                }
+            }
+            return Touch.onTouchEvent(widget, buffer, event);
+        }
+    }
+}
+</code></pre>
+
+<p>You should call somewhere</p>
+
+<pre><code>textView.setMovementMethod(
+    TextViewFixTouchConsume.LocalLinkMovementMethod.getInstance()
+);
+</code></pre>
+
+<p>to set this MovementMethod for the textView.</p>
+
+<p>This MovementMethod raises a flag in <code>TextViewFixTouchConsume</code> if user actually hits link.
+(only in <code>ACTION_UP</code> and <code>ACTION_DOWN</code> events) and <code>TextViewFixTouchConsume.onTouchEvent</code> returns true only if user actually hit link.</p>
+
+<p>But that's not all!!!!
+The third problem is that <code>ListView</code> (<code>AbsListView</code>) calls it's <code>performClick</code> method (that calls <code>onItemClick</code> event handler) ONLY if <code>ListView</code>'s item view has no focusables.
+So, you need to override </p>
+
+<pre><code>@Override
+public boolean hasFocusable() {
+    return false;
+}
+</code></pre>
+
+<p>in a view that you add to <code>ListView</code>. 
+(in my case that is a layout that contains textView)</p>
+
+<p>or you can use <code>setOnClickLIstener</code> for that view.
+The trick is not very good, but it works.</p>

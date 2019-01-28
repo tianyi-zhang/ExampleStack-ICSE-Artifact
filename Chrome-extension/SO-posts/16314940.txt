@@ -1,0 +1,55 @@
+<p>Here's a solution i've created that uses the internal storage and doesn't require any new permission, based on "Derzu"'s idea, and the fact that starting with honeycomb, this is built in :</p>
+
+<pre><code>/**decodes a bitmap from a resource id. returns a mutable bitmap no matter what is the API level.&lt;br/&gt;
+might use the internal storage in some cases, creating temporary file that will be deleted as soon as it isn't finished*/
+@TargetApi(Build.VERSION_CODES.HONEYCOMB)
+public static Bitmap decodeMutableBitmapFromResourceId(final Context context, final int bitmapResId) {
+    final Options bitmapOptions = new Options();
+    if (VERSION.SDK_INT &gt;= VERSION_CODES.HONEYCOMB)
+        bitmapOptions.inMutable = true;
+    Bitmap bitmap = BitmapFactory.decodeResource(context.getResources(), bitmapResId, bitmapOptions);
+    if (!bitmap.isMutable())
+        bitmap = convertToMutable(context, bitmap);
+    return bitmap;
+}
+
+@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH)
+public static Bitmap convertToMutable(final Context context, final Bitmap imgIn) {
+    final int width = imgIn.getWidth(), height = imgIn.getHeight();
+    final Config type = imgIn.getConfig();
+    File outputFile = null;
+    final File outputDir = context.getCacheDir();
+    try {
+        outputFile = File.createTempFile(Long.toString(System.currentTimeMillis()), null, outputDir);
+        outputFile.deleteOnExit();
+        final RandomAccessFile randomAccessFile = new RandomAccessFile(outputFile, "rw");
+        final FileChannel channel = randomAccessFile.getChannel();
+        final MappedByteBuffer map = channel.map(MapMode.READ_WRITE, 0, imgIn.getRowBytes() * height);
+        imgIn.copyPixelsToBuffer(map);
+        imgIn.recycle();
+        final Bitmap result = Bitmap.createBitmap(width, height, type);
+        map.position(0);
+        result.copyPixelsFromBuffer(map);
+        channel.close();
+        randomAccessFile.close();
+        outputFile.delete();
+        return result;
+    } catch (final Exception e) {
+    } finally {
+        if (outputFile != null)
+            outputFile.delete();
+    }
+    return null;
+}
+</code></pre>
+
+<p>another alternative is to use JNI in order to put the data into it, recycle the original bitmap, and use the JNI data to create a new bitmap, which will be (automatically) mutable, so together with <a href="http://stackoverflow.com/a/18250952/878126"><strong>my JNI solution for bitmaps</strong></a>, one can do the following:</p>
+
+<pre><code>Bitmap bitmap=BitmapFactory.decodeResource(getResources(),R.drawable.ic_launcher);
+final JniBitmapHolder bitmapHolder=new JniBitmapHolder(bitmap);
+bitmap.recycle();
+bitmap=bitmapHolder.getBitmapAndFree();
+Log.d("DEBUG",""+bitmap.isMutable()); //will return true
+</code></pre>
+
+<p>however, i'm not sure what is the minimal requirement of API level. it works very well on API 8 and above.</p>

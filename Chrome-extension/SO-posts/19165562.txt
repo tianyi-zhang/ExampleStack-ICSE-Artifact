@@ -1,0 +1,199 @@
+<p>The "correct" way of doing this is to implement a CookieHandler:  <a href="http://developer.android.com/reference/java/net/CookieHandler.html" rel="nofollow">http://developer.android.com/reference/java/net/CookieHandler.html</a></p>
+
+<p>The most basic way of doing this is to extend Application and put this in your applications onCreate():</p>
+
+<pre><code>CookieHandler.setDefault(new CookieManager());
+</code></pre>
+
+<p><strong>PLEASE NOTE:</strong>  This will only implement a DEFAULT CookieManger.  The default CookieManger will manage cookies for all of your HTTP requests during a specific session of your application.  However, it does not have any means of persisting cookies over subsequent uses of the application.</p>
+
+<p>In order to do that, you'll need to write your own cookie manager by implementing CookieStore:
+<a href="http://developer.android.com/reference/java/net/CookieStore.html" rel="nofollow">http://developer.android.com/reference/java/net/CookieStore.html</a></p>
+
+<p>Here's an example of a CookieStore implementation i used in an app that is currently in the Google Play store:</p>
+
+<pre><code>package com.touchvision.util;
+
+import java.net.CookieStore;
+import java.net.HttpCookie;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.Editor;
+import android.util.Log;
+
+import com.touchvision.Config;
+
+/*
+ * This is a custom cookie storage for the application. This
+ * will store all the cookies to the shared preferences so that it persists
+ * across application restarts.
+ */
+public class TvCookieStore implements CookieStore {
+
+    private static final String LOGTAG = "TV-TvCookieStore";
+
+    /*
+     * The memory storage of the cookies
+     */
+    private Map&lt;String, Map&lt;String,String&gt;&gt; mapCookies = new HashMap&lt;String, Map&lt;String,String&gt;&gt;();
+    /*
+     * The instance of the shared preferences
+     */
+    private final SharedPreferences sharedPrefs;
+
+    /*
+     * @see java.net.CookieStore#add(java.net.URI, java.net.HttpCookie)
+     */
+    public void add(URI uri, HttpCookie cookie) {
+
+        String domain = cookie.getDomain();     
+
+        // Log.i(LOGTAG, "adding ( " + domain +", " + cookie.toString() );
+
+        Map&lt;String,String&gt; cookies = mapCookies.get(domain);
+        if (cookies == null) {
+            cookies = new HashMap&lt;String, String&gt;(); 
+            mapCookies.put(domain, cookies);
+        }
+        cookies.put(cookie.getName(), cookie.getValue());
+
+        if (cookie.getName().startsWith("SPRING_SECURITY") &amp;&amp; !cookie.getValue().equals("")){
+           //  Log.i(LOGTAG, "Saving rememberMeCookie = " + cookie.getValue() );            
+            // Update in Shared Preferences
+            Editor e = sharedPrefs.edit();       
+            e.putString(Config.PREF_SPRING_SECURITY_COOKIE, cookie.toString());       
+            e.commit(); // save changes 
+        }
+
+    }
+
+   /*
+    * Constructor
+    * 
+    * @param  ctxContext the context of the Activity
+    */
+    public TvCookieStore(Context ctxContext) {
+
+        // Log.i(LOGTAG, "constructor()");
+
+        sharedPrefs = ctxContext.getSharedPreferences(Config.SHARED_PREF_NAME, Context.MODE_PRIVATE);
+    }
+
+    /*
+     * @see java.net.CookieStore#get(java.net.URI)
+     */
+    public List&lt;HttpCookie&gt; get(URI uri) {
+
+        List&lt;HttpCookie&gt; cookieList = new ArrayList&lt;HttpCookie&gt;();
+
+        String domain = uri.getHost(); 
+
+        // Log.i(LOGTAG, "getting ( " + domain +" )" );
+
+        Map&lt;String,String&gt; cookies = mapCookies.get(domain);
+        if (cookies == null) {
+               cookies = new HashMap&lt;String, String&gt;(); 
+               mapCookies.put(domain, cookies);
+        }  
+
+        for (Map.Entry&lt;String, String&gt; entry : cookies.entrySet()) {
+            cookieList.add(new HttpCookie(entry.getKey(), entry.getValue()));
+            // Log.i(LOGTAG, "returning cookie: " + entry.getKey() + "="+ entry.getValue());
+        }
+        return cookieList; 
+
+    }
+
+    /*
+     * @see java.net.CookieStore#removeAll()
+     */
+    public boolean removeAll() {
+
+        // Log.i(LOGTAG, "removeAll()" );
+
+        mapCookies.clear();
+        return true;
+
+    }        
+
+    /*
+     * @see java.net.CookieStore#getCookies()
+     */
+    public List&lt;HttpCookie&gt; getCookies() {
+
+        Log.i(LOGTAG, "getCookies()" );
+
+        Set&lt;String&gt; mapKeys = mapCookies.keySet();
+
+        List&lt;HttpCookie&gt; result = new ArrayList&lt;HttpCookie&gt;();
+        for (String key : mapKeys) {
+            Map&lt;String,String&gt; cookies =    mapCookies.get(key);
+            for (Map.Entry&lt;String, String&gt; entry : cookies.entrySet()) {
+                result.add(new HttpCookie(entry.getKey(), entry.getValue()));
+                Log.i(LOGTAG, "returning cookie: " + entry.getKey() + "="+ entry.getValue());
+            }             
+        }
+
+        return result;
+
+    }
+
+    /*
+     * @see java.net.CookieStore#getURIs()
+     */
+    public List&lt;URI&gt; getURIs() {
+
+        Log.i(LOGTAG, "getURIs()" );
+
+        Set&lt;String&gt; keys = mapCookies.keySet();
+        List&lt;URI&gt; uris = new ArrayList&lt;URI&gt;(keys.size());
+        for (String key : keys){
+            URI uri = null;
+            try {
+                uri = new URI(key);
+            } catch (URISyntaxException e) {
+                e.printStackTrace();
+            }
+            uris.add(uri);
+        }
+        return uris;
+
+    }
+
+    /*
+     * @see java.net.CookieStore#remove(java.net.URI, java.net.HttpCookie)
+     */
+    public boolean remove(URI uri, HttpCookie cookie) {
+
+        String domain = cookie.getDomain();     
+
+        Log.i(LOGTAG, "remove( " + domain +", " + cookie.toString() );
+
+        Map&lt;String,String&gt; lstCookies = mapCookies.get(domain);
+
+        if (lstCookies == null)
+            return false;
+
+        return lstCookies.remove(cookie.getName()) != null;
+
+    }
+
+}
+</code></pre>
+
+<p>The above custom CookieStore uses SharedPreferences to persist cookies.  You implement the above class the similar to how you would implement the default CookieManager in your application class, but the line would look like this:</p>
+
+<pre><code>CookieHandler.setDefault( new CookieManager( new TvCookieStore(this), CookiePolicy.ACCEPT_ALL));
+</code></pre>
+
+<p>As you can see, the only Cookie i really cared about persisting was the Spring Security Cookie (we were using Spring Framework on the server side).  Your code will obviously be different to account for your specific needs. </p>
+
+<p>Another quick note:  I tried countless times to do what you're doing and handle the persistence of cookies within my http client class.  It was nothing but headaches.   Give this strategy a shot.</p>

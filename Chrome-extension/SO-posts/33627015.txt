@@ -1,0 +1,78 @@
+<p>Finally I found a solution. It is based on <code>renderCroppedGreyscaleBitmap()</code> method of <code>PlanarYUVLuminanceSource</code> class. Here is how I changed <code>decode()</code> method. </p>
+
+<pre><code>private void decode(byte[] data, int width, int height) {
+    long start = System.currentTimeMillis();
+    Result rawResult = null;
+    PlanarYUVLuminanceSource source = CameraManager.get().buildLuminanceSource(data, width, height);
+    BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+    try {
+        rawResult = multiFormatReader.decodeWithState(bitmap);
+    } catch (ReaderException re) {
+        // continue
+    } finally {
+        multiFormatReader.reset();
+    }
+
+    if (rawResult != null) {
+        // Don't log the barcode contents for security.
+        long end = System.currentTimeMillis();
+        Log.d(TAG, "Found barcode in " + (end - start) + " ms");
+        // Grab &amp; save frame
+        Bitmap wholeBmp = renderGrayScaleBitmap(data, width, height);
+        if(wholeBmp != null)
+            saveBitmap(wholeBmp, "frame.png");
+        else
+            Log.e(TAG, "Bitmap of frame is empty!");
+        Message message = Message.obtain(activity.getHandler(), R.id.zxinglib_decode_succeeded, rawResult);
+        Bundle bundle = new Bundle();
+        bundle.putParcelable(DecodeThread.BARCODE_BITMAP, source.renderCroppedGreyscaleBitmap());
+        message.setData(bundle);
+        message.sendToTarget();
+    } else {
+        Message message = Message.obtain(activity.getHandler(), R.id.zxinglib_decode_failed);
+        message.sendToTarget();
+    }
+}
+</code></pre>
+
+<p>Create bitmap from decode data</p>
+
+<pre><code>private Bitmap renderGrayScaleBitmap(byte[] data, int width, int height) {
+    int[] pixels = new int[width * height];
+    int inputOffset = width;
+    for (int y = 0; y &lt; height; y++) {
+        int outputOffset = y * width;
+        for (int x = 0; x &lt; width; x++) {
+            int grey = data[inputOffset + x] &amp; 0xff;
+            pixels[outputOffset + x] = 0xFF000000 | (grey * 0x00010101);
+        }
+        inputOffset += width;
+    }
+    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+    bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
+    return bitmap;
+}
+</code></pre>
+
+<p>Save bitmap to sdcard</p>
+
+<pre><code>private void saveBitmap(Bitmap bmp, String name) {
+    FileOutputStream out = null;
+    try {
+        String filename = Environment.getExternalStorageDirectory().toString() + "/" + name;
+        Log.i(TAG, "writtenPath=" + filename);
+        out = new FileOutputStream(filename);
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, out); 
+    } catch (Exception e) {
+        e.printStackTrace();
+    } finally {
+        try {
+            if (out != null) {
+                out.close();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+</code></pre>

@@ -1,0 +1,443 @@
+<p>this is a class that displays an image with additional layers:</p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.Iterator;
+
+import org.pskink.niohttp.LayeredImageView.Layer;
+
+import android.content.Context;
+import android.content.res.Resources;
+import android.content.res.TypedArray;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.util.AttributeSet;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
+import android.view.animation.Transformation;
+import android.widget.ImageView;
+
+public class LayeredImageView extends ImageView {
+    private final static String TAG = "LayeredImageView";
+
+    private ArrayList&lt;Layer&gt; mLayers;
+    private Matrix mDrawMatrix;
+
+    private Resources mResources;
+
+    public LayeredImageView(Context context) {
+        super(context);
+        init();
+    }
+
+    public LayeredImageView(Context context, AttributeSet set) {
+        super(context, set);
+        init();
+
+        int[] attrs = {
+                android.R.attr.src
+        };
+        TypedArray a = context.obtainStyledAttributes(set, attrs);
+        TypedValue outValue = new TypedValue();
+        if (a.getValue(0, outValue)) {
+            setImageResource(outValue.resourceId);
+        }
+        a.recycle();
+    }
+
+    private void init() {
+        mLayers = new ArrayList&lt;Layer&gt;();
+        mDrawMatrix = new Matrix();
+        mResources = new LayeredImageViewResources();
+    }
+
+    @Override
+    protected boolean verifyDrawable(Drawable dr) {
+        for (int i = 0; i &lt; mLayers.size(); i++) {
+            Layer layer = mLayers.get(i);
+            if (layer.drawable == dr) {
+                return true;
+            }
+        }
+        return super.verifyDrawable(dr);
+    }
+
+    @Override
+    public void invalidateDrawable(Drawable dr) {
+        if (verifyDrawable(dr)) {
+            invalidate();
+        } else {
+            super.invalidateDrawable(dr);
+        }
+    }
+
+    @Override
+    public Resources getResources() {
+        return mResources;
+    }
+
+    @Override
+    public void setImageBitmap(Bitmap bm) throws RuntimeException {
+        String detailMessage = "setImageBitmap not supported, use: setImageDrawable() " +
+                "or setImageResource()";
+        throw new RuntimeException(detailMessage);
+    }
+
+    @Override
+    public void setImageURI(Uri uri) throws RuntimeException {
+        String detailMessage = "setImageURI not supported, use: setImageDrawable() " +
+                "or setImageResource()";
+        throw new RuntimeException(detailMessage);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        Matrix matrix = getImageMatrix();
+        if (matrix != null) {
+            int numLayers = mLayers.size();
+            boolean pendingAnimations = false;
+            for (int i = 0; i &lt; numLayers; i++) {
+                mDrawMatrix.set(matrix);
+                Layer layer = mLayers.get(i);
+                if (layer.matrix != null) {
+                    mDrawMatrix.preConcat(layer.matrix);
+                }
+                if (layer.animation == null) {
+                    draw(canvas, layer.drawable, mDrawMatrix, 255);
+                } else {
+                    Animation a = layer.animation;
+                    if (!a.isInitialized()) {
+                        Rect bounds = layer.drawable.getBounds();
+                        Drawable parentDrawable = getDrawable();
+                        if (parentDrawable != null) {
+                            Rect parentBounds = parentDrawable.getBounds();
+                            a.initialize(bounds.width(), bounds.height(), parentBounds.width(), parentBounds.height());
+                        } else {
+                            a.initialize(bounds.width(), bounds.height(), 0, 0);
+                        }
+                    }
+                    long currentTime = AnimationUtils.currentAnimationTimeMillis();
+                    boolean running = a.getTransformation(currentTime, layer.transformation);
+                    if (running) {
+                        // animation is running: draw animation frame
+                        Matrix animationFrameMatrix = layer.transformation.getMatrix();
+                        mDrawMatrix.preConcat(animationFrameMatrix);
+
+                        int alpha = (int) (255 * layer.transformation.getAlpha());
+//    Log.d(TAG, "onDraw ********** [" + i + "], alpha: " + alpha + ", matrix: " + animationFrameMatrix);
+                        draw(canvas, layer.drawable, mDrawMatrix, alpha);
+                        pendingAnimations = true;
+                    } else {
+                        // animation ended: set it to null
+                        layer.animation = null;
+                        draw(canvas, layer.drawable, mDrawMatrix, 255);
+                    }
+                }
+            }
+            if (pendingAnimations) {
+                // invalidate if any pending animations
+                invalidate();
+            }
+        }
+    }
+
+    private void draw(Canvas canvas, Drawable drawable, Matrix matrix, int alpha) {
+        canvas.save(Canvas.MATRIX_SAVE_FLAG);
+        canvas.concat(matrix);
+        drawable.setAlpha(alpha);
+        drawable.draw(canvas);
+        canvas.restore();
+    }
+
+    public Layer addLayer(Drawable d, Matrix m) {
+        Layer layer = new Layer(d, m);
+        mLayers.add(layer);
+        invalidate();
+        return layer;
+    }
+
+    public Layer addLayer(Drawable d) {
+        return addLayer(d, null);
+    }
+
+    public Layer addLayer(int idx, Drawable d, Matrix m) {
+        Layer layer = new Layer(d, m);
+        mLayers.add(idx, layer);
+        invalidate();
+        return layer;
+    }
+
+    public Layer addLayer(int idx, Drawable d) {
+        return addLayer(idx, d, null);
+    }
+
+    public void removeLayer(Layer layer) {
+        layer.valid = false;
+        mLayers.remove(layer);
+    }
+
+    public void removeAllLayers() {
+        Iterator&lt;Layer&gt; iter = mLayers.iterator();
+        while (iter.hasNext()) {
+            LayeredImageView.Layer layer = iter.next();
+            layer.valid = false;
+            iter.remove();
+        }
+        invalidate();
+    }
+
+    public int getLayersSize() {
+        return mLayers.size();
+    }
+
+    public class Layer {
+        private Drawable drawable;
+        private Animation animation;
+        private Transformation transformation;
+        private Matrix matrix;
+        private boolean valid;
+
+        private Layer(Drawable d, Matrix m) {
+            drawable = d;
+            transformation = new Transformation();
+            matrix = m;
+            valid = true;
+            Rect bounds = d.getBounds();
+            if (bounds.isEmpty()) {
+                if (d instanceof BitmapDrawable) {
+                    int right = d.getIntrinsicWidth();
+                    int bottom = d.getIntrinsicHeight();
+                    d.setBounds(0, 0, right, bottom);
+                } else {
+                    String detailMessage = "drawable bounds are empty, use d.setBounds()";
+                    throw new RuntimeException(detailMessage);
+                }
+            }
+            d.setCallback(LayeredImageView.this);
+        }
+
+        public void startLayerAnimation(Animation a) throws RuntimeException {
+            if (!valid) {
+                String detailMessage = "this layer has already been removed";
+                throw new RuntimeException(detailMessage);
+            }
+            transformation.clear();
+            animation = a;
+            if (a != null) {
+                a.start();
+            }
+            invalidate();
+        }
+
+        public void stopLayerAnimation(int idx) throws RuntimeException {
+            if (!valid) {
+                String detailMessage = "this layer has already been removed";
+                throw new RuntimeException(detailMessage);
+            }
+            if (animation != null) {
+                animation = null;
+                invalidate();
+            }
+        }
+    }
+
+    private class LayeredImageViewResources extends Resources {
+
+        public LayeredImageViewResources() {
+            super(getContext().getAssets(), new DisplayMetrics(), null);
+        }
+
+        @Override
+        public Drawable getDrawable(int id) throws NotFoundException {
+            Drawable d = super.getDrawable(id);
+            if (d instanceof BitmapDrawable) {
+                BitmapDrawable bd = (BitmapDrawable) d;
+                bd.getBitmap().setDensity(DisplayMetrics.DENSITY_DEFAULT);
+                bd.setTargetDensity(DisplayMetrics.DENSITY_DEFAULT);
+            }
+            return d;
+        }
+    }
+}
+</code></pre>
+
+<p>and how it can be used:</p>
+
+<pre><code>    final LayeredImageView v = new LayeredImageView(this);
+    Resources res = v.getResources();
+
+    v.setImageResource(R.drawable.background);
+
+    Matrix m;
+
+    m = new Matrix();
+    m.preTranslate(81, 146); // pixels to offset
+    final Layer layer1 = v.addLayer(res.getDrawable(R.drawable.layer1), m);
+
+    m = new Matrix();
+    m.preTranslate(62, 63); // pixels to offset
+    final Layer layer0 = v.addLayer(0, res.getDrawable(R.drawable.layer0), m);
+
+
+    final AnimationDrawable ad = new AnimationDrawable();
+    ad.setOneShot(false);
+    Drawable frame1, frame2;
+    frame1 = res.getDrawable(R.drawable.layer0);
+    frame2 = res.getDrawable(R.drawable.layer1);
+    ad.addFrame(frame1, 3000);
+    ad.addFrame(frame2, 1000);
+    ad.addFrame(frame1, 250);
+    ad.addFrame(frame2, 250);
+    ad.addFrame(frame1, 250);
+    ad.addFrame(frame2, 250);
+    ad.addFrame(frame1, 250);
+    ad.addFrame(frame2, 250);
+    ad.setBounds(200, 20, 300, 120);
+    v.addLayer(1, ad);
+    v.post(new Runnable() {
+        @Override
+        public void run() {
+            ad.start();
+        }
+    });
+
+    int[] colors = {
+            0xeeffffff,
+            0xee0038a8,
+            0xeece1126,
+    };
+    GradientDrawable gd = new GradientDrawable(Orientation.TOP_BOTTOM, colors);
+    gd.setBounds(0, 0, 100, 129);
+    gd.setCornerRadius(20);
+    gd.setStroke(5, 0xaa666666);
+    final Matrix mm = new Matrix();
+    mm.preTranslate(200, 69); // pixels to offset
+    mm.preRotate(20, 50, 64.5f);
+    final Layer layer2 = v.addLayer(2, gd, mm);
+
+    final Animation as = AnimationUtils.loadAnimation(this, R.anim.anim_set);
+
+    final Runnable action1 = new Runnable() {
+        @Override
+        public void run() {
+            Animation a;
+            Interpolator i;
+
+            i = new Interpolator() {
+                @Override
+                public float getInterpolation(float input) {
+                    return (float) Math.sin(input * Math.PI);
+                }
+            };
+            as.setInterpolator(i);
+            layer0.startLayerAnimation(as);
+
+            a = new TranslateAnimation(0, 0, 0, 100);
+            a.setDuration(3000);
+            i = new Interpolator() {
+                @Override
+                public float getInterpolation(float input) {
+                    float output = (float) Math.sin(Math.pow(input, 2.5f) * 12 * Math.PI);
+                    return (1-input) * output;
+                }
+            };
+            a.setInterpolator(i);
+            layer1.startLayerAnimation(a);
+
+            a = new AlphaAnimation(0, 1);
+            i = new Interpolator() {
+                @Override
+                public float getInterpolation(float input) {
+                    return (float) (1 - Math.sin(input * Math.PI));
+                }
+            };
+            a.setInterpolator(i);
+            a.setDuration(2000);
+            layer2.startLayerAnimation(a);
+        }
+    };
+    OnClickListener l1 = new OnClickListener() {
+        @Override
+        public void onClick(View view) {
+            action1.run();
+        }
+    };
+    v.setOnClickListener(l1);
+    v.postDelayed(action1, 2000);
+
+//    final float[] values = new float[9];
+//    final float[] pts = new float[2];
+//    final Matrix inverse = new Matrix();;
+//    OnTouchListener l = new OnTouchListener() {
+//        @Override
+//        public boolean onTouch(View view, MotionEvent event) {
+//            int action = event.getAction();
+//            if (action != MotionEvent.ACTION_UP) {
+//                if (inverse.isIdentity()) {
+//                    v.getImageMatrix().invert(inverse);
+//                    Log.d(TAG, "onTouch set inverse");
+//                }
+//                pts[0] = event.getX();
+//                pts[1] = event.getY();
+//                inverse.mapPoints(pts);
+//
+//                mm.getValues(values);
+//                // gd's bounds are (0, 0, 100, 129);
+//                values[Matrix.MTRANS_X] = pts[0] - 100 / 2;
+//                values[Matrix.MTRANS_Y] = pts[1] - 129 / 2;
+//                mm.setValues(values);
+//                v.invalidate();
+//            }
+//            return false;
+//        }
+//    };
+//    v.setOnTouchListener(l);
+    setContentView(v);
+</code></pre>
+
+<p>anim_set.xml looks like:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="true"
+&gt;
+    &lt;rotate
+        android:fromDegrees="0"
+        android:toDegrees="30"
+        android:pivotX="50%"
+        android:pivotY="50%"
+        android:duration="2500"
+    /&gt;
+    &lt;scale
+        android:fromXScale="1"
+        android:toXScale="1.8"
+        android:fromYScale="1"
+        android:toYScale="1.8"
+        android:pivotX="50%"
+        android:pivotY="50%"
+        android:duration="2500"
+    /&gt;
+&lt;/set&gt;
+</code></pre>
+
+<p>with the following images:</p>
+
+<p>background.png: <img src="http://i.stack.imgur.com/Ucint.png" alt="enter image description here"></p>
+
+<p>layer0.png: <img src="http://i.stack.imgur.com/IWO8Y.png" alt="enter image description here"></p>
+
+<p>layer1.png: <img src="http://i.stack.imgur.com/PBvff.png" alt="enter image description here"></p>
+
+<p>the result is: <img src="http://i.stack.imgur.com/qhAKt.png" alt="enter image description here"></p>
+
+<p><strong>IMPORTANT</strong> in order to prevent resources from auto OS scaling when loading from different drawable-* folders you have to use Resources object obtained from LayeredImageView.getResources() method</p>
+
+<p>have fun!</p>

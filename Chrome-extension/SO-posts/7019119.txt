@@ -1,0 +1,129 @@
+<p>If you want to use JNA, you can use something similar to the following code.</p>
+
+<p>Using JNA 3.3.0 and JNA platform JAR.</p>
+
+<p>More doco on the LowLevelMouseProc function <a href="http://msdn.microsoft.com/en-us/library/ms644986%28v=vs.85%29.aspx" rel="nofollow">here</a> and the mouse events <a href="http://msdn.microsoft.com/en-us/library/ff468877%28v=VS.85%29.aspx" rel="nofollow">here</a>.</p>
+
+<p>MouseHook.java:</p>
+
+<pre><code>package jnatest;
+
+import jnatest.WinUserX.LowLevelMouseProc;
+import jnatest.WinUserX.MSLLHOOKSTRUCT;
+
+import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.platform.win32.User32;
+import com.sun.jna.platform.win32.WinDef.HMODULE;
+import com.sun.jna.platform.win32.WinDef.LRESULT;
+import com.sun.jna.platform.win32.WinDef.WPARAM;
+import com.sun.jna.platform.win32.WinUser;
+import com.sun.jna.platform.win32.WinUser.HHOOK;
+import com.sun.jna.platform.win32.WinUser.MSG;
+
+public class MouseHook
+{
+    private static volatile boolean quit;
+    private static HHOOK hhk;
+    private static LowLevelMouseProc mouseHook;
+
+    public static void main(String[] args) 
+    {
+        System.out.println("Press middle button to quit.");
+        final User32 lib = User32.INSTANCE;
+        HMODULE hMod = Kernel32.INSTANCE.GetModuleHandle(null);
+        mouseHook = new LowLevelMouseProc() 
+        {
+            public LRESULT callback(int nCode, WPARAM wParam, MSLLHOOKSTRUCT info) 
+            {
+                if (nCode &gt;= 0) 
+                {
+                    switch (wParam.intValue())
+                    {
+                        case WinUserX.WM_LBUTTONDOWN:
+                            System.out.println("Left button click at " + info.pt.x + ", " + info.pt.y);
+                            break;
+                        case WinUserX.WM_LBUTTONUP:
+                            System.out.println("Left button release.");
+                            break;
+                        case WinUserX.WM_MBUTTONDOWN:
+                            System.out.println("Middle button.");
+                            quit = true;
+                            break;
+                    }
+                }
+                return lib.CallNextHookEx(hhk, nCode, wParam, info.getPointer());
+            }
+        };
+        hhk = lib.SetWindowsHookEx(WinUser.WH_MOUSE_LL, mouseHook, hMod, 0);
+        new Thread() 
+        {
+            public void run() 
+            {
+                while (!quit) 
+                {
+                    try { Thread.sleep(10); } catch(InterruptedException e) { }
+                }
+                System.err.println("unhook and exit");
+                lib.UnhookWindowsHookEx(hhk);
+                System.exit(0);
+            }
+        }.start();
+
+        // This bit never returns from GetMessage
+        int result;
+        MSG msg = new MSG();
+        while ((result = lib.GetMessage(msg, null, 0, 0)) != 0) 
+        {
+            if (result == -1) 
+            {
+                System.err.println("error in get message");
+                break;
+            }
+            else 
+            {
+                System.err.println("got message");
+                lib.TranslateMessage(msg);
+                lib.DispatchMessage(msg);
+            }
+        }
+        lib.UnhookWindowsHookEx(hhk);
+    }
+}        
+</code></pre>
+
+<p>WinUserX.java:</p>
+
+<pre><code>package jnatest;
+
+import com.sun.jna.Structure;
+import com.sun.jna.platform.win32.BaseTSD.ULONG_PTR;
+import com.sun.jna.platform.win32.WinDef.LRESULT;
+import com.sun.jna.platform.win32.WinDef.WPARAM;
+import com.sun.jna.platform.win32.WinUser;
+
+public interface WinUserX extends WinUser
+{
+    public int WM_LBUTTONDOWN = 0x0201;
+    public int WM_LBUTTONUP = 0x0202; 
+    public int WM_MOUSEMOVE = 0x0200;
+    public int WM_MOUSEWHEEL = 0x020A;
+    public int WM_MOUSEHWHEEL = 0x020E;
+    public int WM_RBUTTONDOWN = 0x0204;
+    public int WM_RBUTTONUP = 0x0205;
+    public int WM_MBUTTONDOWN = 0x0207;
+
+    public interface LowLevelMouseProc extends HOOKPROC 
+    {
+        LRESULT callback(int nCode, WPARAM wParam, MSLLHOOKSTRUCT lParam);
+    }
+
+    public class MSLLHOOKSTRUCT extends Structure 
+    {
+        public POINT pt;
+        public int mouseData;
+        public int flags;
+        public int time;
+        public ULONG_PTR dwExtraInfo;
+    }
+}
+</code></pre>

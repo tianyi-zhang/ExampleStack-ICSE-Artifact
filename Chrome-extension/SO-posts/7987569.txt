@@ -1,0 +1,51 @@
+<p>I disagree with the hypothesis that you should only receive 10 interrupts.</p>
+
+<pre><code>Assume the CPU has 1 core.
+1. Main thread starts Watcher and sleeps
+2. Watcher starts and adds 100 Waiters then blocks
+3. Waiter 1-10 start and sleep in sequence
+4. Main wakes and interrupts Watcher then sleeps
+5. Watcher cancels Waiter 1-5 then is yielded by the OS   (now we have 5 interrupts)
+6. Waiter 11-13 start and sleep
+7. Watcher cancels Waiter 6-20 then is yielded by the OS   (now we have 13 interrupts)
+8. Waiter 14-20 are "started" resulting in a no-op
+9. Waiter 21-24 start and sleep
+....
+</code></pre>
+
+<p>Essentially, my argument is that there is no guarantee that the Watcher thread will be allowed to cancel all 100 "Waiter" RunnableFuture instances before it has to yield the time slice and allow the ExecutorService's worker threads to start more Waiter tasks.</p>
+
+<p><strong>Update:</strong> Showing code from <code>AbstractExecutorService</code></p>
+
+<pre><code>public &lt;T&gt; List&lt;Future&lt;T&gt;&gt; invokeAll(Collection&lt;? extends Callable&lt;T&gt;&gt; tasks)
+    throws InterruptedException {
+    if (tasks == null)
+        throw new NullPointerException();
+    List&lt;Future&lt;T&gt;&gt; futures = new ArrayList&lt;Future&lt;T&gt;&gt;(tasks.size());
+    boolean done = false;
+    try {
+        for (Callable&lt;T&gt; t : tasks) {
+            RunnableFuture&lt;T&gt; f = newTaskFor(t);
+            futures.add(f);
+            execute(f);
+        }
+        for (Future&lt;T&gt; f : futures) {
+            if (!f.isDone()) {
+                try {
+                    f.get(); //If interrupted, this is where the InterruptedException will be thrown from
+                } catch (CancellationException ignore) {
+                } catch (ExecutionException ignore) {
+                }
+            }
+        }
+        done = true;
+        return futures;
+    } finally {
+        if (!done)
+            for (Future&lt;T&gt; f : futures)
+                f.cancel(true); //Specifying "true" is what allows an interrupt to be sent to the ExecutorService's worker threads
+    }
+}
+</code></pre>
+
+<p>The finally block which contains <code>f.cancel(true)</code> is when the interrupt would be propagated to task which is currently running. As you can see, this is a tight loop, but there is no guarantee that the thread executing the loop would be able to iterate through all instances of <code>Future</code> in one time slice.</p>

@@ -1,0 +1,119 @@
+<p>You're currently only storing the last id returned from the DL manager.  Changed this to a thread-safe queue - that should fix it if I understand your use can correctly.</p>
+
+<pre><code>public class MainActivity extends ActionBarActivity {
+TextView testtv;
+String[] imagenames;
+String BASEURL;
+private Queue&lt;Long&gt; enqueue = new ConcurrentLinkedQueue&lt;&gt;(); 
+private DownloadManager dm = null;
+
+@TargetApi(Build.VERSION_CODES.GINGERBREAD)
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+    BASEURL = getResources().getString(R.string.base_URL);
+    imagenames = getResources().getStringArray(R.array.pic_name);
+    testtv = (TextView) findViewById(R.id.testtv);
+    File Path = getExternalFilesDir(null);
+    File noMedia = new File(Path + "/.nomedia");
+    if (!noMedia.exists()) {
+        try {
+            noMedia.createNewFile();
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+    Path.mkdirs();
+    for (int index = 0; index &lt; imagenames.length; index++) {
+        File image = new File(Path + "/" + imagenames[index]);
+
+        if (image.exists()) {
+            testtv.setText("file exists");
+        } else {
+            Boolean result = isDownloadManagerAvailable(getApplicationContext());
+            if (result) {
+                downloadFile(imagenames[index]);
+            }
+        }
+
+    }
+
+}
+
+@SuppressLint("NewApi")
+public void downloadFile(String imagename) {
+    // TODO Auto-generated method stub
+    String DownloadUrl = BASEURL + imagename;
+    DownloadManager.Request request = new DownloadManager.Request(
+            Uri.parse(DownloadUrl));
+    request.setDescription("P3 Resources"); // appears the same
+                                            // in Notification
+                                            // bar while
+                                            // downloading
+    request.setTitle("P3 Resources");
+    if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB) {
+        request.allowScanningByMediaScanner();
+        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
+    }
+    String fileName = DownloadUrl.substring(
+            DownloadUrl.lastIndexOf('/') + 1, DownloadUrl.length());
+    request.setDestinationInExternalFilesDir(getApplicationContext(), null,
+            fileName);
+
+    // get download service and enqueue file
+    dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+    enqueue.offer(dm.enqueue(request));
+
+}
+
+public static boolean isDownloadManagerAvailable(Context context) {
+    try {
+        if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.GINGERBREAD) {
+            return false;
+        }
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_LAUNCHER);
+        intent.setClassName("com.android.providers.downloads.ui",
+                "com.android.providers.downloads.ui.DownloadList");
+        List&lt;ResolveInfo&gt; list = context.getPackageManager()
+                .queryIntentActivities(intent,
+                        PackageManager.MATCH_DEFAULT_ONLY);
+        return list.size() &gt; 0;
+    } catch (Exception e) {
+        return false;
+    }
+}
+
+private BroadcastReceiver receiver = new BroadcastReceiver() {
+    @TargetApi(Build.VERSION_CODES.GINGERBREAD)
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(action)) {
+            long downloadId = intent.getLongExtra(
+                    DownloadManager.EXTRA_DOWNLOAD_ID, 0);
+            if (enqueue.contains(downloadId)) {
+                enqueue.remove(downloadId);
+            }
+
+            if (!enqueue.isEmpty()) {
+                return;
+            }
+
+            //not waiting on any more downloads
+            testtv.setText("Downloads Complete");
+        }
+    }
+};
+
+@TargetApi(Build.VERSION_CODES.GINGERBREAD)
+public void onResume() {
+    super.onResume();
+
+    registerReceiver(receiver, new IntentFilter(
+            DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+}
+}
+</code></pre>

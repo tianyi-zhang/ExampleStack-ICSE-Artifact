@@ -1,0 +1,454 @@
+<p>Because you cannot have a general algorithm for every locale, no. You have to implement your own algorithm for every locale that you are supporting.</p>
+
+<p>** <strong>EDIT</strong> **</p>
+
+<p>Just for the heck of it, I played around until I got this class. <del>It cannot display <code>Long.MIN_VALUE</code> because of bit restrictions... but I presume it could be modified and change <code>long</code> value types to <code>double</code> for decimal or even bigger numbers</del> It can display any numbers up to 66 digits and 26 decimals using a string representation of the number. You may add more <code>ScaleUnit</code> for more decimals...</p>
+
+<pre><code>/**
+ * This class will convert numeric values into an english representation
+ * 
+ * For units, see : http://www.jimloy.com/math/billion.htm
+ * 
+ * @author yanick.rochon@gmail.com
+ */
+public class NumberToWords {
+
+    static public class ScaleUnit {
+        private int exponent;
+        private String[] names;
+        private ScaleUnit(int exponent, String...names) {
+            this.exponent = exponent;
+            this.names = names;
+        }
+        public int getExponent() {
+            return exponent;
+        }
+        public String getName(int index) {
+            return names[index];
+        }
+    }
+
+    /**
+     * See http://www.wordiq.com/definition/Names_of_large_numbers
+     */
+    static private ScaleUnit[] SCALE_UNITS = new ScaleUnit[] {
+        new ScaleUnit(63, "vigintillion", "decilliard"),
+        new ScaleUnit(60, "novemdecillion", "decillion"),
+        new ScaleUnit(57, "octodecillion", "nonilliard"),
+        new ScaleUnit(54, "septendecillion", "nonillion"),
+        new ScaleUnit(51, "sexdecillion", "octilliard"),
+        new ScaleUnit(48, "quindecillion", "octillion"),
+        new ScaleUnit(45, "quattuordecillion", "septilliard"),
+        new ScaleUnit(42, "tredecillion", "septillion"),
+        new ScaleUnit(39, "duodecillion", "sextilliard"),
+        new ScaleUnit(36, "undecillion", "sextillion"),
+        new ScaleUnit(33, "decillion", "quintilliard"),
+        new ScaleUnit(30, "nonillion", "quintillion"),
+        new ScaleUnit(27, "octillion", "quadrilliard"),
+        new ScaleUnit(24, "septillion", "quadrillion"),
+        new ScaleUnit(21, "sextillion", "trilliard"),
+        new ScaleUnit(18, "quintillion", "trillion"),
+        new ScaleUnit(15, "quadrillion", "billiard"),
+        new ScaleUnit(12, "trillion", "billion"),
+        new ScaleUnit(9, "billion", "milliard"),
+        new ScaleUnit(6, "million", "million"),
+        new ScaleUnit(3, "thousand", "thousand"),
+        new ScaleUnit(2, "hundred", "hundred"),
+        //new ScaleUnit(1, "ten", "ten"),
+        //new ScaleUnit(0, "one", "one"),
+        new ScaleUnit(-1, "tenth", "tenth"),
+        new ScaleUnit(-2, "hundredth", "hundredth"),
+        new ScaleUnit(-3, "thousandth", "thousandth"),
+        new ScaleUnit(-4, "ten-thousandth", "ten-thousandth"),
+        new ScaleUnit(-5, "hundred-thousandth", "hundred-thousandth"),
+        new ScaleUnit(-6, "millionth", "millionth"),
+        new ScaleUnit(-7, "ten-millionth", "ten-millionth"),
+        new ScaleUnit(-8, "hundred-millionth", "hundred-millionth"),
+        new ScaleUnit(-9, "billionth", "milliardth"),
+        new ScaleUnit(-10, "ten-billionth", "ten-milliardth"),
+        new ScaleUnit(-11, "hundred-billionth", "hundred-milliardth"),
+        new ScaleUnit(-12, "trillionth", "billionth"),
+        new ScaleUnit(-13, "ten-trillionth", "ten-billionth"),
+        new ScaleUnit(-14, "hundred-trillionth", "hundred-billionth"),
+        new ScaleUnit(-15, "quadrillionth", "billiardth"),
+        new ScaleUnit(-16, "ten-quadrillionth", "ten-billiardth"),
+        new ScaleUnit(-17, "hundred-quadrillionth", "hundred-billiardth"),
+        new ScaleUnit(-18, "quintillionth", "trillionth"),
+        new ScaleUnit(-19, "ten-quintillionth", "ten-trillionth"),
+        new ScaleUnit(-20, "hundred-quintillionth", "hundred-trillionth"),
+        new ScaleUnit(-21, "sextillionth", "trilliardth"),
+        new ScaleUnit(-22, "ten-sextillionth", "ten-trilliardth"),
+        new ScaleUnit(-23, "hundred-sextillionth", "hundred-trilliardth"),
+        new ScaleUnit(-24, "septillionth","quadrillionth"),
+        new ScaleUnit(-25, "ten-septillionth","ten-quadrillionth"),
+        new ScaleUnit(-26, "hundred-septillionth","hundred-quadrillionth"),
+    };
+
+    static public enum Scale {
+        SHORT,
+        LONG;
+
+        public String getName(int exponent) {
+            for (ScaleUnit unit : SCALE_UNITS) {
+                if (unit.getExponent() == exponent) {
+                    return unit.getName(this.ordinal());
+                }
+            }
+            return ""; 
+        }
+    }
+
+    /**
+     * Change this scale to support American and modern British value (short scale)
+     * or Traditional British value (long scale)
+     */
+    static public Scale SCALE = Scale.SHORT; 
+
+
+    static abstract public class AbstractProcessor {
+
+        static protected final String SEPARATOR = " ";
+        static protected final int NO_VALUE = -1;
+
+        protected List&lt;Integer&gt; getDigits(long value) {
+            ArrayList&lt;Integer&gt; digits = new ArrayList&lt;Integer&gt;();
+            if (value == 0) {
+                digits.add(0);
+            } else {
+                while (value &gt; 0) {
+                    digits.add(0, (int) value % 10);
+                    value /= 10;
+                }
+            }
+            return digits;
+        }
+
+        public String getName(long value) {
+            return getName(Long.toString(value));
+        }
+
+        public String getName(double value) {
+            return getName(Double.toString(value));
+        }
+
+        abstract public String getName(String value);
+    }
+
+    static public class UnitProcessor extends AbstractProcessor {
+
+        static private final String[] TOKENS = new String[] {
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"
+        };
+
+        @Override
+        public String getName(String value) {
+            StringBuilder buffer = new StringBuilder();
+
+            int offset = NO_VALUE;
+            int number;
+            if (value.length() &gt; 3) {
+                number = Integer.valueOf(value.substring(value.length() - 3), 10);
+            } else {
+                number = Integer.valueOf(value, 10);
+            }
+            number %= 100;
+            if (number &lt; 10) {
+                offset = (number % 10) - 1;
+                //number /= 10;
+            } else if (number &lt; 20) {
+                offset = (number % 20) - 1;
+                //number /= 100;
+            }
+
+            if (offset != NO_VALUE &amp;&amp; offset &lt; TOKENS.length) {
+                buffer.append(TOKENS[offset]);
+            }
+
+            return buffer.toString();
+        }
+
+    }
+
+    static public class TensProcessor extends AbstractProcessor {
+
+        static private final String[] TOKENS = new String[] {
+            "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"
+        };
+
+        static private final String UNION_SEPARATOR = "-";
+
+        private UnitProcessor unitProcessor = new UnitProcessor();
+
+        @Override
+        public String getName(String value) {
+            StringBuilder buffer = new StringBuilder();
+            boolean tensFound = false;
+
+            int number;
+            if (value.length() &gt; 3) {
+                number = Integer.valueOf(value.substring(value.length() - 3), 10);
+            } else {
+                number = Integer.valueOf(value, 10);
+            }
+            number %= 100;   // keep only two digits
+            if (number &gt;= 20) {
+                buffer.append(TOKENS[(number / 10) - 2]);
+                number %= 10;
+                tensFound = true;
+            } else {
+                number %= 20;
+            }
+
+            if (number != 0) {
+                if (tensFound) {
+                    buffer.append(UNION_SEPARATOR);
+                }
+                buffer.append(unitProcessor.getName(number));
+            }
+
+            return buffer.toString();
+        }
+    }
+
+    static public class HundredProcessor extends AbstractProcessor {
+
+        private int EXPONENT = 2;
+
+        private UnitProcessor unitProcessor = new UnitProcessor();
+        private TensProcessor tensProcessor = new TensProcessor();
+
+        @Override
+        public String getName(String value) {
+            StringBuilder buffer = new StringBuilder();
+
+            int number;
+            if (value.isEmpty()) {
+                number = 0;
+            } else if (value.length() &gt; 4) {
+                number = Integer.valueOf(value.substring(value.length() - 4), 10);
+            } else {
+                number = Integer.valueOf(value, 10);
+            }
+            number %= 1000;  // keep at least three digits
+
+            if (number &gt;= 100) {
+                buffer.append(unitProcessor.getName(number / 100));
+                buffer.append(SEPARATOR);
+                buffer.append(SCALE.getName(EXPONENT));
+            }
+
+            String tensName = tensProcessor.getName(number % 100);
+
+            if (!tensName.isEmpty() &amp;&amp; (number &gt;= 100)) {
+                buffer.append(SEPARATOR);
+            }
+            buffer.append(tensName);
+
+            return buffer.toString();
+        }
+    }
+
+    static public class CompositeBigProcessor extends AbstractProcessor {
+
+        private HundredProcessor hundredProcessor = new HundredProcessor();
+        private AbstractProcessor lowProcessor;
+        private int exponent;
+
+        public CompositeBigProcessor(int exponent) {
+            if (exponent &lt;= 3) {
+                lowProcessor = hundredProcessor;
+            } else {
+                lowProcessor = new CompositeBigProcessor(exponent - 3);
+            }
+            this.exponent = exponent;
+        }
+
+        public String getToken() {
+            return SCALE.getName(getPartDivider());
+        }
+
+        protected AbstractProcessor getHighProcessor() {
+            return hundredProcessor;
+        }
+
+        protected AbstractProcessor getLowProcessor() {
+            return lowProcessor;
+        }
+
+        public int getPartDivider() {
+            return exponent;
+        }
+
+        @Override
+        public String getName(String value) {
+            StringBuilder buffer = new StringBuilder();
+
+            String high, low;
+            if (value.length() &lt; getPartDivider()) {
+                high = "";
+                low = value;
+            } else {
+                int index = value.length() - getPartDivider();
+                high = value.substring(0, index);
+                low = value.substring(index);
+            }
+
+            String highName = getHighProcessor().getName(high);
+            String lowName = getLowProcessor().getName(low);
+
+            if (!highName.isEmpty()) {
+                buffer.append(highName);
+                buffer.append(SEPARATOR);
+                buffer.append(getToken());
+
+                if (!lowName.isEmpty()) {
+                    buffer.append(SEPARATOR);
+                }
+            }
+
+            if (!lowName.isEmpty()) {
+                buffer.append(lowName);
+            }
+
+            return buffer.toString();
+        }
+    }
+
+    static public class DefaultProcessor extends AbstractProcessor {
+
+        static private String MINUS = "minus";
+        static private String UNION_AND = "and";
+
+        static private String ZERO_TOKEN = "zero";
+
+        private AbstractProcessor processor = new CompositeBigProcessor(63);
+
+        @Override
+        public String getName(String value) {
+            boolean negative = false;
+            if (value.startsWith("-")) {
+                negative = true;
+                value = value.substring(1);
+            }
+
+            int decimals = value.indexOf(".");
+            String decimalValue = null;
+            if (0 &lt;= decimals) {
+                decimalValue = value.substring(decimals + 1);
+                value = value.substring(0, decimals);
+            }
+
+            String name = processor.getName(value);
+
+            if (name.isEmpty()) {
+                name = ZERO_TOKEN;
+            } else if (negative) {
+                name = MINUS.concat(SEPARATOR).concat(name); 
+            }
+
+            if (!(null == decimalValue || decimalValue.isEmpty())) {
+                name = name.concat(SEPARATOR).concat(UNION_AND).concat(SEPARATOR)
+                    .concat(processor.getName(decimalValue))
+                    .concat(SEPARATOR).concat(SCALE.getName(-decimalValue.length()));
+            }
+
+            return name;
+        }
+
+    }
+
+    static public AbstractProcessor processor;
+
+
+    public static void main(String...args) {
+
+        processor = new DefaultProcessor();
+
+        long[] values = new long[] {
+            0,
+            4,
+            10,
+            12,
+            100,
+            108,
+            299,
+            1000,
+            1003,
+            2040,
+            45213,
+            100000,
+            100005,
+            100010,
+            202020,
+            202022,
+            999999,
+            1000000,
+            1000001,
+            10000000,
+            10000007,
+            99999999,
+            Long.MAX_VALUE,
+            Long.MIN_VALUE
+        };
+
+        String[] strValues = new String[] {
+            "0001.2",
+            "3.141592"
+        };
+
+        for (long val : values) {
+            System.out.println(val + " = " + processor.getName(val) );
+        }
+
+        for (String strVal : strValues) {
+            System.out.println(strVal + " = " + processor.getName(strVal) );
+        }
+
+        // generate a very big number...
+        StringBuilder bigNumber = new StringBuilder();
+        for (int d=0; d&lt;66; d++) {
+            bigNumber.append( (char) ((Math.random() * 10) + '0'));
+        }
+        bigNumber.append(".");
+        for (int d=0; d&lt;26; d++) {
+            bigNumber.append( (char) ((Math.random() * 10) + '0'));
+        }
+
+        System.out.println(bigNumber.toString() + " = " + processor.getName(bigNumber.toString()));
+
+    }
+
+}
+</code></pre>
+
+<p>and a sample output (for the random big number generator)</p>
+
+<pre><code>0 = zero
+4 = four
+10 = ten
+12 = twelve
+100 = one hundred
+108 = one hundred eight
+299 = two hundred ninety-nine
+1000 = one thousand
+1003 = one thousand three
+2040 = two thousand fourty
+45213 = fourty-five thousand two hundred thirteen
+100000 = one hundred thousand
+100005 = one hundred thousand five
+100010 = one hundred thousand ten
+202020 = two hundred two thousand twenty
+202022 = two hundred two thousand twenty-two
+999999 = nine hundred ninety-nine thousand nine hundred ninety-nine
+1000000 = one million
+1000001 = one million one
+10000000 = ten million
+10000007 = ten million seven
+99999999 = ninety-nine million nine hundred ninety-nine thousand nine hundred ninety-nine
+9223372036854775807 = nine quintillion two hundred twenty-three quadrillion three hundred seventy-two trillion thirty-six billion eight hundred fifty-four million seven hundred seventy-five thousand eight hundred seven
+-9223372036854775808 = minus nine quintillion two hundred twenty-three quadrillion three hundred seventy-two trillion thirty-six billion eight hundred fifty-four million seven hundred seventy-five thousand eight hundred eight
+0001.2 = one and two tenth
+3.141592 = three and one hundred fourty-one thousand five hundred ninety-two millionth
+694780458103427072928672912656674465845126458162617425283733729646.85695031739734695391404376 = six hundred ninety-four vigintillion seven hundred eighty novemdecillion four hundred fifty-eight octodecillion one hundred three septendecillion four hundred twenty-seven sexdecillion seventy-two quindecillion nine hundred twenty-eight quattuordecillion six hundred seventy-two tredecillion nine hundred twelve duodecillion six hundred fifty-six undecillion six hundred seventy-four decillion four hundred sixty-five nonillion eight hundred fourty-five octillion one hundred twenty-six septillion four hundred fifty-eight sextillion one hundred sixty-two quintillion six hundred seventeen quadrillion four hundred twenty-five trillion two hundred eighty-three billion seven hundred thirty-three million seven hundred twenty-nine thousand six hundred fourty-six and eighty-five septillion six hundred ninety-five sextillion thirty-one quintillion seven hundred thirty-nine quadrillion seven hundred thirty-four trillion six hundred ninety-five billion three hundred ninety-one million four hundred four thousand three hundred seventy-six hundred-septillionth
+</code></pre>

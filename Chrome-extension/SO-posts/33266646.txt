@@ -1,0 +1,152 @@
+<h3>Alternative Solution #1: Using Resources.getIdentifier()</h3>
+
+<p>Why not use getResources().getIdentifier() to get id of the resource and use the static MediaPlayer.create() as usual? </p>
+
+<pre><code>public int getIdentifier (String name, String defType, String defPackage)
+</code></pre>
+
+<p><a href="http://developer.android.com/reference/android/content/res/Resources.html#getIdentifier(java.lang.String,%20java.lang.String,%20java.lang.String)" rel="nofollow">getIdentifier()</a> takes your resource name (test0), resource type(raw), your package name and returns the actual resource id.</p>
+
+<pre><code> MediaPlayer mp;
+ //String filename = "android.resource://" + this.getPackageName() + "/raw/test0";
+ mp=MediaPlayer.create(getApplicationContext(), getResources().getIdentifier("test0","raw",getPackageName()));
+ mp.start();
+</code></pre>
+
+<p>I've tested this code and it works. 
+<hr>
+<strong>Update #1:</strong></p>
+
+<h3>Alternative Solution #2: Using Uri.parse()</h3>
+
+<p>I've tested this code as well and it works too. Pass your resource path as URI to setDataSource(). I just made that change to your code to get it work.</p>
+
+<pre><code>String filename = "android.resource://" + this.getPackageName() + "/raw/test0";
+
+mp = new MediaPlayer();
+try { mp.setDataSource(this,Uri.parse(filename)); } catch (Exception e) {}
+try { mp.prepare(); } catch (Exception e) {}
+mp.start();
+</code></pre>
+
+<p><hr>
+<strong>Update #2: Answer is NO</strong></p>
+
+<h3>About setDataSource(String) call</h3>
+
+<p>After seeing your comment, it looks like you exactly want setDataSource(string) to be used for your purpose. I don't understand why. But, what I assume is, for some reason you are trying to avoid using "context". If that is not the case then the above two solutions should work perfectly for you or if you are trying to avoid context, I'm afraid that is not possible with the function with signature setDataSource(String) call. The reason is as below,</p>
+
+<p>MediaPlayer setDataSource() function has these below options out of which you are only interested in setDataSource(String),</p>
+
+<p><a href="http://i.stack.imgur.com/fkYMA.png" rel="nofollow"><img src="http://i.stack.imgur.com/fkYMA.png" alt="setDataSource Functions"></a></p>
+
+<p>setDataSource(String) internally calls setDataSource(String path, String[] keys, String[] values) function. If you can check its <a href="https://github.com/android/platform_frameworks_base/blob/master/media/java/android/media/MediaPlayer.java" rel="nofollow">source</a>,</p>
+
+<pre><code>public void setDataSource(String path)
+            throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+        setDataSource(path, null, null);
+    }
+</code></pre>
+
+<p>and if you check setDataSource(String path, String[] keys, String[] values) code, you will see the below condition filtering the path based on its scheme, particularly if it is "file" scheme it calls setDataSource(FileDescriptor) or if scheme is non "file", it calls native JNI media function. </p>
+
+<pre><code>{
+        final Uri uri = Uri.parse(path);
+        final String scheme = uri.getScheme();
+        if ("file".equals(scheme)) {
+            path = uri.getPath();
+        } else if (scheme != null) {
+            // handle non-file sources
+            nativeSetDataSource(
+                MediaHTTPService.createHttpServiceBinderIfNecessary(path),
+                path,
+                keys,
+                values);
+            return;
+        }
+        final File file = new File(path);
+        if (file.exists()) {
+            FileInputStream is = new FileInputStream(file);
+            FileDescriptor fd = is.getFD();
+            setDataSource(fd);
+            is.close();
+        } else {
+            throw new IOException("setDataSource failed.");
+        }
+}
+</code></pre>
+
+<p>In the above code, your resource file URI scheme will not be null (android.resource://) and <strong>setDataSource(String) will try to use native JNI function nativeSetDataSource() thinking that your path is http/https/rtsp and obviously that call will fail as well without throwing any exception. Thats why your call to setDataSource(String) escapes without an exception and gets to prepare() call with the following exception.</strong> </p>
+
+<pre><code>Prepare failed.: status=0x1
+</code></pre>
+
+<p>So setDataSource(String) override cannot handle your resource file. You need to choose another override for that.</p>
+
+<p>On the other side, check setDataSource(Context context, Uri uri, Map headers) which is used by setDataSource(Context context, Uri uri), it uses AssetFileDescriptor, ContentResolver from your context and openAssetFileDescriptor to open the URI which gets success as openAssetFileDescriptor() can open your resource file and finally the resultant fd is used to call setDataSource(FileDescriptor) override.</p>
+
+<pre><code>    AssetFileDescriptor fd = null;
+    try {
+        ContentResolver resolver = context.getContentResolver();
+        fd = resolver.openAssetFileDescriptor(uri, "r");
+        //  :
+        //  :
+        //  :
+        if (fd.getDeclaredLength() &lt; 0) {
+                setDataSource(fd.getFileDescriptor());
+            } else {
+                setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getDeclaredLength());
+            }
+</code></pre>
+
+<p>To conclude, you cannot use setDataSource(String) override as is to use your resource mp3 file. Instead, if you want use string to play your resource file you can use either MediaPlayer.create() static function with getIdentifier() as given above or setDataSource(context,uri) as given in Update#1.</p>
+
+<p>Refer to the complete source code for more understanding here: <a href="https://github.com/android/platform_frameworks_base/blob/master/media/java/android/media/MediaPlayer.java" rel="nofollow">Android MediaPlayer</a>
+<hr>
+<strong>Update #3:</strong></p>
+
+<h3>openFrameworks setDataSource(String):</h3>
+
+<p>As I have mentioned in the comments below, openFrameworks uses android MediaPlayer code asis. If you can refer to Line no: 4,</p>
+
+<pre><code>import android.media.MediaPlayer;
+</code></pre>
+
+<p>and Line no: 26, 27, 28 and 218</p>
+
+<pre><code>        player = new MediaPlayer();       //26
+        player.setDataSource(fileName);   //27
+        player.prepare();                 //28
+
+        private MediaPlayer player;       //218
+</code></pre>
+
+<p>So, if you try to pass <strong>ardroid.resource//+ this.getPackageName() + "raw/test0"</strong> to setDataSource() using openFrameworks, you will still get the same exception as I explained in Update#2. Having said that, I just tried my luck searching Google to double sure what I am saying and found this <a href="http://forum.openframeworks.cc/t/soundfiles-on-android/6220/9" rel="nofollow">openFrameworks forum link</a> where one of the <strong>openFrameworks core developer arturo</strong> says, </p>
+
+<blockquote>
+  <p>don't know exactly how the mediaPlayer works but everything in res/raw
+  or bin/data gets copied to /sdcard/cc.openframeworks.packagename</p>
+</blockquote>
+
+<p>Based on that comment, you may try using the copied path in setDataSource(). Using resource file on setDataSource(String) of MediaPlayer is not possible as it cannot accept resource file path. Please note that, I said "resource file path" starts with the scheme <strong>android.resource//</strong> which is actually a jar location (within your apk), not a physical location. Local file will work with setDataSource(String) which starts with the scheme <strong>file://</strong>.</p>
+
+<p>To make you clearly understand what you are trying to do with a resource file, try executing this below code and see the result in logcat,</p>
+
+<pre><code>    try{
+      Log.d("RESURI", this.getClass().getClassLoader().getResource("res/raw/test0").toURI().toString());
+    } 
+    catch(Exception e) {
+
+    }
+</code></pre>
+
+<p>You'll get the result as,</p>
+
+<pre><code>jar:file:/data/app/&lt;packagename&gt;/&lt;apkname&gt;.apk!/res/raw/test0
+</code></pre>
+
+<p>that is to show you that the resource file you are trying to access is not actually a file in physical path but a jar location (within apk) which you cannot access using setDataSource(String) method. (Try using 7zip to extract your apk file and you will see the res/raw/test0 in it).</p>
+
+<p>Hope that helps.</p>
+
+<p>PS: I know its bit lengthy answer, but I hope this explains it in detail. Leaving the alternative solutions in the top if that can help others.</p>

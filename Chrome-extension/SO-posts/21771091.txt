@@ -1,0 +1,87 @@
+<p>Looking at your snippet of code i see a couple of things. Did you modify the handshake call? If not you looks like you could potentially be calling establish() twice on the builder. When you call establish in your code snippet assuming that the handshake and configure methods from the toyvpn example weren't modified you could be blowing away the the interface that is correctly configured to talk to the server at least from what i see looking at the vanilla toyvpn app their server is configured to send them the correct configuration.  so you are trying to read and write from an incorrectly configured tun device. </p>
+
+<pre><code>private void handshake(DatagramChannel tunnel) throws Exception {
+    // To build a secured tunnel, we should perform mutual authentication
+    // and exchange session keys for encryption. To keep things simple in
+    // this demo, we just send the shared secret in plaintext and wait
+    // for the server to send the parameters.
+    // Allocate the buffer for handshaking.
+    ByteBuffer packet = ByteBuffer.allocate(1024);
+
+    // Control messages always start with zero.
+    packet.put((byte) 0).put(mSharedSecret).flip();
+
+    // Send the secret several times in case of packet loss.
+    for (int i = 0; i &lt; 3; ++i) {
+        packet.position(0);
+        tunnel.write(packet);
+    }
+    packet.clear();
+
+    // Wait for the parameters within a limited time.
+    for (int i = 0; i &lt; 50; ++i) {
+        Thread.sleep(100);
+
+        // Normally we should not receive random packets.
+        int length = tunnel.read(packet);
+        if (length &gt; 0 &amp;&amp; packet.get(0) == 0) {
+            configure(new String(packet.array(), 1, length - 1).trim());
+            return;
+        }
+    }
+    throw new IllegalStateException("Timed out");
+}
+
+private void configure(String parameters) throws Exception {
+    // If the old interface has exactly the same parameters, use it!
+    if (mInterface != null &amp;&amp; parameters.equals(mParameters)) {
+        Log.i(TAG, "Using the previous interface");
+        return;
+    }
+
+    // Configure a builder while parsing the parameters.
+    Builder builder = new Builder();
+    for (String parameter : parameters.split(" ")) {
+        String[] fields = parameter.split(",");
+        try {
+            switch (fields[0].charAt(0)) {
+                case 'm':
+                    builder.setMtu(Short.parseShort(fields[1]));
+                    break;
+                case 'a':
+                    builder.addAddress(fields[1], Integer.parseInt(fields[2]));
+                    break;
+                case 'r':
+                    builder.addRoute(fields[1], Integer.parseInt(fields[2]));
+                    break;
+                case 'd':
+                    builder.addDnsServer(fields[1]);
+                    break;
+                case 's':
+                    builder.addSearchDomain(fields[1]);
+                    break;
+            }
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Bad parameter: " + parameter);
+        }
+    }
+
+    // Close the old interface since the parameters have been changed.
+    try {
+        mInterface.close();
+    } catch (Exception e) {
+        // ignore
+    }
+    // Create a new interface using the builder and save the parameters.
+        mInterface = builder.setSession(mServerAddress)
+            .setConfigureIntent(mConfigureIntent)
+            .establish();
+        mParameters = parameters;
+        Log.i(TAG, "New interface: " + parameters);
+    }
+}
+</code></pre>
+
+<p>Potentially three times because the second time the return value from the builder isn't used but it would return a new fd for the tun device according to the docs. I would probably suggest moving the changes that you are adding for configuring the vpn interface into the configure method in the <a href="http://androidxref.com/4.3_r2.1/xref/development/samples/ToyVpn/src/com/example/android/toyvpn/ToyVpnService.java" rel="nofollow">ToyVpnService</a> example. For the most part it looks like most of your changes are focused on the configuration. You could try adding calls to canCheckError / checkError from the <a href="http://developer.android.com/reference/android/os/ParcelFileDescriptor.html" rel="nofollow">ParcelFileDescriptor</a> interface or use getFd() and call valid to check that the descriptor for the tun device is actually a valid fd by the time you try to read and write to it.</p>
+
+<p>Hope that helps some. </p>

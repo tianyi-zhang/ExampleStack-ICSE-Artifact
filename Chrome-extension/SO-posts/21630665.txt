@@ -1,0 +1,131 @@
+<p>Provided earlier solution works fine but it scales with cropping. If you need to scale to fit, then use the following solution. Call updateTextureMatrix every time when surface view is changed: i.e. in onSurfaceTextureAvailable and in onSurfaceTextureSizeChanged methods. Also note that this solution relies that activity ignores configuration changes (i.e. android:configChanges="orientation|screenSize|keyboardHidden" or something like that):</p>
+
+<pre><code>private void updateTextureMatrix(int width, int height)
+{
+    boolean isPortrait = false;
+
+    Display display = getWindowManager().getDefaultDisplay();
+    if (display.getRotation() == Surface.ROTATION_0 || display.getRotation() == Surface.ROTATION_180) isPortrait = true;
+    else if (display.getRotation() == Surface.ROTATION_90 || display.getRotation() == Surface.ROTATION_270) isPortrait = false;
+
+    int previewWidth = orgPreviewWidth;
+    int previewHeight = orgPreviewHeight;
+
+    if (isPortrait)
+    {
+        previewWidth = orgPreviewHeight;
+        previewHeight = orgPreviewWidth;
+    }
+
+    float ratioSurface = (float) width / height;
+    float ratioPreview = (float) previewWidth / previewHeight;
+
+    float scaleX;
+    float scaleY;
+
+    if (ratioSurface &gt; ratioPreview)
+    {
+        scaleX = (float) height / previewHeight;
+        scaleY = 1;
+    }
+    else
+    {
+        scaleX = 1;
+        scaleY = (float) width / previewWidth;
+    }
+
+    Matrix matrix = new Matrix();
+
+    matrix.setScale(scaleX, scaleY);
+    textureView.setTransform(matrix);
+
+    float scaledWidth = width * scaleX;
+    float scaledHeight = height * scaleY;
+
+    float dx = (width - scaledWidth) / 2;
+    float dy = (height - scaledHeight) / 2;
+    textureView.setTranslationX(dx);
+    textureView.setTranslationY(dy);
+}
+</code></pre>
+
+<p>Also you need the following fields:</p>
+
+<pre><code>private int orgPreviewWidth;
+private int orgPreviewHeight;
+</code></pre>
+
+<p>initialize it in onSurfaceTextureAvailable mathod before calling updateTextureMatrix:</p>
+
+<pre><code>Camera.Parameters parameters = camera.getParameters();
+parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
+
+Pair&lt;Integer, Integer&gt; size = getMaxSize(parameters.getSupportedPreviewSizes());
+parameters.setPreviewSize(size.first, size.second);
+
+orgPreviewWidth = size.first;
+orgPreviewHeight = size.second;
+
+camera.setParameters(parameters);
+</code></pre>
+
+<p>getMaxSize method:</p>
+
+<pre><code>private static Pair&lt;Integer, Integer&gt; getMaxSize(List&lt;Camera.Size&gt; list)
+{
+    int width = 0;
+    int height = 0;
+
+    for (Camera.Size size : list) {
+        if (size.width * size.height &gt; width * height)
+        {
+            width = size.width;
+            height = size.height;
+        }
+    }
+
+    return new Pair&lt;Integer, Integer&gt;(width, height);
+}
+</code></pre>
+
+<p>And last thing - you need to correct camera rotation. So call setCameraDisplayOrientation method in Activity onConfigurationChanged method (and also make initial call in onSurfaceTextureAvailable method):</p>
+
+<pre><code>public static void setCameraDisplayOrientation(Activity activity, int cameraId, Camera camera)
+{
+    Camera.CameraInfo info = new Camera.CameraInfo();
+    Camera.getCameraInfo(cameraId, info);
+    int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+    int degrees = 0;
+    switch (rotation)
+    {
+        case Surface.ROTATION_0:
+            degrees = 0;
+            break;
+        case Surface.ROTATION_90:
+            degrees = 90;
+            break;
+        case Surface.ROTATION_180:
+            degrees = 180;
+            break;
+        case Surface.ROTATION_270:
+            degrees = 270;
+            break;
+    }
+
+    int result;
+    if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT)
+    {
+        result = (info.orientation + degrees) % 360;
+        result = (360 - result) % 360;  // compensate the mirror
+    }
+    else
+    {  // back-facing
+        result = (info.orientation - degrees + 360) % 360;
+    }
+    camera.setDisplayOrientation(result);
+
+    Camera.Parameters params = camera.getParameters();
+    params.setRotation(result);
+    camera.setParameters(params);
+}
+</code></pre>

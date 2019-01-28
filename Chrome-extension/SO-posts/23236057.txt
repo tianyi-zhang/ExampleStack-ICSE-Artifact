@@ -1,0 +1,85 @@
+<p>You may thing that <code>remove(int index)</code> on an <code>ArrayList</code> is faster than <code>remove(int index)</code> on a <code>LinkedList</code>, but that's not the case.</p>
+
+<p>Why?  You're ignoring one of the largest costs to an <code>ArrayList</code>:  how much it actually costs <strong>to resize the array</strong> after an element is removed.</p>
+
+<p>The actual implementation for the <code>ArrayList</code> is provided here:</p>
+
+<pre><code>public E remove(int index) {
+    rangeCheck(index);
+
+    modCount++;
+    E oldValue = elementData(index);
+
+    int numMoved = size - index - 1;
+    if (numMoved &gt; 0)
+        System.arraycopy(elementData, index+1, elementData, index,
+                         numMoved);
+    elementData[--size] = null; // clear to let GC do its work
+
+    return oldValue;
+}
+</code></pre>
+
+<p>Now, that <code>System.arraycopy</code> call is actually doing the work of copying your existing array halves into new memory, lining them up contiguously, and then cleaning up after itself.  Effectively, every element is shifted to the left by 1 after this entire operation.</p>
+
+<p>Regardless as to where this operation was performed (front of list, middle of list, end of list), you're copying <em>n-1</em> elements into contiguous memory.  That's an O(n) operation.</p>
+
+<p>Now, compare/contrast with <code>LinkedList</code>'s implementation (<code>checkElementIndex</code> is omitted as it is intuitive):</p>
+
+<pre><code>public E remove(int index) {
+    checkElementIndex(index);
+    return unlink(node(index));
+}
+
+Node&lt;E&gt; node(int index) {
+    // assert isElementIndex(index);
+
+    if (index &lt; (size &gt;&gt; 1)) {
+        Node&lt;E&gt; x = first;
+        for (int i = 0; i &lt; index; i++)
+            x = x.next;
+        return x;
+    } else {
+        Node&lt;E&gt; x = last;
+        for (int i = size - 1; i &gt; index; i--)
+            x = x.prev;
+        return x;
+    }
+}
+
+E unlink(Node&lt;E&gt; x) {
+    // assert x != null;
+    final E element = x.item;
+    final Node&lt;E&gt; next = x.next;
+    final Node&lt;E&gt; prev = x.prev;
+
+    if (prev == null) {
+        first = next;
+    } else {
+        prev.next = next;
+        x.prev = null;
+    }
+
+    if (next == null) {
+        last = prev;
+    } else {
+        next.prev = prev;
+        x.next = null;
+    }
+
+    x.item = null;
+    size--;
+    modCount++;
+    return element;
+}
+</code></pre>
+
+<p>The implementation will either search from the rear or from the front, depending on which is closer (hence the bitwise division by two, or <code>size &gt;&gt; 1</code>).  There is work involved in actually <em>finding</em> the location, but once it is found, a very specific and non-size-dependent set of steps is done to ensure that the integrity of the list is preserved.</p>
+
+<p>So, regardless of where I remove this one element (front, middle, end), I'm doing about the same unit of work to both delete the node and adjust my list.  Hence, the runtime operation could be considered about constant time.</p>
+
+<p>Addendum:</p>
+
+<p>To further your reading, the addition of an element in an <code>ArrayList</code> would behave in a similar manner as to when you're removing an element - you have to take into account that your underlying array may need to be resized <em>before</em> you can enter, and if you enter 10,000 elements and undergo 1,000 resizes, you're inserting data on the order of O(n).</p>
+
+<p>Contrast inserting in a <code>LinkedList</code>, which only inserts at either the front or the end; both of which are directly accessible, do not involve anything with the original array whatsoever, and can be done in constant time.</p>

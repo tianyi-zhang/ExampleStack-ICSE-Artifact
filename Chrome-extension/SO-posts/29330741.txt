@@ -1,0 +1,75 @@
+<p>It's not so hard to track down the <em>reason</em> for the odd behavior. </p>
+
+<p>The <code>divide</code> call goes to </p>
+
+<pre><code>public BigDecimal divide(BigDecimal divisor, int scale, RoundingMode roundingMode) {
+    return divide(divisor, scale, roundingMode.oldMode);
+}
+</code></pre>
+
+<p>This, internally, delegates to another <code>divide</code> method, based on the rounding mode:</p>
+
+<pre><code>public BigDecimal divide(BigDecimal divisor, int scale, int roundingMode) {
+    if (roundingMode &lt; ROUND_UP || roundingMode &gt; ROUND_UNNECESSARY)
+        throw new IllegalArgumentException("Invalid rounding mode");
+    if (this.intCompact != INFLATED) {
+        if ((divisor.intCompact != INFLATED)) {
+            return divide(this.intCompact, this.scale, divisor.intCompact, divisor.scale, scale, roundingMode);
+        } else {
+            return divide(this.intCompact, this.scale, divisor.intVal, divisor.scale, scale, roundingMode);
+        }
+    } else {
+        if ((divisor.intCompact != INFLATED)) {
+            return divide(this.intVal, this.scale, divisor.intCompact, divisor.scale, scale, roundingMode);
+        } else {
+            return divide(this.intVal, this.scale, divisor.intVal, divisor.scale, scale, roundingMode);
+        }
+    }
+}
+</code></pre>
+
+<p>In this case, the last call applies. Note that the <code>intVal</code> (which is a <code>BigInteger</code> that is stored in the <code>BigDecimal</code>) is passed directly to this method as the first argument:</p>
+
+<pre><code>private static BigDecimal divide(BigInteger dividend, int dividendScale, BigInteger divisor, int divisorScale, int scale, int roundingMode) {
+    if (checkScale(dividend,(long)scale + divisorScale) &gt; dividendScale) {
+        int newScale = scale + divisorScale;
+        int raise = newScale - dividendScale;
+        BigInteger scaledDividend = bigMultiplyPowerTen(dividend, raise);
+        return divideAndRound(scaledDividend, divisor, scale, roundingMode, scale);
+    } else {
+        int newScale = checkScale(divisor,(long)dividendScale - scale);
+        int raise = newScale - divisorScale;
+        BigInteger scaledDivisor = bigMultiplyPowerTen(divisor, raise);
+        return divideAndRound(dividend, scaledDivisor, scale, roundingMode, scale);
+    }
+}
+</code></pre>
+
+<p>Finally, the path to the <strong>second</strong> <code>divideAndRound</code> is taken here, again passing the <code>dividend</code> on (which was the <code>intVal</code> of the original <code>BigDecimal</code>), ending up with this code:</p>
+
+<pre><code>private static BigDecimal divideAndRound(BigInteger bdividend, BigInteger bdivisor, int scale, int roundingMode,
+                                         int preferredScale) {
+    boolean isRemainderZero; // record remainder is zero or not
+    int qsign; // quotient sign
+    // Descend into mutables for faster remainder checks
+    MutableBigInteger mdividend = new MutableBigInteger(bdividend.mag);
+    MutableBigInteger mq = new MutableBigInteger();
+    MutableBigInteger mdivisor = new MutableBigInteger(bdivisor.mag);
+    MutableBigInteger mr = mdividend.divide(mdivisor, mq);
+    ...
+</code></pre>
+
+<p>And this is where the error is introduced: The <code>mdivididend</code> is a <strong>mutable</strong> <code>BigInteger</code>, that was created as a mutable view on the <code>mag</code> array of the <code>BigInteger</code> that is stored in the <code>BigDecimal</code> <code>x</code> from the original call. The division modifies the <code>mag</code> field, and thus, the state of the (now not-so-immutable) <code>BigDecimal</code>.</p>
+
+<p>This is clearly a bug in the implementation of one of the <code>divide</code> methods. I already started tracking the change sets of the OpenJDK, but have not yet spotted the definite culprit. (<em>Edit: See updates below</em>)</p>
+
+<p>(A side note: Calling <code>x.toString()</code> before doing the division does not really <em>avoid</em>, but only <em>hide</em> the bug: It causes a string cache of the correct state to be created internally. The right value is printed, but the internal state is still wrong - which is concerning, to say the least...)</p>
+
+<hr>
+
+<blockquote>
+  <p><strong>Update</strong>: To confirm what <code>@MikeM</code> said: Bug has been listed on <a href="https://bugs.openjdk.java.net/browse/JDK-8066842">openjdk bug list</a> and it has been resolved in <code>JDK8 Build 51</code></p>
+  
+  <p><strong>Update</strong> : Kudos to Mike and exex zian for digging out the bug reports. According to the discussion there, the bug was introduced with <a href="http://hg.openjdk.java.net/jdk8/jdk8/jdk/rev/ffada2ce20e5#l1.1174">this changeset</a>. 
+  <sub>(Admittedly, while skimming through the changes, I also considered this as a hot candidate, but could not believe that this was introduced <em>four years ago</em> and remained unnoticed until now...)</sub></p>
+</blockquote>

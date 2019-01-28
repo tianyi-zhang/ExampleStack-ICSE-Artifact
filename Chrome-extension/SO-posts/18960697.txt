@@ -1,0 +1,127 @@
+<p>If you are using JSON I recommend the Jackson JSON library.</p>
+
+<p><a href="http://wiki.fasterxml.com/JacksonHome">http://wiki.fasterxml.com/JacksonHome</a></p>
+
+<p>The jar files can be found here:</p>
+
+<p><a href="http://wiki.fasterxml.com/JacksonDownload">http://wiki.fasterxml.com/JacksonDownload</a></p>
+
+<p>Here is the generic code I use to convert any result set into a Map&lt;> or List&lt; Map&lt;> > Converting this to JSON using JacksonJSON is pretty straight forward (See Below).</p>
+
+<pre><code>package com.naj.tmoi.entity;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class EntityFactory {
+
+    public EntityFactory(Connection connection, String queryString) {
+        this.queryString = queryString;
+        this.connection = connection;
+    }
+
+    public Map&lt;String, Object&gt; findSingle(Object[] params) throws SQLException {
+        List&lt;Map&lt;String, Object&gt;&gt; objects = this.findMultiple(params);
+
+        if (objects.size() != 1) {
+            throw new SQLException("Query did not produce one object it produced: " + objects.size() + " objects.");
+        }
+
+        Map&lt;String, Object&gt; object = objects.get(0);  //extract only the first item;
+
+        return object;
+    }
+
+    public List&lt;Map&lt;String, Object&gt;&gt; findMultiple(Object[] params) throws SQLException {
+        ResultSet rs = null;
+        PreparedStatement ps = null;
+        try {
+            ps = this.connection.prepareStatement(this.queryString);
+            for (int i = 0; i &lt; params.length; ++i) {
+                ps.setObject(1, params[i]);
+            }
+
+            rs = ps.executeQuery();
+            return getEntitiesFromResultSet(rs);
+        } catch (SQLException e) {
+            throw (e);
+        } finally {
+            if (rs != null) {
+                rs.close();
+            }
+            if (ps != null) {
+                ps.close();
+            }
+        }
+    }
+
+    protected List&lt;Map&lt;String, Object&gt;&gt; getEntitiesFromResultSet(ResultSet resultSet) throws SQLException {
+        ArrayList&lt;Map&lt;String, Object&gt;&gt; entities = new ArrayList&lt;&gt;();
+        while (resultSet.next()) {
+            entities.add(getEntityFromResultSet(resultSet));
+        }
+        return entities;
+    }
+
+    protected Map&lt;String, Object&gt; getEntityFromResultSet(ResultSet resultSet) throws SQLException {
+        ResultSetMetaData metaData = resultSet.getMetaData();
+        int columnCount = metaData.getColumnCount();
+        Map&lt;String, Object&gt; resultsMap = new HashMap&lt;&gt;();
+        for (int i = 1; i &lt;= columnCount; ++i) {
+            String columnName = metaData.getColumnName(i).toLowerCase();
+            Object object = resultSet.getObject(i);
+            resultsMap.put(columnName, object);
+        }
+        return resultsMap;
+    }
+    private final String queryString;
+    protected Connection connection;
+}
+</code></pre>
+
+<p>In the servlet I convert the List into JSON using the com.fasterxml.jackson.databind.ObjectMapper which converts Java Generics into a JSON String. </p>
+
+<pre><code>    Connection connection = null;
+    try {
+        connection = DataSourceSingleton.getConnection();
+        EntityFactory nutrientEntityFactory = new EntityFactory(connection, NUTRIENT_QUERY_STRING);
+        List&lt;Map&lt;String, Object&gt;&gt; nutrients = nutrientEntityFactory.findMultiple(new Object[]{});
+
+        ObjectMapper mapper = new ObjectMapper();
+
+        String json = mapper.writeValueAsString(nutrients);
+
+
+        response.setContentType("application/json;charset=UTF-8");
+        response.getWriter().write(json);
+    } catch (SQLException e) {
+        throw new ServletException(e);
+    } finally {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException e) {
+                throw new ServletException(e);
+            }
+        }
+    }
+</code></pre>
+
+<p>You can pass in Parameters to the PreparedStatement like this:</p>
+
+<pre><code>String name = request.getHeader("name");
+EntityFactory entityFactory = new EntityFactory(DataSourceSingleton.getConnection(), QUERY_STRING);
+Map&lt;String, Object&gt; object = entityFactory.findSingle(new String[]{name});
+
+
+private static final String QUERY_STRING = "SELECT NAME, PASSWORD, TOKEN, TOKEN_EXPIRATION FROM USER WHERE NAME = ?";
+</code></pre>
+
+<p>}</p>

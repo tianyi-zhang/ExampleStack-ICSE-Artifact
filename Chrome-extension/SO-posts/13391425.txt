@@ -1,0 +1,58 @@
+<p>Well, here's what I ended up doing. <code>java.awt.Image</code> was certainly a dead-end. There was a solution in the form of wrapping up a <code>PdfTemplate</code> in an <code>ImgTemplate</code> so that it could be used as an iText <code>Image</code>.</p>
+
+<p>(I had to have it in something which knew its size, because it's being used in a table and the layout would go completely crazy otherwise. An <code>Image</code> seems to know this.)</p>
+
+<pre><code>public class SvgHelper {
+    private final SAXSVGDocumentFactory factory;
+    private final GVTBuilder builder;
+    private final BridgeContext bridgeContext;
+
+    public SvgHelper() {
+        factory = new SAXSVGDocumentFactory(
+            XMLResourceDescriptor.getXMLParserClassName());
+        UserAgent userAgent = new UserAgentAdapter();
+        DocumentLoader loader = new DocumentLoader(userAgent);
+        bridgeContext = new BridgeContext(userAgent, loader);
+        bridgeContext.setDynamicState(BridgeContext.STATIC);
+        builder = new GVTBuilder();
+    }
+
+    public Image createSvgImage(PdfContentByte contentByte, URL resource,
+                                float maxPointWidth, float maxPointHeight) {
+        Image image = drawUnscaledSvg(contentByte, resource);
+        image.scaleToFit(maxPointWidth, maxPointHeight);
+        return image;
+    }
+
+    public Image drawUnscaledSvg(PdfContentByte contentByte, URL resource) {
+        GraphicsNode imageGraphics;
+        try {
+            SVGDocument imageDocument = factory.createSVGDocument(resource.toString());
+            imageGraphics = builder.build(bridgeContext, imageDocument);
+        } catch (IOException e) {
+            throw new RuntimeException("Couldn't load SVG resource", e);
+        }
+
+        float width = (float) imageGraphics.getBounds().getWidth();
+        float height = (float) imageGraphics.getBounds().getHeight();
+
+        PdfTemplate template = contentByte.createTemplate(width, height);
+        Graphics2D graphics = template.createGraphics(width, height);
+        try {
+            // SVGs can have their corner at coordinates other than (0,0).
+            Rectangle2D bounds = imageGraphics.getBounds();
+
+            //TODO: Is this in the right coordinate space even?
+            graphics.translate(-bounds.getX(), -bounds.getY());
+
+            imageGraphics.paint(graphics);
+
+            return new ImgTemplate(template);
+        } catch (BadElementException e) {
+            throw new RuntimeException("Couldn't generate PDF from SVG", e);
+        } finally {
+            graphics.dispose();
+        }
+    }
+}
+</code></pre>

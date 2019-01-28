@@ -1,0 +1,419 @@
+<p>I found solution based on <a href="http://blog.peterkuterna.net/2011/05/pinned-header-listview-as-in-contacts.html" rel="nofollow">Pinned Header ListView</a> of Peter Kuterna and android sample ExpandableList1.java. 
+PinnedHeaderExpListView.java</p>
+
+<pre><code>package com.example;
+
+import com.example.ExpandableList.MyExpandableListAdapter;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.util.AttributeSet;
+import android.view.View;
+import android.widget.BaseExpandableListAdapter;
+import android.widget.ExpandableListAdapter;
+import android.widget.ExpandableListView;
+import android.widget.TextView;
+
+/**
+ * A ListView that maintains a header pinned at the top of the list. The
+ * pinned header can be pushed up and dissolved as needed.
+ */
+public class PinnedHeaderExpListView extends ExpandableListView{
+
+    /**
+     * Adapter interface.  The list adapter must implement this interface.
+     */
+    public interface PinnedHeaderAdapter {
+
+        /**
+         * Pinned header state: don't show the header.
+         */
+        public static final int PINNED_HEADER_GONE = 0;
+
+        /**
+         * Pinned header state: show the header at the top of the list.
+         */
+        public static final int PINNED_HEADER_VISIBLE = 1;
+
+        /**
+         * Pinned header state: show the header. If the header extends beyond
+         * the bottom of the first shown element, push it up and clip.
+         */
+        public static final int PINNED_HEADER_PUSHED_UP = 2;
+
+        /**
+         * Configures the pinned header view to match the first visible list item.
+         *
+         * @param header pinned header view.
+         * @param position position of the first visible list item.
+         * @param alpha fading of the header view, between 0 and 255.
+         */
+        void configurePinnedHeader(View header, int position, int alpha);
+    }
+
+    private static final int MAX_ALPHA = 255;
+
+    private MyExpandableListAdapter mAdapter;
+    private View mHeaderView;
+    private boolean mHeaderViewVisible;
+
+    private int mHeaderViewWidth;
+
+    private int mHeaderViewHeight;
+
+    public PinnedHeaderExpListView(Context context) {
+        super(context);
+    }
+
+    public PinnedHeaderExpListView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    public PinnedHeaderExpListView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+    }
+
+    public void setPinnedHeaderView(View view) {
+        mHeaderView = view;
+
+        // Disable vertical fading when the pinned header is present
+        // TODO change ListView to allow separate measures for top and bottom fading edge;
+        // in this particular case we would like to disable the top, but not the bottom edge.
+        if (mHeaderView != null) {
+            setFadingEdgeLength(0);
+        }
+        requestLayout();
+    }
+
+    @Override
+    public void setAdapter(ExpandableListAdapter adapter) {
+        super.setAdapter(adapter);
+        mAdapter = (MyExpandableListAdapter)adapter;
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (mHeaderView != null) {
+            measureChild(mHeaderView, widthMeasureSpec, heightMeasureSpec);
+            mHeaderViewWidth = mHeaderView.getMeasuredWidth();
+            mHeaderViewHeight = mHeaderView.getMeasuredHeight();
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (mHeaderView != null) {
+            mHeaderView.layout(0, 0, mHeaderViewWidth, mHeaderViewHeight);
+            configureHeaderView(getFirstVisiblePosition());
+        }
+    }
+
+    /** 
+     * animating header pushing
+     * @param position
+     */
+    public void configureHeaderView(int position) {
+        final int group = getPackedPositionGroup(getExpandableListPosition(position));
+        int groupView = getFlatListPosition(getPackedPositionForGroup(group));
+
+        if (mHeaderView == null) {
+            return;
+        }
+
+        mHeaderView.setOnClickListener(new OnClickListener() {
+
+            public void onClick(View header) {
+                if(!expandGroup(group)) collapseGroup(group); 
+            }
+        }); 
+
+        int state,nextSectionPosition = getFlatListPosition(getPackedPositionForGroup(group+1));
+
+        if (mAdapter.getGroupCount()== 0) {
+            state = PinnedHeaderAdapter.PINNED_HEADER_GONE;
+        }else if (position &lt; 0) {
+            state = PinnedHeaderAdapter.PINNED_HEADER_GONE;
+        }else if (nextSectionPosition != -1 &amp;&amp; position == nextSectionPosition - 1) {
+            state=PinnedHeaderAdapter.PINNED_HEADER_PUSHED_UP;
+        }else  state=PinnedHeaderAdapter.PINNED_HEADER_VISIBLE;
+
+        switch (state) {    
+            case PinnedHeaderAdapter.PINNED_HEADER_GONE: {
+                mHeaderViewVisible = false;
+                break;
+            }
+
+            case PinnedHeaderAdapter.PINNED_HEADER_VISIBLE: {
+                mAdapter.configurePinnedHeader(mHeaderView, group, MAX_ALPHA);
+                if (mHeaderView.getTop() != 0) {
+                    mHeaderView.layout(0, 0, mHeaderViewWidth, mHeaderViewHeight);
+                }
+                mHeaderViewVisible = true;
+                break;
+            }
+
+            case PinnedHeaderAdapter.PINNED_HEADER_PUSHED_UP: {
+                View firstView = getChildAt(0);
+                if(firstView==null){
+                    if (mHeaderView.getTop() != 0) {
+                        mHeaderView.layout(0, 0, mHeaderViewWidth, mHeaderViewHeight);
+                    }
+                    mHeaderViewVisible = true;
+                    break;
+                }
+                int bottom = firstView.getBottom();
+                int itemHeight = firstView.getHeight();
+                int headerHeight = mHeaderView.getHeight();
+                int y;
+                int alpha;
+                if (bottom &lt; headerHeight) {
+                    y = (bottom - headerHeight);
+                    alpha = MAX_ALPHA * (headerHeight + y) / headerHeight;
+                } else {
+                    y = 0;
+                    alpha = MAX_ALPHA;
+                }
+                mAdapter.configurePinnedHeader(mHeaderView, group, alpha);
+                //??????????
+                if (mHeaderView.getTop() != y) {
+                    mHeaderView.layout(0, y, mHeaderViewWidth, mHeaderViewHeight + y);
+                }
+                mHeaderViewVisible = true;
+                break;
+            }
+        }
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        super.dispatchDraw(canvas);
+        if (mHeaderViewVisible) {
+            drawChild(canvas, mHeaderView, getDrawingTime());
+        }
+    }
+
+}
+</code></pre>
+
+<p>ExpandableList.java</p>
+
+<pre><code>package com.example;
+
+
+import android.app.Activity;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AbsListView;
+import android.widget.AbsListView.LayoutParams;
+import android.widget.AbsListView.OnScrollListener;
+import android.widget.AdapterView;
+import android.widget.AdapterView.OnItemClickListener;
+import android.widget.BaseExpandableListAdapter;
+import android.widget.ExpandableListAdapter;
+import android.widget.SectionIndexer;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.example.PinnedHeaderExpListView.PinnedHeaderAdapter;
+
+
+
+/**
+ * Demonstrates expandable lists using a custom {@link ExpandableListAdapter}
+ * from {@link BaseExpandableListAdapter}.
+ */
+public class ExpandableList extends Activity {
+
+    MyExpandableListAdapter mAdapter;
+    PinnedHeaderExpListView elv;
+
+    private int mPinnedHeaderBackgroundColor;
+    private int mPinnedHeaderTextColor;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+
+        // Set up our adapter
+        mAdapter = new MyExpandableListAdapter();
+        elv = (PinnedHeaderExpListView) findViewById(R.id.list);
+
+        elv.setAdapter(mAdapter);
+
+        mPinnedHeaderBackgroundColor = getResources().getColor(android.R.color.black);
+        mPinnedHeaderTextColor = getResources().getColor(android.R.color.white);
+
+        elv.setGroupIndicator(null);
+        View h = LayoutInflater.from(this).inflate(R.layout.header, (ViewGroup) findViewById(R.id.root), false);
+        elv.setPinnedHeaderView(h);
+        elv.setOnScrollListener((OnScrollListener) mAdapter);
+        elv.setDividerHeight(0);
+    }
+
+    /**
+     * A simple adapter which maintains an ArrayList of photo resource Ids. 
+     * Each photo is displayed as an image. This adapter supports clearing the
+     * list of photos and adding a new photo.
+     *
+     */
+    public class MyExpandableListAdapter extends BaseExpandableListAdapter implements PinnedHeaderAdapter, OnScrollListener{
+        // Sample data set.  children[i] contains the children (String[]) for groups[i].
+        private String[] groups = { "People Names", "Dog Names", "Cat Names", "Fish Names" };
+        private String[][] children = {
+                { "Arnold", "Barry", "Chuck", "David", "Stas", "Oleg", "Max","Alex","Romeo", "Adolf" },
+                { "Ace", "Bandit", "Cha-Cha", "Deuce", "Nokki", "Baron", "Sharik", "Toshka","SObaka","Belka","Strelka","Zhuchka"},
+                { "Fluffy", "Snuggles","Cate", "Yasha","Bars" },
+                { "Goldy", "Bubbles","Fluffy", "Snuggles","Guffy", "Snoopy" }
+        };
+
+        public Object getChild(int groupPosition, int childPosition) {
+            return children[groupPosition][childPosition];
+        }
+
+        public long getChildId(int groupPosition, int childPosition) {
+            return childPosition;
+        }
+
+        public int getChildrenCount(int groupPosition) {
+            return children[groupPosition].length;
+        }
+
+        public TextView getGenericView() {
+            // Layout parameters for the ExpandableListView
+            AbsListView.LayoutParams lp = new AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 64);
+
+            TextView textView = new TextView(ExpandableList.this);
+            textView.setLayoutParams(lp);
+            // Center the text vertically
+            textView.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+            // Set the text starting position
+            textView.setPadding(36, 0, 0, 0);
+            return textView;
+        }
+
+        public View getChildView(int groupPosition, int childPosition, boolean isLastChild,
+                View convertView, ViewGroup parent) {
+            TextView textView = getGenericView();
+            textView.setText(getChild(groupPosition, childPosition).toString());
+            return textView;
+        }
+
+
+        public Object getGroup(int groupPosition) {
+            return groups[groupPosition];
+        }
+
+        public int getGroupCount() {
+            return groups.length;
+        }
+
+        public long getGroupId(int groupPosition) {
+            return groupPosition;
+        }
+
+        public View getGroupView(int groupPosition, boolean isExpanded, View convertView,
+                ViewGroup parent) {
+            TextView textView = (TextView) LayoutInflater.from(getApplicationContext()).inflate(R.layout.header, parent, false);
+            textView.setText(getGroup(groupPosition).toString());
+            return textView;
+        }
+
+        public boolean isChildSelectable(int groupPosition, int childPosition) {
+            return true;
+        }
+
+        public boolean hasStableIds() {
+            return true;
+        }
+
+
+        /**
+         * ????????/?????????? ??????
+         */
+        public void configurePinnedHeader(View v, int position, int alpha) {
+            TextView header = (TextView) v;
+            final String title = (String) getGroup(position);
+
+            header.setText(title);
+            if (alpha == 255) {
+                header.setBackgroundColor(mPinnedHeaderBackgroundColor);
+                header.setTextColor(mPinnedHeaderTextColor);
+            } else {
+                header.setBackgroundColor(Color.argb(alpha, 
+                        Color.red(mPinnedHeaderBackgroundColor),
+                        Color.green(mPinnedHeaderBackgroundColor),
+                        Color.blue(mPinnedHeaderBackgroundColor)));
+                header.setTextColor(Color.argb(alpha, 
+                        Color.red(mPinnedHeaderTextColor),
+                        Color.green(mPinnedHeaderTextColor),
+                        Color.blue(mPinnedHeaderTextColor)));
+            }
+        }
+
+        public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+            if (view instanceof PinnedHeaderExpListView) {
+                ((PinnedHeaderExpListView) view).configureHeaderView(firstVisibleItem);
+            }
+
+        }
+
+        public void onScrollStateChanged(AbsListView view, int scrollState) {
+            // TODO Auto-generated method stub
+
+        }
+
+    }
+
+}
+</code></pre>
+
+<p>main.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" &gt;
+
+    &lt;view class="com.example.PinnedHeaderExpListView"
+        android:id="@+id/list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" /&gt; 
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>header.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/header"
+    android:layout_width="match_parent"
+    android:layout_height="25dp"
+    android:background="@android:color/black" &gt;
+
+&lt;/TextView&gt;
+</code></pre>
+
+<p>It works as expected, except clicking on header. I wish that clicking on header will be equal clicking on group item, but event doesn't even happen and OnClickListener doesnt get control. Why ?</p>
+
+<p><strong>EDIT :</strong> 
+clicking on header also works if you add following piece of code inside <code>onCreate()</code> method of <code>ExpandableList.java</code> activity.</p>
+
+<pre><code>        elv.setOnGroupClickListener(new OnGroupClickListener() {
+
+        @Override
+        public boolean onGroupClick(ExpandableListView parent, View v,
+                int groupPosition, long id) {
+            return false;
+        }
+    });
+</code></pre>

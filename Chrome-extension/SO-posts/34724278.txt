@@ -1,0 +1,168 @@
+<p>In case you still wondering, there is example of custom content provider, which joins 2 table. Note the projection in <code>query</code>, you need to set aliase for '_id'. If you make projection just for '_id' you will get ambiguse columns exceptions, as there are 2 such columns, if you dont make any, you will not be able to use resulting cursor with loaders.</p>
+
+<pre><code>public class ContactsWithCategorisProvider extends ContentProvider {
+
+  private MySQLiteHelper database;
+
+  // used for the UriMacher
+  private static String TABLE_NAME = buildTableName();
+  private static String TABLE_ID = ContactsTable._ID;
+  private static String AUTHORITY = "some_authority";
+
+  private static final int ITEMS = 10;
+  private static final int ITEM_ID = 20;
+  private static final String BASE_PATH = "yourbase";
+  private static final UriMatcher sURIMatcher = new UriMatcher(UriMatcher.NO_MATCH);
+  public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/" + BASE_PATH);
+
+  private static String buildTableName() {
+    StringBuilder sb = new StringBuilder();
+    sb.append(ContactsTable.TABLE_NAME);
+    sb.append(" LEFT OUTER JOIN ");
+    sb.append(ContactsCategoriesTable.TABLE_NAME);
+    sb.append(" ON(");
+    sb.append(ContactsCategoriesTable.CONTACT_ID);
+    sb.append(" = ");
+    sb.append(ContactsTable.CONTACT_ID);
+    sb.append(" AND ");
+    sb.append(ContactsCategoriesTable.CURRENT_USER);
+    sb.append(" = ");
+    sb.append(ContactsTable.CURRENT_USER);
+    sb.append(") ");
+    return sb.toString();
+  }
+
+  static {
+    sURIMatcher.addURI(AUTHORITY, BASE_PATH, ITEMS);
+    sURIMatcher.addURI(AUTHORITY, BASE_PATH + "/#", ITEM_ID);
+  }
+
+  @Override public boolean onCreate() {
+    database = new MySQLiteHelper(getContext());
+    return true;
+  }
+
+  @Override
+  public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
+      String sortOrder) {
+
+    // Uisng SQLiteQueryBuilder instead of query() method
+    SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+
+    // check if the caller has requested a column which does not exists
+    //      checkColumns(projection);
+    Log.e("check_uri", uri.toString());
+    // Set the table
+    queryBuilder.setTables(TABLE_NAME);
+    if (projection == null || projection.length == 0) {
+      projection = new String[] {
+          ContactsTable.TABLE_NAME + "." + ContactsTable._ID + " AS " + ContactsTable._ID,
+          ContactsTable.NAME, ContactsTable.NAME_SHORT, ContactsTable.NUMBER, ContactsTable.NOTE,
+          ContactsTable.CATEGORIES, ContactsCategoriesTable.NAME, ContactsTable.CONTACT_ID
+      };
+    }
+    int uriType = sURIMatcher.match(uri);
+    switch (uriType) {
+      case ITEMS:
+        break;
+      case ITEM_ID:
+        queryBuilder.appendWhere(TABLE_ID + "=" + uri.getLastPathSegment());
+        break;
+      default:
+        throw new IllegalArgumentException("Unknown URI: " + uri);
+    }
+
+    SQLiteDatabase db = database.getWritableDatabase();
+    Cursor cursor =
+        queryBuilder.query(db, projection, selection, selectionArgs, null, null, sortOrder);
+    cursor.setNotificationUri(getContext().getContentResolver(), uri);
+
+    return cursor;
+  }
+
+  @Override public String getType(Uri uri) {
+    return null;
+  }
+
+  @Override public Uri insert(Uri uri, ContentValues values) {
+    int uriType = sURIMatcher.match(uri);
+    SQLiteDatabase sqlDB = database.getWritableDatabase();
+    long id;
+    switch (uriType) {
+      case ITEMS:
+        id = sqlDB.insert(TABLE_NAME, null, values);
+        break;
+      default:
+        throw new IllegalArgumentException("Unknown URI: " + uri);
+    }
+    getContext().getContentResolver().notifyChange(uri, null);
+    return Uri.parse(BASE_PATH + "/" + id);
+  }
+
+  public void insert(Uri uri, ArrayList&lt;ContentValues&gt; values) {
+
+    int uriType = sURIMatcher.match(uri);
+    SQLiteDatabase sqlDB = database.getWritableDatabase();
+    switch (uriType) {
+      case ITEMS:
+        for (ContentValues c : values) {
+          sqlDB.insert(TABLE_NAME, null, c);
+        }
+        break;
+      default:
+        throw new IllegalArgumentException("Unknown URI: " + uri);
+    }
+    getContext().getContentResolver().notifyChange(uri, null);
+  }
+
+  @Override public int delete(Uri uri, String selection, String[] selectionArgs) {
+    int uriType = sURIMatcher.match(uri);
+    SQLiteDatabase sqlDB = database.getWritableDatabase();
+    int rowsDeleted = 0;
+    switch (uriType) {
+      case ITEMS:
+        rowsDeleted = sqlDB.delete(TABLE_NAME, selection, selectionArgs);
+        break;
+      case ITEM_ID:
+        String id = uri.getLastPathSegment();
+        if (TextUtils.isEmpty(selection)) {
+          rowsDeleted = sqlDB.delete(TABLE_NAME, TABLE_ID + "=" + id, null);
+        } else {
+          rowsDeleted =
+              sqlDB.delete(TABLE_NAME, TABLE_ID + "=" + id + " and " + selection, selectionArgs);
+        }
+        break;
+      default:
+        throw new IllegalArgumentException("Unknown URI: " + uri);
+    }
+    getContext().getContentResolver().notifyChange(uri, null);
+    return rowsDeleted;
+  }
+
+  @Override
+  public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+
+    int uriType = sURIMatcher.match(uri);
+    SQLiteDatabase sqlDB = database.getWritableDatabase();
+    int rowsUpdated = 0;
+    switch (uriType) {
+      case ITEMS:
+        rowsUpdated = sqlDB.update(TABLE_NAME, values, selection, selectionArgs);
+        break;
+      case ITEM_ID:
+        String id = uri.getLastPathSegment();
+        if (TextUtils.isEmpty(selection)) {
+          rowsUpdated = sqlDB.update(TABLE_NAME, values, TABLE_ID + "=" + id, null);
+        } else {
+          rowsUpdated = sqlDB.update(TABLE_NAME, values, TABLE_ID + "=" + id + " and " + selection,
+              selectionArgs);
+        }
+        break;
+      default:
+        throw new IllegalArgumentException("Unknown URI: " + uri);
+    }
+    getContext().getContentResolver().notifyChange(uri, null);
+    return rowsUpdated;
+  }
+}
+</code></pre>

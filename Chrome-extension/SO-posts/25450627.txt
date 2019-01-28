@@ -1,0 +1,78 @@
+<p>As already mentioned, <code>setup()</code> and <code>cleanup()</code> are methods you can override, if you choose, and they are there for you to initialize and clean up your map/reduce tasks. You actually don't have access to any data from the input split directly during these phases. The lifecycle of a map/reduce task is (from a programmer's point of view):</p>
+
+<p>setup -> map -> cleanup</p>
+
+<p>setup -> reduce -> cleanup</p>
+
+<p>What typically happens during <code>setup()</code> is that you may read parameters from the configuration object to customize your processing logic.</p>
+
+<p>What typically happens during <code>cleanup()</code> is that you clean up any resources you may have allocated. There are other uses too, which is to flush out any accumulation of aggregate results. </p>
+
+<p>The <code>setup()</code> and <code>cleanup()</code> methods are simply "hooks" for you, the developer/programmer, to have a chance to do something before and after your map/reduce tasks.</p>
+
+<p>For example, in the canonical word count example, let's say you want to exclude certain words from being counted (e.g. stop words such as "the", "a", "be", etc...). When you configure your MapReduce Job, you can pass a list (comma-delimited) of these words as a parameter (key-value pair) into the configuration object. Then in your map code, during <code>setup()</code>, you can acquire the stop words and store them in some global variable (global variable to the map task) and exclude counting these words during your map logic. Here is a modified example from <a href="http://wiki.apache.org/hadoop/WordCount">http://wiki.apache.org/hadoop/WordCount</a>.</p>
+
+<pre><code>public class WordCount {
+
+ public static class Map extends Mapper&lt;LongWritable, Text, Text, IntWritable&gt; {
+    private final static IntWritable one = new IntWritable(1);
+    private Text word = new Text();
+    private Set&lt;String&gt; stopWords;
+
+    protected void setup(Context context) throws IOException, InterruptedException {
+        Configuration conf = context.getConfiguration();
+
+        stopWords = new HashSet&lt;String&gt;();
+        for(String word : conf.get("stop.words").split(",")) {
+            stopWords.add(word);
+        }
+    }
+
+    public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        String line = value.toString();
+        StringTokenizer tokenizer = new StringTokenizer(line);
+        while (tokenizer.hasMoreTokens()) {
+            String token = tokenizer.nextToken();
+            if(stopWords.contains(token)) {
+                continue;
+            }
+            word.set(tokenizer.nextToken());
+            context.write(word, one);
+        }
+    }
+ } 
+
+ public static class Reduce extends Reducer&lt;Text, IntWritable, Text, IntWritable&gt; {
+
+    public void reduce(Text key, Iterable&lt;IntWritable&gt; values, Context context) 
+      throws IOException, InterruptedException {
+        int sum = 0;
+        for (IntWritable val : values) {
+            sum += val.get();
+        }
+        context.write(key, new IntWritable(sum));
+    }
+ }
+
+ public static void main(String[] args) throws Exception {
+    Configuration conf = new Configuration();
+    conf.set("stop.words", "the, a, an, be, but, can");
+
+    Job job = new Job(conf, "wordcount");
+
+    job.setOutputKeyClass(Text.class);
+    job.setOutputValueClass(IntWritable.class);
+
+    job.setMapperClass(Map.class);
+    job.setReducerClass(Reduce.class);
+
+    job.setInputFormatClass(TextInputFormat.class);
+    job.setOutputFormatClass(TextOutputFormat.class);
+
+    FileInputFormat.addInputPath(job, new Path(args[0]));
+    FileOutputFormat.setOutputPath(job, new Path(args[1]));
+
+    job.waitForCompletion(true);
+ }
+}
+</code></pre>

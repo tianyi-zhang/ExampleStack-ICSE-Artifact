@@ -1,0 +1,130 @@
+<p>On Mac OS X version 10.9.4, I can verify that <code>createBufferStrategy(2)</code> works under Java 8, while <code>createBufferStrategy(3)</code> fails unless I revert to Java 7. As an aside, note that Swing GUI objects should be constructed and manipulated <em>only</em> on the <a href="http://docs.oracle.com/javase/tutorial/uiswing/concurrency/initial.html" rel="nofollow">event dispatch thread</a>.</p>
+
+<p><img src="http://i.stack.imgur.com/zjzIX.png" alt="image"></p>
+
+<p>As tested:</p>
+
+<pre><code>import java.awt.Canvas;
+import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.GraphicsConfiguration;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
+import java.awt.image.BufferStrategy;
+import java.awt.image.BufferedImage;
+import javax.swing.JFrame;
+import java.awt.EventQueue;
+
+public class Game implements Runnable {
+    private BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+    private boolean running;
+    private Thread thread;
+    private JFrame f;
+    private Canvas c;
+
+    public Game() {
+        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        GraphicsDevice[] gs = ge.getScreenDevices();
+        for (GraphicsDevice gd : gs) {
+            GraphicsConfiguration[] gc = gd.getConfigurations();
+            for (GraphicsConfiguration gc1 : gc) {
+                f = new JFrame("Title", gd.getDefaultConfiguration());
+                c = new Canvas(gc1);
+                f.add(c);
+                f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                f.pack();
+                f.setSize(360, 300);
+                f.setLocationRelativeTo(null);
+                f.setVisible(true);
+            }
+        }
+    }
+
+    public void init() {
+        img.getGraphics().drawImage(img, 0, 0, Color.BLUE, null);
+    }
+
+    @Override
+    public void run() {
+        long lastTime = System.nanoTime();
+        double nsPerTick = 1000000000D / 60;
+
+        int ticks = 0;
+        int frames = 0;
+
+        long lastTimer = System.currentTimeMillis();
+        double delta = 0;
+
+        init();
+
+        while (running) {
+            long now = System.nanoTime();
+            delta += (now - lastTime) / nsPerTick;
+            lastTime = now;
+            boolean shouldRender = true;
+
+            while (delta &gt;= 1) {
+                ticks++;
+                tick();
+                delta -= 1;
+                shouldRender = true;
+            }
+
+            try {
+                Thread.sleep(2);
+            } catch (InterruptedException e) {
+                System.out.println(e.getMessage());
+            }
+
+            if (shouldRender) {
+                frames++;
+                render();
+            }
+
+            if (System.currentTimeMillis() - lastTimer &gt;= 1000) {
+                lastTimer += 1000;
+                frames = 0;
+                ticks = 0;
+            }
+        }
+    }
+
+    public synchronized void start() {
+        running = true;
+        thread = new Thread(this, "GAME");
+        thread.start();
+    }
+
+    public synchronized void stop() {
+        running = false;
+
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        EventQueue.invokeLater(new Runnable() {
+
+            @Override
+            public void run() {
+                new Game().start();
+            }
+        });
+    }
+
+    public void tick() { /*player movement, ect*/ }
+
+    public void render() {
+        c.createBufferStrategy(2);
+        BufferStrategy bs = c.getBufferStrategy();
+        Graphics g = bs.getDrawGraphics();
+        g.drawImage(img, 100, 100, null);
+        g.drawString("Hello, world: " + System.currentTimeMillis(), 50, 50);
+        g.dispose();
+        bs.show();
+    }
+}
+</code></pre>

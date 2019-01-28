@@ -1,0 +1,229 @@
+<p>After some digging, I found the solution. Hope it helps somebody else.</p>
+
+<p>We can send message from an Activity to <code>WearableListenerService</code> using <code>Wearable.MessageApi</code> functions.
+When the <code>Activity</code> and <code>WearableListenerService</code> are on the same Node (device), we need to <strong>get the instance of the local node</strong> (current node from which the message is sent) for sending the message as below</p>
+
+<pre><code>NodeApi.GetLocalNodeResult nodes = Wearable.NodeApi.getLocalNode(mGoogleApiClient).await();
+</code></pre>
+
+<p>rather than</p>
+
+<pre><code>NodeApi.GetConnectedNodesResult nodes  = Wearable.NodeApi.getConnectedNodes(mGoogleApiClient).await();
+</code></pre>
+
+<p>which is used to get the list of other devices (such as wear) connected to the phone.</p>
+
+<p>So, I was able to successfully send a message from my Activity to WearableListenerService as follows</p>
+
+<blockquote>
+  <p>Activity Code</p>
+</blockquote>
+
+<pre><code>public class PhoneActivity extends Activity implements
+    GoogleApiClient.ConnectionCallbacks,
+    GoogleApiClient.OnConnectionFailedListener{
+
+private static final String TAG = "PhoneActivity";
+
+public static final String CONFIG_START = "config/start";
+public static final String CONFIG_STOP= "config/stop"
+
+Intent intent;
+TextView txtview;
+
+GoogleApiClient mGoogleApiClient;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_phone);
+
+    if(null == mGoogleApiClient) {
+        mGoogleApiClient = new GoogleApiClient.Builder(this)
+                .addApi(Wearable.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+        Log.v(TAG, "GoogleApiClient created");
+    }
+
+    if(!mGoogleApiClient.isConnected()){
+        mGoogleApiClient.connect();
+        Log.v(TAG, "Connecting to GoogleApiClient..");
+    }
+
+    startService(new Intent(this, PhoneService.class));
+}
+
+@Override
+public void onConnectionSuspended(int cause) {
+    Log.v(TAG,"onConnectionSuspended called");
+}
+
+@Override
+public void onConnectionFailed(ConnectionResult connectionResult) {
+    Log.v(TAG,"onConnectionFailed called");
+}
+
+@Override
+public void onConnected(Bundle connectionHint) {
+    Log.v(TAG,"onConnected called");
+}
+
+@Override
+protected void onStart() {
+    super.onStart();
+    Log.v(TAG, "onStart called");
+}
+
+@Override
+public boolean onCreateOptionsMenu(Menu menu) {
+    // Inflate the menu; this adds items to the action bar if it is present.
+    getMenuInflater().inflate(R.menu.phone, menu);
+    return true;
+}
+
+@Override
+public boolean onOptionsItemSelected(MenuItem item) {
+    // Handle action bar item clicks here. The action bar will
+    // automatically handle clicks on the Home/Up button, so long
+    // as you specify a parent activity in AndroidManifest.xml.
+    int id = item.getItemId();
+    if (id == R.id.action_start_) {
+        new SendActivityPhoneMessage(CONFIG_START,"").start();
+    }else if (id == R.id.action__stop) {
+        new SendActivityPhoneMessage(CONFIG_STOP,"").start();
+    }else if (id == R.id.action_settings) {
+        return true;
+    }
+    return super.onOptionsItemSelected(item);
+}
+
+class SendActivityPhoneMessage extends Thread {
+    String path;
+    String message;
+
+    // Constructor to send a message to the data layer
+    SendActivityPhoneMessage(String p, String msg) {
+        path = p;
+        message = msg;
+    }
+
+    public void run() {
+        NodeApi.GetLocalNodeResult nodes = Wearable.NodeApi.getLocalNode(mGoogleApiClient).await();
+        Node node = nodes.getNode();
+        Log.v(TAG, "Activity Node is : "+node.getId()+ " - " + node.getDisplayName());
+        MessageApi.SendMessageResult result = Wearable.MessageApi.sendMessage(mGoogleApiClient, node.getId(), path, message.getBytes()).await();
+        if (result.getStatus().isSuccess()) {
+            Log.v(TAG, "Activity Message: {" + message + "} sent to: " + node.getDisplayName());
+        }
+        else {
+            // Log an error
+            Log.v(TAG, "ERROR: failed to send Activity Message");
+        }
+
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<blockquote>
+  <p><strong>Service Code</strong></p>
+</blockquote>
+
+<pre><code>public class PhoneService extends WearableListenerService implements
+    GoogleApiClient.ConnectionCallbacks,
+    GoogleApiClient.OnConnectionFailedListener{
+
+private static final String TAG = "PhoneService";
+
+public static final String CONFIG_START = "config/start";
+public static final String CONFIG_STOP = "config/stop";
+
+GoogleApiClient mGoogleApiClient;
+
+public PhoneService() {
+}
+
+@Override
+public void onCreate() {
+    super.onCreate();
+    Log.v(TAG, "Created");
+
+    if(null == mGoogleApiClient) {
+        mGoogleApiClient = new GoogleApiClient.Builder(this)
+                .addApi(Wearable.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+        Log.v(TAG, "GoogleApiClient created");
+    }
+
+    if(!mGoogleApiClient.isConnected()){
+        mGoogleApiClient.connect();
+        Log.v(TAG, "Connecting to GoogleApiClient..");
+    }
+}
+
+@Override
+public void onDestroy() {
+
+    Log.v(TAG, "Destroyed");
+
+    if(null != mGoogleApiClient){
+        if(mGoogleApiClient.isConnected()){
+            mGoogleApiClient.disconnect();
+            Log.v(TAG, "GoogleApiClient disconnected");
+        }
+    }
+
+    super.onDestroy();
+}
+
+@Override
+public void onConnectionSuspended(int cause) {
+    Log.v(TAG,"onConnectionSuspended called");
+}
+
+@Override
+public void onConnectionFailed(ConnectionResult connectionResult) {
+    Log.v(TAG,"onConnectionFailed called");
+}
+
+@Override
+public void onConnected(Bundle connectionHint) {
+    Log.v(TAG,"onConnected called");
+
+}
+
+@Override
+public void onDataChanged(DataEventBuffer dataEvents) {
+    super.onDataChanged(dataEvents);
+    Log.v(TAG, "Data Changed");
+}
+
+@Override
+public void onMessageReceived(MessageEvent messageEvent) {
+    super.onMessageReceived(messageEvent);
+    if(messageEvent.getPath().equals(CONFIG_START)){
+        //do something here
+    }else if(messageEvent.getPath().equals(CONFIG_STOP)){
+        //do something here
+    }
+}
+
+@Override
+public void onPeerConnected(Node peer) {
+    super.onPeerConnected(peer);
+    Log.v(TAG, "Peer Connected " + peer.getDisplayName());
+}
+
+@Override
+public void onPeerDisconnected(Node peer) {
+    super.onPeerDisconnected(peer);
+    Log.v(TAG, "Peer Disconnected " + peer.getDisplayName());
+}
+</code></pre>
+
+<p>}</p>

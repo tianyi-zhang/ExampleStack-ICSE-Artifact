@@ -1,0 +1,373 @@
+<p>Alright, after a good nights sleep and applying RedOrav's advice regarding orthogonal projection, I did more browsing into it and got it working!</p>
+
+<p>The code snippets given by RedOrav did actually work, however after switching to the orthogonal projection I was still drawing the squares and triangles as small as 0.15f in width. Barely be visible as it's less than 1 pixel wide!</p>
+
+<p>After changing the background/square/triangle code to something more reasonable (30.0f), they showed up!</p>
+
+<p>Played around with the code a bit more and got positioning working properly. I've submitted the code to <a href="https://bitbucket.org/koonkii/test_opengl/src" rel="nofollow">bitbucket</a> for those who want to check out a working copy of the project.</p>
+
+<p>The reason why I needed G.getYPos() is because the bottom coordinate = 0, and top is screen height. Couldn't figure out a nicer way of inverting it without turning all the textures upside-down.</p>
+
+<p>The important initialisation parts are:</p>
+
+<p><strong>Global helper</strong></p>
+
+<pre><code>public class G {
+    public static float ratio;
+    public static int width, height;
+
+    /** The texture pointer */
+    public static int[] textures = new int[3];
+
+    final static int TEXTURE_DEFAULT = 0;
+    final static int TEXTURE_BG = 1;
+    final static int TEXTURE_ANDROID = 2;
+    final static int TEXTURE_TURTLE = 3;
+
+    /**
+     * Since (bottom = 0, top = height), we need to invert the values so they make sense logically.
+     */
+    public static int getYPos(int top) {
+        return G.height - top;
+    }
+}
+</code></pre>
+
+<p><strong>Renderer class</strong></p>
+
+<pre><code>@Override
+public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+    this.loadGLTextures(gl);
+
+    gl.glClearColor(1.0f, 0.0f, 0.0f, 1.0f);    //Red Background
+}
+
+@Override
+public void onSurfaceChanged(GL10 gl, int width, int height) {
+    gl.glViewport(0, 0, width, height);
+
+
+    // Save these for global use.
+    G.width = width;
+    G.height = height;
+    G.ratio = (float) width / height;
+
+
+    // Set up orthogonal viewport and make adjustments for screen ratio
+    gl.glViewport(0, 0, width, height);
+    gl.glMatrixMode(GL10.GL_PROJECTION);
+    gl.glLoadIdentity();
+    GLU.gluOrtho2D(gl, 0, width, 0, height); // The parameters are weird but bottom = 0 so we need an inverter function G.
+
+    gl.glMatrixMode(GL10.GL_MODELVIEW);
+    gl.glLoadIdentity();
+
+
+    // Start setting up the constructs we need
+    bg = new Background();
+
+    squares = new ArrayList&lt;Square&gt;();
+    squares.add(new Square(width / 2, G.getYPos(0))); // middle/top of the screen
+    squares.add(new Square(width / 2, G.height /2)); // center of the screen
+
+    triangles = new ArrayList&lt;Triangle&gt;();
+    triangles.add(new Triangle(0, G.getYPos(0))); // top left
+    triangles.add(new Triangle(width, G.getYPos(height))); // bottom right
+    triangles.add(new Triangle(width /2, height /2)); // middle
+}
+
+@Override
+public void onDrawFrame(GL10 gl) {
+    // Clear the screen
+    gl.glClear(GL10.GL_COLOR_BUFFER_BIT);
+
+    bg.draw(gl);
+
+    for (Square s : squares) {
+        s.draw(gl);
+    }
+
+    // Draw correctly scaled triangles
+    for (Triangle t : triangles) {
+        t.draw(gl);
+    }
+
+    try {
+        Thread.sleep(400);
+    }
+    catch (InterruptedException e) {
+    }
+}
+
+
+/**
+ * Loads the textures up.
+ */
+public void loadGLTextures(GL10 gl) {
+    int[] texture_map = new int[] { R.drawable.bg_game, R.drawable.ic_launcher };
+    Bitmap bitmap;
+
+    // generate one texture pointer, keep 0 as blank/default
+    gl.glGenTextures(texture_map.length, G.textures, 0);
+
+    for (int i = 0; i &lt; texture_map.length; i++) {
+        // loading texture
+        bitmap = BitmapFactory.decodeResource(context.getResources(), texture_map[i]);
+
+        // ...and bind it to our array
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, G.textures[i +1]);
+
+        // create nearest filtered texture
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_NEAREST);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, GL10.GL_LINEAR);
+
+        // Use Android GLUtils to specify a two-dimensional texture image from our bitmap
+        GLUtils.texImage2D(GL10.GL_TEXTURE_2D, 0, bitmap, 0);
+
+        // Clean up
+        bitmap.recycle();
+    }
+}
+</code></pre>
+
+<p><strong>Background class</strong>
+p</p>
+
+<pre><code>ublic class Background {
+    private FloatBuffer vertexBuffer;   // buffer holding the vertices
+    private float vertices[] = {
+            -1.0f, -1.0f,  0.0f,        // V1 - bottom left
+            -1.0f,  1.0f,  0.0f,        // V2 - top left
+            1.0f, -1.0f,  0.0f,        // V3 - bottom right
+            1.0f,  1.0f,  0.0f         // V4 - top right
+    };
+
+    private FloatBuffer textureBuffer;  // buffer holding the texture coordinates
+    private float texture[] = {
+            // Mapping coordinates for the vertices
+            0.0f, 1.0f,     // top left     (V2)
+            0.0f, 0.0f,     // bottom left  (V1)
+            1.0f, 1.0f,     // top right    (V4)
+            1.0f, 0.0f      // bottom right (V3)
+    };
+
+
+    public Background() {
+        // Recalculate the vertices so they fit the screen
+        vertices[0] = 0;        // v1 left
+        vertices[1] = G.height; // v1 bottom
+
+        vertices[3] = 0;        // v2 left
+        vertices[4] = 0;        // v2 top
+
+        vertices[6] = G.width;  // v3 right
+        vertices[7] = G.height; // v3 bottom
+
+        vertices[9] = G.width;  // v4 right
+        vertices[10] = 0;       // v4 top
+
+
+        // a float has 4 bytes so we allocate for each coordinate 4 bytes
+        ByteBuffer byteBuffer = ByteBuffer.allocateDirect(vertices.length * 4);
+        byteBuffer.order(ByteOrder.nativeOrder());
+
+        // allocates the memory from the byte buffer
+        vertexBuffer = byteBuffer.asFloatBuffer();
+
+        // fill the vertexBuffer with the vertices
+        vertexBuffer.put(vertices);
+
+        // set the cursor position to the beginning of the buffer
+        vertexBuffer.position(0);
+
+
+        byteBuffer = ByteBuffer.allocateDirect(texture.length * 4);
+        byteBuffer.order(ByteOrder.nativeOrder());
+        textureBuffer = byteBuffer.asFloatBuffer();
+        textureBuffer.put(texture);
+        textureBuffer.position(0);
+    }
+
+
+    public void draw(GL10 gl) {
+        gl.glEnable(GL10.GL_TEXTURE_2D); // Twig;
+
+        // Bind the previously generated texture
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, G.textures[G.TEXTURE_BG]);
+
+        // Point to our buffers
+        gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+        gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+        // Point to our vertex buffer
+        gl.glVertexPointer(3, GL10.GL_FLOAT, 0, vertexBuffer);
+        gl.glTexCoordPointer(2, GL10.GL_FLOAT, 0, textureBuffer);
+
+        // Draw the vertices as triangle strip
+        gl.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, vertices.length / 3);
+
+        //Disable the client state before leaving
+        gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+        gl.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+        gl.glDisable(GL10.GL_TEXTURE_2D); // twig;
+    }
+}
+</code></pre>
+
+<p><strong>Square class</strong>
+Very similar to background except it has a position and applies alpha transparency.</p>
+
+<pre><code>public class Square {
+    private FloatBuffer vertexBuffer;   // buffer holding the vertices
+    private float vertices[] = {
+            -1.0f, -1.0f,  0.0f,        // V1 - bottom left
+            -1.0f,  1.0f,  0.0f,        // V2 - top left
+            1.0f, -1.0f,  0.0f,        // V3 - bottom right
+            1.0f,  1.0f,  0.0f         // V4 - top right
+    };
+
+    private FloatBuffer textureBuffer;  // buffer holding the texture coordinates
+    private float texture[] = {
+            // Mapping coordinates for the vertices
+            0.0f, 1.0f,     // top left     (V2)
+            0.0f, 0.0f,     // bottom left  (V1)
+            1.0f, 1.0f,     // top right    (V4)
+            1.0f, 0.0f      // bottom right (V3)
+    };
+
+
+    public Square(float posX, float posY) {
+        float w = 30f;
+        float h = w;
+
+        vertices[0] = posX - w; // left
+        vertices[3] = posX - w;
+        vertices[6] = posX + w; // right
+        vertices[9] = posX + w;
+
+        vertices[1] = posY - h; // top
+        vertices[4] = posY + h;
+        vertices[7] = posY - h; // bottom
+        vertices[10] = posY + h;
+
+        // a float has 4 bytes so we allocate for each coordinate 4 bytes
+        ByteBuffer byteBuffer = ByteBuffer.allocateDirect(vertices.length * 4);
+        byteBuffer.order(ByteOrder.nativeOrder());
+
+        // allocates the memory from the byte buffer
+        vertexBuffer = byteBuffer.asFloatBuffer();
+
+        // fill the vertexBuffer with the vertices
+        vertexBuffer.put(vertices);
+
+        // set the cursor position to the beginning of the buffer
+        vertexBuffer.position(0);
+
+
+
+        byteBuffer = ByteBuffer.allocateDirect(texture.length * 4);
+        byteBuffer.order(ByteOrder.nativeOrder());
+        textureBuffer = byteBuffer.asFloatBuffer();
+        textureBuffer.put(texture);
+        textureBuffer.position(0);
+    }
+
+
+    /** The draw method for the square with the GL context */
+    public void draw(GL10 gl) {
+        // Enable alpha transparency
+        gl.glEnable(GL10.GL_BLEND);
+        gl.glBlendFunc(GL10.GL_ONE, GL10.GL_ONE_MINUS_SRC_ALPHA);
+
+        // bind the previously generated texture
+        gl.glEnable(GL10.GL_TEXTURE_2D); // Twig;
+
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, G.textures[G.TEXTURE_ANDROID]);
+
+        // Point to our buffers
+        gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+        gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+        // reset the colour for the square
+        gl.glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+        // Point to our vertex buffer
+        gl.glVertexPointer(3, GL10.GL_FLOAT, 0, vertexBuffer);
+        gl.glTexCoordPointer(2, GL10.GL_FLOAT, 0, textureBuffer);
+
+        // Draw the vertices as triangle strip
+        gl.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, vertices.length / 3);
+
+        //Disable the client state before leaving
+        gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+        gl.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+        // Disable alpha transparency
+        gl.glDisable(GL10.GL_BLEND);
+        gl.glBlendFunc(GL10.GL_ONE, GL10.GL_ZERO);
+
+        gl.glDisable(GL10.GL_TEXTURE_2D); // twig;
+    }
+}
+</code></pre>
+
+<p><strong>Triangle class</strong></p>
+
+<pre><code>public class Triangle {
+    private FloatBuffer vertexBuffer;   // buffer holding the vertices
+
+    private float vertices[] = {
+            -0.5f, -0.5f,  0.0f,        // V1 - first vertex (x,y,z)
+             0.5f, -0.5f,  0.0f,        // V2 - second vertex
+             0.0f,  0.5f,  0.0f         // V3 - third vertex
+    };
+
+    public Triangle(float posX, float posY) {
+        int w = 30;
+        int h = w;
+
+        vertices[0] = posX - (w/2); // left
+        vertices[3] = posX + (w/2); // right
+        vertices[6] = posX;         // middle
+
+        vertices[1] = posY - (h/2); // bottom
+        vertices[4] = posY - (h/2); // bottom
+        vertices[7] = posY + (h/2); // top
+
+        // a float has 4 bytes so we allocate for each coordinate 4 bytes
+        ByteBuffer vertexByteBuffer = ByteBuffer.allocateDirect(vertices.length * 4);
+        vertexByteBuffer.order(ByteOrder.nativeOrder());
+
+        // allocates the memory from the byte buffer
+        vertexBuffer = vertexByteBuffer.asFloatBuffer();
+
+        // fill the vertexBuffer with the vertices
+        vertexBuffer.put(vertices);
+
+        // set the cursor position to the beginning of the buffer
+        vertexBuffer.position(0);
+    }
+
+    public void draw(GL10 gl) {
+        gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+
+        // set the colour for the triangle
+        gl.glColor4f(0.0f, 0.0f, 1.0f, 1.0f);
+
+        // Point to our vertex buffer
+        gl.glVertexPointer(3, GL10.GL_FLOAT, 0, vertexBuffer);
+
+        // Draw the vertices as triangle strip
+        gl.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, vertices.length / 3);
+
+        // Reset the colour
+        gl.glColor4f(1.0f, 1.0f, 1.0f, 0.0f);
+
+        //Disable the client state before leaving
+        gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+    }
+}
+</code></pre>
+
+<p>Hope this helps anyone else having similar issues with starting OpenGL.</p>

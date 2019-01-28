@@ -1,0 +1,214 @@
+<p>Try to add this async task in your activity.</p>
+
+<pre><code>public class Async extends AsyncTask&lt;String, String, String&gt; {
+    String resp = "";
+    Double lat;
+    Double lng;
+
+    @Override
+    protected String doInBackground(String... arg0) {
+        // TODO Auto-generated method stub
+        try {
+            resp = downloadUrl(PLACES_API_BASE + TYPE_DETAILS + OUT_JSON
+                    + "?key=" + API_KEY + "&amp;reference=" + arg0[0]
+                    + "&amp;sensor=false");
+
+            JSONObject jsonObj = new JSONObject(resp.toString());
+            JSONObject jObj = jsonObj.getJSONObject("result");
+            JSONObject jObj2 = jObj.getJSONObject("geometry");
+            JSONObject jObj3 = jObj2.getJSONObject("location");
+            lat = jObj3.getDouble("lat");
+            lng = jObj3.getDouble("lng");
+
+            Log.e("lat", "" + lat);
+            Log.e("lng", "" + lng);
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (JSONException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        Log.e("response----&gt;", resp);
+        return null;
+    }
+
+    @Override
+    protected void onPostExecute(String result) {
+        // TODO Auto-generated method stub
+        super.onPostExecute(result);
+        Location loc = new Location("");
+        loc.setLatitude(lat);
+        loc.setLongitude(lng);
+        updateCurrentMarker(loc);
+        changeCamera(getLastCameraUpdate(loc));
+        marker.setDraggable(true);
+        // btn_save.setVisibility(View.GONE);
+    }
+}
+
+private String downloadUrl(String strUrl) throws IOException {
+    String data = "";
+    InputStream iStream = null;
+    HttpURLConnection urlConnection = null;
+    try {
+        URL url = new URL(strUrl);
+
+        // Creating an http connection to communicate with url
+        urlConnection = (HttpURLConnection) url.openConnection();
+
+        // Connecting to url
+        urlConnection.connect();
+
+        // Reading data from url
+        iStream = urlConnection.getInputStream();
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(
+                iStream));
+
+        StringBuffer sb = new StringBuffer();
+
+        String line = "";
+        while ((line = br.readLine()) != null) {
+            sb.append(line);
+        }
+
+        data = sb.toString();
+
+        br.close();
+
+    } catch (Exception e) {
+        Log.d("Exception while downloading url", e.toString());
+    } finally {
+        iStream.close();
+        urlConnection.disconnect();
+    }
+    return data;
+}
+
+private ArrayList&lt;LocationAutoCompleteModel&gt; autocomplete(String input) {
+    ArrayList&lt;LocationAutoCompleteModel&gt; resultList = null;
+
+    HttpURLConnection conn = null;
+    StringBuilder jsonResults = new StringBuilder();
+    try {
+        StringBuilder sb = new StringBuilder(PLACES_API_BASE
+                + TYPE_AUTOCOMPLETE + OUT_JSON);
+        sb.append("?sensor=false&amp;key=" + API_KEY);
+        // sb.append("&amp;components=country:uk");
+        sb.append("&amp;input=" + URLEncoder.encode(input, "utf8"));
+
+        URL url = new URL(sb.toString());
+        conn = (HttpURLConnection) url.openConnection();
+        InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+        // Load the results into a StringBuilder
+        int read;
+        char[] buff = new char[1024];
+        while ((read = in.read(buff)) != -1) {
+            jsonResults.append(buff, 0, read);
+        }
+    } catch (MalformedURLException e) {
+        Log.e(LOG_TAG, "Error processing Places API URL", e);
+        return resultList;
+    } catch (IOException e) {
+        Log.e(LOG_TAG, "Error connecting to Places API", e);
+        return resultList;
+    } finally {
+        if (conn != null) {
+            conn.disconnect();
+        }
+    }
+
+    try {
+        // Create a JSON object hierarchy from the results
+        JSONObject jsonObj = new JSONObject(jsonResults.toString());
+        JSONArray predsJsonArray = jsonObj.getJSONArray("predictions");
+
+        // Extract the Place descriptions from the results
+        resultList = new ArrayList&lt;LocationAutoCompleteModel&gt;(
+                predsJsonArray.length());
+        for (int i = 0; i &lt; predsJsonArray.length(); i++) {
+            LocationAutoCompleteModel lm = new LocationAutoCompleteModel();
+            lm.setDesc(predsJsonArray.getJSONObject(i).getString(
+                    "description"));
+            lm.setRef(predsJsonArray.getJSONObject(i)
+                    .getString("reference"));
+            resultList.add(lm);
+        }
+    } catch (JSONException e) {
+        Log.e(LOG_TAG, "Cannot process JSON results", e);
+    }
+
+    return resultList;
+}
+
+public class PlacesAutoCompleteAdapter extends ArrayAdapter&lt;String&gt;
+        implements Filterable {
+
+    public PlacesAutoCompleteAdapter(Context context, int textViewResourceId) {
+        super(context, textViewResourceId);
+    }
+
+    @Override
+    public int getCount() {
+        return resultList.size();
+    }
+
+    @Override
+    public String getItem(int index) {
+        return resultList.get(index).getDesc();
+    }
+
+    @Override
+    public Filter getFilter() {
+        Filter filter = new Filter() {
+            @Override
+            protected FilterResults performFiltering(CharSequence constraint) {
+                FilterResults filterResults = new FilterResults();
+                if (constraint != null) {
+                    // Retrieve the autocomplete results.
+                    resultList = autocomplete(constraint.toString());
+                    Log.e("ExampleApplication getFilter",
+                            "" + constraint.toString());
+
+                    // Assign the data to the FilterResults
+                    filterResults.values = resultList;
+                    filterResults.count = resultList.size();
+                }
+                return filterResults;
+            }
+
+            @Override
+            protected void publishResults(CharSequence constraint,
+                                          FilterResults results) {
+                if (results != null &amp;&amp; results.count &gt; 0) {
+                    notifyDataSetChanged();
+                } else {
+                    notifyDataSetInvalidated();
+                }
+            }
+        };
+        return filter;
+    }
+}
+</code></pre>
+
+<p>And call like this</p>
+
+<pre><code>AutoCompleteTextView autoCompView = (AutoCompleteTextView) rootView.findViewById(R.id.searchLocation);
+        autoCompView.setThreshold(3);
+        autoCompView.setAdapter(new PlacesAutoCompleteAdapter(getActivity(),
+                android.R.layout.simple_list_item_1));
+        autoCompView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+
+            @Override
+            public void onItemClick(AdapterView&lt;?&gt; arg0, View arg1, int arg2,
+                                    long arg3) {
+
+                String PARAMETERS = resultList.get(arg2).getRef();
+                Log.e("ref string", PARAMETERS);
+                new Async().execute("" + PARAMETERS);
+            }
+        });
+</code></pre>

@@ -1,0 +1,83 @@
+<p>It is not safe to alter the default SSLContext since it affects the entire process. This lowers the security setting of every connection indiscriminately.  It may also not be thread-safe although I am not sure.</p>
+
+<p>I recommend delegating such operations to a separate process per-request.</p>
+
+<pre><code>String content = new HttpsNoVerify.fetch(URL.create(myURL));
+</code></pre>
+
+<p>Listing of <strong>com/example/HttpsNoVerify.java</strong>:</p>
+
+<pre><code>package com.example;
+
+import org.apache.commons.io.IOUtils;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.net.URL;
+
+public class HttpsNoVerify {
+    public static void main(String... args) throws Exception {
+        URL url = new URL(args[0]);
+
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() {return null;}
+                public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType){}
+                public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType){}
+            }
+        };
+
+        SSLContext sc = SSLContext.getInstance("SSL");
+        sc.init(null, trustAllCerts, new java.security.SecureRandom());
+        HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+
+        IOUtils.copy(url.openStream(), System.out);
+    }
+
+    public String fetch(URL url) throws Exception {
+        return new SubProcess(HttpsNoVerify.class).run(url.toString());
+    }
+}
+</code></pre>
+
+<p>Listing of <strong>com/example/SubProcess.java</strong>:</p>
+
+<pre><code>package com.example;
+
+import org.apache.commons.io.IOUtils;
+
+import java.util.Arrays;
+
+public class SubProcess {
+    private final Class&lt;?&gt; classToRun;
+
+    public SubProcess(Class&lt;?&gt; classToRun) {
+        this.classToRun = classToRun;
+    }
+
+    public String run(String... args) throws Exception {
+        ProcessBuilder processBuilder = new ProcessBuilder("java",
+                "-Djava.library.path=" + System.getProperty("java.library.path"),
+                "-classpath", System.getProperty("java.class.path"),
+                classToRun.getCanonicalName());
+
+        for (String arg : args) processBuilder.command().add(arg);
+
+        processBuilder.redirectErrorStream();
+
+        Process process = processBuilder.start();
+
+        String output = IOUtils.toString(process.getInputStream());
+
+        process.waitFor();
+
+        if (process.exitValue() != 0)
+            throw new IllegalStateException(
+                    String.format("Running %s with %s failed", classToRun, Arrays.toString(args)));
+
+        return output;
+    }
+}
+</code></pre>

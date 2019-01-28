@@ -1,0 +1,159 @@
+<p>I've finally managed to pull of something the suits my needs perfectly, and thought I'd share in case someone else can use it.</p>
+
+<p>I have been trying to display two JTrees side by side - one that contains a filtered list of the other.</p>
+
+<p>Basically I have made two TreeModels, and use the same root node for both.  This seems to work fine so far, so long as I make sure to override EVERY method that gets called from DefaultTreeModel in my code, such as nodeChanged( TreeNode node ) or else there will be pain.</p>
+
+<p>The pain comes from the fact that the only time the nodes themselves are queried for information like childcount, is when nodestructure type methods are called on the DefaultTreeModel.  Aside from that, all calls for tree structure information can be intercepted and filtered out as shown below.</p>
+
+<p>This can get nasty as you have to make sure you dig out every time the nodes themselves are queried if you use DefaultTreeModel as the base like I did.  This problem might not be there if you implement TreeModel directly instead of being lazy like me.  NodesChanged source came straight from the JDK source.</p>
+
+<p>I was lucky in that what I wanted meant there was always a path back to the root node from every item in the filtered list.</p>
+
+<p>This was all I needed to do, even tho I spent the whole day trying wild and chaotic inventions, like recreating a shallow copy of the tree etc, not to mention reading lots on Stack !:</p>
+
+<pre><code>public class FilteredSceneModel extends DefaultTreeModel {
+
+public static boolean isSceneItem(Object child) {
+    return !(child instanceof DataItem);
+}
+
+public FilteredSceneModel(RootSceneNode root, SelectionModel sm) {
+    super(root, sm);
+}
+
+private boolean isSceneFolder(Object node) {
+    return node instanceof RootSceneNode || node instanceof Floor;
+}
+
+@Override
+public AbstractSceneItem getChild(Object parent, int index) {
+    AbstractSceneItem asi = (AbstractSceneItem) parent;
+    if (isSceneItem(parent)) {
+        int dex = 0;
+        for (AbstractSceneItem child : asi.children) {
+            if (isSceneItem(child)) {
+                if (dex == index) {
+                    return child;
+                }
+                dex++;
+            }
+        }
+    }
+    System.out.println("illegal state for: " + parent + " at index: " + index);
+    return asi.getChildAt(index);
+}
+
+@Override
+public int getChildCount(Object parent) {
+    if (isSceneItem(parent)) {
+        AbstractSceneItem asi = (AbstractSceneItem) parent;
+        int count = 0;
+        for (AbstractSceneItem child : asi.children) {
+            if (isSceneItem(child)) {
+                count++;
+            }
+        }
+        return count;
+    }
+    return -1;
+}
+
+@Override
+public int getIndexOfChild(Object parent, Object childItem) {
+    if (isSceneItem(parent)) {
+        AbstractSceneItem asi = (AbstractSceneItem) parent;
+        int count = 0;
+        for (AbstractSceneItem child : asi.children) {
+            if (isSceneItem(child)) {
+                if (child == childItem) {
+                    return count;
+                }
+                count++;
+            }
+        }
+    }
+    return -1;
+}
+
+@Override
+public boolean isLeaf(Object node) {
+    if (isSceneItem(node)) {
+        if (isSceneFolder(node)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+@Override
+public void activeFloorChanged(Floor floor) {
+    for (AbstractSceneItem asi : floor) {
+        if (isSceneItem(asi)) {
+            nodeChanged(asi);
+        }
+    }
+}
+
+@Override
+protected void renamed(AbstractSceneItem asi) {
+    if (isSceneItem(asi)) {
+        nodeChanged(asi);
+        System.out.println("scene only model renamed: " + asi.fullPathToString());
+    }
+}
+
+@Override
+public void nodeChanged(TreeNode tn) {
+    if (isSceneItem(tn)) {
+        filteredNodeChanged(tn);
+    }
+}
+
+@Override
+public void nodeStructureChanged(TreeNode tn) {
+    if (isSceneItem(tn)) {
+        super.nodeStructureChanged(tn);
+    }
+}
+
+private void filteredNodeChanged(TreeNode node) {
+    if (listenerList != null &amp;&amp; node != null) {
+        TreeNode parent = node.getParent();
+
+        if (parent != null) {
+            int anIndex = getIndexOfChild(parent, node);
+            if (anIndex != -1) {
+                int[] cIndexs = new int[1];
+
+                cIndexs[0] = anIndex;
+                nodesChanged(parent, cIndexs);
+            }
+        } else if (node == getRoot()) {
+            nodesChanged(node, null);
+        }
+    }
+}
+
+@Override
+public void nodesChanged(TreeNode node, int[] childIndices) {
+    if (node != null) {
+        if (childIndices != null) {
+            int cCount = childIndices.length;
+
+            if (cCount &gt; 0) {
+                Object[] cChildren = new Object[cCount];
+
+                for (int counter = 0; counter &lt; cCount; counter++) {
+                    cChildren[counter] = getChild(node, childIndices[counter]);
+                }
+                fireTreeNodesChanged(this, getPathToRoot(node),
+                        childIndices, cChildren);
+            }
+        } else if (node == getRoot()) {
+            fireTreeNodesChanged(this, getPathToRoot(node), null, null);
+        }
+    }
+}
+}
+</code></pre>

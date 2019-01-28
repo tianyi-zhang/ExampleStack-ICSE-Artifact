@@ -1,0 +1,181 @@
+<p>The below code, allow user to Download, Install and Delete .apk file on Android device.
+I've created an Android app (Say App1), which downloads other android apps on SD card. On Button click in App1, it will download the .apk file from my own website on Background, on download complete it will prompt user to install the app downloaded recently from App1 and after the installation is completed the downloaded .apk file will be deleted from the SD card.</p>
+
+<p>In my App1 main activity: I've included button<br>
+In my case I'm launching my other applications from App1, if not installed on the device, I'm downloading it from my website and installing it.<br>
+<code>button click event method</code></p>
+
+<pre><code>public OnClickListener ButtonClicked = new OnClickListener() {
+        public void onClick(View v) {
+            Intent i;
+            PackageManager manager = getPackageManager();
+            try {
+                i = manager.getLaunchIntentForPackage("com.mycompany.mygame");
+                if (i == null)
+                    throw new PackageManager.NameNotFoundException();
+                i.addCategory(Intent.CATEGORY_LAUNCHER);
+                startActivity(i);
+            } catch (PackageManager.NameNotFoundException e) {
+                InstallAPK downloadAndInstall = new InstallAPK();
+                progress.setCancelable(false);
+                progress.setMessage("Downloading...");
+                downloadAndInstall.setContext(getApplicationContext(), progress);
+                downloadAndInstall.execute("http://xyz/android/gamedownload.aspx?name=mygame.apk");
+            }
+        }
+    };
+</code></pre>
+
+<p><code>InstallAPK Class</code></p>
+
+<pre><code>public class InstallAPK extends AsyncTask&lt;String,Void,Void&gt; {
+
+    ProgressDialog progressDialog;
+    int status = 0;
+
+    private Context context;
+    public void setContext(Context context, ProgressDialog progress){
+        this.context = context;
+        this.progressDialog = progress;
+    }
+
+    public void onPreExecute() {
+        progressDialog.show();
+    }
+
+    @Override
+    protected Void doInBackground(String... arg0) {
+        try {
+            URL url = new URL(arg0[0]);
+            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+            c.setRequestMethod("GET");
+            c.setDoOutput(true);
+            c.connect();
+
+            File sdcard = Environment.getExternalStorageDirectory();
+            File myDir = new File(sdcard,"Android/data/com.mycompany.android.games/temp");
+            myDir.mkdirs();
+            File outputFile = new File(myDir, "temp.apk");
+            if(outputFile.exists()){
+                outputFile.delete();
+            }
+            FileOutputStream fos = new FileOutputStream(outputFile);
+
+            InputStream is = c.getInputStream();
+
+            byte[] buffer = new byte[1024];
+            int len1 = 0;
+            while ((len1 = is.read(buffer)) != -1) {
+                fos.write(buffer, 0, len1);
+            }
+            fos.flush();
+            fos.close();
+            is.close();
+
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.fromFile(new File(sdcard,"Android/data/com.mycompany.android.games/temp/temp.apk")), "application/vnd.android.package-archive");
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // without this flag android returned a intent error!
+            context.startActivity(intent);
+
+
+        } catch (FileNotFoundException fnfe) {
+            status = 1;
+            Log.e("File", "FileNotFoundException! " + fnfe);
+        }
+
+        catch(Exception e)
+        {
+            Log.e("UpdateAPP", "Exception " + e);
+        }
+        return null;
+    }
+
+    public void onPostExecute(Void unused) {
+        progressDialog.dismiss();
+        if(status == 1)
+            Toast.makeText(context,"Game Not Available",Toast.LENGTH_LONG).show();
+    }
+}
+</code></pre>
+
+<p><code>To delete downloaded file from SD card I've used BroadcastReceiver class</code></p>
+
+<pre><code>@Override
+    public void onReceive(Context context, Intent intent) { 
+
+        try
+        {
+            String packageName = intent.getData().toString() + getApplicationName(context, intent.getData().toString(), PackageManager.GET_UNINSTALLED_PACKAGES);
+
+            if(intent.getAction().equals("android.intent.action.PACKAGE_ADDED")){
+                File sdcard = Environment.getExternalStorageDirectory();
+                File file = new File(sdcard,"Android/data/com.mycompany.android.games/temp/temp.apk");
+                file.delete();
+            }
+        }catch(Exception e){Toast.makeText(context, "onReceive()", Toast.LENGTH_LONG).show();}
+    }
+</code></pre>
+
+<p><code>Don't forget to include following permission in the AndroidManifest.xml</code><br></p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /&gt;
+&lt;uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /&gt;
+&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+&lt;uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /&gt;
+</code></pre>
+
+<p><code>In my website, I create two .aspx pages and placed it inside Android folder and .apk files inside Android/Games folder in Visual Studio</code><br>
+<code>First page: marketplace.aspx.cs</code></p>
+
+<pre><code>public partial class marketplace : System.Web.UI.Page
+    {
+        protected void Page_Load(object sender, EventArgs e)
+        {
+            DirectoryInfo directory = new DirectoryInfo(Server.MapPath("~/Android/Games"));
+            int counter = 0;
+            foreach (FileInfo file in directory.GetFiles())
+            {
+                HyperLink link = new HyperLink();
+                link.ID = "Link" + counter++;
+                link.Text = file.Name;
+                link.NavigateUrl = "gamedownload.aspx?name=" + file.Name;
+
+                Page.Controls.Add(link);
+                Page.Controls.Add(new LiteralControl("&lt;br/&gt;"));
+
+            }
+        }
+
+        protected void Click(object sender, EventArgs e)
+        {
+            Response.Redirect("gamedownload.aspx");
+        }
+    }
+</code></pre>
+
+<p><code>Second Page: gamedownload.aspx.cs</code></p>
+
+<pre><code>public partial class gamedownload : System.Web.UI.Page
+    {
+        protected void Page_Load(object sender, EventArgs e)
+        {
+            string fileName = Request.QueryString["name"].ToString();
+            Response.ContentType = "application/octet-stream";
+            Response.AddHeader("Content-Disposition", "attachment;filename=" + fileName);
+            Response.TransmitFile(Server.MapPath("~/Android/Games/" + fileName));
+            Response.End();
+        }
+    }
+</code></pre>
+
+<p><code>I added following code in Web.config file</code><br></p>
+
+<pre><code>&lt;system.webServer&gt;
+    &lt;staticContent&gt;
+      &lt;mimeMap fileExtension=".apk"
+               mimeType="application/vnd.android.package-archive" /&gt;
+    &lt;/staticContent&gt;
+  &lt;/system.webServer&gt;
+</code></pre>
+
+<p>I hope this information will be help full for some people.</p>

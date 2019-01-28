@@ -1,0 +1,223 @@
+<ul>
+<li>You are on the right track with the <code>DataHelper</code>. Having a <code>DataHelper</code> to create your database and tables is a good plan. However, have your <code>DataHelper</code> extend the SQLiteOpenHelper class so it is truly a <code>Helper</code> class.</li>
+<li>Also, it is a good idea to seperate each table you are creating into different java classes. Then have your <code>DataHelper</code> just call the <code>onCreate</code> methods for those tables/classes.</li>
+<li>Also, android provides a <code>ContentProvider</code> that helps you provide access to your data. Try providing access to your database strictly through your own <code>ContentProvider</code>. This provides better flexibility and a few levels of abstraction.</li>
+</ul>
+
+<p>Here are some <strong>examples</strong> that i have recently been working with. These are from another source as well, but modified a little. I am not sure where i got the original stuff. But here is what i have from what i was working on.</p>
+
+<p>Hope this helps!</p>
+
+<pre><code>//SimpleNotesDBHelper (Your `DataHelper`)
+public class SimpleNotesDBHelper extends SQLiteOpenHelper {
+
+    private static final String NOTES_DATABASE_NAME = "simplenotes.db";
+    private static final int DB_VERSION = 1;
+
+    public SimpleNotesDBHelper(Context context) {
+        super(context, NOTES_DATABASE_NAME, null, DB_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        NotesTable.onCreate(db);
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        NotesTable.onUpgrade(db, oldVersion, newVersion);
+    }
+
+}
+</code></pre>
+
+<hr>
+
+<pre><code>//NotesTable (a seperate table in my db)
+public class NotesTable {
+
+    public static final String NOTES_TABLE = "notes";
+    public static final String COL_ID = "_id";
+    public static final String COL_CATEGORY = "category";
+    public static final String COL_SUMMARY = "summary";
+    public static final String COL_DESCRIPTION = "description";
+    public static final String NOTES_TABLE_CREATE = "create table "
+            + NOTES_TABLE
+            + "("
+            + COL_ID
+            + " integer primary key autoincrement, "
+            + COL_CATEGORY
+            + " text not null, "
+            + COL_SUMMARY
+            + " text not null, "
+            + COL_DESCRIPTION
+            + " text not null"
+            + ");";
+
+    public static void onCreate(SQLiteDatabase database) {
+        database.execSQL(NOTES_TABLE_CREATE);
+
+        insertingSomeTestData(database);
+    }
+
+    public static void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {
+        database.execSQL("drop table if exists " + NOTES_TABLE);
+        onCreate(database);
+    }
+}
+</code></pre>
+
+<hr>
+
+<pre><code>//SimpleNotesContentProvider (a ContentProvider to my db)
+public class SimpleNotesContentProvider extends ContentProvider {
+
+    private SimpleNotesDBHelper databaseHelper;
+
+    private static final int SIMPLE_NOTES = 10; //arbitrary
+    private static final int SIMPLE_NOTE_ID = 20; //arbitrary
+
+    private static final String AUTHORITY = "ashton.learning.projects.simplenotes.contentprovider";
+    private static final String BASE_PATH = "simplenotes";
+    private static final String DIR_BASE_TYPE = "simplenotes";
+    private static final String ITEM_BASE_TYPE = "simplenote";
+    public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/" + BASE_PATH);
+    public static final String CONTENT_TYPE = ContentResolver.CURSOR_DIR_BASE_TYPE + "/" + DIR_BASE_TYPE;
+    public static final String CONTENT_ITEM_TYPE = ContentResolver.CURSOR_ITEM_BASE_TYPE + "/" + ITEM_BASE_TYPE;
+    private static final UriMatcher sURIMatcher = new UriMatcher(UriMatcher.NO_MATCH);      
+
+    @Override
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+
+        int uriType = sURIMatcher.match(uri);
+
+        SQLiteDatabase db = databaseHelper.getWritableDatabase();
+        int rowsDeleted = 0;
+        switch (uriType) {
+        case SIMPLE_NOTES:
+            rowsDeleted = db.delete(NotesTable.NOTES_TABLE, selection, selectionArgs);
+            break;
+        case SIMPLE_NOTE_ID:
+            String id = uri.getLastPathSegment();
+            if (TextUtils.isEmpty(selection)) {
+                rowsDeleted = db.delete(NotesTable.NOTES_TABLE, 
+                        NotesTable.COL_ID + "=" + id, 
+                        null);
+            }
+            else {
+                rowsDeleted = db.delete(NotesTable.NOTES_TABLE, 
+                        NotesTable.COL_ID + "=" + id + " and " + selection, 
+                        selectionArgs);
+            }
+            break;
+        default:
+            throw new IllegalArgumentException("Unknown URI: " + uri);
+        }
+        getContext().getContentResolver().notifyChange(uri, null);
+        return rowsDeleted;
+    }
+
+    @Override
+    public String getType(Uri uri) {
+        return null;
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
+
+        int uriType = sURIMatcher.match(uri);
+
+        SQLiteDatabase db = databaseHelper.getWritableDatabase();
+        int rowsDeleted = 0;
+        long id = 0;
+        switch(uriType) {
+        case SIMPLE_NOTES:
+            id = db.insert(NotesTable.NOTES_TABLE, null, values);
+            break;
+        default:
+            throw new IllegalArgumentException("Unknown URI: " + uri);
+        }
+
+        getContext().getContentResolver().notifyChange(uri, null);
+        return Uri.parse(BASE_PATH + "/" + id);
+    }
+
+    @Override
+    public boolean onCreate() {
+        databaseHelper = new SimpleNotesDBHelper(getContext());
+        sURIMatcher.addURI(AUTHORITY, BASE_PATH, SIMPLE_NOTES);
+        sURIMatcher.addURI(AUTHORITY, BASE_PATH + "/#", SIMPLE_NOTE_ID);
+        return false;
+    }
+
+    @Override
+    public Cursor query(Uri uri, String[] projection, String selection,
+            String[] selectionArgs, String sortOrder) {
+
+        SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+
+        queryBuilder.setTables(NotesTable.NOTES_TABLE);
+
+        int uriType = sURIMatcher.match(uri);
+
+        switch (uriType) {
+        case SIMPLE_NOTES:
+            break;
+        case SIMPLE_NOTE_ID:
+            queryBuilder.appendWhere(NotesTable.COL_ID 
+                    + "="
+                    + uri.getLastPathSegment());
+            break;
+        default:
+            throw new IllegalArgumentException("Unknown URI: " + uri);
+        }
+
+        SQLiteDatabase db = databaseHelper.getWritableDatabase();
+
+        Cursor cursor = queryBuilder.query(db, projection, selection, selectionArgs, null, null, sortOrder);
+
+        cursor.setNotificationUri(getContext().getContentResolver(), uri);
+
+        return cursor;
+    }
+
+    @Override
+    public int update(Uri uri, ContentValues values, String selection,
+            String[] selectionArgs) {
+
+        int uriType = sURIMatcher.match(uri);
+        SQLiteDatabase db = databaseHelper.getWritableDatabase();
+        int rowsUpdated = 0;
+
+        switch (uriType) {
+        case SIMPLE_NOTES:
+            rowsUpdated = db.update(NotesTable.NOTES_TABLE, 
+                    values, 
+                    selection, 
+                    selectionArgs);
+            break;
+        case SIMPLE_NOTE_ID:
+            String id = uri.getLastPathSegment();
+            if (TextUtils.isEmpty(selection)) {
+                rowsUpdated = db.update(NotesTable.NOTES_TABLE, 
+                        values, 
+                        NotesTable.COL_ID + "=" + id, 
+                        null);
+            }
+            else {
+                rowsUpdated = db.update(NotesTable.NOTES_TABLE, 
+                        values, 
+                        NotesTable.COL_ID + "=" + id + " and " + selection, 
+                        selectionArgs);
+            }
+            break;
+        default:
+            throw new IllegalArgumentException("Unknown URI: " + uri);
+        }
+
+        getContext().getContentResolver().notifyChange(uri, null);
+        return rowsUpdated;
+    }
+
+}
+</code></pre>

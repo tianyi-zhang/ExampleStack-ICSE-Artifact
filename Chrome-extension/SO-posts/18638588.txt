@@ -1,0 +1,50 @@
+<p>So something to consider is that <a href="http://developer.android.com/reference/android/text/format/Formatter.html#formatIpAddress%28int%29">Formatter.formatIpAddress(int)</a> is being deprecated:</p>
+
+<blockquote>
+  <p>This method was deprecated in API level 12.
+  Use getHostAddress(), which supports both IPv4 and IPv6 addresses. This method does not support IPv6 addresses.</p>
+</blockquote>
+
+<p>So using <code>formatIpAddress(int)</code> is likely not a good long term solution, although it will work.</p>
+
+<p>Here is a potential solution if you are looking to absolutely on get the IP address for the WiFi interface:</p>
+
+<pre><code>protected String wifiIpAddress(Context context) {
+    WifiManager wifiManager = (WifiManager) context.getSystemService(WIFI_SERVICE);
+    int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
+
+    // Convert little-endian to big-endianif needed
+    if (ByteOrder.nativeOrder().equals(ByteOrder.LITTLE_ENDIAN)) {
+        ipAddress = Integer.reverseBytes(ipAddress);
+    }
+
+    byte[] ipByteArray = BigInteger.valueOf(ipAddress).toByteArray();
+
+    String ipAddressString;
+    try {
+        ipAddressString = InetAddress.getByAddress(ipByteArray).getHostAddress();
+    } catch (UnknownHostException ex) {
+        Log.e("WIFIIP", "Unable to get host address.");
+        ipAddressString = null;
+    }
+
+    return ipAddressString;
+}
+</code></pre>
+
+<p>As stated in previous responses, you need to set the following in your <em>AndroidManifest.xml</em>:</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.ACCESS_WIFI_STATE" /&gt;
+</code></pre>
+
+<p>Note that this is only an example solution.  You should take time to check for null values and so on to make sure that the UX is smooth.</p>
+
+<p>The irony is that on one hand Google is deprecating <code>formatIpAddress(int)</code>, but still has <a href="http://developer.android.com/reference/android/net/wifi/WifiInfo.html#getIpAddress%28%29">getIpAddress()</a> still returns an integer value.  The IP address being an int also rules it out for being IPv6 compliant.</p>
+
+<p>Next is the fact that endianness may or may not be an issue.  I have only tested three devices and they have all been little-endian.  It seems like endianness can vary depending on the hardware, even though we are running in VMs this can still be an issue.  So to be on the safe side I added an endian check in the code.</p>
+
+<p><a href="http://developer.android.com/reference/java/net/InetAddress.html#getByAddress%28byte%5b%5d%29">getByAddress(byte[])</a> appears to want  the integer value to be big endian.  From researching this it appears that network byte order is big-endian.  Makes sense since an address like 192.168.12.22 is a big-endian number.</p>
+
+<hr>
+
+<p>Check out <a href="https://github.com/digitalrounin/hammernet">HammerNet</a> GitHub project.  It implements the code above along with a bunch of sanity checks, ability to handle defaults for AVDs, unit tests, and other things.  I had to implement this for an app of mine and decided to open source the library.</p>

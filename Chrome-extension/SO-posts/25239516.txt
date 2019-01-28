@@ -1,0 +1,176 @@
+<p>I use a generic class to use as a type to map a enum. Then, you can map all your enums using it.</p>
+
+<p>The class is this:</p>
+
+<pre><code>public class GenericEnumUserType implements UserType, ParameterizedType {
+
+private static final String DEFAULT_IDENTIFIER_METHOD_NAME = "name";
+private static final String DEFAULT_VALUE_OF_METHOD_NAME = "valueOf";
+
+private Class enumClass;
+private Class identifierType;
+private Method identifierMethod;
+private Method valueOfMethod;
+private NullableType type;
+private int[] sqlTypes;
+
+@Override
+public void setParameterValues(Properties parameters) {
+    String enumClassName = parameters.getProperty("enumClassName");
+    try {
+        enumClass = Class.forName(enumClassName).asSubclass(Enum.class);
+    } catch (ClassNotFoundException cfne) {
+        throw new HibernateException("Enum class not found", cfne);
+    }
+
+    String identifierMethodName = parameters.getProperty("identifierMethod", DEFAULT_IDENTIFIER_METHOD_NAME);
+
+    try {
+        identifierMethod = enumClass.getMethod(identifierMethodName, new Class[0]);
+        identifierType = identifierMethod.getReturnType();
+    } catch (Exception e) {
+        throw new HibernateException("Failed to obtain identifier method", e);
+    }
+
+    type = (NullableType) TypeFactory.basic(identifierType.getName());
+
+    if (type == null) {
+        throw new HibernateException("Unsupported identifier type " + identifierType.getName());
+    }
+
+    sqlTypes = new int[] { type.sqlType() };
+
+    String valueOfMethodName = parameters.getProperty("valueOfMethod", DEFAULT_VALUE_OF_METHOD_NAME);
+
+    try {
+        valueOfMethod = enumClass.getMethod(valueOfMethodName, new Class[] { identifierType });
+    } catch (Exception e) {
+        throw new HibernateException("Failed to obtain valueOf method", e);
+    }
+}
+
+@Override
+public Class returnedClass() {
+    return enumClass;
+}
+
+@Override
+public Object nullSafeGet(ResultSet rs, String[] names, Object owner) throws HibernateException, SQLException {
+    Object identifier = type.get(rs, names[0]);
+    if (rs.wasNull()) {
+        return null;
+    }
+
+    try {
+        return valueOfMethod.invoke(enumClass, new Object[] { identifier });
+    } catch (Exception e) {
+        throw new HibernateException("Exception while invoking " + "valueOf method " + valueOfMethod.getName()
+                + " of enumeration class " + enumClass, e);
+    }
+}
+
+@Override
+public void nullSafeSet(PreparedStatement st, Object value, int index) throws HibernateException, SQLException {
+    try {
+        if (value == null) {
+            st.setNull(index, type.sqlType());
+        } else {
+            Object identifier = identifierMethod.invoke(value, new Object[0]);
+            type.set(st, identifier, index);
+        }
+    } catch (Exception e) {
+        throw new HibernateException("Exception while invoking identifierMethod " + identifierMethod.getName()
+                + " of enumeration class " + enumClass, e);
+    }
+}
+
+@Override
+public int[] sqlTypes() {
+    return sqlTypes;
+}
+
+@Override
+public Object assemble(Serializable cached, Object owner) throws HibernateException {
+    return cached;
+}
+
+@Override
+public Object deepCopy(Object value) throws HibernateException {
+    return value;
+}
+
+@Override
+public Serializable disassemble(Object value) throws HibernateException {
+    return (Serializable) value;
+}
+
+@Override
+public boolean equals(Object x, Object y) throws HibernateException {
+    return x == y;
+}
+
+@Override
+public int hashCode(Object x) throws HibernateException {
+    return x.hashCode();
+}
+
+@Override
+public boolean isMutable() {
+    return false;
+}
+
+@Override
+public Object replace(Object original, Object target, Object owner) throws HibernateException {
+    return original;
+}}
+</code></pre>
+
+<p>Enum class should be like this:</p>
+
+<pre><code>public enum AccountStatus {
+ACTIVE(1), BLOCKED(2), DELETED(3);
+
+private AccountStatus(int id) {
+    this.id = id;
+}
+
+private int id;
+
+public int getId() {
+    return id;
+}
+
+public void setId(int id) {
+    this.id = id;
+}
+
+public static AccountStatus valueOf(int id) {
+    switch (id) {
+    case 1:
+        return ACTIVE;
+    case 2:
+        return BLOCKED;
+    case 3:
+        return DELETED;
+    default:
+        throw new IllegalArgumentException();
+    }
+}}
+</code></pre>
+
+<p>The static method "valueOf" is necessary to convert from id stored in database to java object.</p>
+
+<p>Then, hibernate mapping is like this:</p>
+
+<pre><code>&lt;hibernate-mapping&gt;
+&lt;typedef class="path.to.GenericEnumUserType" name="accountStatusType"&gt;
+    &lt;param name="enumClassName"&gt;com.systemonenoc.hermes.ratingengine.persistence.constants.AccountStatus&lt;/param&gt;
+    &lt;param name="identifierMethod"&gt;getId&lt;/param&gt;
+&lt;/typedef&gt;
+&lt;class name="package.to.class.with.enum.Account" table="account" schema="public"&gt;
+    &lt;property name="accountStatus" type="accountStatusType" column="account_status" not-null="true" /&gt;
+[...]
+&lt;/hibernate-mapping&gt;
+</code></pre>
+
+<p>So you have to declare as a type the class GenericEnumUserType with typedef, and a method to get the id of the enum (in this case, getId()). In your database wil be store the id as value in a integer column, and in java you will have the enum object.</p>

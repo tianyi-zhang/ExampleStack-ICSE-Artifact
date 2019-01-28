@@ -1,0 +1,240 @@
+<p>to get access token first you have to login</p>
+
+<pre><code>fb.authorize(FacebookActivity.this, new String[] {"xmpp_login"},Facebook.FORCE_DIALOG_AUTH, new DialogListner());
+</code></pre>
+
+<p>SASLXFacebookPlatformMecha class</p>
+
+<pre><code>import java.io.IOException;
+import java.net.URLEncoder;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.harmony.javax.security.auth.callback.CallbackHandler;
+import org.apache.harmony.javax.security.sasl.Sasl;
+import org.jivesoftware.smack.SASLAuthentication;
+import org.jivesoftware.smack.XMPPException;
+import org.jivesoftware.smack.sasl.SASLMechanism;
+import org.jivesoftware.smack.util.Base64;
+
+public class SASLXFacebookPlatformMecha extends SASLMechanism {
+
+private static final String NAME = "X-FACEBOOK-PLATFORM";
+
+private String apiKey = "";
+private String access_token = "";
+
+/**
+ * Constructor.
+ */
+public SASLXFacebookPlatformMecha(SASLAuthentication saslAuthentication) {
+    super(saslAuthentication);
+}
+
+@Override
+protected void authenticate() throws IOException, XMPPException {
+
+    getSASLAuthentication().send(new AuthMechanism(NAME, ""));
+}
+
+@Override
+public void authenticate(String apiKey, String host, String acces_token)
+        throws IOException, XMPPException {
+    if (apiKey == null || acces_token == null) {
+        throw new IllegalArgumentException("Invalid parameters");
+    }
+
+    this.access_token = acces_token;
+    this.apiKey = apiKey;
+    this.hostname = host;
+
+    String[] mechanisms = { NAME };
+    Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+    this.sc = Sasl.createSaslClient(mechanisms, null, "xmpp", host, props,
+            this);
+    authenticate();
+}
+
+@Override
+public void authenticate(String username, String host, CallbackHandler cbh)
+        throws IOException, XMPPException {
+    String[] mechanisms = { NAME };
+    Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+    this.sc = Sasl.createSaslClient(mechanisms, null, "xmpp", host, props,
+            cbh);
+    authenticate();
+}
+
+@Override
+protected String getName() {
+    return NAME;
+}
+
+@Override
+public void challengeReceived(String challenge) throws IOException {
+    byte[] response = null;
+
+    if (challenge != null) {
+        String decodedChallenge = new String(Base64.decode(challenge));
+        Map&lt;String, String&gt; parameters = getQueryMap(decodedChallenge);
+
+        String version = "1.0";
+        String nonce = parameters.get("nonce");
+        String method = parameters.get("method");
+
+        long callId = new GregorianCalendar().getTimeInMillis();
+
+        String composedResponse = "api_key="
+                + URLEncoder.encode(apiKey, "utf-8") + "&amp;call_id=" + callId
+                + "&amp;method=" + URLEncoder.encode(method, "utf-8")
+                + "&amp;nonce=" + URLEncoder.encode(nonce, "utf-8")
+                + "&amp;access_token="
+                + URLEncoder.encode(access_token, "utf-8") + "&amp;v="
+                + URLEncoder.encode(version, "utf-8");
+
+        response = composedResponse.getBytes("utf-8");
+    }
+
+    String authenticationText = "";
+
+    if (response != null) {
+        authenticationText = Base64.encodeBytes(response,
+                Base64.DONT_BREAK_LINES);
+    }
+
+    // Send the authentication to the server
+    getSASLAuthentication().send(new Response(authenticationText));
+}
+
+private Map&lt;String, String&gt; getQueryMap(String query) {
+    Map&lt;String, String&gt; map = new HashMap&lt;String, String&gt;();
+    String[] params = query.split("\\&amp;");
+
+    for (String param : params) {
+        String[] fields = param.split("=", 2);
+        map.put(fields[0], (fields.length &gt; 1 ? fields[1] : null));
+    }
+
+    return map;
+}
+}
+</code></pre>
+
+<p>I created ChatManager class</p>
+
+<pre><code>import org.jivesoftware.smack.Chat;
+import org.jivesoftware.smack.ChatManagerListener;
+import org.jivesoftware.smack.ConnectionConfiguration;
+import org.jivesoftware.smack.MessageListener;
+import org.jivesoftware.smack.Roster;
+import org.jivesoftware.smack.RosterListener;
+import org.jivesoftware.smack.SASLAuthentication;
+import org.jivesoftware.smack.XMPPConnection;
+import org.jivesoftware.smack.XMPPException;
+import org.jivesoftware.smack.packet.Presence;
+import org.jivesoftware.smack.packet.Presence.Type;
+import org.jivesoftware.smackx.pubsub.PresenceState;
+
+public class FacebookChatManager {
+
+private static FacebookChatManager chatManager;
+private XMPPConnection connection;
+private final String SERVER = "chat.facebook.com";
+private final int PORT = 5222;
+private final String FACEBOOK_MECHANISM = "X-FACEBOOK-PLATFORM";
+private RosterListener rosterListner;
+
+private FacebookChatManager(RosterListener rosterListner)
+{
+    this.rosterListner = rosterListner;
+    ConnectionConfiguration connFig = new ConnectionConfiguration(SERVER,
+            PORT);
+    connFig.setSASLAuthenticationEnabled(true);
+    connection = new XMPPConnection(connFig);
+    //setup facebook authentication mechanism
+    SASLAuthentication.registerSASLMechanism(FACEBOOK_MECHANISM,
+            SASLXFacebookPlatformMecha.class);
+    SASLAuthentication.supportSASLMechanism(FACEBOOK_MECHANISM, 0);
+}
+
+public static FacebookChatManager getInstance(RosterListener rosterListner)
+{
+    if(chatManager == null)
+    {
+        chatManager =  new FacebookChatManager(rosterListner);
+    }
+    return chatManager;
+}
+
+public boolean connect()
+{
+    try {
+        connection.connect();
+        return true;
+    } catch (XMPPException e) {
+        e.printStackTrace();
+        connection.disconnect();
+    }
+    return false;
+}
+
+public void disConnect()
+{
+    connection.disconnect();
+}
+
+public boolean logIn(String apiKey, String accessToken)
+{
+    try {
+        connection.login(apiKey, accessToken);
+        setPresenceState(Presence.Type.available, "");
+        connection.getRoster().addRosterListener(rosterListner);
+        return true;
+    } catch (XMPPException e) {
+        connection.disconnect();
+        e.printStackTrace();
+    }
+    return false;
+}
+
+public Roster getRoster()
+{
+    return connection.getRoster();
+}
+
+public Chat createNewChat(String user, MessageListener messageListner)
+{
+    return connection.getChatManager().createChat(user, messageListner);
+}
+
+public void registerNewIncomingChatListner(ChatManagerListener chatManagerListner)
+{
+    connection.getChatManager().addChatListener(chatManagerListner);
+}
+
+public void setPresenceState(Type precenseType, String status)
+{
+    Presence presence = new Presence(precenseType);
+    presence.setStatus(status);
+    connection.sendPacket(presence);
+}
+
+public Presence getUserPresence(String userId)
+{
+    return connection.getRoster().getPresence(userId);
+}
+}
+</code></pre>
+
+<p>at the end to use that FacebookChatManager class note that rosterListnr is used to get info about your friends state change implement one as you want</p>
+
+<pre><code>FacebookChatManager facebookChatManager = FacebookChatManager.getInstance(rosterListner);
+
+if (facebookChatManager.connect()) {
+            if (facebookChatManager.logIn(FacebookActivity.APP_ID,
+                    access_token)) {
+                return facebookChatManager.getRoster();
+            }
+        }
+</code></pre>

@@ -1,0 +1,133 @@
+<p><strong>Quick answer:</strong> </p>
+
+<p>Remove the <code>server.join()</code> line.  That line makes the junit thread wait until the server thread stops.  Which is not needed for unit testing.</p>
+
+<p><strong>Long answer:</strong></p>
+
+<p>What we (the jetty developers) have learned about using jetty embedded servers with junit.</p>
+
+<p>Use the <code>@Before</code> and <code>@After</code> annotations to start and stop the server if you have 1 test method, or some requirement that the server be pristine between test methods.</p>
+
+<p><em>Example @Before / @After (Jetty 9.x):</em></p>
+
+<pre class="lang-java prettyprint-override"><code>public class MyTest
+{
+     private Server server;
+     private URI serverUri;
+
+     @Before
+     public void startServer() throws Exception
+     {
+        this.server = new Server();
+        ServerConnector connector = new ServerConnector(server);
+        connector.setPort(0); // let connector pick an unused port #
+        server.addConnector(connector);
+
+        ServletContextHandler context = new ServletContextHandler();
+        context.setContextPath("/");
+        server.setHandler(context);
+
+        // Serve capture servlet
+        context.addServlet(new ServletHolder(new MyServlet()),"/my/*");
+
+        // Start Server
+        server.start();
+
+        String host = connector.getHost();
+        if (host == null)
+        {
+            host = "localhost";
+        }
+        int port = connector.getLocalPort();
+        this.serverUri = new URI(String.format("http://%s:%d/",host,port));
+    }
+
+    @After
+    public void stopServer()
+    {
+        try
+        {
+            server.stop();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace(System.err);
+        }
+    }
+
+    @Test
+    public void testMe()
+    {
+        // Issue request to server
+        URI requestUri = serverUri.resolve("/my/test");
+        // assert the response
+    }
+}
+</code></pre>
+
+<p>This technique makes the server start on port 0, which is a magic number that tells the underlying stack to pick an empty port and start listening.  The test case then asks the server what port number it is listening on and builds out the <code>serverUri</code> field to be appropropriate for this test run.</p>
+
+<p>This technique works great, however, it will start/stop the server for each method.</p>
+
+<p>Enter, the better technique, use the <code>@BeforeClass</code> and <code>@AfterClass</code> annotations to start/stop the server once for the entire test class, running all of the methods inside of the test class against this started server.</p>
+
+<p><em>Example @BeforeClass / @AfterClass (Jetty 9.x):</em></p>
+
+<pre class="lang-java prettyprint-override"><code>public class MyTest
+{
+     private static Server server;
+     private static URI serverUri;
+
+     @BeforeClass
+     public static void startServer() throws Exception
+     {
+        server = new Server();
+        ServerConnector connector = new ServerConnector(server);
+        connector.setPort(0); // let connector pick an unused port #
+        server.addConnector(connector);
+
+        ServletContextHandler context = new ServletContextHandler();
+        context.setContextPath("/");
+        server.setHandler(context);
+
+        // Serve capture servlet
+        context.addServlet(new ServletHolder(new MyServlet()),"/my/*");
+
+        // Start Server
+        server.start();
+
+        String host = connector.getHost();
+        if (host == null)
+        {
+            host = "localhost";
+        }
+        int port = connector.getLocalPort();
+        serverUri = new URI(String.format("http://%s:%d/",host,port));
+    }
+
+    @AfterClass
+    public static void stopServer()
+    {
+        try
+        {
+            server.stop();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace(System.err);
+        }
+    }
+
+    @Test
+    public void testMe()
+    {
+        // Issue request to server
+        URI requestUri = serverUri.resolve("/my/test");
+        // assert the response
+    }
+}
+</code></pre>
+
+<p>Doesn't look much different?  Yes, the changes are subtle.  <code>@Before</code> became <code>@BeforeClass</code>, <code>@After</code> became <code>@AfterClass</code>.  The start/stop methods are now static.  The <code>server</code> and <code>serverUri</code> fields are now static.</p>
+
+<p>This technique is used where we have dozens of test methods that access the same server, and those requests do not alter the state in the server.  This speeds up the test case execution by simply not recreating the server between each test method.</p>

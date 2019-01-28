@@ -1,0 +1,246 @@
+<p>URL will be fixed.</p>
+
+<p>You also need to have specific permission in your channel to set custom thumbnails.</p>
+
+<p>There is <a href="https://code.google.com/p/youtube-api-samples/source/browse/samples/php/upload_thumbnail.php" rel="nofollow">PHP</a> and <a href="https://code.google.com/p/youtube-api-samples/source/browse/samples/python/upload_thumbnail.py" rel="nofollow">Python</a> examples in our sample code that works.</p>
+
+<p>Here's the Java one, I just wrote and tested, it works.</p>
+
+<pre><code>/*
+ * Copyright (c) 2013 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+package com.google.api.services.samples.youtube.cmdline.youtube_cmdline_uploadthumbnail_sample;
+
+import com.google.api.client.auth.oauth2.Credential;
+import com.google.api.client.extensions.java6.auth.oauth2.AuthorizationCodeInstalledApp;
+import com.google.api.client.extensions.java6.auth.oauth2.FileCredentialStore;
+import com.google.api.client.extensions.jetty.auth.oauth2.LocalServerReceiver;
+import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
+import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.googleapis.media.MediaHttpUploader;
+import com.google.api.client.googleapis.media.MediaHttpUploaderProgressListener;
+import com.google.api.client.http.HttpTransport;
+import com.google.api.client.http.InputStreamContent;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.jackson2.JacksonFactory;
+import com.google.api.services.youtube.YouTube;
+import com.google.api.services.youtube.YouTube.Thumbnails.Set;
+import com.google.api.services.youtube.model.ThumbnailSetResponse;
+import com.google.common.collect.Lists;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.List;
+
+/**
+ * This sample uploads and sets a custom thumbnail for a video by:
+ *
+ *  1. Uploading a image utilizing "MediaHttpUploader" 2. Setting the uploaded image as a custom
+ * thumbnail to the video via "youtube.thumbnails.set" method
+ *
+ * @author Ibrahim Ulukaya
+ */
+public class UploadThumbnail {
+
+  /**
+   * Global instance of the HTTP transport.
+   */
+  private static final HttpTransport HTTP_TRANSPORT = new NetHttpTransport();
+
+  /**
+   * Global instance of the JSON factory.
+   */
+  private static final JsonFactory JSON_FACTORY = new JacksonFactory();
+
+  /**
+   * Global instance of Youtube object to make all API requests.
+   */
+  private static YouTube youtube;
+
+  /* Global instance of the format used for the image being uploaded (MIME type). */
+  private static String IMAGE_FILE_FORMAT = "image/png";
+
+
+
+  /**
+   * Authorizes the installed application to access user's protected data.
+   *
+   * @param scopes list of scopes needed to run youtube upload.
+   */
+  private static Credential authorize(List&lt;String&gt; scopes) throws IOException {
+
+    // Load client secrets.
+    GoogleClientSecrets clientSecrets = GoogleClientSecrets.load(JSON_FACTORY,
+        new InputStreamReader(UploadThumbnail.class.getResourceAsStream("/client_secrets.json")));
+
+    // Checks that the defaults have been replaced (Default = "Enter X here").
+    if (clientSecrets.getDetails().getClientId().startsWith("Enter")
+        || clientSecrets.getDetails().getClientSecret().startsWith("Enter ")) {
+      System.out.println(
+          "Enter Client ID and Secret from https://code.google.com/apis/console/?api=youtube"
+          + "into youtube-cmdline-uploadthumbnail-sample/src/main/resources/client_secrets.json");
+      System.exit(1);
+    }
+
+    // Set up file credential store.
+    FileCredentialStore credentialStore = new FileCredentialStore(
+        new File(System.getProperty("user.home"), ".credentials/youtube-api-uploadthumbnail.json"),
+        JSON_FACTORY);
+
+    // Set up authorization code flow.
+    GoogleAuthorizationCodeFlow flow = new GoogleAuthorizationCodeFlow.Builder(
+        HTTP_TRANSPORT, JSON_FACTORY, clientSecrets, scopes).setCredentialStore(credentialStore)
+        .build();
+
+    // Build the local server and bind it to port 8080
+    LocalServerReceiver localReceiver = new LocalServerReceiver.Builder().setPort(8080).build();
+
+    // Authorize.
+    return new AuthorizationCodeInstalledApp(flow, localReceiver).authorize("user");
+  }
+
+  /**
+   * This is a very simple code sample that looks up a user's channel, then features the most
+   * recently uploaded video in the bottom left hand corner of every single video in the channel.
+   *
+   * @param args command line args (not used).
+   */
+  public static void main(String[] args) {
+
+    // An OAuth 2 access scope that allows for full read/write access.
+    List&lt;String&gt; scopes = Lists.newArrayList("https://www.googleapis.com/auth/youtube");
+
+    try {
+      // Authorization.
+      Credential credential = authorize(scopes);
+
+      // YouTube object used to make all API requests.
+      youtube = new YouTube.Builder(HTTP_TRANSPORT, JSON_FACTORY, credential).setApplicationName(
+          "youtube-cmdline-addfeaturedvideo-sample").build();
+
+      // Get the user selected video Id.
+      String videoId = getVideoIdFromUser();
+      System.out.println("You chose " + videoId + " to upload a thumbnail.");
+
+      // Get the user selected local image file to upload.
+      File imageFile = getImageFromUser();
+      System.out.println("You chose " + imageFile + " to upload.");
+
+      InputStreamContent mediaContent = new InputStreamContent(
+          IMAGE_FILE_FORMAT, new BufferedInputStream(new FileInputStream(imageFile)));
+      mediaContent.setLength(imageFile.length());
+
+      // Create a request to set the selected mediaContent as the thumbnail of the selected video.
+      Set thumbnailSet = youtube.thumbnails().set(videoId, mediaContent);
+
+      // Set the upload type and add event listener.
+      MediaHttpUploader uploader = thumbnailSet.getMediaHttpUploader();
+
+      /*
+       * Sets whether direct media upload is enabled or disabled. True = whole media content is
+       * uploaded in a single request. False (default) = resumable media upload protocol to upload
+       * in data chunks.
+       */
+      uploader.setDirectUploadEnabled(false);
+
+      MediaHttpUploaderProgressListener progressListener = new MediaHttpUploaderProgressListener() {
+        @Override
+        public void progressChanged(MediaHttpUploader uploader) throws IOException {
+          switch (uploader.getUploadState()) {
+            case INITIATION_STARTED:
+              System.out.println("Initiation Started");
+              break;
+            case INITIATION_COMPLETE:
+              System.out.println("Initiation Completed");
+              break;
+            case MEDIA_IN_PROGRESS:
+              System.out.println("Upload in progress");
+              System.out.println("Upload percentage: " + uploader.getProgress());
+              break;
+            case MEDIA_COMPLETE:
+              System.out.println("Upload Completed!");
+              break;
+            case NOT_STARTED:
+              System.out.println("Upload Not Started!");
+              break;
+          }
+        }
+      };
+      uploader.setProgressListener(progressListener);
+
+      // Execute upload and set thumbnail.
+      ThumbnailSetResponse setResponse = thumbnailSet.execute();
+
+      // Print out returned results.
+      System.out.println("\n================== Uploaded Thumbnail ==================\n");
+      System.out.println("  - Url: " + setResponse.getItems().get(0).getDefault().getUrl());
+
+    } catch (GoogleJsonResponseException e) {
+      System.err.println("GoogleJsonResponseException code: " + e.getDetails().getCode() + " : "
+          + e.getDetails().getMessage());
+      e.printStackTrace();
+
+    } catch (IOException e) {
+      System.err.println("IOException: " + e.getMessage());
+      e.printStackTrace();
+    }
+  }
+
+  /*
+   * Prompts for a video ID from standard input and returns it.
+   */
+  private static String getVideoIdFromUser() throws IOException {
+
+    String title = "";
+
+    System.out.print("Please enter a video Id to update: ");
+    BufferedReader bReader = new BufferedReader(new InputStreamReader(System.in));
+    title = bReader.readLine();
+
+    if (title.length() &lt; 1) {
+      // If nothing is entered, exits
+      System.out.print("Video Id can't be empty!");
+      System.exit(1);
+    }
+
+    return title;
+  }
+
+  /*
+   * Prompts for the path of the image file to upload from standard input and returns it.
+   */
+  private static File getImageFromUser() throws IOException {
+
+    String path = "";
+
+    System.out.print("Please enter the path of the image file to upload: ");
+    BufferedReader bReader = new BufferedReader(new InputStreamReader(System.in));
+    path = bReader.readLine();
+
+    if (path.length() &lt; 1) {
+      // If nothing is entered, exits
+      System.out.print("Path can not be empty!");
+      System.exit(1);
+    }
+
+    return new File(path);
+  }
+}
+</code></pre>

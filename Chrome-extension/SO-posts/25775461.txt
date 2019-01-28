@@ -1,0 +1,106 @@
+<p>The reason this happens is because the view explicitly saves and restores its state on orientation changes, by overriding <a href="http://developer.android.com/reference/android/view/View.html#onSaveInstanceState()" rel="nofollow">View#onSaveInstanceState()</a> and <a href="http://developer.android.com/reference/android/view/View.html#onRestoreInstanceState(android.os.Parcelable)" rel="nofollow">View#onRestoreInstanceStance(Parcelable)</a>. Here's the of the implementation in <strong>TextView</strong> (super class of <strong>EditText</strong>)</p>
+
+<pre><code>@Override
+public Parcelable onSaveInstanceState() {
+    Parcelable superState = super.onSaveInstanceState();
+
+    // Save state if we are forced to
+    boolean save = mFreezesText;
+    int start = 0;
+    int end = 0;
+
+    if (mText != null) {
+        start = getSelectionStart();
+        end = getSelectionEnd();
+        if (start &gt;= 0 || end &gt;= 0) {
+            // Or save state if there is a selection
+            save = true;
+        }
+    }
+
+    if (save) {
+        SavedState ss = new SavedState(superState);
+        // XXX Should also save the current scroll position!
+        ss.selStart = start;
+        ss.selEnd = end;
+
+        if (mText instanceof Spanned) {
+            Spannable sp = new SpannableStringBuilder(mText);
+
+            if (mEditor != null) {
+                removeMisspelledSpans(sp);
+                sp.removeSpan(mEditor.mSuggestionRangeSpan);
+            }
+
+            ss.text = sp;
+        } else {
+            ss.text = mText.toString();
+        }
+
+        if (isFocused() &amp;&amp; start &gt;= 0 &amp;&amp; end &gt;= 0) {
+            ss.frozenWithFocus = true;
+        }
+
+        ss.error = getError();
+
+        return ss;
+    }
+
+    return superState;
+}
+
+[...]
+
+@Override
+public void onRestoreInstanceState(Parcelable state) {
+    if (!(state instanceof SavedState)) {
+        super.onRestoreInstanceState(state);
+        return;
+    }
+
+    SavedState ss = (SavedState)state;
+    super.onRestoreInstanceState(ss.getSuperState());
+
+    // XXX restore buffer type too, as well as lots of other stuff
+    if (ss.text != null) {
+        setText(ss.text);
+    }
+
+    if (ss.selStart &gt;= 0 &amp;&amp; ss.selEnd &gt;= 0) {
+        if (mText instanceof Spannable) {
+            int len = mText.length();
+
+            if (ss.selStart &gt; len || ss.selEnd &gt; len) {
+                String restored = "";
+
+                if (ss.text != null) {
+                    restored = "(restored) ";
+                }
+
+                Log.e(LOG_TAG, "Saved cursor position " + ss.selStart +
+                      "/" + ss.selEnd + " out of range for " + restored +
+                      "text " + mText);
+            } else {
+                Selection.setSelection((Spannable) mText, ss.selStart, ss.selEnd);
+
+                if (ss.frozenWithFocus) {
+                    createEditorIfNeeded();
+                    mEditor.mFrozenWithFocus = true;
+                }
+            }
+        }
+    }
+
+    if (ss.error != null) {
+        final CharSequence error = ss.error;
+        // Display the error later, after the first layout pass
+        post(new Runnable() {
+            public void run() {
+                setError(error);
+            }
+        });
+    }
+}
+</code></pre>
+
+<p>As you can see, it saves the state in a <code>Parcelable</code> object, which is then passed along to a view with the same <code>android:id</code> in the new instance, and <code>onRestoreInstanceState()</code> gets called on the new view. If you create a custom view, which doesn't just consists of other views, you might want to override these methods.</p>

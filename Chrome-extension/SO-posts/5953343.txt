@@ -1,0 +1,204 @@
+<p>Ok,</p>
+
+<p>Figured out the issue is definitely in the <code>HTMLWriter</code> class. Unfortunately, they did not make it easy to override this class, but I beleive I have it.</p>
+
+<pre><code>    import java.io.IOException;
+    import java.io.Writer;
+    import java.util.Enumeration;
+    import java.util.Vector;
+    import javax.swing.text.AttributeSet;
+    import javax.swing.text.MutableAttributeSet;
+    import javax.swing.text.SimpleAttributeSet;
+    import javax.swing.text.StyleConstants;
+    import javax.swing.text.html.CSS;
+    import javax.swing.text.html.HTML;
+    import javax.swing.text.html.HTMLDocument;
+    import javax.swing.text.html.HTMLWriter;
+
+    public class FixedHTMLWriter extends HTMLWriter
+    {
+        private Vector                      tags                = new Vector(10);
+        private Vector                      tagValues       = new Vector(10);
+        private Vector                      tagsToRemove    = new Vector(10);
+        private MutableAttributeSet convAttr            = new SimpleAttributeSet();
+        private MutableAttributeSet oConvAttr       = new SimpleAttributeSet();
+
+        public FixedHTMLWriter(Writer w, HTMLDocument doc, int pos, int len)
+        {
+            super(w, doc, pos, len);
+        }
+
+        AttributeSet convertToHTML(AttributeSet from, MutableAttributeSet to)
+        {
+            if (to == null)
+            {
+                to = convAttr;
+            }
+            to.removeAttributes(to);
+            if (from != null)
+            {
+                Enumeration keys = from.getAttributeNames();
+                String value = "";
+                while (keys.hasMoreElements())
+                {
+                           Object key = keys.nextElement();
+                    if (key instanceof CSS.Attribute)
+                    {
+                        value +=  key + ": " + from.getAttribute(key) + ";";
+                        if (keys.hasMoreElements())
+                            value += " ";
+                    }
+
+                    else
+                    {
+                        to.addAttribute(key, from.getAttribute(key));
+                    }
+                }
+                if (value.length() &gt; 0)
+                {
+                    to.addAttribute(HTML.Attribute.STYLE, value);
+                }
+            }
+            return to;
+        }
+
+        @Override
+        protected void closeOutUnwantedEmbeddedTags(AttributeSet attr) throws IOException
+        {
+            tagsToRemove.removeAllElements();
+            // translate css attributes to html
+            attr = convertToHTML(attr, null);
+            HTML.Tag t;
+            Object tValue;
+            int firstIndex = -1;
+            int size = tags.size();
+            // First, find all the tags that need to be removed.
+            for (int i = size - 1; i &gt;= 0; i--)
+            {
+                t = (HTML.Tag) tags.elementAt(i);
+                tValue = tagValues.elementAt(i);
+                if ((attr == null) || noMatchForTagInAttributes(attr, t, tValue))
+                {
+                    firstIndex = i;
+                    tagsToRemove.addElement(t);
+                }
+            }
+            if (firstIndex != -1)
+            {
+                // Then close them out.
+                boolean removeAll = ((size - firstIndex) == tagsToRemove.size());
+                for (int i = size - 1; i &gt;= firstIndex; i--)
+                {
+                    t = (HTML.Tag) tags.elementAt(i);
+                    if (removeAll || tagsToRemove.contains(t))
+                    {
+                        tags.removeElementAt(i);
+                        tagValues.removeElementAt(i);
+                    }
+                    write('&lt;');
+                    write('/');
+                    write(t.toString());
+                    write('&gt;');
+                }
+                // Have to output any tags after firstIndex that still remaing,
+                // as we closed them out, but they should remain open.
+                size = tags.size();
+                for (int i = firstIndex; i &lt; size; i++)
+                {
+                    t = (HTML.Tag) tags.elementAt(i);
+                    write('&lt;');
+                    write(t.toString());
+                    Object o = tagValues.elementAt(i);
+                    if (o != null &amp;&amp; o instanceof AttributeSet)
+                    {
+                        writeAttributes((AttributeSet) o);
+                    }
+                    write('&gt;');
+                }
+            }
+        }
+
+        private boolean noMatchForTagInAttributes(AttributeSet attr, HTML.Tag t, Object tagValue)
+        {
+            if (attr != null &amp;&amp; attr.isDefined(t))
+            {
+                Object newValue = attr.getAttribute(t);
+                if ((tagValue == null) ? (newValue == null) : (newValue != null &amp;&amp; tagValue.equals(newValue)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        protected void writeEmbeddedTags(AttributeSet attr) throws IOException
+        {
+            // translate css attributes to html
+            attr = convertToHTML(attr, oConvAttr);
+            Enumeration names = attr.getAttributeNames();
+            while (names.hasMoreElements())
+            {
+                Object name = names.nextElement();
+                if (name instanceof HTML.Tag)
+                {
+                    HTML.Tag tag = (HTML.Tag) name;
+                    if (tag == HTML.Tag.FORM || tags.contains(tag))
+                    {
+                        continue;
+                    }
+                    write('&lt;');
+                    write(tag.toString());
+                    Object o = attr.getAttribute(tag);
+                    if (o != null &amp;&amp; o instanceof AttributeSet)
+                    {
+                        writeAttributes((AttributeSet) o);
+                    }
+                    write('&gt;');
+                    tags.addElement(tag);
+                    tagValues.addElement(o);
+                }
+            }
+        }
+
+        @Override
+        protected void writeAttributes(AttributeSet attr) throws IOException
+        {
+            convAttr.removeAttributes(convAttr);
+            convertToHTML(attr, convAttr);
+            Enumeration names = convAttr.getAttributeNames();
+            while (names.hasMoreElements())
+            {
+                Object name = names.nextElement();
+                if (name instanceof HTML.Tag || name instanceof StyleConstants || name == HTML.Attribute.ENDTAG)
+                {
+                    continue;
+                }
+                write(" " + name + "=\"" + convAttr.getAttribute(name) + "\"");
+            }
+        }
+    }
+</code></pre>
+
+<p>And you need to override the <code>HTMLEditorKit</code> class method <code>write</code> as follows:</p>
+
+<pre><code>    public void write(Writer out, Document doc, int pos, int len) throws IOException, BadLocationException
+        {
+            if (doc instanceof HTMLDocument)
+            {
+                FixedHTMLWriter w = new FixedHTMLWriter(out, (HTMLDocument) doc, pos, len);
+                w.write();
+            }
+            else if (doc instanceof StyledDocument)
+            {
+                MinimalHTMLWriter w = new MinimalHTMLWriter(out, (StyledDocument) doc, pos, len);
+                w.write();
+            }
+            else
+            {
+                super.write(out, doc, pos, len);
+            }
+        }
+</code></pre>
+
+<p>And set the overridden <code>HTMLEditorKit</code> on the <code>JEditorPane</code> using a call to <code>setEditorKit</code>.</p>

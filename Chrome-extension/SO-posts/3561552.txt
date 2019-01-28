@@ -1,0 +1,382 @@
+<p>Inspired from the implementation of VideoView</p>
+
+<pre>
+<code>
+package org.myvideo;
+
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.Intent;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
+import android.media.MediaPlayer.OnPreparedListener;
+import android.media.MediaPlayer.OnCompletionListener;
+import android.media.MediaPlayer.OnErrorListener;
+import android.view.MotionEvent;
+import android.net.Uri;
+import android.util.Log;
+import android.view.View;
+import android.view.KeyEvent;
+import android.widget.ImageView;
+import android.widget.MediaController;
+import android.widget.MediaController.MediaPlayerControl;
+import android.util.AttributeSet;
+import android.content.DialogInterface;
+import android.content.DialogInterface.OnClickListener;
+
+import java.io.IOException;
+
+public class MyAudioView extends ImageView implements MediaPlayerControl {
+    // settable by the client
+    private Uri         mUri;
+
+    // All the stuff we need for playing and showing a video
+    private MediaPlayer mMediaPlayer = null;
+    private MediaController mMediaController;
+    private int mCurrentBufferPercentage;
+    private boolean     mStartWhenPrepared;
+    private int         mSeekWhenPrepared;
+    private Context mContext;
+    private boolean     mIsPrepared;
+    private MediaPlayer.OnPreparedListener mOnPreparedListener;
+    private OnErrorListener mOnErrorListener;
+    private OnCompletionListener mOnCompletionListener;
+
+    public MyAudioView(Context context) {
+        super(context);
+        mContext = context;
+    }
+
+    public MyAudioView(Context context, AttributeSet attrs) {
+        this(context, attrs, 0);
+        mContext = context;
+    }
+
+    public MyAudioView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        mContext = context;
+    }
+
+    public void setVideoPath(String path) {
+        setAudioURI(Uri.parse(path));
+    }
+
+    public void setAudioURI(Uri uri) {
+        mUri = uri;
+        mStartWhenPrepared = false;
+        mSeekWhenPrepared = 0;
+        openVideo();
+        requestLayout();
+        invalidate();
+    }
+
+    public void stopPlayback() {
+        if (mMediaPlayer != null) {
+            mMediaPlayer.stop();
+            mMediaPlayer.release();
+            mMediaPlayer = null;
+        }
+    }
+
+    private void openVideo() {
+        if (mUri == null) {
+            // not ready for playback just yet, will try again later
+            return;
+        }
+        // Tell the music playback service to pause 
+        // TODO: these constants need to be published somewhere in the framework.
+        Intent i = new Intent("com.android.music.musicservicecommand");
+        i.putExtra("command", "pause");
+        mContext.sendBroadcast(i);
+
+        if (mMediaPlayer != null) {
+            mMediaPlayer.reset();
+            mMediaPlayer.release();
+            mMediaPlayer = null;
+        }
+        try {
+            mMediaPlayer = new MediaPlayer();
+            mMediaPlayer.setOnPreparedListener(mPreparedListener);
+            mIsPrepared = false;
+            mMediaPlayer.setOnCompletionListener(mCompletionListener);
+            mMediaPlayer.setOnErrorListener(mErrorListener);
+            mMediaPlayer.setOnBufferingUpdateListener(mBufferingUpdateListener);
+            mCurrentBufferPercentage = 0;
+            mMediaPlayer.setDataSource(mContext, mUri);
+            mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mMediaPlayer.setScreenOnWhilePlaying(true);
+            mMediaPlayer.prepareAsync();
+            attachMediaController();
+        } catch (IOException ex) {
+            Log.w("MyAudioView", "Unable to open content: " + mUri, ex);
+            return;
+        } catch (IllegalArgumentException ex) {
+            Log.w("MyAudioView", "Unable to open content: " + mUri, ex);
+            return;
+        }
+    }
+
+    public void setMediaController(MediaController controller) {
+        if (mMediaController != null) {
+            mMediaController.hide();
+        }
+        mMediaController = controller;
+        attachMediaController();
+    }
+
+    private void attachMediaController() {
+        if (mMediaPlayer != null && mMediaController != null) {
+            mMediaController.setMediaPlayer(this);
+            View anchorView = this.getParent() instanceof View ?
+                    (View)this.getParent() : this;
+            mMediaController.setAnchorView(anchorView);
+            mMediaController.setEnabled(mIsPrepared);
+        }
+    }
+
+    MediaPlayer.OnPreparedListener mPreparedListener = new MediaPlayer.OnPreparedListener() {
+        public void onPrepared(MediaPlayer mp) {
+            // briefly show the mediacontroller
+            mIsPrepared = true;
+            if (mOnPreparedListener != null) {
+                mOnPreparedListener.onPrepared(mMediaPlayer);
+            }
+            if (mMediaController != null) {
+                mMediaController.setEnabled(true);
+            }
+            if (mStartWhenPrepared) {
+                mMediaPlayer.start();
+            }
+        }
+    };
+
+    private MediaPlayer.OnCompletionListener mCompletionListener =
+        new MediaPlayer.OnCompletionListener() {
+        public void onCompletion(MediaPlayer mp) {
+            if (mMediaController != null) {
+                mMediaController.hide();
+            }
+            if (mOnCompletionListener != null) {
+                mOnCompletionListener.onCompletion(mMediaPlayer);
+            }
+        }
+    };
+
+    private MediaPlayer.OnErrorListener mErrorListener =
+        new MediaPlayer.OnErrorListener() {
+        public boolean onError(MediaPlayer mp, int a, int b) {
+            Log.d("MyAudioView", "Error: " + a + "," + b);
+            if (mMediaController != null) {
+                mMediaController.hide();
+            }
+
+            /* If an error handler has been supplied, use it and finish. */
+            if (mOnErrorListener != null) {
+                if (mOnErrorListener.onError(mMediaPlayer, a, b)) {
+                    return true;
+                }
+            }
+
+            /* Otherwise, pop up an error dialog so the user knows that
+             * something bad has happened. Only try and pop up the dialog
+             * if we're attached to a window. When we're going away and no
+             * longer have a window, don't bother showing the user an error.
+             */
+            if (getWindowToken() != null) {
+                new AlertDialog.Builder(mContext)
+                        .setTitle("Error")
+                        .setMessage("This track could not be played")
+                        .setPositiveButton("OK",
+                                new DialogInterface.OnClickListener() {
+                                    public void onClick(DialogInterface dialog, int whichButton) {
+                                        /* If we get here, there is no onError listener, so
+                                         * at least inform them that the video is over.
+                                         */
+                                        if (mOnCompletionListener != null) {
+                                            mOnCompletionListener.onCompletion(mMediaPlayer);
+                                        }
+                                    }
+                                })
+                        .setCancelable(false)
+                        .show();
+            }
+            return true;
+        }
+    };
+
+    private MediaPlayer.OnBufferingUpdateListener mBufferingUpdateListener =
+        new MediaPlayer.OnBufferingUpdateListener() {
+        public void onBufferingUpdate(MediaPlayer mp, int percent) {
+            mCurrentBufferPercentage = percent;
+        }
+    };
+
+    /**
+     * Register a callback to be invoked when the media file
+     * is loaded and ready to go.
+     *
+     * @param l The callback that will be run
+     */
+    public void setOnPreparedListener(MediaPlayer.OnPreparedListener l)
+    {
+        mOnPreparedListener = l;
+    }
+
+    /**
+     * Register a callback to be invoked when the end of a media file
+     * has been reached during playback.
+     *
+     * @param l The callback that will be run
+     */
+    public void setOnCompletionListener(OnCompletionListener l)
+    {
+        mOnCompletionListener = l;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent ev) {
+        if (mIsPrepared && mMediaPlayer != null && mMediaController != null) {
+            toggleMediaControlsVisiblity();
+        }
+        return false;
+    }
+
+    @Override
+    public boolean onTrackballEvent(MotionEvent ev) {
+        if (mIsPrepared && mMediaPlayer != null && mMediaController != null) {
+            toggleMediaControlsVisiblity();
+        }
+        return false;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event)
+    {
+        if (mIsPrepared &&
+                keyCode != KeyEvent.KEYCODE_BACK &&
+                keyCode != KeyEvent.KEYCODE_VOLUME_UP &&
+                keyCode != KeyEvent.KEYCODE_VOLUME_DOWN &&
+                keyCode != KeyEvent.KEYCODE_MENU &&
+                keyCode != KeyEvent.KEYCODE_CALL &&
+                keyCode != KeyEvent.KEYCODE_ENDCALL &&
+                mMediaPlayer != null &&
+                mMediaController != null) {
+            if (keyCode == KeyEvent.KEYCODE_HEADSETHOOK) {
+                if (mMediaPlayer.isPlaying()) {
+                    pause();
+                    mMediaController.show();
+                } else {
+                    start();
+                    mMediaController.hide();
+                }
+                return true;
+            } else {
+                toggleMediaControlsVisiblity();
+            }
+        }
+
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void toggleMediaControlsVisiblity() {
+        if (mMediaController.isShowing()) { 
+            mMediaController.hide();
+        } else {
+            mMediaController.show();
+        }
+    }
+
+    public void start() {
+        if (mMediaPlayer != null && mIsPrepared) {
+                mMediaPlayer.start();
+                mStartWhenPrepared = false;
+        } else {
+            mStartWhenPrepared = true;
+        }
+    }
+
+    public void pause() {
+        if (mMediaPlayer != null && mIsPrepared) {
+            if (mMediaPlayer.isPlaying()) {
+                mMediaPlayer.pause();
+            }
+        }
+        mStartWhenPrepared = false;
+    }
+
+    public int getDuration() {
+        if (mMediaPlayer != null && mIsPrepared) {
+            return mMediaPlayer.getDuration();
+        }
+        return -1;
+    }
+
+    public int getCurrentPosition() {
+        if (mMediaPlayer != null && mIsPrepared) {
+            return mMediaPlayer.getCurrentPosition();
+        }
+        return 0;
+    }
+
+    public void seekTo(int msec) {
+        if (mMediaPlayer != null && mIsPrepared) {
+            mMediaPlayer.seekTo(msec);
+        } else {
+            mSeekWhenPrepared = msec;
+        }
+    }    
+
+    public boolean isPlaying() {
+        if (mMediaPlayer != null && mIsPrepared) {
+            return mMediaPlayer.isPlaying();
+        }
+        return false;
+    }
+
+    public int getBufferPercentage() {
+        if (mMediaPlayer != null) {
+            return mCurrentBufferPercentage;
+        }
+        return 0;
+    }
+
+    public boolean canSeekForward() {
+      return true;
+    }
+
+    public boolean canSeekBackward() {
+      return true;
+    }
+
+    public boolean canPause() {
+      return true;
+    }
+}
+</code>
+</pre>
+
+<pre>
+<code>
+package org.myvideo;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.widget.MediaController;
+import android.net.Uri;
+
+public class MyVideo extends Activity
+{
+    /** Called when the activity is first created. */
+    @Override
+    public void onCreate(Bundle savedInstanceState)
+    {
+        MyAudioView video = new MyAudioView(this);
+        video.setMediaController(new MediaController(this));
+        super.onCreate(savedInstanceState);
+        video.setAudioURI(Uri.parse("http://url_to_media"));
+        video.setImageResource(R.drawable.icon);
+        setContentView(video);
+    }
+}
+</code>
+</pre>

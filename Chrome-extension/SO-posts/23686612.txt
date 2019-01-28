@@ -1,0 +1,312 @@
+<p><strong>EDIT :</strong> I've thrown together a working example for you. It works like this:</p>
+
+<p>It will start within a directory (in the example below, <code>/storage/sdcard/DCIM/</code>). If the directory contains any images, they will be displayed. If it contains any sub-directories, it will check to see if they contain either images, or their own sub-directories. If they do, a folder icon will be displayed. Clicking on the folder icon will open up the folder, and show the images/ sub-directories that it contains.</p>
+
+<p>Please note that this is just intended to give you a rough idea of how to implement it-- you will still need to work on this code a bit to improve the efficiency, especially in terms of memory usage, but I've run this on my emulator and the code is working.</p>
+
+<h2>Within your activity</h2>
+
+<pre><code>public class MainActivity extends Activity implements OnItemClickListener {
+
+    List&lt;GridViewItem&gt; gridItems;
+
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        setGridAdapter("/storage/sdcard/DCIM/");
+    }
+
+
+    /**
+     * This will create our GridViewItems and set the adapter
+     * 
+     * @param path
+     *            The directory in which to search for images
+     */
+    private void setGridAdapter(String path) {
+        // Create a new grid adapter
+        gridItems = createGridItems(path);
+        MyGridAdapter adapter = new MyGridAdapter(this, gridItems);
+
+        // Set the grid adapter
+        GridView gridView = (GridView) findViewById(R.id.gridView);
+        gridView.setAdapter(adapter);
+
+        // Set the onClickListener
+        gridView.setOnItemClickListener(this);
+    }
+
+
+    /**
+     * Go through the specified directory, and create items to display in our
+     * GridView
+     */
+    private List&lt;GridViewItem&gt; createGridItems(String directoryPath) {
+        List&lt;GridViewItem&gt; items = new ArrayList&lt;GridViewItem&gt;();
+
+        // List all the items within the folder.
+        File[] files = new File(directoryPath).listFiles(new ImageFileFilter());
+        for (File file : files) {
+
+            // Add the directories containing images or sub-directories
+            if (file.isDirectory()
+                &amp;&amp; file.listFiles(new ImageFileFilter()).length &gt; 0) {
+
+                items.add(new GridViewItem(file.getAbsolutePath(), true, null));
+            }
+            // Add the images
+            else {
+                Bitmap image = BitmapHelper.decodeBitmapFromFile(file.getAbsolutePath(),
+                                                                 50,
+                                                                 50);
+                items.add(new GridViewItem(file.getAbsolutePath(), false, image));
+            }
+        }
+
+        return items;
+    }
+
+
+    /**
+     * Checks the file to see if it has a compatible extension.
+     */
+    private boolean isImageFile(String filePath) {
+        if (filePath.endsWith(".jpg") || filePath.endsWith(".png"))
+        // Add other formats as desired
+        {
+            return true;
+        }
+        return false;
+    }
+
+
+    @Override
+    public void
+            onItemClick(AdapterView&lt;?&gt; parent, View view, int position, long id) {
+
+        if (gridItems.get(position).isDirectory()) {
+            setGridAdapter(gridItems.get(position).getPath());
+        }
+        else {
+            // Display the image
+        }
+
+    }
+
+    /**
+     * This can be used to filter files.
+     */
+    private class ImageFileFilter implements FileFilter {
+
+        @Override
+        public boolean accept(File file) {
+            if (file.isDirectory()) {
+                return true;
+            }
+            else if (isImageFile(file.getAbsolutePath())) {
+                return true;
+            }
+            return false;
+        }
+    }
+
+}
+</code></pre>
+
+<h2>Then you need to create the adapter, which should extend BaseAdapter, and look like this.</h2>
+
+<pre><code>public class MyGridAdapter extends BaseAdapter {
+
+    LayoutInflater inflater;
+    List&lt;GridViewItem&gt; items;
+
+
+    public MyGridAdapter(Context context, List&lt;GridViewItem&gt; items) {
+        this.items = items;
+        inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+    }
+
+
+    @Override
+    public int getCount() {
+        return items.size();
+    }
+
+
+    @Override
+    public Object getItem(int position) {
+        return items.get(position);
+    }
+
+
+    @Override
+    public long getItemId(int position) {
+        return position;
+    }
+
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+
+        if (convertView == null) {
+            convertView = inflater.inflate(R.layout.grid_item, null);
+        }
+
+        TextView text = (TextView) convertView.findViewById(R.id.textView);
+        text.setText(items.get(position).getPath());
+
+        ImageView imageView = (ImageView) convertView.findViewById(R.id.imageView);
+        Bitmap image = items.get(position).getImage();
+
+        if (image != null){
+            imageView.setImageBitmap(image);
+        }
+        else {
+            // If no image is provided, display a folder icon.
+            imageView.setImageResource(R.drawable.your_folder_icon);
+        }
+
+        return convertView;
+    }
+
+}
+</code></pre>
+
+<h2>And you need to create a class that represents each grid item</h2>
+
+<pre><code>public class GridViewItem {
+
+    private String path;
+    private boolean isDirectory;
+    private Bitmap image;
+
+
+    public GridViewItem(String path, boolean isDirectory, Bitmap image) {
+        this.path = path;
+        this.isDirectory = isDirectory;
+        this.image = image;
+    }
+
+
+    public String getPath() {
+        return path;
+    }
+
+
+    public boolean isDirectory() {
+        return isDirectory;
+    }
+
+
+    public Bitmap getImage() {
+        return image;
+    }
+}
+</code></pre>
+
+<h2>A class for working with images</h2>
+
+<pre><code>public abstract class BitmapHelper {
+
+    public static Bitmap decodeBitmapFromFile(String imagePath,
+                                              int reqWidth,
+                                              int reqHeight) {
+
+        // First decode with inJustDecodeBounds=true to check dimensions
+        final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(imagePath, options);
+
+        // Calculate inSampleSize
+        options.inSampleSize = calculateSampleSize(options, reqWidth, reqHeight);
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false;
+        return BitmapFactory.decodeFile(imagePath, options);
+    }
+
+
+    private static int calculateSampleSize(BitmapFactory.Options options,
+                                           int reqHeight,
+                                           int reqWidth) {
+
+        // Raw height and width of image
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height &gt; reqHeight || width &gt; reqWidth) {
+
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+
+            // Calculate the largest inSampleSize value that is a power of 2 and
+            // keeps both
+            // height and width larger than the requested height and width.
+            while ((halfHeight / inSampleSize) &gt; reqHeight
+                   &amp;&amp; (halfWidth / inSampleSize) &gt; reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+
+        return inSampleSize;
+
+    }
+
+}
+</code></pre>
+
+<h2>activity_main.xml</h2>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;GridView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/gridView"
+    android:numColumns="auto_fit"
+    android:gravity="center"
+    android:columnWidth="150dp"
+    android:stretchMode="columnWidth"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent" &gt;
+&lt;/GridView&gt;
+</code></pre>
+
+<h2>grid_item.xml</h2>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="150dp"
+    android:layout_height="150dp"
+    android:padding="5dp" &gt;
+
+    &lt;ImageView
+        android:id="@+id/imageView"
+        android:layout_width="150dp"
+        android:layout_height="150dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/andrew_salgado" &gt;
+    &lt;/ImageView&gt;
+
+    &lt;RelativeLayout
+        android:layout_width="fill_parent"
+        android:layout_height="20dp"
+        android:layout_alignParentBottom="true"
+        android:alpha="0.8"
+        android:background="#000000" &gt;
+
+        &lt;TextView
+            android:id="@+id/textView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="start"
+            android:singleLine="true"
+            android:textColor="#FFFFFF" /&gt;
+
+    &lt;/RelativeLayout&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p><img src="http://i.stack.imgur.com/4mWDH.png" alt="enter image description here"></p>

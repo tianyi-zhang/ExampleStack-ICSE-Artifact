@@ -1,0 +1,64 @@
+<p>Worker threads are spawned as tasks arrive by execute, and these are the ones that interact with the underlying work queue. You need to prestart the workers if you begin with a non-empty work queue. See the <a href="http://grepcode.com/file/repository.grepcode.com/java/root/jdk/openjdk/7-b147/java/util/concurrent/ThreadPoolExecutor.java">implementation in OpenJDK 7</a>.</p>
+
+<p>I repeat, <strong>the workers are the ones that interact with the work queue</strong>. They are only spawned on demand when passed via <code>execute</code>. (or the layers above it, e.g. <code>invokeAll</code>, <code>submit</code>, etc.) If they are not started, it will not matter how much work you add to the queue, since there is nothing checking it as <strong>there are no workers started</strong>.</p>
+
+<p><code>ThreadPoolExecutor</code> does not spawn worker threads until necessary or if you pre-empt their creation by the methods <a href="http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/ThreadPoolExecutor.html#prestartAllCoreThreads%28%29">prestartAllCoreThreads</a> and <a href="http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/ThreadPoolExecutor.html#prestartCoreThread%28%29">prestartCoreThread</a>. If there are no workers started, then there is no way any of the work in your queue is going to be done.</p>
+
+<p>The reason adding an initial <code>execute</code> works is that it forces the creation of a <strong>sole</strong> core worker thread, which then can begin processing the work from your queue. You could also call <code>prestartCoreThread</code> and receive similar behavior. If you want to start <em>all</em> the workers, you must call <code>prestartAllCoreThreads</code> or submit that number of tasks via <code>execute</code>.</p>
+
+<p>See the code for <code>execute</code> below.</p>
+
+<pre><code>/**
+ * Executes the given task sometime in the future.  The task
+ * may execute in a new thread or in an existing pooled thread.
+ *
+ * If the task cannot be submitted for execution, either because this
+ * executor has been shutdown or because its capacity has been reached,
+ * the task is handled by the current {@code RejectedExecutionHandler}.
+ *
+ * @param command the task to execute
+ * @throws RejectedExecutionException at discretion of
+ *         {@code RejectedExecutionHandler}, if the task
+ *         cannot be accepted for execution
+ * @throws NullPointerException if {@code command} is null
+ */
+public void execute(Runnable command) {
+    if (command == null)
+        throw new NullPointerException();
+    /*
+     * Proceed in 3 steps:
+     *
+     * 1. If fewer than corePoolSize threads are running, try to
+     * start a new thread with the given command as its first
+     * task.  The call to addWorker atomically checks runState and
+     * workerCount, and so prevents false alarms that would add
+     * threads when it shouldn't, by returning false.
+     *
+     * 2. If a task can be successfully queued, then we still need
+     * to double-check whether we should have added a thread
+     * (because existing ones died since last checking) or that
+     * the pool shut down since entry into this method. So we
+     * recheck state and if necessary roll back the enqueuing if
+     * stopped, or start a new thread if there are none.
+     *
+     * 3. If we cannot queue task, then we try to add a new
+     * thread.  If it fails, we know we are shut down or saturated
+     * and so reject the task.
+     */
+    int c = ctl.get();
+    if (workerCountOf(c) &lt; corePoolSize) {
+        if (addWorker(command, true))
+            return;
+        c = ctl.get();
+    }
+    if (isRunning(c) &amp;&amp; workQueue.offer(command)) {
+        int recheck = ctl.get();
+        if (! isRunning(recheck) &amp;&amp; remove(command))
+            reject(command);
+        else if (workerCountOf(recheck) == 0)
+            addWorker(null, false);
+    }
+    else if (!addWorker(command, false))
+        reject(command);
+}
+</code></pre>

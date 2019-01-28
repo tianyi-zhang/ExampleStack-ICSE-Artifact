@@ -1,0 +1,118 @@
+<p>For sample applications and debugging purposes, I use a simple solution that allows me to write the stacktrace to the sd card of the device and/or upload it to a server. This solution has been inspired by <a href="http://code.google.com/p/android-remote-stacktrace">http://code.google.com/p/android-remote-stacktrace</a> (specifically, the save-to-device and upload-to-server parts) and I think it solves the problem mentioned by Soonil. It's not optimal, but it works and you can improve it if you want to use it in a production application. If you decide to upload the stacktraces to the server, you can use a php script (index.php) to view them. If you're interested, you can find all the sources below - one java class for your application and two optional php scrips for the server hosting the uploaded stacktraces.</p>
+
+<p>In a Context (e.g. the main Activity), call</p>
+
+<pre><code>if(!(Thread.getDefaultUncaughtExceptionHandler() instanceof CustomExceptionHandler)) {
+    Thread.setDefaultUncaughtExceptionHandler(new CustomExceptionHandler(
+            "/sdcard/&lt;desired_local_path&gt;", "http://&lt;desired_url&gt;/upload.php"));
+}
+</code></pre>
+
+<p>CustomExceptionHandler</p>
+
+<pre><code>public class CustomExceptionHandler implements UncaughtExceptionHandler {
+
+    private UncaughtExceptionHandler defaultUEH;
+
+    private String localPath;
+
+    private String url;
+
+    /* 
+     * if any of the parameters is null, the respective functionality 
+     * will not be used 
+     */
+    public CustomExceptionHandler(String localPath, String url) {
+        this.localPath = localPath;
+        this.url = url;
+        this.defaultUEH = Thread.getDefaultUncaughtExceptionHandler();
+    }
+
+    public void uncaughtException(Thread t, Throwable e) {
+        String timestamp = TimestampFormatter.getInstance().getTimestamp();
+        final Writer result = new StringWriter();
+        final PrintWriter printWriter = new PrintWriter(result);
+        e.printStackTrace(printWriter);
+        String stacktrace = result.toString();
+        printWriter.close();
+        String filename = timestamp + ".stacktrace";
+
+        if (localPath != null) {
+            writeToFile(stacktrace, filename);
+        }
+        if (url != null) {
+            sendToServer(stacktrace, filename);
+        }
+
+        defaultUEH.uncaughtException(t, e);
+    }
+
+    private void writeToFile(String stacktrace, String filename) {
+        try {
+            BufferedWriter bos = new BufferedWriter(new FileWriter(
+                    localPath + "/" + filename));
+            bos.write(stacktrace);
+            bos.flush();
+            bos.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendToServer(String stacktrace, String filename) {
+        DefaultHttpClient httpClient = new DefaultHttpClient();
+        HttpPost httpPost = new HttpPost(url);
+        List&lt;NameValuePair&gt; nvps = new ArrayList&lt;NameValuePair&gt;();
+        nvps.add(new BasicNameValuePair("filename", filename));
+        nvps.add(new BasicNameValuePair("stacktrace", stacktrace));
+        try {
+            httpPost.setEntity(
+                    new UrlEncodedFormEntity(nvps, HTTP.UTF_8));
+            httpClient.execute(httpPost);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+</code></pre>
+
+<p>upload.php</p>
+
+<pre><code>&lt;?php
+    $filename = isset($_POST['filename']) ? $_POST['filename'] : "";
+    $message = isset($_POST['stacktrace']) ? $_POST['stacktrace'] : "";
+    if (!ereg('^[-a-zA-Z0-9_. ]+$', $filename) || $message == ""){
+        die("This script is used to log debug data. Please send the "
+                . "logging message and a filename as POST variables.");
+    }
+    file_put_contents($filename, $message . "\n", FILE_APPEND);
+?&gt;
+</code></pre>
+
+<p>index.php</p>
+
+<pre><code>&lt;?php
+    $myDirectory = opendir(".");
+    while($entryName = readdir($myDirectory)) {
+        $dirArray[] = $entryName;
+    }
+    closedir($myDirectory);
+    $indexCount = count($dirArray);
+    sort($dirArray);
+    print("&lt;TABLE border=1 cellpadding=5 cellspacing=0 \n");
+    print("&lt;TR&gt;&lt;TH&gt;Filename&lt;/TH&gt;&lt;TH&gt;Filetype&lt;/th&gt;&lt;th&gt;Filesize&lt;/TH&gt;&lt;/TR&gt;\n");
+    for($index=0; $index &lt; $indexCount; $index++) {
+        if ((substr("$dirArray[$index]", 0, 1) != ".") 
+                &amp;&amp; (strrpos("$dirArray[$index]", ".stacktrace") != false)){ 
+            print("&lt;TR&gt;&lt;TD&gt;");
+            print("&lt;a href=\"$dirArray[$index]\"&gt;$dirArray[$index]&lt;/a&gt;");
+            print("&lt;/TD&gt;&lt;TD&gt;");
+            print(filetype($dirArray[$index]));
+            print("&lt;/TD&gt;&lt;TD&gt;");
+            print(filesize($dirArray[$index]));
+            print("&lt;/TD&gt;&lt;/TR&gt;\n");
+        }
+    }
+    print("&lt;/TABLE&gt;\n");
+?&gt;
+</code></pre>

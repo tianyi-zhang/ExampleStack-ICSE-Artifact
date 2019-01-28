@@ -1,0 +1,47 @@
+<p>Sounds strange, but I had the exact same problem.  The app I was working on was making several successive requests to download a bunch of thumbnail images to display in a ListView, and after the second one it would hang as if there was a dead lock in the HttpClient code.</p>
+
+<p>The strange fix that I found was to use AndroidHttpClient instead of DefaultHttpClient.  As soon as I did this, and I tried a lot of stuff before going this route, it started working just fine.  Just remember to call client.close() when you're done with the request.</p>
+
+<p>AndroidHttpClient is described in the documentation as DefaultHttpClient with "reasonable default settings and registered schemes for Android".  Since this was introduced in api level 8 (Android 2.2), I dug up the source to duplicate these "default settings" so that I could use it further back than that api level.  Here is my code for duplicating the defaults and a helper class with a static method for safely closing it</p>
+
+<pre><code>public class HttpClientProvider {
+
+    // Default connection and socket timeout of 60 seconds. Tweak to taste.
+    private static final int SOCKET_OPERATION_TIMEOUT = 60 * 1000;
+
+    public static DefaultHttpClient newInstance(String userAgent)
+    {
+        HttpParams params = new BasicHttpParams();
+
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+        HttpProtocolParams.setContentCharset(params, HTTP.DEFAULT_CONTENT_CHARSET);
+        HttpProtocolParams.setUseExpectContinue(params, true);
+
+        HttpConnectionParams.setStaleCheckingEnabled(params, false);
+        HttpConnectionParams.setConnectionTimeout(params, SOCKET_OPERATION_TIMEOUT);
+        HttpConnectionParams.setSoTimeout(params, SOCKET_OPERATION_TIMEOUT);
+        HttpConnectionParams.setSocketBufferSize(params, 8192);
+
+        SchemeRegistry schReg = new SchemeRegistry();
+        schReg.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+        schReg.register(new Scheme("https", SSLSocketFactory.getSocketFactory(), 443));
+        ClientConnectionManager conMgr = new ThreadSafeClientConnManager(params, schReg);
+
+        DefaultHttpClient client = new DefaultHttpClient(conMgr, params);
+
+        return client;
+    }
+
+}
+</code></pre>
+
+<p>And in another class...</p>
+
+<pre><code>public static void safeClose(HttpClient client)
+{
+    if(client != null &amp;&amp; client.getConnectionManager() != null)
+    {
+        client.getConnectionManager().shutdown();
+    }
+}
+</code></pre>

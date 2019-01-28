@@ -1,0 +1,116 @@
+<p>For complete and utter nubs like me who have zero knowledge of what the author is actually doing, but need to do it anyway...here's how I made it work. Have no idea how to de-deprecate the instanceOfYaml() though.
+One other thing, my Spring Boot Eclipse project read from files marked .yml, not .yaml</p>
+
+<pre><code>import org.springframework.util.PropertiesPersister;
+import org.springframework.util.StringUtils;
+import org.yaml.snakeyaml.Dumper;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.DumperOptions.ScalarStyle;
+import org.yaml.snakeyaml.Loader;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.nodes.Tag;
+import org.yaml.snakeyaml.resolver.Resolver;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.Reader;
+import java.io.Writer;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Properties;
+
+public class YamlPropertiesPersister implements PropertiesPersister {
+    @Override
+    public void load(Properties props, InputStream is) throws IOException {
+        load(props, new InputStreamReader(is));
+    }
+
+    /**
+     * We want to traverse map representing Yaml object and each time we will find String:String value pair we want to
+     * save it as Property. As we are going deeper into map we generate a compound key as path-like String
+     *
+     * @param props
+     * @param reader
+     * @throws IOException
+     * @see org.springframework.util.PropertiesPersister#load(java.util.Properties, java.io.Reader)
+     */
+    @Override
+    public void load(Properties props, Reader reader) throws IOException {
+        Yaml yaml = instanceOfYaml();
+        Map&lt;String, Object&gt; map = (Map&lt;String, Object&gt;) yaml.load(reader);
+        // now we can populate supplied props
+        assignProperties(props, map, null);
+    }
+
+    /**
+     * @param props
+     * @param map
+     */
+    public void assignProperties(Properties props, Map&lt;String, Object&gt; map, String path) {
+        for (Entry&lt;String, Object&gt; entry : map.entrySet()) {
+            String key = entry.getKey();
+            if (!StringUtils.isEmpty(path))
+                key = path + "." + key;
+            Object val = entry.getValue();
+            if (val instanceof String) {
+                // see if we need to create a compound key
+                props.put(key, val);
+            } else if (val instanceof Map) {
+                assignProperties(props, (Map&lt;String, Object&gt;) val, key);
+            }
+        }
+    }
+
+    @Override
+    public void store(Properties props, OutputStream os, String header) throws IOException {
+        throw new UnsupportedOperationException("Current implementation is a read-only");
+    }
+
+    @Override
+    public void store(Properties props, Writer writer, String header) throws IOException {
+        throw new UnsupportedOperationException("Current implementation is a read-only");
+    }
+
+    @Override
+    public void loadFromXml(Properties props, InputStream is) throws IOException {
+        throw new UnsupportedOperationException("Use DefaultPropertiesPersister if you want to read/write XML");
+    }
+
+    @Override
+    public void storeToXml(Properties props, OutputStream os, String header) throws IOException {
+        throw new UnsupportedOperationException("Use DefaultPropertiesPersister if you want to load/store to XML");
+    }
+
+    @Override
+    public void storeToXml(Properties props, OutputStream os, String header, String encoding) throws IOException {
+        throw new UnsupportedOperationException("Use DefaultPropertiesPersister if you want to read/write XML");
+    }
+
+
+    public static Yaml instanceOfYaml() {
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        options.setDefaultScalarStyle(ScalarStyle.DOUBLE_QUOTED);
+        final Yaml yaml = new Yaml(new Loader(), new Dumper(options), new Resolver() {
+            /**
+             * @see org.yaml.snakeyaml.resolver.Resolver#addImplicitResolvers()
+             */
+            @Override
+            protected void addImplicitResolvers() {
+                addImplicitResolver(Tag.BOOL, BOOL, "yYnNtTfFoO");
+                // disable resolving of floats and integers
+                // addImplicitResolver(Tags.FLOAT, FLOAT, "-+0123456789.");
+                // addImplicitResolver(Tag.INT, INT, "-+0123456789");
+                addImplicitResolver(Tag.MERGE, MERGE, "&lt;");
+                addImplicitResolver(Tag.NULL, NULL, "~nN\0");
+                addImplicitResolver(Tag.NULL, EMPTY, null);
+                addImplicitResolver(Tag.TIMESTAMP, TIMESTAMP, "0123456789");
+                addImplicitResolver(Tag.VALUE, VALUE, "=");
+            }
+        });
+        return yaml;
+    }
+}
+</code></pre>

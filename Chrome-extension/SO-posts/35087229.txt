@@ -1,0 +1,167 @@
+<p>I came cross the same problem today, so I checked out the ViewGroup.java source code. The result is that disappearing children always draw on the others.</p>
+
+<p>This is a snippet of <code>ViewGroup.dispatchDraw(Canvas)</code> in API 23 and I am pretty sure it is almost the same in API 22.</p>
+
+<pre><code>for (int i = 0; i &lt; childrenCount; i++) {
+    while (transientIndex &gt;= 0 &amp;&amp; mTransientIndices.get(transientIndex) == i) {
+        final View transientChild = mTransientViews.get(transientIndex);
+        if ((transientChild.mViewFlags &amp; VISIBILITY_MASK) == VISIBLE ||
+                transientChild.getAnimation() != null) {
+            more |= drawChild(canvas, transientChild, drawingTime);
+        }
+        transientIndex++;
+        if (transientIndex &gt;= transientCount) {
+            transientIndex = -1;
+        }
+    }
+    int childIndex = customOrder ? getChildDrawingOrder(childrenCount, i) : i;
+    final View child = (preorderedList == null)
+            ? children[childIndex] : preorderedList.get(childIndex);
+    if ((child.mViewFlags &amp; VISIBILITY_MASK) == VISIBLE || child.getAnimation() != null) {
+        more |= drawChild(canvas, child, drawingTime);
+    }
+}
+while (transientIndex &gt;= 0) {
+    // there may be additional transient views after the normal views
+    final View transientChild = mTransientViews.get(transientIndex);
+    if ((transientChild.mViewFlags &amp; VISIBILITY_MASK) == VISIBLE ||
+            transientChild.getAnimation() != null) {
+        more |= drawChild(canvas, transientChild, drawingTime);
+    }
+    transientIndex++;
+    if (transientIndex &gt;= transientCount) {
+        break;
+    }
+}
+if (preorderedList != null) preorderedList.clear();
+
+// Draw any disappearing views that have animations
+if (mDisappearingChildren != null) {
+    final ArrayList&lt;View&gt; disappearingChildren = mDisappearingChildren;
+    final int disappearingCount = disappearingChildren.size() - 1;
+    // Go backwards -- we may delete as animations finish
+    for (int i = disappearingCount; i &gt;= 0; i--) {
+        final View child = disappearingChildren.get(i);
+        more |= drawChild(canvas, child, drawingTime);
+    }
+}
+</code></pre>
+
+<p>Gone'd views are in <code>mDisappearingChildren</code>.</p>
+
+<p>As the source code said, normal views and transient views draw first, then disappearing views draw. So disappearing children always draw on the others. App developers can not change the order.</p>
+
+<p>My suggestion is don't use <code>LayoutTransition</code>, write animation by yourself.</p>
+
+<p><strong>Edit:</strong></p>
+
+<p>I found a trick to draw disappearing children before other views, reflect required.</p>
+
+<p>You need a dump view to make disappearing children replace it in <code>ViewGroup.drawChild(Canvas, View, long)</code>.</p>
+
+<p>An example is here.</p>
+
+<pre><code>public class TrickLayout extends FrameLayout {
+
+    private Field mDisappearingChildrenField;
+    private ArrayList&lt;View&gt; mSuperDisappearingChildren;
+    // The dump view to draw disappearing children
+    // Maybe you need more than one dump view
+    private View mDumpView;
+    private boolean mDoTrick;
+
+    public TrickLayout(Context context) {
+        super(context);
+        init(context);
+    }
+
+    public TrickLayout(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        init(context);
+    }
+
+    public TrickLayout(Context context, AttributeSet attrs, int defStyleAttr) {
+        super(context, attrs, defStyleAttr);
+        init(context);
+    }
+
+    private void init(Context context) {
+        try {
+            mDisappearingChildrenField = ViewGroup.class.getDeclaredField("mDisappearingChildren");
+            mDisappearingChildrenField.setAccessible(true);
+        } catch (NoSuchFieldException e) {
+            // Ignore
+        }
+
+        if (mDisappearingChildrenField != null) {
+            // You can add dump view in xml or somewhere else in code
+            mDumpView = new View(context);
+            addView(mDumpView, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+        }
+    }
+
+
+    @SuppressWarnings("unchecked")
+    private void getSuperDisappearingChildren() {
+        if (mDisappearingChildrenField == null || mSuperDisappearingChildren != null) {
+            return;
+        }
+
+        try {
+            mSuperDisappearingChildren = (ArrayList&lt;View&gt;) mDisappearingChildrenField.get(this);
+        } catch (IllegalAccessException e) {
+            // Ignore
+        }
+    }
+
+    private boolean iWantToDoTheTrick() {
+        // Do I need do the trick?
+        return true;
+    }
+
+    private boolean beforeDispatchDraw() {
+        getSuperDisappearingChildren();
+
+        if (mSuperDisappearingChildren == null ||
+                mSuperDisappearingChildren.size() &lt;= 0 || getChildCount() &lt;= 1) { // dump view included
+            return false;
+        }
+
+        return iWantToDoTheTrick();
+    }
+
+    private void afterDispatchDraw() {
+        // Clean up here
+    }
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        mDoTrick = beforeDispatchDraw();
+        super.dispatchDraw(canvas);
+        if (mDoTrick) {
+            afterDispatchDraw();
+            mDoTrick = false;
+        }
+    }
+
+    @Override
+    protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
+        ArrayList&lt;View&gt; disappearingChildren = mSuperDisappearingChildren;
+
+        if (mDoTrick) {
+            if (child == mDumpView) {
+                boolean more = false;
+                for (int i = disappearingChildren.size() - 1; i &gt;= 0; i--) {
+                    more |= super.drawChild(canvas, disappearingChildren.get(i), drawingTime);
+                }
+                return more;
+            } else if (disappearingChildren.contains(child)) {
+                // Skip
+                return false;
+            }
+        }
+
+        return super.drawChild(canvas, child, drawingTime);
+    }
+}
+</code></pre>

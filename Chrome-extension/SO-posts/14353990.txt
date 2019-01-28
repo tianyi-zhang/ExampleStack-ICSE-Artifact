@@ -1,0 +1,105 @@
+<p>I think I found the solution, tested and it works until proved otherwise ;)</p>
+
+<p>Recup 
+My server runs on a specific timezone (i.e. Europe/Rome)</p>
+
+<p>If a user on Pacific/Honolulu TZ want to schedule a job that starts on Sun, 27 Jan 2013 at 3:00PM end ends on Thu, 31 Jan 2013 at 9:00PM that fire every day every five minutes starting from 2:00PM to 10:55PM (0 0/5 14-22 * * ?) the correct way is the following:</p>
+
+<ul>
+<li>set the user timezone in inTimeZone method on the CronScheduleBuilder</li>
+<li>adapt to the server time the startAt and endAt dates by converting from Pacific/Honolulu to Europe/Rome</li>
+</ul>
+
+<p>Sample Code:</p>
+
+<pre><code>// Begin User Input
+String userDefinedTZ = "Pacific/Honolulu"; // +11
+
+int userStartYear = 2013;
+int userStartMonth = Calendar.JANUARY;
+int UserStartDayOfMonth = 27;
+int userStartHour = 15;
+int userStartMinute = 0;
+int userStartSecond = 0;
+
+int userEndYear = 2013;
+int userEndMonth = Calendar.JANUARY;
+int UserEndDayOfMonth = 31;
+int userEndHour = 21;
+int userEndMinute = 0;
+int userEndSecond = 0;
+// End User Input
+
+
+Calendar userStartDefinedTime = Calendar.getInstance();
+// set start schedule by user input
+userStartDefinedTime.set(userStartYear, userStartMonth, UserStartDayOfMonth, userStartHour, userStartMinute, userStartSecond);
+
+Calendar userEndDefinedTime = Calendar.getInstance();
+// set end schedule by user input
+userEndDefinedTime.set(userEndYear, userEndMonth, UserEndDayOfMonth, userEndHour, userEndMinute, userEndSecond);
+
+
+CronTrigger trigger = newTrigger()
+  .withIdentity("name", "group")
+  .withSchedule(
+    // define timezone for the CronScheduleBuilder
+    cronSchedule("0 0/5 14-22 * * ?").inTimeZone(TimeZone.getTimeZone("Pacific/Honolulu"))
+  )
+  // adapt user start date to server timezone
+  .startAt( convertDateToServerTimeZone(userStartDefinedTime.getTime(), userDefinedTZ) )
+  // adapt user end date to server timezone
+  .endAt( convertDateToServerTimeZone(userEndDefinedTime.getTime(), userDefinedTZ) )
+  .build();
+</code></pre>
+
+<p>Utility to convert dates based on tz:</p>
+
+<pre><code>public Calendar convertDateToServerTimeZone(Date dateTime, String timeZone) {
+    Calendar userDefinedTime = Calendar.getInstance();
+    userDefinedTime.setTime(dateTime);
+    if(!TimeZone.getDefault().getID().equalsIgnoreCase(timeZone)) {
+    System.out.println        ("original defined time: " + userDefinedTime.getTime().toString() + " on tz:" + timeZone);
+    Calendar quartzStartDate = new GregorianCalendar(TimeZone.getTimeZone(timeZone));
+    quartzStartDate.set(Calendar.YEAR, userDefinedTime.get(Calendar.YEAR));
+    quartzStartDate.set(Calendar.MONTH, userDefinedTime.get(Calendar.MONTH));
+    quartzStartDate.set(Calendar.DAY_OF_MONTH, userDefinedTime.get(Calendar.DAY_OF_MONTH));
+    quartzStartDate.set(Calendar.HOUR_OF_DAY, userDefinedTime.get(Calendar.HOUR_OF_DAY));
+    quartzStartDate.set(Calendar.MINUTE, userDefinedTime.get(Calendar.MINUTE));
+    quartzStartDate.set(Calendar.SECOND, userDefinedTime.get(Calendar.SECOND));
+    quartzStartDate.set(Calendar.MILLISECOND, userDefinedTime.get(Calendar.MILLISECOND));
+    System.out.println("adapted time for " + TimeZone.getDefault().getID() + ": " + quartzStartDate.getTime().toString());
+    return quartzStartDate;
+    } else {
+    return userDefinedTime;
+    }
+}
+</code></pre>
+
+<h3>== BEGIN OF UPDATE 2012-01-24 ==</h3>
+
+<p>Quartz Based Utility to convert dates based on tz using <a href="http://quartz-scheduler.org/api/2.1.0/org/quartz/DateBuilder.html">DateBuilder</a>:</p>
+
+<pre><code>public Calendar convertDateToServerTimeZone(Date dateTime, String timeZone) {
+    Calendar userDefinedTime = Calendar.getInstance();
+    userDefinedTime.setTime(dateTime);
+    if(!TimeZone.getDefault().getID().equalsIgnoreCase(timeZone)) {
+      System.out.println("original defined time: " + userDefinedTime.getTime().toString() + " on tz:" + timeZone);
+
+      Date translatedTime = DateBuilder.translateTime(userDefinedTime.getTime(), TimeZone.getDefault(), TimeZone.getTimeZone(timeZone));
+
+      Calendar quartzStartDate = new GregorianCalendar();
+      quartzStartDate.setTime(translatedTime);
+      System.out.println("adapted time for " + TimeZone.getDefault().getID() + ": " + quartzStartDate.getTime().toString());
+      return quartzStartDate;
+    } else {
+      return userDefinedTime;
+    }
+}
+</code></pre>
+
+<h3>== END OF UPDATE 2012-01-24 ==</h3>
+
+<p>So <strong>on my Europe/Rome Quartz server this job are scheduled for starting from Mon Jan 28 02:00:00 CET 2013 to Fri Feb 01 08:00:00 CET 2013 and fire every five minute every day from 01:00AM to 08:55PM</strong></p>
+
+<p>When building your Dates for start and end times also specify the timezone (on the java.util.Calendar, or date format string, or org.quartz.DateBuilder) before instantiating the Date. Then quartz stores the date as milliseconds since January 1, 1970 in UTC in that particular timezone - and hence when the server's timezone changes, the trigger is not affected. </p>

@@ -1,0 +1,47 @@
+<p>You seem to be assuming that Outlook sent along the plain text with the HTML version, which does not appear to be the case. The MIME-type for the email you logged from Outlook is <code>text/html</code>, which indicates that it is just an HTML-formatted document. The Gmail version, on the other hand, sent a document of <code>multipart/alternative</code>, which could indicate that there are multiple versions of the email in the same document (plain text and HTML -- I believe this is the default behaviour for Gmail). Thus, if you are getting the HTML-encoded version, you are getting the "text" of the email just as it was sent.</p>
+
+<p>There is no requirement that emails be sent with a plain-text version or, indeed, with any other format. It is up to you to ensure that the mail client is sending the email in a format that your consuming program can handle or to change the consuming program to handle the formats being sent.</p>
+
+<p>In addition to the above, you may want to reconsider this line:</p>
+
+<pre><code>mpMessage = getText(multipart.getBodyPart(0));
+</code></pre>
+
+<p>Which appears to assume that the first part of the multipart message will be a plain text document and the text of the message. This might be a bad assumption.</p>
+
+<hr>
+
+<p>So, assuming you have actually gotten the mail message with the HTML content, <code>getContent()</code> shouldn't be returning <code>null</code> or an empty string. It should be returning an <code>InputStream</code> as per the <a href="http://javamail.kenai.com/nonav/javadocs/javax/mail/internet/MimeBodyPart.html#getContent%28%29" rel="nofollow">documentation on <code>MimeBodyPart#getContent()</code></a>. Reading the <code>InputStream</code> should enable you to produce a string with the HTML tags. </p>
+
+<p>Since you don't seem to care about the HTML, but just the content, the process can be greatly simplified by just using a Java HTML parsing library such as <a href="http://jsoup.org" rel="nofollow">Jsoup</a>. Basically, you can integrate this into your current code by changing <code>getText()</code> to something like this:</p>
+
+<pre><code>private String getText(Part p) throws MessagingException, IOException {
+    System.out.println("getText contentType "+p.getContentType());
+    if (p.isMimeType("text/plain")) {
+        String s = (String) p.getContent();
+        System.out.println(s);
+        return s;
+    } else if (p.isMimeType("text/html")) {
+        // the last two parameters of this may need to be modified
+        String s = Jsoup.parse(p.getInputStream(), null, null).text();
+        System.out.println(s);
+        return s;
+    } else if (p.isMimeType("multipart/alternative")) {
+        Multipart mp = (Multipart) p.getContent();
+        String text = "";
+        for (int i = 0; i &lt; mp.getCount(); i++) {
+            Part bp = mp.getBodyPart(i);
+            if (bp.isMimeType("text/*")) {
+                String s = getText(bp);
+                if (s != null) {
+                    text += s;
+                }
+            }
+        }
+        return text;
+    }
+    return null;
+}
+</code></pre>
+
+<p>Note that this assumes that the email is small enough to be read and parsed entirely in memory.</p>

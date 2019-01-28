@@ -1,0 +1,52 @@
+<p>I was using something along the lines of the currently accepted answer in order to send emails with an attached binary error log file. GMail and K-9 send it just fine and it also arrives fine on my mail server. The only problem was my mail client of choice Thunderbird which had troubles with opening / saving the attached log file. In fact it simply didn't save the file at all without complaining.</p>
+
+<p>I took a look at one of these mail's source codes and noticed that the log file attachment had (understandably) the mime type <code>message/rfc822</code>. Of course that attachment is not an attached email. But Thunderbird cannot cope with that tiny error gracefully. So that was kind of a bummer.</p>
+
+<p>After a bit of research and experimenting I came up with the following solution:</p>
+
+<pre><code>    public Intent createEmailOnlyChooserIntent(Intent source,
+        CharSequence chooserTitle) {
+        Stack&lt;Intent&gt; intents = new Stack&lt;Intent&gt;();
+        Intent i = new Intent(Intent.ACTION_SENDTO, Uri.fromParts("mailto",
+                "info@domain.com", null));
+        List&lt;ResolveInfo&gt; activities = getPackageManager()
+                .queryIntentActivities(i, 0);
+
+        for(ResolveInfo ri : activities) {
+            Intent target = new Intent(source);
+            target.setPackage(ri.activityInfo.packageName);
+            intents.add(target);
+        }
+
+        if(!intents.isEmpty()) {
+            Intent chooserIntent = Intent.createChooser(intents.remove(0),
+                    chooserTitle);
+            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS,
+                    intents.toArray(new Parcelable[intents.size()]));
+
+            return chooserIntent;
+        } else {
+            return Intent.createChooser(source, chooserTitle);
+        }
+    }
+</code></pre>
+
+<p>It can be used as follows:</p>
+
+<pre><code>        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(crashLogFile));
+        i.putExtra(Intent.EXTRA_EMAIL, new String[] {
+            ANDROID_SUPPORT_EMAIL
+        });
+        i.putExtra(Intent.EXTRA_SUBJECT, "Crash report");
+        i.putExtra(Intent.EXTRA_TEXT, "Some crash report details");
+
+        startActivity(createEmailOnlyChooserIntent(i, "Send via email"));
+</code></pre>
+
+<p>As you can see, the createEmailOnlyChooserIntent method can be easily fed with the correct intent and the correct mime type.</p>
+
+<p>It then goes through the list of available activities that respond to an ACTION_SENDTO <code>mailto</code> protocol intent (which are email apps only) and constructs a chooser based on that list of activities and the original ACTION_SEND intent with the correct mime type.</p>
+
+<p>Another advantage is that Skype is not listed anymore (which happens to respond to the rfc822 mime type).</p>

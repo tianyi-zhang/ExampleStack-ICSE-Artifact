@@ -1,0 +1,216 @@
+<p>You hadn't posted any code relating to the adapter itself, but I found your <a href="http://stackoverflow.com/q/12350711/1267661">previous question</a> and you are most of the way there. </p>
+
+<h2>The Quick and Dirty Answer</h2>
+
+<p>In <code>bindView()</code>, let's modify your <code>comments_count</code> TextView to save the index of the current row in the tag (for your <code>itemUri</code>) and add a simple OnClickListener:</p>
+
+<pre><code>public void bindView(View view, Context context, Cursor cursor) {
+    ViewHolder holder = (ViewHolder)view.getTag();
+    if (holder == null) {
+        ...
+        holder.comments_count.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                // Get the position from the ViewHolder
+                long id = (Long) v.getTag();
+                Toast.makeText(v.getContext(), "Comment Click: " + id, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+    ...
+    holder.comments_count.setTag(cursor.getLong(0));
+}
+</code></pre>
+
+<p>When the user clicks on the row it will still call <code>onListItemClick()</code>, except if they click on the comments box. The comments box fires the OnClickListener above where you can direct the user to your <code>CommentsActivity</code>. You didn't mention where you fetch the different values for <code>itemUri</code> but I assumed you need the row's id to get it.</p>
+
+<hr>
+
+<h2>Superior Answer</h2>
+
+<p>In your previous question, I noticed that you are making some repetitive calls and that Thiago Moreira Rocha's layout was extremely complex to be used repeatedly (for every ListView row.) So I propose a different approach. I've divided my answer into parts relating to the adapter, row layout, and colors for <code>comments_count</code>:</p>
+
+<p><strong>The Adapter</strong><br>
+I'll post the code in full and then explain at the bottom:</p>
+
+<pre><code>public class CustomCursorAdapter extends CursorAdapter {
+    private LayoutInflater mInflater;
+    private int[] mFrom;
+
+    private OnClickListener commentClick = new OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            // Get the position saved in bindView()
+            long id = (Long) v.getTag();
+            Toast.makeText(v.getContext(), "Comment Click: " + id, Toast.LENGTH_SHORT).show();
+        }
+    };
+
+    public CustomCursorAdapter(Context context, Cursor cursor, int flags) {
+        super(context, cursor, flags);
+        mInflater = LayoutInflater.from(context);
+    }
+
+    private void applyColorFilter(Drawable drawable, int count) {
+        drawable.clearColorFilter();
+        if (count &gt; 0) {
+            float saturation = (count * 15) / 100f;
+            // The value gets pinned if out of range.
+            int color = Color.HSVToColor(new float[] {110f, saturation, 1f});
+            drawable.setColorFilter(color, Mode.SRC);
+        }
+    }
+
+    @Override
+    public void bindView(View view, Context context, Cursor cursor) {
+        ViewHolder holder = (ViewHolder) view.getTag();
+        holder.title.setText(cursor.getString(mFrom[0]));
+        holder.description.setText(cursor.getString(mFrom[1]));
+
+        // Get comments_count and set it as text
+        int count = cursor.getInt(mFrom[2]);
+        holder.comments_count.setText(count + "");
+        holder.comments_count.setTag(cursor.getLong(0));
+
+        // Adjust the color by saturation
+        applyColorFilter(holder.comments_color, count);
+
+        // Alternate method, that I explain in the answer
+        //   Note: set the solid color in color.xml to #2aff00 
+        //holder.comments_color.setAlpha(count * 45);
+    }
+
+    @Override
+    public View newView(Context context, Cursor cursor, ViewGroup parent) {
+        View view = mInflater.inflate(R.layout.list_item, parent, false);
+
+        ViewHolder holder = new ViewHolder();
+        holder.title = (TextView)view.findViewById(R.id.title);
+        holder.description = (TextView)view.findViewById(R.id.description);
+        holder.comments_count = (TextView)view.findViewById(R.id.comments_count);
+        holder.comments_count.setOnClickListener(commentClick);
+        holder.comments_color = ((LayerDrawable) holder.comments_count.getBackground()).findDrawableByLayerId(R.id.color);
+
+        view.setTag(holder);
+
+        return view;
+    }
+
+    @Override
+    public Cursor swapCursor(Cursor newCursor) {
+        if(mFrom == null &amp;&amp; newCursor != null) {
+            mFrom = new int[] {newCursor.getColumnIndex(TITLE), newCursor.getColumnIndex(DESCRIPTION), newCursor.getColumnIndex(COMMENTS_COUNT)};
+        }
+        return super.swapCursor(newCursor);
+    }
+
+    private class ViewHolder {
+        TextView title;
+        TextView description;
+        TextView comments_count;
+        Drawable comments_color;
+    }
+}
+</code></pre>
+
+<p>I made a few changes:</p>
+
+<ul>
+<li><code>mFrom</code> holds the indices of the columns that you are using. You only need to get the column index <em>once</em>, it won't change unless you change the Cursor</li>
+<li><code>commentsClick</code> is <em>one</em> generic OnClickListener that I use for <em>every</em> row and I set it while creating a <code>ViewHolder</code></li>
+<li>I brought your method for changing the HSV color into the adapter and called it <code>applyColorFilter()</code></li>
+<li>I moved creating the <code>ViewHolder</code> into <code>newView()</code> rather than checking for a <code>null</code> one in <code>bindView()</code></li>
+</ul>
+
+<hr>
+
+<p><strong>The Row Layout</strong><br>
+You probably noticed that I change the comments' color a little differently, that is because I use a simpler row layout:</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="10dp" &gt;
+
+    &lt;TextView
+        android:id="@+id/title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentLeft="true"
+        android:layout_toLeftOf="@+id/comments_count"
+        android:textAppearance="?android:attr/textAppearanceLarge" /&gt;
+
+    &lt;TextView
+        android:id="@+id/description"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentLeft="true"
+        android:layout_below="@+id/title"
+        android:layout_toLeftOf="@+id/comments_count"
+        android:textAppearance="?android:attr/textAppearanceSmall" /&gt;
+
+    &lt;TextView
+        android:id="@+id/comments_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentRight="true"
+        android:layout_centerVertical="true"
+        android:layout_marginRight="15dp"
+        android:background="@drawable/comments_layers"
+        android:textAppearance="?android:attr/textAppearanceLarge" /&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>(While <a href="http://stackoverflow.com/a/12352314/1267661">Thiago Moreira Rocha's layout</a> works, the nested ViewGroups seem like overkill. Anytime you have a ViewGroup with only one child, their is usually an alternative.)</p>
+
+<p>I use a LayerDrawable to replace the two LinearLayouts, that I will explain in in steps.  <strong>First,</strong> the border (<code>border.xml</code>), very similar to the previous one:</p>
+
+<pre><code>&lt;shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle" &gt;
+    &lt;corners android:radius="10dp" /&gt;
+    &lt;padding android:bottom="2dp" android:left="2dp" android:right="2dp" android:top="2dp" /&gt;
+    &lt;solid android:color="#ffffff" /&gt;
+    &lt;stroke android:width="2dp"
+        android:color="#000000" /&gt;
+&lt;/shape&gt;
+</code></pre>
+
+<p>(Notice the padding is the width of the stroke.)</p>
+
+<p><strong>Second,</strong> the adjustable background color (<code>color.xml</code>):</p>
+
+<pre><code>&lt;shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle" &gt;
+    &lt;corners android:radius="10dp" /&gt;
+    &lt;padding android:bottom="10dp" android:left="10dp" android:right="10dp" android:top="10dp" /&gt;
+    &lt;solid android:color="#ffffff" /&gt;
+&lt;/shape&gt;
+</code></pre>
+
+<p><strong>Last,</strong> I created a LayerDrawable to combine the two images (<code>comments_layers.xml</code>):</p>
+
+<pre><code>&lt;layer-list xmlns:android="http://schemas.android.com/apk/res/android" &gt;
+    &lt;item 
+        android:id="@+id/border"
+        android:drawable="@drawable/border" /&gt;
+    &lt;item 
+        android:id="@+id/color"
+        android:drawable="@drawable/color" /&gt;
+&lt;/layer-list&gt;
+</code></pre>
+
+<hr>
+
+<p><strong>(Optional)</strong><br>
+You adjust the saturation of your HSV value in <code>applyColorFilter()</code>, but it seems that this is the equivalent to adjusting the alpha of a green background. If this is true, the changing the alpha value is a much simpler task. Find my comments in <code>bindView()</code>:</p>
+
+<ol>
+<li>Comment out <code>applyColorFilter(holder.comments_color, count);</code></li>
+<li>Uncomment <code>holder.comments_color.setAlpha(count * 45);</code></li>
+<li>Open my <code>color.xml</code> file and change the <code>color</code> attribute of the <code>solid</code> element from <code>#ffffff</code> to <code>#2aff00</code></li>
+</ol>
+
+<hr>
+
+<p>In all truth I had never used LayerDrawables like this before, there may be a faster way, but I think this is pretty slick.</p>

@@ -1,0 +1,165 @@
+<p>I think the problem is that you use the same background Thread for all your uploads.</p>
+
+<p>That is, it starts uploading file 1..n-1 but keeps getting interrupted with a new demand to upload the next n+1 file. The last file upload is not interrupted, hence succeed.</p>
+
+<p>I would suggest looking into IntentServices: <a href="http://mobile.tutsplus.com/tutorials/android/android-fundamentals-intentservice-basics/" rel="nofollow">http://mobile.tutsplus.com/tutorials/android/android-fundamentals-intentservice-basics/</a></p>
+
+<p>With an IntentService in place for uploading of files, you can do a simple loop over the files directly in your UI thread.</p>
+
+<pre><code>for (filesYouWantToUpload) {
+     Intent i = new Intent(context, UploadIntentService.class);
+     i.putStringExtra(file);
+     startService(i);
+}
+</code></pre>
+
+<p><strong>Edit:</strong></p>
+
+<p>Cannot test the code, but it should look something like this.</p>
+
+<p>The FileUploader IntentService:</p>
+
+<pre><code>public class FileUploader extends IntentService {
+
+private static final String TAG = FileUploader.class.getName();
+
+
+public FileUploader() {
+    super("FileUploader");
+}
+
+@Override
+protected void onHandleIntent(Intent intent) {
+
+    String selectedPath = intent.getStringExtra("selectedPath");
+    String myFileUrl = intent.getStringExtra("myFileUrl");
+
+    doFileUpload(selectedPath, myFileUrl);
+
+}
+
+ private void doFileUpload(String selectedPath, String myFileUrl)
+    {
+        HttpURLConnection conn = null;
+        DataOutputStream dos = null;
+        DataInputStream inStream = null;
+        String lineEnd = "\r\n";
+        String twoHyphens = "--";
+        String boundary =  "*****";
+        int bytesRead, bytesAvailable, bufferSize;
+        byte[] buffer;
+        int maxBufferSize = 1*1024*1024;
+        String responseFromServer = "";
+        String urlString = "http://bumba27.byethost16.com/Tracker/Services/recordedAudio/file_upload_new.php?mb_code='mb_code1'";
+
+        try
+        {
+            //------------------ CLIENT REQUEST
+            FileInputStream fileInputStream = new FileInputStream(new File(myFileUrl) );
+            // open a URL connection to the Servlet
+            URL url = new URL(urlString);
+            // Open a HTTP connection to the URL
+            conn = (HttpURLConnection) url.openConnection();
+            // Allow Inputs
+            conn.setDoInput(true);
+            // Allow Outputs
+            conn.setDoOutput(true);
+            // Don't use a cached copy.
+            conn.setUseCaches(false);
+            // Use a post method.
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Connection", "Keep-Alive");
+            conn.setRequestProperty("Content-Type", "multipart/form-data;boundary="+boundary);
+            dos = new DataOutputStream( conn.getOutputStream() );
+            dos.writeBytes(twoHyphens + boundary + lineEnd);
+            dos.writeBytes("Content-Disposition: form-data; name=\"uploadedfile\";filename=\"" + selectedPath + "\"" + lineEnd);                 
+            dos.writeBytes(lineEnd);
+            // create a buffer of maximum size
+            bytesAvailable = fileInputStream.available();
+            bufferSize = Math.min(bytesAvailable, maxBufferSize);
+            buffer = new byte[bufferSize];
+            // read file and write it into form...
+            bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+            while (bytesRead &gt; 0)
+            {
+                dos.write(buffer, 0, bufferSize);
+                bytesAvailable = fileInputStream.available();
+                bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+            }
+            // send multipart form data necesssary after file data...
+            dos.writeBytes(lineEnd);
+            dos.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd);
+            // close streams
+            Log.e("Debug","File is written");
+            fileInputStream.close();
+            dos.flush();
+            dos.close();
+        }
+        catch (MalformedURLException ex)
+        {
+            Log.e("Debug", "error: " + ex.getMessage(), ex);
+        }
+        catch (IOException ioe)
+        {
+            Log.e("Debug", "error: " + ioe.getMessage(), ioe);
+        }
+        //------------------ read the SERVER RESPONSE
+        try {
+            inStream = new DataInputStream ( conn.getInputStream() );
+            String str;
+
+            while (( str = inStream.readLine()) != null)
+            {
+                Log.e("Debug","Server Response "+str);
+            }
+            inStream.close();
+
+        }
+        catch (IOException ioex){
+            Log.e("Debug", "error: " + ioex.getMessage(), ioex);
+        }
+    }
+
+ }
+</code></pre>
+
+<p>Remember to update your manifest:</p>
+
+<pre><code> &lt;service android:name="yourpackage.FileUploader " /&gt;
+</code></pre>
+
+<p>Finally openGalleryAudio() would be something like this:</p>
+
+<pre><code>  public void openGalleryAudio(){
+
+    String name = null;
+
+    File sdCardRoot = Environment.getExternalStorageDirectory();
+    File yourDir = new File(sdCardRoot, "/My_records");
+    for (File f : yourDir.listFiles()) 
+    {
+        if (f.isFile())
+            name = f.getName();
+
+        selectedPath = Environment.getExternalStorageDirectory().getAbsolutePath()+"/My_records/"+name;
+
+        // Do your stuff
+        Log.d("selectedPath", selectedPath);
+        selectedPathList.add(selectedPath);
+    }
+
+
+
+    Iterator&lt;String&gt; it = selectedPathList.iterator();
+    while (it.hasNext()) 
+    {
+        Intent i = new Intent(this, FileUploader.class)
+        i.putExtra("selectedPath", selectedPath);
+        i.putExtra("myFileUrl", it.next()+"");
+        startService(i);
+    }
+
+
+}
+</code></pre>

@@ -1,0 +1,160 @@
+<p>I had the same problem. Android loads all the drawables at once, so animation with many frames causes this error.</p>
+
+<p>I ended up creating my own simple sequence animation:</p>
+
+<pre><code>public class AnimationsContainer {
+    public int FPS = 30;  // animation FPS
+
+    // single instance procedures
+    private static AnimationsContainer mInstance;
+
+    private AnimationsContainer() {
+    };
+
+    public static AnimationsContainer getInstance() {
+        if (mInstance == null)
+            mInstance = new AnimationsContainer();
+        return mInstance;
+    }
+
+    // animation progress dialog frames
+    private int[] mProgressAnimFrames = { R.drawable.logo_30001, R.drawable.logo_30002, R.drawable.logo_30003 };
+
+    // animation splash screen frames
+    private int[] mSplashAnimFrames = { R.drawable.logo_ding200480001, R.drawable.logo_ding200480002 };
+
+
+    /**
+     * @param imageView 
+     * @return progress dialog animation
+     */
+    public FramesSequenceAnimation createProgressDialogAnim(ImageView imageView) {
+        return new FramesSequenceAnimation(imageView, mProgressAnimFrames);
+    }
+
+    /**
+     * @param imageView
+     * @return splash screen animation
+     */
+    public FramesSequenceAnimation createSplashAnim(ImageView imageView) {
+        return new FramesSequenceAnimation(imageView, mSplashAnimFrames);
+    }
+
+    /**
+     * AnimationPlayer. Plays animation frames sequence in loop
+     */
+public class FramesSequenceAnimation {
+    private int[] mFrames; // animation frames
+    private int mIndex; // current frame
+    private boolean mShouldRun; // true if the animation should continue running. Used to stop the animation
+    private boolean mIsRunning; // true if the animation currently running. prevents starting the animation twice
+    private SoftReference&lt;ImageView&gt; mSoftReferenceImageView; // Used to prevent holding ImageView when it should be dead.
+    private Handler mHandler;
+    private int mDelayMillis;
+    private OnAnimationStoppedListener mOnAnimationStoppedListener;
+
+    private Bitmap mBitmap = null;
+    private BitmapFactory.Options mBitmapOptions;
+
+    public FramesSequenceAnimation(ImageView imageView, int[] frames, int fps) {
+        mHandler = new Handler();
+        mFrames = frames;
+        mIndex = -1;
+        mSoftReferenceImageView = new SoftReference&lt;ImageView&gt;(imageView);
+        mShouldRun = false;
+        mIsRunning = false;
+        mDelayMillis = 1000 / fps;
+
+        imageView.setImageResource(mFrames[0]);
+
+        // use in place bitmap to save GC work (when animation images are the same size &amp; type)
+        if (Build.VERSION.SDK_INT &gt;= 11) {
+            Bitmap bmp = ((BitmapDrawable) imageView.getDrawable()).getBitmap();
+            int width = bmp.getWidth();
+            int height = bmp.getHeight();
+            Bitmap.Config config = bmp.getConfig();
+            mBitmap = Bitmap.createBitmap(width, height, config);
+            mBitmapOptions = new BitmapFactory.Options();
+            // setup bitmap reuse options. 
+            mBitmapOptions.inBitmap = mBitmap;
+            mBitmapOptions.inMutable = true;
+            mBitmapOptions.inSampleSize = 1;
+        }
+    }
+
+    private int getNext() {
+        mIndex++;
+        if (mIndex &gt;= mFrames.length)
+            mIndex = 0;
+        return mFrames[mIndex];
+    }
+
+    /**
+     * Starts the animation
+     */
+    public synchronized void start() {
+        mShouldRun = true;
+        if (mIsRunning)
+            return;
+
+        Runnable runnable = new Runnable() {
+            @Override
+            public void run() {
+                ImageView imageView = mSoftReferenceImageView.get();
+                if (!mShouldRun || imageView == null) {
+                    mIsRunning = false;
+                    if (mOnAnimationStoppedListener != null) {
+                        mOnAnimationStoppedListener.AnimationStopped();
+                    }
+                    return;
+                }
+
+                mIsRunning = true;
+                mHandler.postDelayed(this, mDelayMillis);
+
+                if (imageView.isShown()) {
+                    int imageRes = getNext();
+                    if (mBitmap != null) { // so Build.VERSION.SDK_INT &gt;= 11
+                        Bitmap bitmap = null;
+                        try {
+                            bitmap = BitmapFactory.decodeResource(imageView.getResources(), imageRes, mBitmapOptions);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                        if (bitmap != null) {
+                            imageView.setImageBitmap(bitmap);
+                        } else {
+                            imageView.setImageResource(imageRes);
+                            mBitmap.recycle();
+                            mBitmap = null;
+                        }
+                    } else {
+                        imageView.setImageResource(imageRes);
+                    }
+                }
+
+            }
+        };
+
+        mHandler.post(runnable);
+    }
+
+        /**
+         * Stops the animation
+         */
+        public synchronized void stop() {
+            mShouldRun = false;
+        }
+    }
+}
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>FramesSequenceAnimation anim = AnimationsContainer.getInstance().createSplashAnim(mSplashImageView);
+anim.start();
+</code></pre>
+
+<ul>
+<li>don't forget to stop it...</li>
+</ul>

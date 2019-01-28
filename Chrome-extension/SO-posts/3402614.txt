@@ -1,0 +1,233 @@
+<p>Three files are relevant, DataProvider, DataIndex, changes to the AndroidManifest.
+In my case the data objects I want to look for in my database are 'Locations' data objects, hence the name of my classes, but you can apply it for your logic without problem.</p>
+
+<p>LocationProvider.java:</p>
+
+<pre><code>package com.myapp.android.search;
+
+import android.app.SearchManager;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.content.UriMatcher;
+import android.content.res.Resources;
+import android.database.Cursor;
+import android.database.MatrixCursor;
+import android.net.Uri;
+import android.text.TextUtils;
+import android.util.Log;
+import com.myapp.android.MyApp;
+import com.myapp.android.model.Location;
+
+import java.util.ArrayList;
+
+/**
+ * Provides search suggestions for a list of words and their definitions.
+ */
+public class LocationProvider extends ContentProvider {
+
+    public static String AUTHORITY = "myapp_locations";
+
+    private static final int SEARCH_SUGGEST = 0;
+    private static final int SHORTCUT_REFRESH = 1;
+    private static final UriMatcher sURIMatcher = buildUriMatcher();
+
+    /**
+     * The columns we'll include in our search suggestions.  There are others that could be used
+     * to further customize the suggestions, see the docs in {@link SearchManager} for the details
+     * on additional columns that are supported.
+     */
+    private static final String[] COLUMNS = {
+            "_id",  // must include this column
+            SearchManager.SUGGEST_COLUMN_TEXT_1,
+            SearchManager.SUGGEST_COLUMN_TEXT_2,
+            SearchManager.SUGGEST_COLUMN_INTENT_DATA,
+            };
+
+    /**
+     * Sets up a uri matcher for search suggestion and shortcut refresh queries.
+     */
+    private static UriMatcher buildUriMatcher() {
+        UriMatcher matcher =  new UriMatcher(UriMatcher.NO_MATCH);
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_QUERY, SEARCH_SUGGEST);
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_QUERY + "/*", SEARCH_SUGGEST);
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_SHORTCUT, SHORTCUT_REFRESH);
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_SHORTCUT + "/*", SHORTCUT_REFRESH);
+        return matcher;
+    }
+
+    @Override
+    public boolean onCreate() {
+        Resources resources = getContext().getResources();
+       // LocationIndex.getInstance(this.getContext()).ensureLoaded(resources);
+        return true;
+    }
+
+    @Override
+    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
+            String sortOrder) {
+        if (!TextUtils.isEmpty(selection)) {
+            throw new IllegalArgumentException("selection not allowed for " + uri);
+        }
+        if (selectionArgs != null &amp;&amp; selectionArgs.length != 0) {
+            throw new IllegalArgumentException("selectionArgs not allowed for " + uri);
+        }
+        if (!TextUtils.isEmpty(sortOrder)) {
+            throw new IllegalArgumentException("sortOrder not allowed for " + uri);
+        }
+        switch (sURIMatcher.match(uri)) {
+            case SEARCH_SUGGEST:
+                String query = null;
+                if (uri.getPathSegments().size() &gt; 1) {
+                    query = uri.getLastPathSegment().toLowerCase();
+                }
+                return getSuggestions(query, projection);
+            case SHORTCUT_REFRESH:
+                String shortcutId = null;
+                if (uri.getPathSegments().size() &gt; 1) {
+                    shortcutId = uri.getLastPathSegment();
+                }
+                return refreshShortcut(shortcutId, projection);
+            default:
+                throw new IllegalArgumentException("Unknown URL " + uri);
+        }
+    }
+
+    private Cursor getSuggestions(String query, String[] projection) {
+        String processedQuery = query == null ? "" : query.toLowerCase();
+        ArrayList&lt;Location&gt; words = LocationIndex.getInstance().getMatches(processedQuery);
+        MatrixCursor cursor = new MatrixCursor(COLUMNS);
+        long id = 0;
+        for (Location word : words) {
+            cursor.addRow(columnValuesOfWord(id++, word));
+        }
+        return cursor;
+    }
+
+    private Object[] columnValuesOfWord(long id, Location loc) {
+        return new Object[] {
+                id,                       // _id
+                loc.getTitle(),           // text1
+                loc.getDescription(),     // text2
+                loc.getTitle(),           // intent_data (included when clicking on item)
+        };
+    }
+
+    /**
+     * Note: this is unused as is, but if we included
+     * {@link SearchManager#SUGGEST_COLUMN_SHORTCUT_ID} as a column in our results, we
+     * could expect to receive refresh queries on this uri for the id provided, in which case we
+     * would return a cursor with a single item representing the refreshed suggestion data.
+     */
+    private Cursor refreshShortcut(String shortcutId, String[] projection) {
+        return null;
+    }
+
+    /**
+     * All queries for this provider are for the search suggestion and shortcut refresh mime type.
+     */
+    public String getType(Uri uri) {
+        switch (sURIMatcher.match(uri)) {
+            case SEARCH_SUGGEST:
+                return SearchManager.SUGGEST_MIME_TYPE;
+            case SHORTCUT_REFRESH:
+                return SearchManager.SHORTCUT_MIME_TYPE;
+            default:
+                throw new IllegalArgumentException("Unknown URL " + uri);
+        }
+    }
+
+    public Uri insert(Uri uri, ContentValues values) {
+        throw new UnsupportedOperationException();
+    }
+
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+        throw new UnsupportedOperationException();
+    }
+
+    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+        throw new UnsupportedOperationException();
+    }
+}
+</code></pre>
+
+<p>LocationIndex.java</p>
+
+<pre><code>package com.myapp.android.search;
+
+import com.myapp.android.model.Location;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class LocationIndex {
+
+    private boolean mLoaded = false;
+    private static final LocationIndex sInstance = new LocationIndex();
+    private ArrayList&lt;Location&gt; locations;
+    private final ConcurrentHashMap&lt;String, ArrayList&lt;Location&gt;&gt; mDict = new ConcurrentHashMap&lt;String, ArrayList&lt;Location&gt;&gt;();
+
+    public static LocationIndex getInstance() {
+        return sInstance;
+    }
+
+    public synchronized void loadWords(ArrayList&lt;Location&gt; locations) { //throws IOException, Resources resources
+        if (mLoaded) return;
+        this.locations = locations;
+        for (Iterator&lt;Location&gt; iter=locations.iterator();iter.hasNext();) {            
+            Location loc = iter.next();
+            if (loc!=null) addLocation(loc);
+        }
+        mLoaded = true;
+
+    }
+
+    public ArrayList&lt;Location&gt; getMatches(String query) {
+        ArrayList&lt;Location&gt; list = mDict.get(query);
+        return list == null ? new ArrayList&lt;Location&gt;() : list;
+    }
+
+    private void addLocation(Location loc) {
+        final int len = loc.getTitle().length();
+        for (int i = 0; i &lt; len; i++) {
+            final String prefix = loc.getTitle().substring(0, len - i);
+            addMatch(prefix, loc);
+        }
+    }
+
+    private void addMatch(String query, Location loc) {    
+        ArrayList&lt;Location&gt; matches = mDict.get(query);
+        if (matches == null) {
+            matches = new ArrayList&lt;Location&gt;();
+            mDict.put(query.toLowerCase(), matches);
+        }
+        matches.add(loc);
+    }
+
+    public ConcurrentHashMap&lt;String, ArrayList&lt;Location&gt;&gt; getmDict() {
+        return mDict;
+    }
+}
+</code></pre>
+
+<p>AndroidManifest.xml</p>
+
+<p>add the following to your manifest...</p>
+
+<pre><code>&lt;!-- Provides search suggestions for words and their definitions. --&gt;
+&lt;provider android:name=".search.LocationProvider"
+          android:authorities="myapp_locations"
+          android:syncable="false"/&gt;
+
+&lt;provider android:name=".content.LocalFileContentProvider"
+          android:authorities="com.myapp.android.localfile"
+          android:syncable="false"/&gt;
+</code></pre>
+
+<p>and the intent filter in the activities you want to activate the search for (maybe all):</p>
+
+<pre><code>&lt;intent-filter&gt;
+    &lt;action android:name="android.intent.action.SEARCH"/&gt;
+    &lt;category android:name="android.intent.category.DEFAULT"/&gt;
+&lt;/intent-filter&gt;
+</code></pre>

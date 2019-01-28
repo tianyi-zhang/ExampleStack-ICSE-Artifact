@@ -1,0 +1,488 @@
+<p>The internal storage is referred to as "external storage" in the API.</p>
+
+<p>As mentioned in the <a href="http://developer.android.com/reference/android/os/Environment.html#getExternalStorageDirectory%28%29">Environment</a> documentation</p>
+
+<blockquote>
+  <p>Note: don't be confused by the word "external" here. This directory can better be thought as media/shared storage. It is a filesystem that can hold a relatively large amount of data and that is shared across all applications (does not enforce permissions). Traditionally this is an SD card, but it may also be implemented as built-in storage in a device that is distinct from the protected internal storage and can be mounted as a filesystem on a computer.</p>
+</blockquote>
+
+<p>To distinguish whether "Environment.getExternalStorageDirectory()" actually returned physically internal or external storage, call Environment.isExternalStorageEmulated(). If it's emulated, than it's internal. On newer devices that have internal storage and sdcard slot Environment.getExternalStorageDirectory() will always return the internal storage. While on older devices that have only sdcard as a media storage option it will always return the sdcard.</p>
+
+<p>There is no way to retrieve all storages using current Android API.</p>
+
+<p>I've created a helper based on Vitaliy Polchuk's method in the answer below</p>
+
+<p><a href="http://stackoverflow.com/questions/9340332/how-can-i-get-the-list-of-mounted-external-storage-of-android-device/19982338#19982338">How can I get the list of mounted external storage of android device</a></p>
+
+<p><strong>NOTE: starting KitKat secondary storage is accessible only as READ-ONLY</strong>, you may want to check for writability using the following method</p>
+
+<pre><code>/**
+ * Checks whether the StorageVolume is read-only
+ * 
+ * @param volume
+ *            StorageVolume to check
+ * @return true, if volume is mounted read-only
+ */
+public static boolean isReadOnly(@NonNull final StorageVolume volume) {
+    if (volume.mFile.equals(Environment.getExternalStorageDirectory())) {
+        // is a primary storage, check mounted state by Environment
+        return android.os.Environment.getExternalStorageState().equals(
+                android.os.Environment.MEDIA_MOUNTED_READ_ONLY);
+    } else {
+        if (volume.getType() == Type.USB) {
+            return volume.isReadOnly();
+        }
+        //is not a USB storagem so it's read-only if it's mounted read-only or if it's a KitKat device
+        return volume.isReadOnly() || Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.KITKAT;
+    }
+}
+</code></pre>
+
+<p>StorageHelper class</p>
+
+<pre><code>import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.StringTokenizer;
+
+import android.os.Environment;
+
+public final class StorageHelper {
+
+    //private static final String TAG = "StorageHelper";
+
+    private StorageHelper() {
+    }
+
+    private static final String STORAGES_ROOT;
+
+    static {
+        final String primaryStoragePath = Environment.getExternalStorageDirectory()
+                .getAbsolutePath();
+        final int index = primaryStoragePath.indexOf(File.separatorChar, 1);
+        if (index != -1) {
+            STORAGES_ROOT = primaryStoragePath.substring(0, index + 1);
+        } else {
+            STORAGES_ROOT = File.separator;
+        }
+    }
+
+    private static final String[] AVOIDED_DEVICES = new String[] {
+        "rootfs", "tmpfs", "dvpts", "proc", "sysfs", "none"
+    };
+
+    private static final String[] AVOIDED_DIRECTORIES = new String[] {
+        "obb", "asec"
+    };
+
+    private static final String[] DISALLOWED_FILESYSTEMS = new String[] {
+        "tmpfs", "rootfs", "romfs", "devpts", "sysfs", "proc", "cgroup", "debugfs"
+    };
+
+    /**
+     * Returns a list of mounted {@link StorageVolume}s Returned list always
+     * includes a {@link StorageVolume} for
+     * {@link Environment#getExternalStorageDirectory()}
+     * 
+     * @param includeUsb
+     *            if true, will include USB storages
+     * @return list of mounted {@link StorageVolume}s
+     */
+    public static List&lt;StorageVolume&gt; getStorages(final boolean includeUsb) {
+        final Map&lt;String, List&lt;StorageVolume&gt;&gt; deviceVolumeMap = new HashMap&lt;String, List&lt;StorageVolume&gt;&gt;();
+
+        // this approach considers that all storages are mounted in the same non-root directory
+        if (!STORAGES_ROOT.equals(File.separator)) {
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new FileReader("/proc/mounts"));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    // Log.d(TAG, line);
+                    final StringTokenizer tokens = new StringTokenizer(line, " ");
+
+                    final String device = tokens.nextToken();
+                    // skipped devices that are not sdcard for sure
+                    if (arrayContains(AVOIDED_DEVICES, device)) {
+                        continue;
+                    }
+
+                    // should be mounted in the same directory to which
+                    // the primary external storage was mounted
+                    final String path = tokens.nextToken();
+                    if (!path.startsWith(STORAGES_ROOT)) {
+                        continue;
+                    }
+
+                    // skip directories that indicate tha volume is not a storage volume
+                    if (pathContainsDir(path, AVOIDED_DIRECTORIES)) {
+                        continue;
+                    }
+
+                    final String fileSystem = tokens.nextToken();
+                    // don't add ones with non-supported filesystems
+                    if (arrayContains(DISALLOWED_FILESYSTEMS, fileSystem)) {
+                        continue;
+                    }
+
+                    final File file = new File(path);
+                    // skip volumes that are not accessible
+                    if (!file.canRead() || !file.canExecute()) {
+                        continue;
+                    }
+
+                    List&lt;StorageVolume&gt; volumes = deviceVolumeMap.get(device);
+                    if (volumes == null) {
+                        volumes = new ArrayList&lt;StorageVolume&gt;(3);
+                        deviceVolumeMap.put(device, volumes);
+                    }
+
+                    final StorageVolume volume = new StorageVolume(device, file, fileSystem);
+                    final StringTokenizer flags = new StringTokenizer(tokens.nextToken(), ",");
+                    while (flags.hasMoreTokens()) {
+                        final String token = flags.nextToken();
+                        if (token.equals("rw")) {
+                            volume.mReadOnly = false;
+                            break;
+                        } else if (token.equals("ro")) {
+                            volume.mReadOnly = true;
+                            break;
+                        }
+                    }
+                    volumes.add(volume);
+                }
+
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ex) {
+                        // ignored
+                    }
+                }
+            }
+        }
+
+        // remove volumes that are the same devices
+        boolean primaryStorageIncluded = false;
+        final File externalStorage = Environment.getExternalStorageDirectory();
+        final List&lt;StorageVolume&gt; volumeList = new ArrayList&lt;StorageVolume&gt;();
+        for (final Entry&lt;String, List&lt;StorageVolume&gt;&gt; entry : deviceVolumeMap.entrySet()) {
+            final List&lt;StorageVolume&gt; volumes = entry.getValue();
+            if (volumes.size() == 1) {
+                // go ahead and add
+                final StorageVolume v = volumes.get(0);
+                final boolean isPrimaryStorage = v.file.equals(externalStorage);
+                primaryStorageIncluded |= isPrimaryStorage;
+                setTypeAndAdd(volumeList, v, includeUsb, isPrimaryStorage);
+                continue;
+            }
+            final int volumesLength = volumes.size();
+            for (int i = 0; i &lt; volumesLength; i++) {
+                final StorageVolume v = volumes.get(i);
+                if (v.file.equals(externalStorage)) {
+                    primaryStorageIncluded = true;
+                    // add as external storage and continue
+                    setTypeAndAdd(volumeList, v, includeUsb, true);
+                    break;
+                }
+                // if that was the last one and it's not the default external
+                // storage then add it as is
+                if (i == volumesLength - 1) {
+                    setTypeAndAdd(volumeList, v, includeUsb, false);
+                }
+            }
+        }
+        // add primary storage if it was not found
+        if (!primaryStorageIncluded) {
+            final StorageVolume defaultExternalStorage = new StorageVolume("", externalStorage, "UNKNOWN");
+            defaultExternalStorage.mEmulated = Environment.isExternalStorageEmulated();
+            defaultExternalStorage.mType =
+                    defaultExternalStorage.mEmulated ? StorageVolume.Type.INTERNAL
+                            : StorageVolume.Type.EXTERNAL;
+            defaultExternalStorage.mRemovable = Environment.isExternalStorageRemovable();
+            defaultExternalStorage.mReadOnly =
+                    Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED_READ_ONLY);
+            volumeList.add(0, defaultExternalStorage);
+        }
+        return volumeList;
+    }
+
+    /**
+     * Sets {@link StorageVolume.Type}, removable and emulated flags and adds to
+     * volumeList
+     * 
+     * @param volumeList
+     *            List to add volume to
+     * @param v
+     *            volume to add to list
+     * @param includeUsb
+     *            if false, volume with type {@link StorageVolume.Type#USB} will
+     *            not be added
+     * @param asFirstItem
+     *            if true, adds the volume at the beginning of the volumeList
+     */
+    private static void setTypeAndAdd(final List&lt;StorageVolume&gt; volumeList,
+            final StorageVolume v,
+            final boolean includeUsb,
+            final boolean asFirstItem) {
+        final StorageVolume.Type type = resolveType(v);
+        if (includeUsb || type != StorageVolume.Type.USB) {
+            v.mType = type;
+            if (v.file.equals(Environment.getExternalStorageDirectory())) {
+                v.mRemovable = Environment.isExternalStorageRemovable();
+            } else {
+                v.mRemovable = type != StorageVolume.Type.INTERNAL;
+            }
+            v.mEmulated = type == StorageVolume.Type.INTERNAL;
+            if (asFirstItem) {
+                volumeList.add(0, v);
+            } else {
+                volumeList.add(v);
+            }
+        }
+    }
+
+    /**
+     * Resolved {@link StorageVolume} type
+     * 
+     * @param v
+     *            {@link StorageVolume} to resolve type for
+     * @return {@link StorageVolume} type
+     */
+    private static StorageVolume.Type resolveType(final StorageVolume v) {
+        if (v.file.equals(Environment.getExternalStorageDirectory())
+                &amp;&amp; Environment.isExternalStorageEmulated()) {
+            return StorageVolume.Type.INTERNAL;
+        } else if (containsIgnoreCase(v.file.getAbsolutePath(), "usb")) {
+            return StorageVolume.Type.USB;
+        } else {
+            return StorageVolume.Type.EXTERNAL;
+        }
+    }
+
+    /**
+     * Checks whether the array contains object
+     * 
+     * @param array
+     *            Array to check
+     * @param object
+     *            Object to find
+     * @return true, if the given array contains the object
+     */
+    private static &lt;T&gt; boolean arrayContains(T[] array, T object) {
+        for (final T item : array) {
+            if (item.equals(object)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks whether the path contains one of the directories
+     * 
+     * For example, if path is /one/two, it returns true input is "one" or
+     * "two". Will return false if the input is one of "one/two", "/one" or
+     * "/two"
+     * 
+     * @param path
+     *            path to check for a directory
+     * @param dirs
+     *            directories to find
+     * @return true, if the path contains one of the directories
+     */
+    private static boolean pathContainsDir(final String path, final String[] dirs) {
+        final StringTokenizer tokens = new StringTokenizer(path, File.separator);
+        while (tokens.hasMoreElements()) {
+            final String next = tokens.nextToken();
+            for (final String dir : dirs) {
+                if (next.equals(dir)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks ifString contains a search String irrespective of case, handling.
+     * Case-insensitivity is defined as by
+     * {@link String#equalsIgnoreCase(String)}.
+     * 
+     * @param str
+     *            the String to check, may be null
+     * @param searchStr
+     *            the String to find, may be null
+     * @return true if the String contains the search String irrespective of
+     *         case or false if not or {@code null} string input
+     */
+    public static boolean containsIgnoreCase(final String str, final String searchStr) {
+        if (str == null || searchStr == null) {
+            return false;
+        }
+        final int len = searchStr.length();
+        final int max = str.length() - len;
+        for (int i = 0; i &lt;= max; i++) {
+            if (str.regionMatches(true, i, searchStr, 0, len)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Represents storage volume information
+     */
+    public static final class StorageVolume {
+
+        /**
+         * Represents {@link StorageVolume} type
+         */
+        public enum Type {
+            /**
+             * Device built-in internal storage. Probably points to
+             * {@link Environment#getExternalStorageDirectory()}
+             */
+            INTERNAL,
+
+            /**
+             * External storage. Probably removable, if no other
+             * {@link StorageVolume} of type {@link #INTERNAL} is returned by
+             * {@link StorageHelper#getStorages(boolean)}, this might be
+             * pointing to {@link Environment#getExternalStorageDirectory()}
+             */
+            EXTERNAL,
+
+            /**
+             * Removable usb storage
+             */
+            USB
+        }
+
+        /**
+         * Device name
+         */
+        public final String device;
+
+        /**
+         * Points to mount point of this device
+         */
+        public final File file;
+
+        /**
+         * File system of this device
+         */
+        public final String fileSystem;
+
+        /**
+         * if true, the storage is mounted as read-only
+         */
+        private boolean mReadOnly;
+
+        /**
+         * If true, the storage is removable
+         */
+        private boolean mRemovable;
+
+        /**
+         * If true, the storage is emulated
+         */
+        private boolean mEmulated;
+
+        /**
+         * Type of this storage
+         */
+        private Type mType;
+
+        StorageVolume(String device, File file, String fileSystem) {
+            this.device = device;
+            this.file = file;
+            this.fileSystem = fileSystem;
+        }
+
+        /**
+         * Returns type of this storage
+         * 
+         * @return Type of this storage
+         */
+        public Type getType() {
+            return mType;
+        }
+
+        /**
+         * Returns true if this storage is removable
+         * 
+         * @return true if this storage is removable
+         */
+        public boolean isRemovable() {
+            return mRemovable;
+        }
+
+        /**
+         * Returns true if this storage is emulated
+         * 
+         * @return true if this storage is emulated
+         */
+        public boolean isEmulated() {
+            return mEmulated;
+        }
+
+        /**
+         * Returns true if this storage is mounted as read-only
+         * 
+         * @return true if this storage is mounted as read-only
+         */
+        public boolean isReadOnly() {
+            return mReadOnly;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((file == null) ? 0 : file.hashCode());
+            return result;
+        }
+
+        /**
+         * Returns true if the other object is StorageHelper and it's
+         * {@link #file} matches this one's
+         * 
+         * @see Object#equals(Object)
+         */
+        @Override
+        public boolean equals(Object obj) {
+            if (obj == this) {
+                return true;
+            }
+            if (obj == null) {
+                return false;
+            }
+            if (getClass() != obj.getClass()) {
+                return false;
+            }
+            final StorageVolume other = (StorageVolume) obj;
+            if (file == null) {
+                return other.file == null;
+            }
+            return file.equals(other.file);
+        }
+
+        @Override
+        public String toString() {
+            return file.getAbsolutePath() + (mReadOnly ? " ro " : " rw ") + mType + (mRemovable ? " R " : "")
+                    + (mEmulated ? " E " : "") + fileSystem;
+        }
+    }
+}
+</code></pre>

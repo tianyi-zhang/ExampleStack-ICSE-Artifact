@@ -1,0 +1,70 @@
+<p>Oh dear - looks like customer marshallers of sets is <em>unpossible</em>. The AWS SDK is hardcoded to only deal with single string values (SUnmarshaller()).</p>
+
+<p>DynamoDBReflector in AWS SDK 1.3.13, line 185:</p>
+
+<pre><code>if ( isCustomMarshaller(getter) ) {
+    unmarshaller = new SUnmarshaller() {
+
+        @Override
+        public Object unmarshall(AttributeValue value) {
+            return getCustomMarshalledValue(toReturn, getter, value);
+        }
+    };
+}
+</code></pre>
+
+<p><strong>UPDATE</strong></p>
+
+<p>As an utterly filthy hack, I've cobbled something together that works by copy/pasting the entire class :( This is why private static final utility services are <em>bad</em>, and dependency injection is <em>good</em>.</p>
+
+<p>This will work so you can use one customer converter (<code>UuidConverter</code> in my case) for getters that return <code>UUID</code> instances, <em>or</em> <code>Set&lt;UUID&gt;</code> instances.</p>
+
+<p>I added a method called getCustomMarshalledValueSet, which iterates over the List returned by value.getSS(), calls the custom marshaller for each, and adds the result to a Set which it returns.</p>
+
+<pre><code>    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private &lt;T&gt; T getCustomMarshalledValueSet(T toReturn, Method getter, AttributeValue value) {
+    DynamoDBMarshalling annotation = getter.getAnnotation(DynamoDBMarshalling.class);
+    Class&lt;? extends DynamoDBMarshaller&lt;? extends Object&gt;&gt; marshallerClass = annotation.marshallerClass();
+
+    DynamoDBMarshaller marshaller;
+    try {
+        marshaller = marshallerClass.newInstance();
+    } catch (InstantiationException e) {
+        throw new DynamoDBMappingException("Couldn't instantiate marshaller of class " + marshallerClass, e);
+    } catch (IllegalAccessException e) {
+        throw new DynamoDBMappingException("Couldn't instantiate marshaller of class " + marshallerClass, e);
+    }
+
+    Set&lt;T&gt; set = new HashSet&lt;T&gt;();
+
+    for (String part : value.getSS()) {
+        set.add((T) marshaller.unmarshall(getter.getReturnType(), part));
+    }
+
+    return (T) set;
+}
+</code></pre>
+
+<p>Additionally getArgumentUnmarshaller was changed to bring the isCollection check before the conditional to decide what type of unmarshaller to use, and changed the custom marshaller block to pick the right sort.</p>
+
+<pre><code>            if (isCustomMarshaller(getter)) {
+                if (isCollection) {
+                    unmarshaller = new SSUnmarshaller() {
+
+                        @Override
+                        public Object unmarshall(AttributeValue value) {
+                            return getCustomMarshalledValueSet(toReturn, getter, value);
+                        }
+                    };
+                } else {
+                    unmarshaller = new SUnmarshaller() {
+
+                        @Override
+                        public Object unmarshall(AttributeValue value) {
+                            return getCustomMarshalledValue(toReturn, getter, value);
+                        }
+                    };
+                }
+
+            }
+</code></pre>

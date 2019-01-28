@@ -1,0 +1,200 @@
+<p>I believe there is no methods in Jsoup to get progress get() and post(). I've managed to do this via HttpURLConnection and then passing Jsoup.parse a file. It looks like this:
+(don't forget to add permissions in manifest file)</p>
+
+<p>WithFileProgress.java:</p>
+
+<pre><code>public class WithFileProgress {
+ProgressDialog progressDialog;
+Context context;
+TextView content;
+
+public WithFileProgress(Context context, TextView content) {
+    this.context = context;
+    this.content = content;
+}
+
+public void connect(String url) {
+    new downloadHTML().execute(url);
+}
+
+private class downloadHTML extends AsyncTask&lt;String, Integer, Document&gt; { // params, progress, result
+
+    @Override
+    protected void onPreExecute() {
+        super.onPreExecute();
+        progressDialog = new ProgressDialog(context);
+        progressDialog.setTitle("downloadHTML");
+        progressDialog.setMessage("Loading...");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+        progressDialog.setCancelable(true);
+        progressDialog.show();
+    }
+
+    @Override
+    protected Document doInBackground(String... params) {
+        InputStream input = null;
+        OutputStream output = null;
+        HttpURLConnection connection = null;
+        File file;
+        Document d = null;
+
+        try {
+            URL url = new URL(params[0]);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.connect();
+
+            // expect HTTP 200 OK, so we don't mistakenly save error report
+            // instead of the file
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                AlertDialog.Builder builder = new AlertDialog.Builder(context);
+                builder.setTitle("downloadHTML").setMessage("Server returned HTTP " + connection.getResponseCode()
+                        + " " + connection.getResponseMessage()).create();
+            }
+
+            // this will be useful to display download percentage
+            // might be -1: server did not report the length
+            int fileLength = connection.getContentLength();
+
+            // download the file
+            input = connection.getInputStream();
+
+            file = new File(Environment.getExternalStorageDirectory(), "downloadHTML.tmp");
+            output = new FileOutputStream(file);
+
+            byte data[] = new byte[8192];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                // allow canceling with back button
+                if (isCancelled()) {
+                    input.close();
+                    return null;
+                }
+                total += count;
+                // publishing the progress....
+                if (fileLength &gt; 0) // only if total length is known
+                    publishProgress((int) (total * 100 / fileLength));
+                output.write(data, 0, count);
+            }
+
+            d = Jsoup.parse(file, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (output != null)
+                    output.close();
+                if (input != null)
+                    input.close();
+            } catch (IOException ignored) {
+            }
+
+            if (connection != null)
+                connection.disconnect();
+        }
+        return d;
+    }
+
+    @Override
+    protected void onPostExecute(Document d) {
+        super.onPostExecute(d);
+        content.setText(d.html());
+        progressDialog.dismiss();
+    }
+
+    @Override
+    protected void onProgressUpdate(Integer... values) {
+        super.onProgressUpdate(values);
+        // if we get here, length is known, now set indeterminate to false
+        progressDialog.setIndeterminate(false);
+        progressDialog.setMax(100);
+        progressDialog.setProgress(values[0]);
+    }
+
+}
+</code></pre>
+
+<p>}</p>
+
+<p>MainActivity.java:</p>
+
+<pre><code>public class MainActivity extends Activity {
+WithFileProgress api;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+
+    TextView content = (TextView)findViewById(R.id.content);
+    api = new WithFileProgress(this, content);
+
+    Button button = (Button)findViewById(R.id.button);
+    button.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View view) {
+            EditText input = (EditText)findViewById(R.id.input);
+            String url = input.getText().toString();
+
+            if (Jsoup.isValid(url, new Whitelist())) {
+                api.connect(url);
+            } else {
+                AlertDialog.Builder builder = new AlertDialog.Builder(getApplicationContext());
+                builder.setTitle("MainActivity").setMessage("Invalid address: "+url).create();
+            }
+        }
+    });
+}
+</code></pre>
+
+<p>}</p>
+
+<p>activity_layout.xml</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+xmlns:tools="http://schemas.android.com/tools"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:paddingLeft="@dimen/activity_horizontal_margin"
+android:paddingRight="@dimen/activity_horizontal_margin"
+android:paddingTop="@dimen/activity_vertical_margin"
+android:paddingBottom="@dimen/activity_vertical_margin"
+tools:context=".MainActivity"&gt;
+
+&lt;ScrollView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:id="@+id/contentScroll"
+    android:layout_above="@+id/input"
+    android:layout_alignParentLeft="true"
+    android:layout_alignParentTop="true"
+    android:layout_alignParentRight="true"&gt;
+
+    &lt;TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:id="@+id/content" /&gt;
+
+&lt;/ScrollView&gt;
+
+&lt;EditText
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:id="@+id/input"
+    android:layout_alignParentBottom="true"
+    android:layout_alignParentLeft="true"
+    android:layout_toLeftOf="@+id/button"
+    android:hint="URL address" /&gt;
+
+&lt;Button
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="Download"
+    android:id="@+id/button"
+    android:layout_alignBottom="@+id/input"
+    android:layout_alignParentRight="true"
+    android:layout_alignTop="@+id/input" /&gt;
+</code></pre>
+
+<p></p>

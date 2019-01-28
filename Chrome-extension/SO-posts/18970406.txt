@@ -1,0 +1,65 @@
+<p>I finally generated AAC files that are playable on both the Android device and the Windows host computer. I am posting my solution here, hoping it could help others.</p>
+
+<p>First, my previous assumption that the Android MediaCodec encoder generates the elementary AAC stream was not accurate. The MediaCodec encoder generates the raw AAC stream. That's why the files could not be played. The raw AAC stream needs to be converted into a playable format, such as the <a href="http://wiki.multimedia.cx/index.php?title=ADTS">ADTS</a> stream. I have changed the title of this post to reflect my new understanding. There was <a href="http://stackoverflow.com/questions/14934305/pcm-to-aac-conversion-using-mediacodec?rq=1">another post</a> that asked a similar question, and had an excellent answer. However, a novice may not necessarily understand the brief descriptions there. I didn't quite get it the 1st time I read that post.</p>
+
+<p>So, in order to generate an AAC bitstream that can be played by a media player, I started from the EncoderTest example given by fadden in his 1st comment, but modified the original code to add the ADTS header per output frame (access unit), and to write the resulting stream into a file (replaced lines 248 through 267 of the original code with the following code snippet):</p>
+
+<pre><code>if (index &gt;= 0) {
+    int outBitsSize   = info.size;
+    int outPacketSize = outBitsSize + 7;    // 7 is ADTS size
+    ByteBuffer outBuf = codecOutputBuffers[index];
+
+    outBuf.position(info.offset);
+    outBuf.limit(info.offset + outBitsSize);
+    try {
+        byte[] data = new byte[outPacketSize];  //space for ADTS header included
+        addADTStoPacket(data, outPacketSize);
+        outBuf.get(data, 7, outBitsSize);
+        outBuf.position(info.offset);
+        mFileStream.write(data, 0, outPacketSize);  //open FileOutputStream beforehand
+    } catch (IOException e) {
+        Log.e(TAG, "failed writing bitstream data to file");
+        e.printStackTrace();
+    }
+
+    numBytesDequeued += info.size;
+
+    outBuf.clear();
+    codec.releaseOutputBuffer(index, false /* render */);
+    Log.d(TAG, "  dequeued " + outBitsSize + " bytes of output data.");
+    Log.d(TAG, "  wrote " + outPacketSize + " bytes into output file.");
+}
+else if (index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+}
+else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+    codecOutputBuffers = codec.getOutputBuffers();
+}
+</code></pre>
+
+<p>Outside the loop, I defined the function addADTStoPacket like this:</p>
+
+<pre><code>/**
+ *  Add ADTS header at the beginning of each and every AAC packet.
+ *  This is needed as MediaCodec encoder generates a packet of raw
+ *  AAC data.
+ *
+ *  Note the packetLen must count in the ADTS header itself.
+ **/
+private void addADTStoPacket(byte[] packet, int packetLen) {
+    int profile = 2;  //AAC LC
+                      //39=MediaCodecInfo.CodecProfileLevel.AACObjectELD;
+    int freqIdx = 4;  //44.1KHz
+    int chanCfg = 2;  //CPE
+
+    // fill in ADTS data
+    packet[0] = (byte)0xFF;
+    packet[1] = (byte)0xF9;
+    packet[2] = (byte)(((profile-1)&lt;&lt;6) + (freqIdx&lt;&lt;2) +(chanCfg&gt;&gt;2));
+    packet[3] = (byte)(((chanCfg&amp;3)&lt;&lt;6) + (packetLen&gt;&gt;11));
+    packet[4] = (byte)((packetLen&amp;0x7FF) &gt;&gt; 3);
+    packet[5] = (byte)(((packetLen&amp;7)&lt;&lt;5) + 0x1F);
+    packet[6] = (byte)0xFC;
+}
+</code></pre>
+
+<p>I also added code to control how to stop generating the AAC ADTS stream, but that's application specific, so I won't detail here. With all these changes, the generated AAC files can be played on the Android device, on my Windows PC, and ffmpeg is happy with them.</p>

@@ -1,0 +1,110 @@
+<p>As Dave Webb mentions, the <a href="http://android-developers.blogspot.com/2011/03/identifying-app-installations.html">Android Developer Blog has an article</a> that covers this.  Their preferred solution is to track app installs rather than devices, and that will work well for most use cases.  The blog post will show you the necessary code to make that work, and I recommend you check it out.</p>
+
+<p>However, the blog post goes on to discuss solutions if you need a device identifier rather than an app installation identifier.  I spoke with someone at Google to get some additional clarification on a few items in the event that you need to do so.  Here's what I discovered about device identifiers that's NOT mentioned in the aforementioned blog post:</p>
+
+<ul>
+<li>ANDROID_ID is the preferred device identifier.  ANDROID_ID is perfectly reliable on versions of Android &lt;=2.1 or >=2.3.  Only 2.2 has the problems mentioned in the post.</li>
+<li>Several devices by several manufacturers are affected by the ANDROID_ID bug in 2.2.</li>
+<li>As far as I've been able to determine, all affected devices have <a href="http://code.google.com/p/android/issues/detail?id=10603">the same ANDROID_ID</a>, which is <a href="http://www.google.com/search?sourceid=chrome&amp;ie=UTF-8&amp;q=9774d56d682e549c">9774d56d682e549c</a>.  Which is also the same device id reported by the emulator, btw.</li>
+<li>Google believes that OEMs have patched the issue for many or most of their devices, but I was able to verify that as of the beginning of April 2011, at least, it's still quite easy to find devices that have the broken ANDROID_ID.</li>
+</ul>
+
+<p>Based on Google's recommendations, I implemented a class that will generate a unique UUID for each device, using ANDROID_ID as the seed where appropriate, falling back on TelephonyManager.getDeviceId() as necessary, and if that fails, resorting to a randomly generated unique UUID that is persisted across app restarts (but not app re-installations).</p>
+
+<p>Note that for devices that have to fallback on the device ID, the unique ID <strong>WILL</strong> persist across factory resets.  This is something to be aware of.  If you need to ensure that a factory reset will reset your unique ID, you may want to consider falling back directly to the random UUID instead of the device ID.</p>
+
+<p>Again, this code is for a device ID, not an app installation ID.  For most situations, an app installation ID is probably what you're looking for.  But if you do need a device ID, then the following code will probably work for you.</p>
+
+<pre><code>import android.content.Context;
+import android.content.SharedPreferences;
+import android.provider.Settings.Secure;
+import android.telephony.TelephonyManager;
+
+import java.io.UnsupportedEncodingException;
+import java.util.UUID;
+
+public class DeviceUuidFactory {
+
+    protected static final String PREFS_FILE = "device_id.xml";
+    protected static final String PREFS_DEVICE_ID = "device_id";
+    protected volatile static UUID uuid;
+
+    public DeviceUuidFactory(Context context) {
+        if (uuid == null) {
+            synchronized (DeviceUuidFactory.class) {
+                if (uuid == null) {
+                    final SharedPreferences prefs = context
+                            .getSharedPreferences(PREFS_FILE, 0);
+                    final String id = prefs.getString(PREFS_DEVICE_ID, null);
+                    if (id != null) {
+                        // Use the ids previously computed and stored in the
+                        // prefs file
+                        uuid = UUID.fromString(id);
+                    } else {
+                        final String androidId = Secure.getString(
+                            context.getContentResolver(), Secure.ANDROID_ID);
+                        // Use the Android ID unless it's broken, in which case
+                        // fallback on deviceId,
+                        // unless it's not available, then fallback on a random
+                        // number which we store to a prefs file
+                        try {
+                            if (!"9774d56d682e549c".equals(androidId)) {
+                                uuid = UUID.nameUUIDFromBytes(androidId
+                                        .getBytes("utf8"));
+                            } else {
+                                final String deviceId = (
+                                    (TelephonyManager) context
+                                    .getSystemService(Context.TELEPHONY_SERVICE))
+                                    .getDeviceId();
+                                uuid = deviceId != null ? UUID
+                                    .nameUUIDFromBytes(deviceId
+                                            .getBytes("utf8")) : UUID
+                                    .randomUUID();
+                            }
+                        } catch (UnsupportedEncodingException e) {
+                            throw new RuntimeException(e);
+                        }
+                        // Write the value out to the prefs file
+                        prefs.edit()
+                                .putString(PREFS_DEVICE_ID, uuid.toString())
+                                .commit();
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns a unique UUID for the current android device. As with all UUIDs,
+     * this unique ID is "very highly likely" to be unique across all Android
+     * devices. Much more so than ANDROID_ID is.
+     * 
+     * The UUID is generated by using ANDROID_ID as the base key if appropriate,
+     * falling back on TelephonyManager.getDeviceID() if ANDROID_ID is known to
+     * be incorrect, and finally falling back on a random UUID that's persisted
+     * to SharedPreferences if getDeviceID() does not return a usable value.
+     * 
+     * In some rare circumstances, this ID may change. In particular, if the
+     * device is factory reset a new device ID may be generated. In addition, if
+     * a user upgrades their phone from certain buggy implementations of Android
+     * 2.2 to a newer, non-buggy version of Android, the device ID may change.
+     * Or, if a user uninstalls your app on a device that has neither a proper
+     * Android ID nor a Device ID, this ID may change on reinstallation.
+     * 
+     * Note that if the code falls back on using TelephonyManager.getDeviceId(),
+     * the resulting ID will NOT change after a factory reset. Something to be
+     * aware of.
+     * 
+     * Works around a bug in Android 2.2 for many devices when using ANDROID_ID
+     * directly.
+     * 
+     * @see http://code.google.com/p/android/issues/detail?id=10603
+     * 
+     * @return a UUID that may be used to uniquely identify your device for most
+     *         purposes.
+     */
+    public UUID getDeviceUuid() {
+        return uuid;
+    }
+}
+</code></pre>

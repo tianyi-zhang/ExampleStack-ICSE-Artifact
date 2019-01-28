@@ -1,0 +1,135 @@
+<p>This is due to the fact that CCL has not yet been updated to handle Tracks (it is an upcoming feature). CCL builds a Bundle from MediaInfo and uses that bundle when firing the CastControllerActivity to pass the MediaInfo (MediaInfo is not parcelable, hence have to use a wrapper and a Bundle is one solution). In the exiting CCL, when it creates a bundle, it doesn't consider Tracks, hence the bundle doesn't have the tracks info. As a result, you are practically loading a media (since it happens in the CastControllerActivity) that doesn't have any tracks info, hence the error that you see. </p>
+
+<p>Till Tracks support gets added to CCL, you can do the following. In Utils class, update the two methods <code>fromMediaInfo()</code> and <code>toMediaInfo()</code> with the following codes in the CCL itself:</p>
+
+<pre><code>private static final String KEY_TRACK_ID = "track-id";
+private static final String KEY_TRACK_CONTENT_ID = "track-custom-id";
+private static final String KEY_TRACK_NAME = "track-name";
+private static final String KEY_TRACK_TYPE = "track-type";
+private static final String KEY_TRACK_SUBTYPE = "track-subtype";
+private static final String KEY_TRACK_LANGUAGE = "track-language";
+private static final String KEY_TRACK_CUSTOM_DATA = "track-custom-data";
+private static final String KEY_TRACKS_DATA = "track-data";
+
+public static Bundle fromMediaInfo(MediaInfo info) {
+    if (null == info) {
+        return null;
+    }
+
+    MediaMetadata md = info.getMetadata();
+    Bundle wrapper = new Bundle();
+    wrapper.putString(MediaMetadata.KEY_TITLE, md.getString(MediaMetadata.KEY_TITLE));
+    wrapper.putString(MediaMetadata.KEY_SUBTITLE, md.getString(MediaMetadata.KEY_SUBTITLE));
+    wrapper.putString(KEY_URL, info.getContentId());
+    wrapper.putString(MediaMetadata.KEY_STUDIO, md.getString(MediaMetadata.KEY_STUDIO));
+    wrapper.putString(KEY_CONTENT_TYPE, info.getContentType());
+    wrapper.putInt(KEY_STREAM_TYPE, info.getStreamType());
+    if (!md.getImages().isEmpty()) {
+        ArrayList&lt;String&gt; urls = new ArrayList&lt;String&gt;();
+        for (WebImage img : md.getImages()) {
+            urls.add(img.getUrl().toString());
+        }
+        wrapper.putStringArrayList(KEY_IMAGES, urls);
+    }
+    JSONObject customData = info.getCustomData();
+    if (null != customData) {
+        wrapper.putString(KEY_CUSTOM_DATA, customData.toString());
+    }
+
+    if (null != info.getMediaTracks() &amp;&amp; !info.getMediaTracks().isEmpty()) {
+        try {
+            JSONArray jsonArray = new JSONArray();
+            for (MediaTrack mt : info.getMediaTracks()) {
+                JSONObject jsonObject = new JSONObject();
+                jsonObject.put(KEY_TRACK_NAME, mt.getName());
+                jsonObject.put(KEY_TRACK_CONTENT_ID, mt.getContentId());
+                jsonObject.put(KEY_TRACK_ID, mt.getId());
+                jsonObject.put(KEY_TRACK_LANGUAGE, mt.getLanguage());
+                jsonObject.put(KEY_TRACK_TYPE, mt.getType());
+                jsonObject.put(KEY_TRACK_SUBTYPE, mt.getSubtype());
+                if (null != mt.getCustomData()) {
+                    jsonObject.put(KEY_TRACK_CUSTOM_DATA, mt.getCustomData().toString());
+                }
+                jsonArray.put(jsonObject);
+            }
+            wrapper.putString(KEY_TRACKS_DATA, jsonArray.toString());
+        } catch (JSONException e) {
+            LOGE(TAG, "fromMediaInfo(): Failed to convert Tracks data to json", e);
+        }
+    }
+
+    return wrapper;
+}
+
+public static MediaInfo toMediaInfo(Bundle wrapper) {
+    if (null == wrapper) {
+        return null;
+    }
+
+    MediaMetadata metaData = new MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE);
+
+    metaData.putString(MediaMetadata.KEY_SUBTITLE,
+            wrapper.getString(MediaMetadata.KEY_SUBTITLE));
+    metaData.putString(MediaMetadata.KEY_TITLE, wrapper.getString(MediaMetadata.KEY_TITLE));
+    metaData.putString(MediaMetadata.KEY_STUDIO, wrapper.getString(MediaMetadata.KEY_STUDIO));
+    ArrayList&lt;String&gt; images = wrapper.getStringArrayList(KEY_IMAGES);
+    if (null != images &amp;&amp; !images.isEmpty()) {
+        for (String url : images) {
+            Uri uri = Uri.parse(url);
+            metaData.addImage(new WebImage(uri));
+        }
+    }
+    String customDataStr = wrapper.getString(KEY_CUSTOM_DATA);
+    JSONObject customData = null;
+    if (!TextUtils.isEmpty(customDataStr)) {
+        try {
+            customData = new JSONObject(customDataStr);
+        } catch (JSONException e) {
+            LOGE(TAG, "Failed to deserialize the custom data string: custom data= "
+                    + customDataStr, e);
+        }
+    }
+    List&lt;MediaTrack&gt; mediaTracks = null;
+    if (null != wrapper.getString(KEY_TRACKS_DATA)) {
+        try {
+            JSONArray jsonArray = new JSONArray(wrapper.getString(KEY_TRACKS_DATA));
+            mediaTracks = new ArrayList&lt;MediaTrack&gt;();
+            if (null != jsonArray &amp;&amp; jsonArray.length() &gt; 0) {
+                for (int i = 0; i &lt; jsonArray.length(); i++) {
+                    JSONObject jsonObj = (JSONObject) jsonArray.get(i);
+                    MediaTrack.Builder builder = new MediaTrack.Builder(
+                            jsonObj.getLong(KEY_TRACK_ID), jsonObj.getInt(KEY_TRACK_TYPE));
+                    if (jsonObj.has(KEY_TRACK_NAME)) {
+                        builder.setName(jsonObj.getString(KEY_TRACK_NAME));
+                    }
+                    if (jsonObj.has(KEY_TRACK_SUBTYPE)) {
+                        builder.setSubtype(jsonObj.getInt(KEY_TRACK_SUBTYPE));
+                    }
+                    if (jsonObj.has(KEY_TRACK_CONTENT_ID)) {
+                        builder.setContentId(jsonObj.getString(KEY_TRACK_CONTENT_ID));
+                    }
+                    if (jsonObj.has(KEY_TRACK_LANGUAGE)) {
+                        builder.setLanguage(jsonObj.getString(KEY_TRACK_LANGUAGE));
+                    }
+                    if (jsonObj.has(KEY_TRACKS_DATA)) {
+                        builder.setCustomData(
+                                new JSONObject(jsonObj.getString(KEY_TRACKS_DATA)));
+                    }
+                    mediaTracks.add(builder.build());
+                }
+            }
+        } catch (JSONException e) {
+            LOGE(TAG, "Failed to build media tracks from the wrapper bundle", e);
+        }
+    }
+    return new MediaInfo.Builder(wrapper.getString(KEY_URL))
+            .setStreamType(wrapper.getInt(KEY_STREAM_TYPE))
+            .setContentType(wrapper.getString(KEY_CONTENT_TYPE))
+            .setMetadata(metaData)
+            .setCustomData(customData)
+            .setMediaTracks(mediaTracks)
+            .build();
+}
+</code></pre>
+
+<p>This should hopefully solve your issue.</p>

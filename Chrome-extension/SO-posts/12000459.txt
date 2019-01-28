@@ -1,0 +1,422 @@
+<p>You could modify the renderer so that it only displays the value if it matches the filter.</p>
+
+<p>Given the fact that you are using the <code>TableRowSorter</code> makes it easier.</p>
+
+<pre><code>public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+
+    RowFilter rowFilter = ((TableRowSorter) table.getRowSorter()).getRowFilter();
+    if (rowFilter != null) {
+
+        if (!rowFilter.include(new FilterEntry(table.getModel(), value, row))) {
+
+            value = null;
+
+        }
+
+    }
+
+    // The rest of the code...
+
+}
+</code></pre>
+
+<p>Now, you're going to need to implement your own <code>FilterEntry</code> :P</p>
+
+<pre><code>public class FilterEntry extends RowFilter.Entry&lt;TableModel, Integer&gt; {
+
+    private final TableModel model;
+    private final Object value;
+    private final int rowIndex;
+
+    public FilterEntry(TableModel model, Object value, int rowIndex) {
+
+        this.model = model;
+        this.value = value;
+        this.rowIndex = rowIndex;
+
+    }
+
+    @Override
+    public TableModel getModel() {
+
+        return model;
+
+    }
+
+    @Override
+    public int getValueCount() {
+
+        return getModel().getColumnCount();
+
+    }
+
+    @Override
+    public Object getValue(int index) {
+
+        return value;
+
+    }
+
+    @Override
+    public Integer getIdentifier() {
+
+        return rowIndex;
+
+    }
+
+}
+</code></pre>
+
+<p>And in order to get the example to work, I had to add</p>
+
+<pre><code>table.getColumnModel().getColumn(1).setCellRenderer(new MultiLineCellRenderer());
+table.getColumnModel().getColumn(3).setCellRenderer(new MultiLineCellRenderer());
+</code></pre>
+
+<p>Under where you set the default cell renderer</p>
+
+<p><strong>UPDATED with Mutable column model</strong></p>
+
+<p>The larger problem you face is having the ability to turn columns on and off.  Trashgod provided an <a href="http://stackoverflow.com/questions/10088853/could-not-set-the-column-width-to-zero-i-e-not-made-column-invisible/10089138#10089138">example</a> of this and I've included a sample model.</p>
+
+<p>The next thing you need to do, is every time the filter changes, you need to run through the entire model and decide what should be include and what shouldn't.</p>
+
+<p>This is how I achieved it...</p>
+
+<p>First, you need to supply your own <code>ColumnModel</code></p>
+
+<pre><code>// Changing the column model effects the data model as well...
+TableModel model = table.getModel();
+table.setColumnModel(new MutableColumnModel());
+table.setModel(model);
+</code></pre>
+
+<p>In you action listener, after you apply the filter, you will need to call <code>updateColumns</code></p>
+
+<pre><code>protected void updateColumns() {
+
+    RowFilter rowFilter = ((TableRowSorter) tblSearch.getRowSorter()).getRowFilter();
+
+    MutableTableColumnModel columnModel = (MutableTableColumnModel) tblSearch.getColumnModel();
+    // Want to reset the columns, otherwise we run into problems doing the value
+    // lookup, as the table doesn't think it exists.
+    // You might be able to get around it with this instead, but we need
+    // to rest the view any way...
+    // columnModel.getColumnByModelIndex(col);
+    columnModel.setColumnVisible(0, true);
+    columnModel.setColumnVisible(1, true);
+    columnModel.setColumnVisible(2, true);
+    columnModel.setColumnVisible(3, true);
+
+    if (rowFilter != null) {
+
+        Map&lt;Integer, Boolean&gt; mapColumns = new HashMap&lt;Integer, Boolean&gt;(tblSearch.getColumnCount());
+        for (int row = 0; row &lt; tblSearch.getRowCount(); row++) {
+
+            boolean include = includeValue(row, 1, rowFilter);
+            mapColumns.put(0, include);
+            mapColumns.put(1, include);
+
+            include = includeValue(row, 3, rowFilter);
+            mapColumns.put(2, include);
+            mapColumns.put(3, include);
+
+        }
+
+        for (Integer col : mapColumns.keySet()) {
+
+            columnModel.setColumnVisible(col, mapColumns.get(col));
+
+        }
+
+    }
+
+}
+
+protected boolean includeValue(int row, int col, RowFilter filter) {
+
+    Object value = tblSearch.getValueAt(row, col);
+
+    boolean include = filter.include(new FilterEntry(tblSearch.getModel(), value, row));
+
+    System.out.println("include " + value + "; include = " + include);
+
+    return include;
+
+}
+</code></pre>
+
+<p>The <code>MutableColumnModel</code></p>
+
+<pre><code>public class MutableTableColumnModel extends DefaultTableColumnModel {
+
+    private List&lt;TableColumn&gt; allTableColumns;
+
+    public MutableTableColumnModel() {
+
+        allTableColumns = new ArrayList&lt;TableColumn&gt;(10);
+
+    }
+
+    public void setColumnVisible(int index, boolean visible) {
+
+        setColumnVisible(getColumnByModelIndex(index), visible);
+
+    }
+
+    /**
+     * Sets the visibility of the specified TableColumn.
+     * The call is ignored if the TableColumn is not found in this column model
+     * or its visibility status did not change.
+     * &lt;p&gt;
+     *
+     * @param aColumn        the column to show/hide
+     * @param visible its new visibility status
+     */
+    // listeners will receive columnAdded()/columnRemoved() event
+    public void setColumnVisible(TableColumn column, boolean visible) {
+
+        if (column != null) {
+
+            if (!visible) {
+
+                if (isColumnVisible(column)) {
+
+                    super.removeColumn(column);
+
+                }
+
+            } else {
+
+                // find the visible index of the column:
+                // iterate through both collections of visible and all columns, counting
+                // visible columns up to the one that's about to be shown again
+                int noVisibleColumns = tableColumns.size();
+                int noInvisibleColumns = allTableColumns.size();
+                int visibleIndex = 0;
+
+                for (int invisibleIndex = 0; invisibleIndex &lt; noInvisibleColumns; ++invisibleIndex) {
+                    TableColumn visibleColumn = (visibleIndex &lt; noVisibleColumns ? (TableColumn) tableColumns.get(visibleIndex) : null);
+                    TableColumn testColumn = (TableColumn) allTableColumns.get(invisibleIndex);
+
+                    if (testColumn == column) {
+                        if (visibleColumn != column) {
+                            super.addColumn(column);
+                            super.moveColumn(tableColumns.size() - 1, visibleIndex);
+                        }
+                        return; // ####################
+                    }
+                    if (testColumn == visibleColumn) {
+                        ++visibleIndex;
+                    }
+                }
+            }
+
+        }
+    }
+
+    /**
+     * Makes all columns in this model visible
+     */
+    public void showAllColumns() {
+        int noColumns = allTableColumns.size();
+
+        for (int columnIndex = 0; columnIndex &lt; noColumns; ++columnIndex) {
+            TableColumn visibleColumn = (columnIndex &lt; tableColumns.size() ? (TableColumn) tableColumns.get(columnIndex) : null);
+            TableColumn invisibleColumn = (TableColumn) allTableColumns.get(columnIndex);
+
+            if (visibleColumn != invisibleColumn) {
+                super.addColumn(invisibleColumn);
+                super.moveColumn(tableColumns.size() - 1, columnIndex);
+            }
+        }
+    }
+
+    /**
+     * Maps the index of the column in the table model at
+     * &lt;code&gt;modelColumnIndex&lt;/code&gt; to the TableColumn object.
+     * There may me multiple TableColumn objects showing the same model column, though this is uncommon.
+     * This method will always return the first visible or else the first invisible column with the specified index.
+     * @param modelColumnIndex index of column in table model
+     * @return table column object or null if no such column in this column model
+     */
+    public TableColumn getColumnByModelIndex(int modelColumnIndex) {
+        for (int columnIndex = 0; columnIndex &lt; allTableColumns.size(); ++columnIndex) {
+            TableColumn column = (TableColumn) allTableColumns.get(columnIndex);
+            if (column.getModelIndex() == modelColumnIndex) {
+                return column;
+            }
+        }
+        return null;
+    }
+
+    /** Checks wether the specified column is currently visible.
+     * @param aColumn column to check
+     * @return visibility of specified column (false if there is no such column at all. [It's not visible, right?])
+     */
+    public boolean isColumnVisible(TableColumn aColumn) {
+        return (tableColumns.indexOf(aColumn) &gt;= 0);
+    }
+
+    /** Append &lt;code&gt;column&lt;/code&gt; to the right of exisiting columns.
+     * Posts &lt;code&gt;columnAdded&lt;/code&gt; event.
+     * @param column The column to be added
+     * @see #removeColumn
+     * @exception IllegalArgumentException if &lt;code&gt;column&lt;/code&gt; is &lt;code&gt;null&lt;/code&gt;
+     */
+    public void addColumn(TableColumn column) {
+        allTableColumns.add(column);
+        super.addColumn(column);
+    }
+
+    /** Removes &lt;code&gt;column&lt;/code&gt; from this column model.
+     * Posts &lt;code&gt;columnRemoved&lt;/code&gt; event.
+     * Will do nothing if the column is not in this model.
+     * @param column the column to be added
+     * @see #addColumn
+     */
+    public void removeColumn(TableColumn column) {
+        int allColumnsIndex = allTableColumns.indexOf(column);
+        if (allColumnsIndex != -1) {
+            allTableColumns.remove(allColumnsIndex);
+        }
+        super.removeColumn(column);
+    }
+
+    /** Moves the column from &lt;code&gt;oldIndex&lt;/code&gt; to &lt;code&gt;newIndex&lt;/code&gt;.
+     * Posts  &lt;code&gt;columnMoved&lt;/code&gt; event.
+     * Will not move any columns if &lt;code&gt;oldIndex&lt;/code&gt; equals &lt;code&gt;newIndex&lt;/code&gt;.
+     *
+     * @param    oldIndex            index of column to be moved
+     * @param    newIndex            new index of the column
+     * @exception IllegalArgumentException    if either &lt;code&gt;oldIndex&lt;/code&gt; or
+     *                         &lt;code&gt;newIndex&lt;/code&gt;
+     *                        are not in [0, getColumnCount() - 1]
+     */
+    public void moveColumn(int oldIndex, int newIndex) {
+        if ((oldIndex &lt; 0) || (oldIndex &gt;= getColumnCount())
+                || (newIndex &lt; 0) || (newIndex &gt;= getColumnCount())) {
+            throw new IllegalArgumentException("moveColumn() - Index out of range");
+        }
+
+        TableColumn fromColumn = (TableColumn) tableColumns.get(oldIndex);
+        TableColumn toColumn = (TableColumn) tableColumns.get(newIndex);
+
+        int allColumnsOldIndex = allTableColumns.indexOf(fromColumn);
+        int allColumnsNewIndex = allTableColumns.indexOf(toColumn);
+
+        if (oldIndex != newIndex) {
+            allTableColumns.remove(allColumnsOldIndex);
+            allTableColumns.add(allColumnsNewIndex, fromColumn);
+        }
+
+        super.moveColumn(oldIndex, newIndex);
+    }
+
+    /**
+     * Returns the total number of columns in this model.
+     *
+     * @param   onlyVisible   if set only visible columns will be counted
+     * @return    the number of columns in the &lt;code&gt;tableColumns&lt;/code&gt; array
+     * @see    #getColumns
+     */
+    public int getColumnCount(boolean onlyVisible) {
+        List&lt;TableColumn&gt; columns = (onlyVisible ? tableColumns : allTableColumns);
+        return columns.size();
+    }
+
+    /**
+     * Returns an &lt;code&gt;Enumeration&lt;/code&gt; of all the columns in the model.
+     *
+     * @param   onlyVisible   if set all invisible columns will be missing from the enumeration.
+     * @return an &lt;code&gt;Enumeration&lt;/code&gt; of the columns in the model
+     */
+    public Iterator&lt;TableColumn&gt; getColumns(boolean onlyVisible) {
+
+        List&lt;TableColumn&gt; columns = (onlyVisible ? tableColumns : allTableColumns);
+        return columns.iterator();
+
+    }
+
+    /**
+     * Returns the position of the first column whose identifier equals &lt;code&gt;identifier&lt;/code&gt;.
+     * Position is the the index in all visible columns if &lt;code&gt;onlyVisible&lt;/code&gt; is true or
+     * else the index in all columns.
+     *
+     * @param    identifier   the identifier object to search for
+     * @param    onlyVisible  if set searches only visible columns
+     *
+     * @return        the index of the first column whose identifier
+     *            equals &lt;code&gt;identifier&lt;/code&gt;
+     *
+     * @exception       IllegalArgumentException  if &lt;code&gt;identifier&lt;/code&gt;
+     *                is &lt;code&gt;null&lt;/code&gt;, or if no
+     *                &lt;code&gt;TableColumn&lt;/code&gt; has this
+     *                &lt;code&gt;identifier&lt;/code&gt;
+     * @see        #getColumn
+     */
+    public int getColumnIndex(Object identifier, boolean onlyVisible) {
+        if (identifier == null) {
+            throw new IllegalArgumentException("Identifier is null");
+        }
+
+        List columns = (onlyVisible ? tableColumns : allTableColumns);
+        int noColumns = columns.size();
+        TableColumn column;
+
+        for (int columnIndex = 0; columnIndex &lt; noColumns; ++columnIndex) {
+            column = (TableColumn) columns.get(columnIndex);
+
+            if (identifier.equals(column.getIdentifier())) {
+                return columnIndex;
+            }
+        }
+
+        throw new IllegalArgumentException("Identifier not found");
+    }
+
+    /**
+     * Returns the &lt;code&gt;TableColumn&lt;/code&gt; object for the column
+     * at &lt;code&gt;columnIndex&lt;/code&gt;.
+     *
+     * @param    columnIndex    the index of the column desired
+     * @param    onlyVisible    if set columnIndex is meant to be relative to all visible columns only
+     *                          else it is the index in all columns
+     *
+     * @return    the &lt;code&gt;TableColumn&lt;/code&gt; object for the column
+     *                at &lt;code&gt;columnIndex&lt;/code&gt;
+     */
+    public TableColumn getColumn(int columnIndex, boolean onlyVisible) {
+        return (TableColumn) tableColumns.elementAt(columnIndex);
+    }
+
+    /**
+     * Returns all the columns
+     * @return
+     */
+    public TableColumn[] getAllColumns() {
+
+        return allTableColumns.toArray(new TableColumn[allTableColumns.size()]);
+
+    }
+
+    public TableColumn[] getHiddenColumns() {
+
+        ArrayList&lt;TableColumn&gt; lstColumns = new ArrayList&lt;TableColumn&gt;(10);
+
+        for (TableColumn column : getAllColumns()) {
+
+            if (!isColumnVisible(column)) {
+
+                lstColumns.add(column);
+
+            }
+
+        }
+
+        return lstColumns.toArray(new TableColumn[lstColumns.size()]);
+
+    }
+
+}
+</code></pre>

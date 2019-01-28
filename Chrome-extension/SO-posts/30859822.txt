@@ -1,0 +1,84 @@
+<p>Android will automatically read the NDEF message of an NFC tag and process it in order to</p>
+
+<ul>
+<li>start registered activities based on the first NDEF record, and</li>
+<li>start apps based on Android Application Records (AAR) anywhere in the NDEF message.</li>
+</ul>
+
+<p>In order to get your activity started and have Android pass the pre-read NDEF message, you could use the <code>NDEF_DISCOVERED</code> intent filter:</p>
+
+<pre><code>&lt;intent-filter&gt;
+    &lt;action android:name="android.nfc.action.NDEF_DISCOVERED" /&gt;
+    &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+    &lt;data android:scheme="vnd.android.nfc"
+        android:host="ext"
+        android:pathPrefix="/example.com:mycustomtype"/&gt;
+&lt;/intent-filter&gt;
+</code></pre>
+
+<p>Then from within your activity, you could process that NDEF message:</p>
+
+<pre><code>public void onResume() {
+    super.onResume();
+    if (NfcAdapter.ACTION_NDEF_DISCOVERED.equals(getIntent().getAction())) {
+        NdefMessage[] msgs = null;
+        Parcelable[] rawMsgs = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES);
+        if (rawMsgs != null) {
+            msgs = new NdefMessage[rawMsgs.length];
+            for (int i = 0; i &lt; rawMsgs.length; ++i) {
+                msgs[i] = (NdefMessage)rawMsgs[i];
+            }
+        }
+
+        if ((msgs != null) &amp;&amp; (msgs.length &gt; 0)) {
+            NdefRecord[] records = msgs[0].getRecords();
+            NdefRecord firstRecord = records[0];
+            byte[] payloadData = firstRecord.getPayload();
+
+            // do something with the payload (data passed through your NDEF record)
+            // or process remaining NDEF message
+
+        }
+    }
+}
+</code></pre>
+
+<p>Note that <code>onResume()</code> is run whenever your activity becomes the foreground activity. Hence, it might be run multiple times for the same tag. THerefore, you could either use another life-cycle method or take some precautions that you do not parse the message multiple times.</p>
+
+<p>If you want to drop all further NFC events, once your activity is open, you could follow the approach that I described in response to <a href="http://stackoverflow.com/q/24059027/2425802">Android app enable NFC only for one Activity</a>. Hence, you would register for the foreground dispatch (which gives your activity priority in receiving NFC events, and you can then simply <em>drop</em> those events.</p>
+
+<pre><code>public void onResume() {
+    super.onResume();
+    NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(this);
+    PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, new Intent(this, getClass()).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), 0);
+    nfcAdapter.enableForegroundDispatch(this, pendingIntent, null, null);
+}
+
+public void onPause() {
+    super.onPause();
+    NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(this);
+    nfcAdapter.disableForegroundDispatch(this);
+}
+
+public void onNewIntent(Intent intent) {
+    if (NfcAdapter.ACTION_TAG_DISCOVERED.equals(intent.getAction())) {
+        // drop NFC events
+    }
+}
+</code></pre>
+
+<p>Finally, to create the NDEF message for your NFC tag, you would do something like this:</p>
+
+<pre><code>byte[] payload = ...  // generate your data payload
+NdefMessage msg = new NdefMessage(
+    NdefRecord.createExternal("example.com", "mycustomtype", payload)
+)
+</code></pre>
+
+<p>If you want to make sure that only your app is started by this tag (or if not installed Play Store is opened for your app), you could also add an AAR:</p>
+
+<pre><code>NdefMessage msg = new NdefMessage(
+    NdefRecord.createExternal("example.com", "mycustomtype", payload),
+    NdefRecord.createApplicationRecord("com.example.your.app.package")
+)
+</code></pre>

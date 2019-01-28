@@ -1,0 +1,75 @@
+<p>Short answer is "It's not possible do directly via OpenGL shader, but possible via renderscript"
+More details about "shader" approach: 
+Fragment shader code is bellow. Pay attention the 1 line must be defined to use texture3D</p>
+
+<pre><code>#extension GL_OES_texture_3D : enable 
+precision mediump float;
+uniform sampler2D u_texture0;
+uniform vec4 uColor;
+varying vec4 v_vertex;
+uniform sampler3D u_lut;
+void main() {
+    vec2 texcoord0 = v_vertex.xy;
+    vec4 rawColor=texture2D(u_texture0, texcoord0);
+    vec4 outColor = texture3D(u_lut, rawColor.rgb);
+    gl_FragColor = outColor; //rawColor;
+}
+</code></pre>
+
+<p>java code:</p>
+
+<pre><code>FloatBuffer texBuffer = ByteBuffer.allocateDirect(array.length * Float.SIZE).order(ByteOrder.nativeOrder()).asFloatBuffer();
+GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, iAxisSize, iAxisSize, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, texBuffer);
+</code></pre>
+
+<p>It works without compile or run time error but as result you'll see black screen. Sure you must use glTexImage3D function instead glTexImage2D, BUT it's not implemented in android SDK17 and you can't do anything with it.</p>
+
+<p>The good news: in Android SDK17 implemented ScriptIntrinsicLUT that can be used to apply 1D LUT to source image. Java code is bellow:</p>
+
+<pre><code>private RenderScript mRS;
+private Allocation mInAllocation;
+private Allocation mOutAllocation;
+private ScriptC_mono mScript;
+private ScriptIntrinsicLUT mIntrinsic;
+...
+mRS = RenderScript.create(this);
+mIntrinsic = ScriptIntrinsicLUT.create(mRS, Element.U8_4(mRS) );
+createLUT();
+mInAllocation = Allocation.createFromBitmap(mRS, mBitmapIn,
+                                                Allocation.MipmapControl.MIPMAP_NONE,
+                                                Allocation.USAGE_SCRIPT);
+mOutAllocation = Allocation.createTyped(mRS, mInAllocation.getType());
+mIntrinsic.forEach(mInAllocation, mOutAllocation);
+mOutAllocation.copyTo(mBitmapOut);
+...
+private void createLUT() {
+    for (int ct=0; ct &lt; 256; ct++) {
+        float f = ((float)ct) / 255.f;
+
+        float r = f;
+        if (r &lt; 0.5f) {
+            r = 4.0f * r * r * r;
+        } else {
+            r = 1.0f - r;
+            r = 1.0f - (4.0f * r * r * r);
+        }
+        mIntrinsic.setRed(ct, (int)(r * 255.f + 0.5f));
+
+        float g = f;
+        if (g &lt; 0.5f) {
+            g = 2.0f * g * g;
+        } else {
+            g = 1.0f - g;
+            g = 1.0f - (2.0f * g * g);
+        }
+        mIntrinsic.setGreen(ct, (int)(g * 255.f + 0.5f));
+
+        float b = f * 0.5f + 0.25f;
+        mIntrinsic.setBlue(ct, (int)(b * 255.f + 0.5f));
+    }
+}
+</code></pre>
+
+<p>More details about: 
+<a href="http://developer.android.com/reference/android/renderscript/ScriptIntrinsicLUT.html" rel="nofollow">http://developer.android.com/reference/android/renderscript/ScriptIntrinsicLUT.html</a>
+<a href="http://my.fit.edu/~vkepuska/ece5570/adt-bundle-windows-x86_64/sdk/sources/android-17/com/android/rs/image/CrossProcess.java" rel="nofollow">http://my.fit.edu/~vkepuska/ece5570/adt-bundle-windows-x86_64/sdk/sources/android-17/com/android/rs/image/CrossProcess.java</a></p>

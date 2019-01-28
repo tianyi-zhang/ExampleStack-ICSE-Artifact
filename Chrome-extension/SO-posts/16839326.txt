@@ -1,0 +1,107 @@
+<p>That's an interesting question.</p>
+
+<p>Google encourage you to switch to the new registration process :</p>
+
+<blockquote>
+  <p>An Android application running on a mobile device registers to receive messages by calling the GoogleCloudMessaging method register(senderID...). This method registers the application for GCM and returns the registration ID. This streamlined approach replaces the previous GCM registration process.</p>
+</blockquote>
+
+<p>The note that says <code>Google may periodically refresh the registration ID</code> only appears on the page that still shows the old registration process, so it's possible that this note is no longer relevant.</p>
+
+<p>If you want to be safe, you can still use the old registration process. Or you can use the new process, but have in addition the code that handles the <code>com.google.android.c2dm.intent.REGISTRATION</code> intent, in order to make sure you are covered if Google do decide to refresh the registration ID. </p>
+
+<p>That said, I never experienced such a refresh, and even when I did experience a change in the registration ID (usually as a result of sending a notification after un-installing the app and then re-installing it), the old registration ID still worked (resulting in a canonical registration ID sent in the response from Google), so no harm was done.</p>
+
+<p><strong>EDIT (06.06.2013) :</strong></p>
+
+<p>Google changed their <a href="http://code.google.com/p/gcm/source/browse/gcm-client/src/com/google/android/gcm/demo/app/DemoActivity.java?r=44e0469692d7d10a104cd689d3045a56971f90ce">Demo App</a> to use the new interface. They refresh the registration ID by setting an expiration date on the value persisted locally by the app. When the app starts, they load their locally stored registration id. If it is "expired" (which in the demo means it was received from GCM over 7 days ago), they call <code>gcm.register(senderID)</code> again.</p>
+
+<p>This doesn't handle the hypothetical scenario in which a registration ID is refreshed by Google for an app that hasn't been launched for a long time. In that case, the app won't be aware of the change, and neither will the 3rd party server.</p>
+
+<pre><code>public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+
+    setContentView(R.layout.main);
+    mDisplay = (TextView) findViewById(R.id.display);
+
+    context = getApplicationContext();
+    regid = getRegistrationId(context);
+
+    if (regid.length() == 0) {
+        registerBackground();
+    }
+    gcm = GoogleCloudMessaging.getInstance(this);
+}
+
+/**
+ * Gets the current registration id for application on GCM service.
+ * &lt;p&gt;
+ * If result is empty, the registration has failed.
+ *
+ * @return registration id, or empty string if the registration is not
+ *         complete.
+ */
+private String getRegistrationId(Context context) {
+    final SharedPreferences prefs = getGCMPreferences(context);
+    String registrationId = prefs.getString(PROPERTY_REG_ID, "");
+    if (registrationId.length() == 0) {
+        Log.v(TAG, "Registration not found.");
+        return "";
+    }
+    // check if app was updated; if so, it must clear registration id to
+    // avoid a race condition if GCM sends a message
+    int registeredVersion = prefs.getInt(PROPERTY_APP_VERSION, Integer.MIN_VALUE);
+    int currentVersion = getAppVersion(context);
+    if (registeredVersion != currentVersion || isRegistrationExpired()) {
+        Log.v(TAG, "App version changed or registration expired.");
+        return "";
+    }
+    return registrationId;
+}
+
+/**
+ * Checks if the registration has expired.
+ *
+ * &lt;p&gt;To avoid the scenario where the device sends the registration to the
+ * server but the server loses it, the app developer may choose to re-register
+ * after REGISTRATION_EXPIRY_TIME_MS.
+ *
+ * @return true if the registration has expired.
+ */
+private boolean isRegistrationExpired() {
+    final SharedPreferences prefs = getGCMPreferences(context);
+    // checks if the information is not stale
+    long expirationTime =
+            prefs.getLong(PROPERTY_ON_SERVER_EXPIRATION_TIME, -1);
+    return System.currentTimeMillis() &gt; expirationTime;
+}
+</code></pre>
+
+<p><strong>EDIT (08.14.2013) :</strong></p>
+
+<p>Google changed their <a href="http://code.google.com/p/gcm/source/browse/gcm-client/GcmClient/src/main/java/com/google/android/gcm/demo/app/DemoActivity.java">Demo App</a> again (two days ago). This time they removed the logic that considers the Registration ID to be expired after 7 days. Now they only refresh the Registration ID when a new version of the app it installed.</p>
+
+<p><strong>EDIT (04.24.2014) :</strong></p>
+
+<p>For the sake of completeness, here are the words of Costin Manolache (taken from <a href="http://stackoverflow.com/questions/17893117/gcm-registration-id-changed/17899972#17899972">here</a>), a Google developer involved in the development of GCM, on the matter :</p>
+
+<blockquote>
+  <p>The 'periodical' refresh never happened, and the registration refresh
+  is not included in the new GCM library.</p>
+  
+  <p>The only known cause for registration ID change is the old bug of apps
+  getting unregistered automatically if they receive a message while
+  getting upgraded. Until this bug is fixed apps still need to call
+  register() after upgrade, and so far the registration ID may change in
+  this case. Calling unregister() explicitly usually changes the
+  registration ID too.</p>
+  
+  <p>The suggestion/workaround is to generate your own random identifier,
+  saved as a shared preference for example. On each app upgrade you can
+  upload the identifier and the potentially new registration ID. This
+  may also help tracking and debugging the upgrade and registration
+  changes on server side.</p>
+</blockquote>
+
+<p>This explains the current implementation of the official GCM Demo application.
+<code>com.google.android.c2dm.intent.REGISTRATION</code> should never be handled when using the <code>GoogleCloudMessaging</code> class to register.</p>

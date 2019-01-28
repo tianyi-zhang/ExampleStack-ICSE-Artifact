@@ -1,0 +1,195 @@
+<p>None of the answers here are correct and suitable for animation. There are many problems in each solution so I wrote something that actually works with all gif files. For instance, this takes into account the actual width and height of the image instead of taking the width and height of the first frame assuming it will fill the entire canvas, no, unfortunately it's not that simple. Second, this doesn't leave any transparent pickles. Third, this takes into account disposal Methods. Fourth, this gives you delays between frames (* 10 if you want to use it in Thread.sleep()).</p>
+
+<pre><code>private ImageFrame[] readGif(InputStream stream) throws IOException{
+    ArrayList&lt;ImageFrame&gt; frames = new ArrayList&lt;ImageFrame&gt;(2);
+
+    ImageReader reader = (ImageReader) ImageIO.getImageReadersByFormatName("gif").next();
+    reader.setInput(ImageIO.createImageInputStream(stream));
+
+    int lastx = 0;
+    int lasty = 0;
+
+    int width = -1;
+    int height = -1;
+
+    IIOMetadata metadata = reader.getStreamMetadata();
+
+    Color backgroundColor = null;
+
+    if(metadata != null) {
+        IIOMetadataNode globalRoot = (IIOMetadataNode) metadata.getAsTree(metadata.getNativeMetadataFormatName());
+
+        NodeList globalColorTable = globalRoot.getElementsByTagName("GlobalColorTable");
+        NodeList globalScreeDescriptor = globalRoot.getElementsByTagName("LogicalScreenDescriptor");
+
+        if (globalScreeDescriptor != null &amp;&amp; globalScreeDescriptor.getLength() &gt; 0){
+            IIOMetadataNode screenDescriptor = (IIOMetadataNode) globalScreeDescriptor.item(0);
+
+            if (screenDescriptor != null){
+                width = Integer.parseInt(screenDescriptor.getAttribute("logicalScreenWidth"));
+                height = Integer.parseInt(screenDescriptor.getAttribute("logicalScreenHeight"));
+            }
+        }
+
+        if (globalColorTable != null &amp;&amp; globalColorTable.getLength() &gt; 0){
+            IIOMetadataNode colorTable = (IIOMetadataNode) globalColorTable.item(0);
+
+            if (colorTable != null) {
+                String bgIndex = colorTable.getAttribute("backgroundColorIndex");
+
+                IIOMetadataNode colorEntry = (IIOMetadataNode) colorTable.getFirstChild();
+                while (colorEntry != null) {
+                    if (colorEntry.getAttribute("index").equals(bgIndex)) {
+                        int red = Integer.parseInt(colorEntry.getAttribute("red"));
+                        int green = Integer.parseInt(colorEntry.getAttribute("green"));
+                        int blue = Integer.parseInt(colorEntry.getAttribute("blue"));
+
+                        backgroundColor = new Color(red, green, blue);
+                        break;
+                    }
+
+                    colorEntry = (IIOMetadataNode) colorEntry.getNextSibling();
+                }
+            }
+        }
+    }
+
+    BufferedImage master = null;
+    boolean hasBackround = false;
+
+    for (int frameIndex = 0;; frameIndex++) {
+        BufferedImage image;
+        try{
+            image = reader.read(frameIndex);
+        }catch (IndexOutOfBoundsException io){
+            break;
+        }
+
+        if (width == -1 || height == -1){
+            width = image.getWidth();
+            height = image.getHeight();
+        }
+
+        IIOMetadataNode root = (IIOMetadataNode) reader.getImageMetadata(frameIndex).getAsTree("javax_imageio_gif_image_1.0");
+        IIOMetadataNode gce = (IIOMetadataNode) root.getElementsByTagName("GraphicControlExtension").item(0);
+        NodeList children = root.getChildNodes();
+
+        int delay = Integer.valueOf(gce.getAttribute("delayTime"));
+
+        String disposal = gce.getAttribute("disposalMethod");
+
+        if (master == null){
+            master = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            master.createGraphics().setColor(backgroundColor);
+            master.createGraphics().fillRect(0, 0, master.getWidth(), master.getHeight());
+
+        hasBackround = image.getWidth() == width &amp;&amp; image.getHeight() == height;
+
+            master.createGraphics().drawImage(image, 0, 0, null);
+        }else{
+            int x = 0;
+            int y = 0;
+
+            for (int nodeIndex = 0; nodeIndex &lt; children.getLength(); nodeIndex++){
+                Node nodeItem = children.item(nodeIndex);
+
+                if (nodeItem.getNodeName().equals("ImageDescriptor")){
+                    NamedNodeMap map = nodeItem.getAttributes();
+
+                    x = Integer.valueOf(map.getNamedItem("imageLeftPosition").getNodeValue());
+                    y = Integer.valueOf(map.getNamedItem("imageTopPosition").getNodeValue());
+                }
+            }
+
+            if (disposal.equals("restoreToPrevious")){
+                BufferedImage from = null;
+                for (int i = frameIndex - 1; i &gt;= 0; i--){
+                    if (!frames.get(i).getDisposal().equals("restoreToPrevious") || frameIndex == 0){
+                        from = frames.get(i).getImage();
+                        break;
+                    }
+                }
+
+                {
+                    ColorModel model = from.getColorModel();
+                    boolean alpha = from.isAlphaPremultiplied();
+                    WritableRaster raster = from.copyData(null);
+                    master = new BufferedImage(model, raster, alpha, null);
+                }
+            }else if (disposal.equals("restoreToBackgroundColor") &amp;&amp; backgroundColor != null){
+                if (!hasBackround || frameIndex &gt; 1){
+                    master.createGraphics().fillRect(lastx, lasty, frames.get(frameIndex - 1).getWidth(), frames.get(frameIndex - 1).getHeight());
+                }
+            }
+            master.createGraphics().drawImage(image, x, y, null);
+
+            lastx = x;
+            lasty = y;
+        }
+
+        {
+            BufferedImage copy;
+
+            {
+                ColorModel model = master.getColorModel();
+                boolean alpha = master.isAlphaPremultiplied();
+                WritableRaster raster = master.copyData(null);
+                copy = new BufferedImage(model, raster, alpha, null);
+            }
+            frames.add(new ImageFrame(copy, delay, disposal, image.getWidth(), image.getHeight()));
+        }
+
+        master.flush();
+    }
+    reader.dispose();
+
+    return frames.toArray(new ImageFrame[frames.size()]);
+}
+</code></pre>
+
+<p>And the ImageFrame class:</p>
+
+<pre><code>import java.awt.image.BufferedImage;
+public class ImageFrame {
+    private final int delay;
+    private final BufferedImage image;
+    private final String disposal;
+    private final int width, height;
+
+    public ImageFrame (BufferedImage image, int delay, String disposal, int width, int height){
+        this.image = image;
+        this.delay = delay;
+        this.disposal = disposal;
+        this.width = width;
+        this.height = height;
+    }
+
+    public ImageFrame (BufferedImage image){
+        this.image = image;
+        this.delay = -1;
+        this.disposal = null;
+        this.width = -1;
+        this.height = -1;
+    }
+
+    public BufferedImage getImage() {
+        return image;
+    }
+
+    public int getDelay() {
+        return delay;
+    }
+
+    public String getDisposal() {
+        return disposal;
+    }
+
+    public int getWidth() {
+        return width;
+    }
+
+    public int getHeight() {
+            return height;
+    }
+}
+</code></pre>

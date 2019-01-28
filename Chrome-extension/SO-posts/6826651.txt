@@ -1,0 +1,69 @@
+<p>The problem is,
+your model object Mainsubjects had some associations (built by OneToMany, ManyToOne, etc.), Lists (PersistentBags), Sets or something (Collection) like this which're initialized lazily. It means, after initialization of result set, Mainsubjects doesn't point to an actual collection object, instead proxies.  While rendering, accessing this collections, hibernate tries to get the values from Database using proxies. But at this point there's no session open. For that reason you get this exception. </p>
+
+<p>You can either set your fetching strategy to EAGER (if you use annotations) like this:
+@OneToMany(fetch=FetchType.EAGER)</p>
+
+<p>In this method you must be aware, that you can not allow more than one PersistentBag initialized eagerly.</p>
+
+<p>or you can use OpenSessionInView pattern, which's a servlet filter opens a new session before your request's handeled by controller, and closes before your web application responses: </p>
+
+<pre><code>   public class DBSessionFilter implements Filter {
+        private static final Logger log = Logger.getLogger(DBSessionFilter.class);
+
+        private SessionFactory sf;
+
+        @Override
+        public void destroy() {
+            // TODO Auto-generated method stub
+
+        }
+
+        @Override
+        public void doFilter(ServletRequest request, ServletResponse response,
+                FilterChain chain) throws IOException, ServletException {
+            try {
+                log.debug("Starting a database transaction");
+                sf.getCurrentSession().beginTransaction();
+
+                // Call the next filter (continue request processing)
+                chain.doFilter(request, response);
+
+                // Commit and cleanup
+                log.debug("Committing the database transaction");
+                sf.getCurrentSession().getTransaction().commit();
+
+            } catch (StaleObjectStateException staleEx) {
+                log.error("This interceptor does not implement optimistic concurrency control!");
+                log.error("Your application will not work until you add compensation actions!");
+                // Rollback, close everything, possibly compensate for any permanent changes
+                // during the conversation, and finally restart business conversation. Maybe
+                // give the user of the application a chance to merge some of his work with
+                // fresh data... what you do here depends on your applications design.
+                throw staleEx;
+            } catch (Throwable ex) {
+                // Rollback only
+                ex.printStackTrace();
+                try {
+                    if (sf.getCurrentSession().getTransaction().isActive()) {
+                        log.debug("Trying to rollback database transaction after exception");
+                        sf.getCurrentSession().getTransaction().rollback();
+                    }
+                } catch (Throwable rbEx) {
+                    log.error("Could not rollback transaction after exception!", rbEx);
+                }
+
+                // Let others handle it... maybe another interceptor for exceptions?
+                throw new ServletException(ex);
+            }
+
+        }
+
+        @Override
+        public void init(FilterConfig arg0) throws ServletException {
+            log.debug("Initializing filter...");
+            log.debug("Obtaining SessionFactory from static HibernateUtil singleton");
+            sf = HibernateUtils.getSessionFactory();
+
+        }
+</code></pre>

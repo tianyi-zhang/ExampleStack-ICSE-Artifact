@@ -1,0 +1,202 @@
+<p>In Android you have to e aware of limited memory, so large images would't fit in memory and you will have OutOfMemory exceptions.</p>
+
+<p>The key is, after saving te image in internal storage, load it at the display resolution:</p>
+
+<p>First download te image, this should be done outside the UI thread, let <code>_url</code> an <code>URL</code> intance with the image addres and <code>_file</code> the String containing destination file :</p>
+
+<pre><code>URLConnection conn = _url.openConnection();
+        conn.connect();
+        InputStream is = conn.getInputStream();
+        boolean success = false; //track succesful operation
+
+        if( _file != null)
+        {
+            try
+            {
+                FileOutputStream fos = new FileOutputStream(_file);
+                byte data[] = new byte[4086]; //use 4086 bytes buffer
+
+                int count = 0;
+                while ((count = is.read(data)) != -1)
+                {
+                    fos.write(data, 0, count);//write de data
+                }
+
+                is.close();
+                fos.flush();
+                fos.close();
+
+                int len =  conn.getContentLength();
+                File f = new File( _file);//check fie length is correct
+                if( len== f.length())
+                {
+                    success = true;
+                }
+                else
+                {
+                    //error downloading, delete de file
+                    File tmp = new File( _file);
+                    if( tmp.exists())
+                    {
+                        tmp.delete();
+                    }
+                }
+            }catch (Exception e )
+            {
+                try
+                {
+                    e.printStackTrace();
+                    //delete file with errors
+                    File tmp = new File( _file);
+                    if( tmp.exists())
+                    {
+                        tmp.delete();
+                    }
+
+                }
+                catch (Exception ex)
+                {
+                    ex.printStackTrace();
+                }
+            }
+            finally
+            {
+                is.close();//cleanup
+
+            }
+</code></pre>
+
+<p>Then when you have to load the image at the desired resolution, here the key is use BitmapFactory to read bitmap info and get scaled bitmap:</p>
+
+<pre><code>public static Bitmap bitmapFromFile(int width, int height, String file)
+{
+
+    Bitmap bitmap = null;
+
+    final BitmapFactory.Options options = new BitmapFactory.Options();
+
+    if( height &gt;0 &amp;&amp; width &gt; 0 ) {
+        options.inJustDecodeBounds = true;//only read bitmap metadata
+        BitmapFactory.decodeFile(file,options);
+
+        // Calculate inSampleSize
+        options.inSampleSize = calculateInSampleSize(options, width, height);
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false;
+
+    }
+    try
+    {
+        bitmap = BitmapFactory.decodeFile(file, options);//decode scaled bitmap
+    }catch (Throwable t)
+    {
+        if( bitmap != null)
+        {
+            bitmap.recycle();//cleanup memory, very important!
+        }
+        return null;
+
+    }
+    return bitmap
+}
+</code></pre>
+
+<p>The final step is to calculate the scale factor:</p>
+
+<pre><code>public static int calculateInSampleSize(
+        BitmapFactory.Options options, int reqWidth, int reqHeight) {
+
+
+    // Raw height and width of image
+    final int height = options.outHeight;
+    final int width = options.outWidth;
+    int inSampleSize = 1;
+
+    if (height &gt; reqHeight || width &gt; reqWidth) {
+
+        final int halfHeight = height;
+        final int halfWidth = width;
+
+        // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+        // height and width larger than the requested height and width.
+        while ((couldShrink(halfWidth, reqWidth, inSampleSize)&amp;&amp;
+                couldShrink(halfHeight,reqHeight, inSampleSize))
+                //&amp;&amp;(halfHeight*halfWidth)/inSampleSize &gt; maxsize)
+                )
+        {
+            inSampleSize *= 2;
+        }
+
+    }
+
+    return inSampleSize;
+}
+private static  boolean couldShrink ( int dimension, int req_dimension, int divider)
+{
+    int actual = dimension / divider;
+    int next = dimension / (divider*2);
+
+    int next_error = Math.abs(next - req_dimension);
+    int actual_error = Math.abs(actual-req_dimension);
+
+    return next &gt; req_dimension ||
+            (actual &gt; req_dimension &amp;&amp; (next_error &lt; actual_error) )
+            ;
+}
+</code></pre>
+
+<p>That is if you want to do it by hand, I recommend you to use <a href="http://square.github.io/picasso/" rel="nofollow">Picasso</a> that will handle donwloading, disk caching and memory caching of your image:</p>
+
+<p>To load into a ImageView called <code>image</code> showing a backgroud (<code>R.drawable.img_bg</code>) while downloading :</p>
+
+<pre><code>Picasso.with(image.getContext())
+            .load(url).placeholder(R.drawable.img_bg).fit()
+                    .into(image, new Callback.EmptyCallback()
+                    {
+                        @Override
+                        public void onSuccess()
+                        {
+                            holder.progress.setVisibility(View.GONE); //hide progress bar
+                        }
+
+                        @Override
+                        public void onError()
+                        {
+                            holder.progress.setVisibility(View.GONE); //hide progress bar
+                            //do whatever you design to show error
+                        }
+                    });
+</code></pre>
+
+<p>to handle yourself a bitmap:</p>
+
+<pre><code>//first declare a target
+_target = new Target()
+    {
+        @Override
+        public void onBitmapLoaded(Bitmap bitmap, Picasso.LoadedFrom from)
+        {
+            //handle your bitmap (store it and use it on you canvas
+        }
+
+        @Override
+        public void onBitmapFailed(Drawable errorDrawable)
+        {
+            //handle your fail state
+
+        }
+
+        @Override
+        public void onPrepareLoad(Drawable placeHolderDrawable)
+        {//for example for drawing a placeholder while downloading
+        }
+    };
+</code></pre>
+
+<p>Now you just have to load and resize your image:    </p>
+
+<pre><code>Picasso.with(context).load(url).resize(192, 192).centerCrop().into(_target);
+</code></pre>
+
+<p>Hope that helps.</p>

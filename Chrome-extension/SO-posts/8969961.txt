@@ -1,0 +1,102 @@
+<p>public enum BitmapLoading {
+    INSTANCE;</p>
+
+<pre><code>private final Map&lt;String, SoftReference&lt;Bitmap&gt;&gt; cache;
+private final ExecutorService pool;
+private Map&lt;ImageView, String&gt; imageViews = Collections.synchronizedMap(new WeakHashMap&lt;ImageView, String&gt;());
+private Bitmap placeholder;
+
+BitmapLoading() {
+    cache = new HashMap&lt;String, SoftReference&lt;Bitmap&gt;&gt;();
+    pool = Executors.newFixedThreadPool(5);
+}
+
+public void setPlaceholder(Bitmap bmp) {
+    try {
+        placeholder = bmp;
+    } catch (OutOfMemoryError e) {
+        placeholder.recycle();
+        bmp.recycle();
+        placeholder = null;
+        bmp = null;
+    }
+}
+
+public Bitmap getBitmapFromCache(String url) {
+    if (cache.containsKey(url)) {
+        return cache.get(url).get();
+    }
+    return null;
+}
+
+public void queueJob(final String url, final ImageView imageView,final int width, final int height) {
+    /* Create handler in UI thread. */
+    final Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            String tag = imageViews.get(imageView);
+            if (tag != null &amp;&amp; tag.equals(url)) {
+                if (msg.obj != null) {
+                    imageView.setImageBitmap((Bitmap) msg.obj);
+                } else {
+                    imageView.setImageBitmap(placeholder);
+                    Log.d(null, "fail " + url);
+                }
+            }
+        }
+    };
+    pool.submit(new Runnable() {
+        @Override
+        public void run() {
+            Bitmap bmp = null;
+            try{
+                bmp = downloadBitmap(url, width, height);
+                Message message = Message.obtain();
+                message.obj = bmp;
+                handler.sendMessage(message);
+            }catch (OutOfMemoryError e) {
+                bmp.recycle();
+                bmp = null;
+            }
+        }
+    });
+}
+
+public void loadBitmap(final String url, final ImageView imageView,final int width, final int height) {
+    imageViews.put(imageView, url);
+    Bitmap bitmap = null ;
+    try {
+        bitmap = getBitmapFromCache(url);
+        if (bitmap != null) {
+            imageView.setImageBitmap(bitmap);
+        } else {
+            imageView.setImageBitmap(placeholder);
+            queueJob(url, imageView, width, height);
+        }
+    } catch (OutOfMemoryError e) {
+        bitmap.recycle();
+        bitmap = null;
+        System.gc();
+    }
+}
+
+private Bitmap downloadBitmap(String url, int width, int height) {
+    Bitmap bitmap =null;
+    try {
+        bitmap = BitmapFactory.decodeStream((InputStream) new URL(url).getContent());
+        bitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
+        cache.put(url, new SoftReference&lt;Bitmap&gt;(bitmap));
+        return bitmap;
+    }catch (OutOfMemoryError e) {
+        bitmap.recycle();
+        bitmap = null;
+        System.gc();
+    } 
+    catch (MalformedURLException e) {
+    } catch (IOException e) {
+    }
+    return null;
+}
+</code></pre>
+
+<p>}</p>

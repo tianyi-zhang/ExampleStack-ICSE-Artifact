@@ -1,0 +1,134 @@
+<p>I had to do something similar a while back. I had a certificate file and I had to figure out a way to load it in and use it for an SSL connection. Hopefully what I did will help you out.</p>
+
+<p>First I had to create a trust manager:</p>
+
+<pre><code>public class MyX509TrustManager implements X509TrustManager {
+
+    X509TrustManager pkixTrustManager;
+
+    MyX509TrustManager() throws Exception {
+
+        String certFile = "/certificates/MyCertFile.cer";
+
+        Certificate myCert = CertificateFactory.getInstance("X509").generateCertificate(this.getClass().getResourceAsStream(valicertFile));
+
+        KeyStore keyStore = KeyStore.getInstance("JKS");
+        keyStore.load(null, "".toCharArray());
+        keyStore.setCertificateEntry("myCert", myCert);
+
+        TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance("PKIX");
+        trustManagerFactory.init(keyStore);
+
+        TrustManager trustManagers[] = trustManagerFactory.getTrustManagers();
+
+        for(TrustManager trustManager : trustManagers) {
+            if(trustManager instanceof X509TrustManager) {
+                pkixTrustManager = (X509TrustManager) trustManager;
+                return;
+            }
+        }
+
+        throw new Exception("Couldn't initialize");
+    }
+
+    public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+        pkixTrustManager.checkServerTrusted(chain, authType);
+    }
+
+    public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+        pkixTrustManager.checkServerTrusted(chain, authType);
+    }
+
+    public X509Certificate[] getAcceptedIssuers() {
+        return pkixTrustManager.getAcceptedIssuers();
+    }
+}
+</code></pre>
+
+<p>After that I had to create a socket factory that used my trust manager:</p>
+
+<pre><code>public class MySSLProtocolSocketFactory implements SecureProtocolSocketFactory {
+
+    private SSLContext sslContext = null;
+
+    public MySSLProtocolSocketFactory() {
+        super();
+    }
+
+    private static SSLContext createMySSLContext() {
+        try {
+            MyX509TrustManager myX509TrustManager = new MyX509TrustManager();
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, new MyX509TrustManager[] { myX509TrustManager}, null);
+            return context;
+        }
+
+        catch(Exception e) {
+            Log.error(Log.Context.Net, e);
+            return null;
+        }
+    }
+
+    private SSLContext getSSLContext() {
+        if(this.sslContext == null) {
+            this.sslContext = createMySSLContext();
+        }
+
+        return this.sslContext;
+    }
+
+    public Socket createSocket(String host, int port, InetAddress clientHost, int clientPort) throws IOException {
+        return getSSLContext().getSocketFactory().createSocket(host, port, clientHost, clientPort);
+    }
+
+    public Socket createSocket(final String host, final int port, final InetAddress localAddress, final int localPort, final HttpConnectionParams params) throws IOException {
+        if(params == null) {
+            throw new IllegalArgumentException("Parameters may not be null");
+        }
+
+        int timeout = params.getConnectionTimeout();
+        SocketFactory socketFactory = getSSLContext().getSocketFactory();
+
+        if(timeout == 0) {
+            return socketFactory.createSocket(host, port, localAddress, localPort);
+        }
+
+        else {
+            Socket socket = socketFactory.createSocket();
+            SocketAddress localAddr = new InetSocketAddress(localAddress, localPort);
+            SocketAddress remoteAddr = new InetSocketAddress(host, port);
+            socket.bind(localAddr);
+            socket.connect(remoteAddr, timeout);
+            return socket;
+        }
+    }
+
+    public Socket createSocket(String host, int port) throws IOException {
+        return getSSLContext().getSocketFactory().createSocket(host, port);
+    }
+
+    public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException {
+        return getSSLContext().getSocketFactory().createSocket(socket, host, port, autoClose);
+    }
+
+    public boolean equals(Object obj) {
+        return ((obj != null) &amp;&amp; obj.getClass().equals(MySSLProtocolSocketFactory.class));
+    }
+
+    public int hashCode() {
+        return MySSLProtocolSocketFactory.class.hashCode();
+    }
+}
+</code></pre>
+
+<p>Then I used that socket factory to send my POST:</p>
+
+<pre><code>Protocol.registerProtocol("myhttps", new Protocol("myhttps", new MySSLProtocolSocketFactory(), 443));
+
+PostMethod postMethod = new PostMethod("myhttps://some.url.here");
+
+HttpClient client = new HttpClient();
+int status = client.executeMethod(postMethod);
+</code></pre>
+
+<p>The only thing I couldn't figure out was how to simply add the certificate file to the regular keystore. All the example source code I found during my research pointed to creating a socket factor and then registering a protocol with that socket factory. Perhaps there is a way to simply use the socket factory to make a connection without registering a protocol; I haven't investigated that thoroughly. In my particular situation, creating a specific protocol was necessary. Hopefully this will get your further along the way. I admit it seems a bit roundabout; I felt the same way when I did it initially. But this was the only way I got it to work. Maybe other people have a better solution.</p>

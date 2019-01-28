@@ -1,0 +1,294 @@
+<p>Well if you put the database inside the jar like this:</p>
+
+<pre><code>&lt;property name="url" value="jdbc:hsqldb:res:/data/images" /&gt;
+</code></pre>
+
+<p>You only can use it as read only, if you try to insert or modify the database if will fail.</p>
+
+<p>One solution is to put a listener in the web.xml so when the application start it will ce initialize with the root path of the application web.</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;web-app version="2.4" xmlns="http://java.sun.com/xml/ns/j2ee" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee http://java.sun.com/xml/ns/j2ee/web-app_2_4.xsd"&gt;
+    &lt;display-name&gt;maf&lt;/display-name&gt;
+    &lt;session-config&gt;
+        &lt;session-timeout&gt;
+            30
+        &lt;/session-timeout&gt;
+    &lt;/session-config&gt;
+    &lt;welcome-file-list&gt;
+        &lt;welcome-file&gt;index.jsp&lt;/welcome-file&gt;
+    &lt;/welcome-file-list&gt;
+
+
+     &lt;!--This is to get root of the aplication--&gt;
+
+    &lt;listener&gt;
+        &lt;listener-class&gt;
+   org.atoms.HsqlDatabaseListener
+        &lt;/listener-class&gt;
+    &lt;/listener&gt;
+
+
+       &lt;!--Este listener se encarga de inicializar todo el contenedor de Spring y mantener una variable en el
+  ServletContext que apunta a dicho contenedor --&gt;
+
+    &lt;listener&gt;
+        &lt;listener-class&gt;
+   org.springframework.web.context.ContextLoaderListener
+        &lt;/listener-class&gt;
+    &lt;/listener&gt;
+
+
+
+
+&lt;/web-app&gt;
+</code></pre>
+
+<p>The listener:</p>
+
+<pre><code>package org.atoms;
+
+import javax.servlet.ServletContext;
+import javax.servlet.ServletContextEvent;
+import javax.servlet.ServletContextListener;
+
+
+/**
+ *
+ * @author atomsfat
+ */
+public class HsqlDatabaseListener implements ServletContextListener {
+
+    private ServletContext context = null;
+
+    public void contextInitialized(ServletContextEvent event) {
+        context = event.getServletContext();
+
+        String prefix = event.getServletContext().getRealPath("/");
+
+        System.out.println("database root " + prefix);
+        com.atoms.HsqlDatabasePathResolver.getInstance(prefix);
+
+
+    }
+
+    public void contextDestroyed(ServletContextEvent event) {
+        context = event.getServletContext();
+
+    }
+</code></pre>
+
+<p>The other class:</p>
+
+<pre><code>package com.atoms;
+
+
+/**
+ *
+ * @author atomsfat
+ */
+public class HsqlDatabasePathResolver {
+
+
+    private static HsqlDatabasePathResolver instance ;
+    private static String applicationPath = "";
+
+    private HsqlDatabasePathResolver() {
+    }
+
+      /** Get Instance.
+   */
+    static public synchronized HsqlDatabasePathResolver getInstance(String applicationPath) {
+
+        if (instance == null) {
+
+            HsqlDatabasePathResolver.applicationPath =
+                    HsqlDatabasePathResolver.normalizePath(applicationPath);
+            instance = new HsqlDatabasePathResolver();
+
+
+
+            System.out.println("Inizalizando path : " + HsqlDatabasePathResolver.applicationPath);
+
+        }
+        return instance;
+    }
+
+    public  String getApplicationPath() {
+        return applicationPath;
+    }
+
+
+
+      public  String getUrlDatabase(String urlDatabase) {
+
+
+         return HsqlDatabasePathResolver.replaceAll(urlDatabase,"{apppath}", applicationPath);
+    }
+
+
+      /**
+
+         *
+         * replace the "\" character by "/" and remove relative paths
+         *
+         * @param path
+         * @return
+         */
+        public static String normalizePath(String path) {
+            if (path == null) {
+                return null;
+            }
+            String normalized = path;
+            if (normalized.equals("/.")) {
+                return "/";
+            }
+            if (normalized.indexOf('\\') &gt;= 0) {
+                normalized = normalized.replace('\\', '/');
+            }
+            if (!normalized.startsWith("/") &amp;&amp; normalized.indexOf(':') &lt; 0) {
+                normalized = "/" + normalized;
+            }
+            do {
+                int index = normalized.indexOf("//");
+                if (index &lt; 0) {
+                    break;
+                }
+                normalized = normalized.substring(0, index) + normalized.substring(index + 1);
+            } while (true);
+            do {
+                int index = normalized.indexOf("/./");
+                if (index &lt; 0) {
+                    break;
+                }
+                normalized = normalized.substring(0, index) + normalized.substring(index + 2);
+            } while (true);
+            do {
+                int index = normalized.indexOf("/../");
+                if (index &gt;= 0) {
+                    if (index == 0) {
+                        return null;
+                    }
+                    int index2 = normalized.lastIndexOf('/', index - 1);
+                    normalized = normalized.substring(0, index2) + normalized.substring(index + 3);
+                } else {
+                    return normalized;
+                }
+            } while (true);
+        }
+
+
+
+
+        public static String replaceAll(String str, String match, String replace) {
+            if (match == null || match.length() == 0) {
+                return str;
+            }
+            if (replace == null) {
+                replace = "";
+            }
+            if(match.equals(replace))return str;
+            StringBuffer ret=new StringBuffer();
+            int i = str.indexOf(match);
+            int y = 0;
+            while (i &gt;= 0)
+            {
+                //System.out.println("i:"+i+" y:"+y);
+                ret.append(str.substring(y, i));
+                ret.append(replace);
+                //str = str.substring(y, i) + replace + str.substring(i + match.length());
+                y = i + match.length();
+                i = str.indexOf(match,y);
+            }
+            ret.append(str.substring(y));
+            return ret.toString();
+        }
+
+
+
+}
+</code></pre>
+
+<p>And this the configuration that I use in spring:</p>
+
+<pre><code>    &lt;?xml version="1.0" encoding="UTF-8"?&gt;
+    &lt;beans xmlns="http://www.springframework.org/schema/beans"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+     xmlns:jee="http://www.springframework.org/schema/jee"
+     xsi:schemaLocation="http://www.springframework.org/schema/beans
+               http://www.springframework.org/schema/beans/spring-beans-2.5.xsd
+               http://www.springframework.org/schema/context
+               http://www.springframework.org/schema/context/spring-context-2.5.xsd
+               http://www.springframework.org/schema/jee http://www.springframework.org/schema/jee/spring-jee-2.5.xsd"&gt;
+
+     &lt;!-- La definición del Datasource --&gt;
+        &lt;bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource" lazy-init="true"
+      destroy-method="close"&gt;
+            &lt;property name="driverClassName" value="org.hsqldb.jdbcDriver" /&gt;
+
+          &lt;property name="url"&gt;
+               &lt;ref bean="dataBaseUrl"/&gt;
+           &lt;/property&gt;
+
+            &lt;property name="username" value="sa" /&gt;
+            &lt;property name="password" value="" /&gt;
+        &lt;/bean&gt;
+
+     &lt;!-- La definición del Factory de Session con Anotaciones --&gt;
+        &lt;bean id="sessionFactory"
+      class="org.springframework.orm.hibernate3.LocalSessionFactoryBean" lazy-init="false"&gt;
+            &lt;property name="dataSource" ref="dataSource" /&gt;
+            &lt;property name="hibernateProperties"&gt;
+                &lt;props&gt;
+                    &lt;prop key="hibernate.dialect"&gt;
+         org.hibernate.dialect.HSQLDialect
+                    &lt;/prop&gt;
+                    &lt;prop key="hibernate.show_sql"&gt;true&lt;/prop&gt;
+                    &lt;prop key="hibernate.format_sql"&gt;true&lt;/prop&gt;
+                &lt;/props&gt;
+            &lt;/property&gt;
+            &lt;property name="mappingResources"&gt;
+                &lt;list&gt;
+                    &lt;value&gt;Atoms.hbm.xml&lt;/value&gt;
+                &lt;/list&gt;
+
+            &lt;/property&gt;
+        &lt;/bean&gt;
+     &lt;!--HibernaTemplate--&gt;
+        &lt;bean id="hibernateTemplate" class="org.springframework.orm.hibernate3.HibernateTemplate"&gt;
+            &lt;property name="sessionFactory"&gt;
+                &lt;ref bean="sessionFactory" /&gt;
+            &lt;/property&gt;
+        &lt;/bean&gt;
+     &lt;!-- Definición de los DAO`s --&gt;
+
+        &lt;bean id="ipBlancaDao" class="org.atoms.impl.AtomsDaoHibernateImpl"&gt;
+            &lt;property name="hibernateTemplate" ref="hibernateTemplate" /&gt;
+        &lt;/bean&gt;
+
+
+        &lt;!--If your are not running in Web this will initialize with the directory from    the  process was started note that this classes is a singleton so if you are running in web the listener already have initialize the class with the path of the class--&gt;
+
+
+        &lt;bean class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer"/&gt;
+
+
+     &lt;bean id="hsqlDatabasePathResolver" class="com.atoms.HsqlDatabasePathResolver" factory-method="getInstance" lazy-init="false"&gt;
+            &lt;constructor-arg&gt;
+                &lt;value&gt;${user.dir}&lt;/value&gt;
+            &lt;/constructor-arg&gt;
+        &lt;/bean&gt;
+
+   &lt;!--This bean just replace {apppath} whit the absolute path--&gt;
+
+        &lt;bean id="dataBaseUrl" class="java.lang.String" factory-bean="hsqlDatabasePathResolver" lazy-init="false"
+                      factory-method="getUrlDatabase"&gt;
+            &lt;constructor-arg&gt;
+                &lt;value&gt;jdbc:hsqldb:mem:{apppath}/WEB-INF/data/maf&lt;/value&gt;
+            &lt;/constructor-arg&gt;
+
+        &lt;/bean&gt;  
+    &lt;/beans&gt;
+</code></pre>
+
+<p>And yes this work but is a mess , I think that the solution is the listener, with it you can get the path of the appWeb. if somebody can make this simple, please post the answer.</p>

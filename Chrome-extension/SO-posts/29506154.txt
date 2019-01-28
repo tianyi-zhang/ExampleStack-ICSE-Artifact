@@ -1,0 +1,410 @@
+<p>I've had to repeat something like this a number of times over the last few months, using a verity of different UI approaches (hiding a field till the user typed and then making it visible via a <code>BorderLayout</code>; a static field on the screen; etc...) and was attempting to build a more concise and re-usable library mechanism which would allow me to configure any <code>JTable</code> with easy filterable support.</p>
+
+<p>One of the reasons I use a <code>JTextField</code> over a <code>JLabel</code>, is it handles user input better then anything you or I might be able to produce (in a reasonable amount of time), but that's me ;)</p>
+
+<p>Personally, I prefer not to open any new windows, as this can introduce other issues, like focus related issues as well as the window been hidden behind the current window on some platforms, etc.</p>
+
+<p>Equally, the few times I've "unhidden" a field, the layout is forced to change, which can look ugly and there isn't always a need to have the filter field visible all the time.  Instead, what I was trying to achieve was a "popup" field which appeared inline with with table itself, but would be capable of been made visible anywhere within the viewable area of the parent <code>JScrollPane</code>...</p>
+
+<p>Now, this approach may not suit your needs, but it's what I've been work towards...</p>
+
+<p><img src="http://i.stack.imgur.com/k7F5E.gif" alt="Filter"></p>
+
+<p>Again, the core concept was to provide functionality that didn't require me to extend a <code>JTable</code>, but could wrapped around an existing <code>JTable</code>.  The core functionality is provided by a utility class and is managed through two <code>interfaces</code> which provide externalized control over some of the core functionality (how the filter is applied to the <code>JTable</code> and how a cancel operation works).  The utility class also provides the means to configure what keyboard action will cancel the filter field</p>
+
+<p>The <code>JTextField</code> which is displayed, is actually added to the <code>JTable</code> itself.  I had thought about trying to force a "offset" into the view, so all the rows were pushed down, but the only way I know how to do this is to extend the <code>JTable</code> itself, which is what I was trying to avoid</p>
+
+<pre><code>public class TableUtilities {
+
+    private static WeakHashMap&lt;JTable, FilterSupport&gt; mapFilters = new WeakHashMap(25);
+
+    public static void installFilterSupport(JTable table, IFilterListener listener, KeyStroke escapeKey) {
+        FilterSupport support = new FilterSupport(table, listener, escapeKey);
+        mapFilters.put(table, support);
+    }
+
+    public static void uninstallFilterSupport(JTable table) {
+        FilterSupport support = mapFilters.remove(table);
+        if (support != null) {
+            support.uninstall();
+        }
+    }
+
+    protected static class FilterSupport implements IFilterSupport {
+
+        private JViewport viewport;
+        private JTable table;
+        private JTextField searchField;
+        private Timer filterTimer;
+
+        private HierarchyListener hierarchyListener;
+        private ChangeListener changeListener;
+        private IFilterListener filterListener;
+
+        public FilterSupport(JTable table, IFilterListener listener, KeyStroke escapeKey) {
+            this.table = table;
+            this.filterListener = listener;
+            table.setFillsViewportHeight(true);
+
+            hierarchyListener = new HierarchyListener() {
+                @Override
+                public void hierarchyChanged(HierarchyEvent e) {
+                    long flags = e.getChangeFlags();
+                    if ((flags &amp; HierarchyEvent.PARENT_CHANGED) != 0) {
+                        if (e.getChanged().equals(table)) {
+                            JTable table = (JTable) e.getChanged();
+                            if (e.getChangedParent() instanceof JViewport) {
+                                if (table.getParent() == null) {
+                                    uninstall();
+                                } else {
+                                    install();
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            changeListener = new ChangeListener() {
+                @Override
+                public void stateChanged(ChangeEvent e) {
+                    JViewport viewport = (JViewport) e.getSource();
+                    Rectangle viewRect = viewport.getViewRect();
+                    searchField.setSize(searchField.getPreferredSize());
+                    int x = (viewRect.x + viewRect.width) - searchField.getWidth();
+                    int y = viewRect.y;
+                    searchField.setLocation(x, y);
+                }
+            };
+
+            table.addHierarchyListener(hierarchyListener);
+
+            searchField = new JTextField(20);
+            searchField.setVisible(false);
+            searchField.getDocument().addDocumentListener(new DocumentListener() {
+
+                @Override
+                public void insertUpdate(DocumentEvent e) {
+                    filterChanged();
+                }
+
+                @Override
+                public void removeUpdate(DocumentEvent e) {
+                    filterChanged();
+                }
+
+                @Override
+                public void changedUpdate(DocumentEvent e) {
+                    filterChanged();
+                }
+            });
+
+            searchField.addFocusListener(new FocusAdapter() {
+                @Override
+                public void focusLost(FocusEvent e) {
+                    cancelField();
+                }
+            });
+
+            filterTimer = new Timer(250, new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    applyFilter();
+                }
+            });
+            filterTimer.setRepeats(false);
+
+            table.addKeyListener(new KeyAdapter() {
+
+                @Override
+                public void keyTyped(KeyEvent e) {
+                    if (Character.isLetterOrDigit(e.getKeyChar())) {
+                        searchField.setVisible(true);
+                        table.revalidate();
+                        table.repaint();
+                        // ?? Should this maintain the current filter value?
+                        searchField.setText(null);
+                        searchField.requestFocusInWindow();
+                        SwingUtilities.invokeLater(new Runnable() {
+                            @Override
+                            public void run() {
+                                searchField.dispatchEvent(e);
+                            }
+                        });
+
+                    }
+                }
+
+            });
+
+            Action escapeAction = new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    cancelField();
+                }
+            };
+
+            bindKeyStrokeTo(table, JComponent.WHEN_FOCUSED, "clear", escapeKey, escapeAction);
+            bindKeyStrokeTo(searchField, JComponent.WHEN_FOCUSED, "clear", escapeKey, escapeAction);
+
+        }
+
+        protected void cancelField() {
+            searchField.setVisible(false);
+            table.requestFocusInWindow();
+            table.revalidate();
+            table.repaint();
+            if (filterListener != null) {
+                filterListener.filterCancelled(table, this);
+            }
+        }
+
+        public void filterChanged() {
+            filterTimer.restart();
+        }
+
+        protected void applyFilter() {
+
+            if (filterListener != null) {
+                filterListener.filterChanged(table, searchField.getText());
+            }
+
+        }
+
+        protected void uninstall() {
+            filterTimer.stop();
+            if (viewport != null) {
+                if (changeListener != null) {
+                    viewport.removeChangeListener(changeListener);
+                }
+                table.remove(searchField);
+                searchField.setVisible(false);
+            }
+            viewport = null;
+        }
+
+        protected void install() {
+            if (viewport != null) {
+                uninstall();
+            }
+            Container parent = table.getParent();
+            if (parent instanceof JViewport) {
+                viewport = (JViewport) parent;
+                viewport.addChangeListener(changeListener);
+                table.add(searchField);
+            }
+        }
+
+        @Override
+        public String getFilter() {
+            return searchField.getText();
+        }
+
+        @Override
+        public void setFilter(String filter) {
+            searchField.setText(filter);
+        }
+
+    }
+
+    public static void bindKeyStrokeTo(JComponent parent, int condition, String name, KeyStroke keyStroke, Action action) {
+        InputMap im = parent.getInputMap(condition);
+        ActionMap am = parent.getActionMap();
+
+        im.put(keyStroke, name);
+        am.put(name, action);
+    }
+
+    public static interface IFilterSupport {
+
+        public String getFilter();
+
+        public void setFilter(String filter);
+
+    }
+
+    public static interface IFilterListener {
+
+        public void filterChanged(JTable table, String filter);
+
+        public void filterCancelled(JTable table, IFilterSupport support);
+    }
+
+}
+</code></pre>
+
+<p>And my test class...</p>
+
+<pre><code>import java.awt.BorderLayout;
+import java.awt.Container;
+import java.awt.EventQueue;
+import java.awt.Rectangle;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.HierarchyEvent;
+import java.awt.event.HierarchyListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.util.WeakHashMap;
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.ActionMap;
+import javax.swing.InputMap;
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.JTextField;
+import javax.swing.JViewport;
+import javax.swing.KeyStroke;
+import javax.swing.RowFilter;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableRowSorter;
+
+public class TestSearchTable {
+
+    public static void main(String[] args) {
+        new TestSearchTable();
+    }
+
+    public TestSearchTable() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                    ex.printStackTrace();
+                }
+
+                JFrame frame = new JFrame("Testing");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.add(new TestPane());
+                frame.pack();
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public class TestPane extends JPanel {
+
+        public TestPane() {
+            setLayout(new BorderLayout());
+
+            DefaultTableModel model = new DefaultTableModel(
+                            new Object[][]{
+                                {"Tiana", "Wilmer"},
+                                {"Twana", "Wingate"},
+                                {"Cody", "Baumgarten"},
+                                {"Venus", "Espy"},
+                                {"Savanna", "Buckmaster"},
+                                {"Adrien", "Edgecomb"},
+                                {"Lauretta", "Sassman"},
+                                {"Vivienne", "Glasco"},
+                                {"Cassy", "Merryman"},
+                                {"Mitchel", "Jarvie"},
+                                {"Kelsi", "Casebeer"},
+                                {"Rosy", "Rizzi"},
+                                {"Bernice", "Capote"},
+                                {"Tijuana", "Launius"},
+                                {"Jeffie", "Crownover"},
+                                {"Selena", "Leavy"},
+                                {"Damon", "Tulloch"},
+                                {"Norris", "Devitt"},
+                                {"Cecil", "Burgio"},
+                                {"Queen", "Mechling"}},
+                            new Object[]{"First Name", "Last name"}
+            ) {
+
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+
+            };
+
+            JTable table = new JTable(model);
+            table.setAutoCreateRowSorter(true);
+            TableUtilities.installFilterSupport(table,
+                            new TableUtilities.IFilterListener() {
+                                @Override
+                                public void filterChanged(JTable table, String filter) {
+                                    TableRowSorter sorter = (TableRowSorter) table.getRowSorter();
+                                    if (filter == null || filter.trim().length() == 0) {
+                                        filter = "*";
+                                    }
+
+                                    if (!filter.startsWith("*") || !filter.endsWith("*")) {
+                                        filter = "*" + filter + "*";
+                                    }
+                                    filter = wildcardToRegex(filter);
+                                    filter = "(?i)" + filter;
+                                    sorter.setRowFilter(RowFilter.regexFilter(filter));
+                                }
+
+                                @Override
+                                public void filterCancelled(JTable table, TableUtilities.IFilterSupport support) {
+//                                  support.setFilter(null);
+                                }
+                            },
+                            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
+            add(new JScrollPane(table));
+        }
+
+    }
+
+    public static String wildcardToRegex(String wildcard) {
+
+        StringBuilder s = new StringBuilder(wildcard.length());
+        s.append('^');
+
+        for (int i = 0, is = wildcard.length(); i &lt; is; i++) {
+
+            char c = wildcard.charAt(i);
+            switch (c) {
+                case '*':
+                    s.append(".*");
+                    break;
+                case '?':
+                    s.append(".");
+                    break;
+                // escape special regexp-characters
+                case '(':
+                case ')':
+                case '[':
+                case ']':
+                case '$':
+                case '^':
+                case '.':
+                case '{':
+                case '}':
+                case '|':
+                case '\\':
+                    s.append("\\");
+                    s.append(c);
+                    break;
+                default:
+                    s.append(c);
+                    break;
+            }
+
+        }
+
+        s.append('$');
+        return (s.toString());
+
+    }
+
+}
+</code></pre>

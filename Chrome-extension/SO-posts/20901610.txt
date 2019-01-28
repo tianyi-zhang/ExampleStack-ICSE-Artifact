@@ -1,0 +1,312 @@
+<p>Check this out .. I believe U are capable of showing Google Map v2</p>
+
+<p>Check out "decodePoly" and "drawPath" method in AsyncTask </p>
+
+<p>Main Imphasis in "drawPath" ..</p>
+
+<pre><code>PolylineOptions options = new PolylineOptions().width(5).color(Color.BLUE).geodesic(true);
+            for (int z = 0; z &lt; list.size(); z++) {
+                LatLng point = list.get(z);
+                options.add(point);
+            }
+            line = myMap.addPolyline(options);
+</code></pre>
+
+<p>Complete class for your reference ..</p>
+
+<pre><code>package com.example.androidhackergooglemap;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Marker;
+import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
+
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.support.v4.app.FragmentActivity;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Toast;
+
+public class MainActivity extends FragmentActivity implements OnClickListener {
+
+    private GoogleMap myMap;
+    Polyline line;
+    Context context;
+
+    Location location;
+    boolean check_provider_enabled = false;
+
+    // Static LatLng
+    LatLng startLatLng = new LatLng(30.707104, 76.690749);
+    LatLng endLatLng = new LatLng(30.721419, 76.730017);
+
+    public void onCreate(Bundle bd) {
+        super.onCreate(bd);
+        setContentView(R.layout.activity_main);
+        context = MainActivity.this;
+
+        // GoogleMap myMap
+        myMap = ((SupportMapFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.map)).getMap();
+        myMap.setMyLocationEnabled(true);
+        myMap.moveCamera(CameraUpdateFactory.newLatLng(startLatLng));
+        myMap.animateCamera(CameraUpdateFactory.zoomTo(12));
+
+        LocationManager service = (LocationManager) getSystemService(LOCATION_SERVICE);
+        boolean enabled = service.isProviderEnabled(LocationManager.GPS_PROVIDER);
+        location = service.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+
+        // check if enabled and if not send user to the GSP settings
+        // Better solution would be to display a dialog and suggesting to 
+        // go to the settings
+        if (!enabled) {
+          /*Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+          startActivity(intent);*/
+            Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            startActivity(intent);
+            Toast.makeText(getApplicationContext(), "Enable GPS servcies to use this app.", Toast.LENGTH_LONG).show();
+        } else{
+
+
+            try{
+
+                String urlTopass = makeURL(startLatLng.latitude,
+                        startLatLng.longitude, endLatLng.latitude,
+                        endLatLng.longitude);
+                new connectAsyncTask(urlTopass).execute();
+
+            }catch(Exception e){
+                e.printStackTrace();
+            }
+
+        }
+
+
+
+
+
+        // Now auto clicking the button
+       // btntemp.performClick();
+    }
+
+
+    private class connectAsyncTask extends AsyncTask&lt;Void, Void, String&gt; {
+        private ProgressDialog progressDialog;
+        String url;
+
+        connectAsyncTask(String urlPass) {
+            url = urlPass;
+        }
+
+        @Override
+        protected void onPreExecute() {
+            // TODO Auto-generated method stub
+            super.onPreExecute();
+            progressDialog = new ProgressDialog(context);
+            progressDialog.setMessage("Fetching route, Please wait...");
+            progressDialog.setIndeterminate(true);
+            progressDialog.show();
+        }
+
+        @Override
+        protected String doInBackground(Void... params) {
+            JSONParser jParser = new JSONParser();
+            String json = jParser.getJSONFromUrl(url);
+            return json;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            progressDialog.hide();
+            if (result != null) {
+                drawPath(result);
+            }
+        }
+    }
+
+    public String makeURL(double sourcelat, double sourcelog, double destlat,
+            double destlog) {
+        StringBuilder urlString = new StringBuilder();
+        urlString.append("http://maps.googleapis.com/maps/api/directions/json");
+        urlString.append("?origin=");// from
+        urlString.append(Double.toString(sourcelat));
+        urlString.append(",");
+        urlString.append(Double.toString(sourcelog));
+        urlString.append("&amp;destination=");// to
+        urlString.append(Double.toString(destlat));
+        urlString.append(",");
+        urlString.append(Double.toString(destlog));
+        urlString.append("&amp;sensor=false&amp;mode=driving&amp;alternatives=true");
+        return urlString.toString();
+    }
+
+    public class JSONParser {
+
+        InputStream is = null;
+        JSONObject jObj = null;
+        String json = "";
+
+        // constructor
+        public JSONParser() {
+        }
+
+        public String getJSONFromUrl(String url) {
+
+            // Making HTTP request
+            try {
+                // defaultHttpClient
+                DefaultHttpClient httpClient = new DefaultHttpClient();
+                HttpPost httpPost = new HttpPost(url);
+
+                HttpResponse httpResponse = httpClient.execute(httpPost);
+                HttpEntity httpEntity = httpResponse.getEntity();
+                is = httpEntity.getContent();
+
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            } catch (ClientProtocolException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            try {
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(is, "iso-8859-1"), 8);
+                StringBuilder sb = new StringBuilder();
+                String line = null;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line + "\n");
+                }
+
+                json = sb.toString();
+                is.close();
+            } catch (Exception e) {
+                Log.e("Buffer Error", "Error converting result " + e.toString());
+            }
+            return json;
+
+        }
+    }
+
+    public void drawPath(String result) {
+        if (line != null) {
+            myMap.clear();
+        }
+        myMap.addMarker(new MarkerOptions().position(endLatLng).icon(
+                BitmapDescriptorFactory.fromResource(R.drawable.ic_launcher)));
+        myMap.addMarker(new MarkerOptions().position(startLatLng).icon(
+                BitmapDescriptorFactory.fromResource(R.drawable.ic_launcher)));
+        try {
+            // Tranform the string into a json object
+            final JSONObject json = new JSONObject(result);
+            JSONArray routeArray = json.getJSONArray("routes");
+            JSONObject routes = routeArray.getJSONObject(0);
+            JSONObject overviewPolylines = routes
+                    .getJSONObject("overview_polyline");
+            String encodedString = overviewPolylines.getString("points");
+            List&lt;LatLng&gt; list = decodePoly(encodedString);
+
+            PolylineOptions options = new PolylineOptions().width(5).color(Color.BLUE).geodesic(true);
+            for (int z = 0; z &lt; list.size(); z++) {
+                LatLng point = list.get(z);
+                options.add(point);
+            }
+            line = myMap.addPolyline(options);
+
+            /*for (int z = 0; z &lt; list.size() - 1; z++) {
+                LatLng src = list.get(z);
+                LatLng dest = list.get(z + 1);
+                line = myMap.addPolyline(new PolylineOptions()
+                        .add(new LatLng(src.latitude, src.longitude),
+                                new LatLng(dest.latitude, dest.longitude))
+                        .width(5).color(Color.BLUE).geodesic(true));
+            }*/
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private List&lt;LatLng&gt; decodePoly(String encoded) {
+
+        List&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+        int index = 0, len = encoded.length();
+        int lat = 0, lng = 0;
+
+        while (index &lt; len) {
+            int b, shift = 0, result = 0;
+            do {
+                b = encoded.charAt(index++) - 63;
+                result |= (b &amp; 0x1f) &lt;&lt; shift;
+                shift += 5;
+            } while (b &gt;= 0x20);
+            int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+            lat += dlat;
+
+            shift = 0;
+            result = 0;
+            do {
+                b = encoded.charAt(index++) - 63;
+                result |= (b &amp; 0x1f) &lt;&lt; shift;
+                shift += 5;
+            } while (b &gt;= 0x20);
+            int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+            lng += dlng;
+
+            LatLng p = new LatLng((((double) lat / 1E5)),
+                    (((double) lng / 1E5)));
+            poly.add(p);
+        }
+
+        return poly;
+    }
+
+    @Override
+    public void onClick(View arg0) {
+        // TODO Auto-generated method stub
+
+    }
+}
+</code></pre>
+
+<p>Hope it helps. Cheers!</p>
+
+<p><strong>UPDATE</strong></p>
+
+<p>check out this .. <a href="http://stackoverflow.com/questions/17223155/creating-ondraglistener-for-google-map-v2-fragment">Creating OnDragListener for Google Map v2 Fragment</a></p>
+
+<p>Also check this one ..
+<a href="http://stackoverflow.com/questions/16713310/how-to-draw-a-shape-on-the-map-fragment-by-touching-it-using-google-map-v2">How to draw a shape on the map fragment by touching it using google map V2</a></p>
+
+<p>Some more reference .. <a href="http://stackoverflow.com/questions/14429877/how-to-get-screen-coordinates-from-marker-in-google-maps-v2-android">How to get screen coordinates from marker in google maps v2 android</a></p>

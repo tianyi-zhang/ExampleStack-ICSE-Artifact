@@ -1,0 +1,510 @@
+<p>Sorry being late!</p>
+
+<p>As any other swing developer, i guess we all came to this kind of problem when JPA is incorporated hoping to deal with all persistence aspects, by encapsulating all of that logic in single isolated tier, also promoting a more clean separation of concerns, believing that it is totally free...but the truth is that it's definitely not.</p>
+
+<p>As you stated before there are a problem with detached entities that makes us create workarounds to solve this problem. The problem is not only working with lazy collections, there is a problem working with the entity itself, first at all, any changes that we do to our entity must be reflected to repository (and with a detached this is not going to happen). I am not an expert on this.. but i will try to highlight my thoughts on this and expose several solutions (many of them had been previously announced by other folks). </p>
+
+<p>From the presentation tier (that is, the code where resides all the user interface and interactions , this includes the controllers) we access the repository tier to do simple CRUD operations, despite the particular repository and the particular presentation, i think this is a standard fact accepted by the community. [I guess this a notion written down very well by Robert Martin in one of DDD books]</p>
+
+<p>So, basically one can wander "if my entity is detached, why I not leave it attached" doing so, it will stay synchronized with my repository an all changes done to the entity will be reflected "immediately" to my repository. And yes.... that is where a first answer appears to this problem.. </p>
+
+<p>1) Use a single entity manager object and keep it open from the start of the app to the end. </p>
+
+<ul>
+<li>At a glance it seems very simple (and it is, just open an EntityManager and store its reference globally and access the same instance everywhere in the application)</li>
+<li>Not recommended by the community as it not safe to keep an entity manager open for too long. The repository connection (hence session/entityManager) may drop due to various reasons.</li>
+</ul>
+
+<p>So despise it's simple, it's not the best options.... so let's move to another solution provided by the JPA API.</p>
+
+<p>2) Use eager loading of fields, so there is no need to be attached to the repository.</p>
+
+<ul>
+<li>This works well, but if you want to add or remove to a collection of the entity, or modify some field value directly, this will not be reflected in the repository.. you will have to manually merge or update the entity by using some method. Therebefore, if you are working with multi tier app where from the presentation tier you must include an extra call to repository tier you are contaminating the code of the presentation tier to be attach to a concrete repository that works with JPA (what happens is the repository is just a collection of entities in memory? ... does a memory repository need an extra call to "update" a collection of an object... the answer is no, so this is good practice but it is done for the sake of make thing "finally" works)</li>
+<li>Also you have to consider to what happens is the object graph retrieved is too big to be stored at the same time in memory, so it would probably fail. (Exactly as Craig commented)</li>
+</ul>
+
+<p>Again.. this not resolve the problem.</p>
+
+<p>3) Using the proxy design pattern, you could extract the Interface of the Entity (let's call it EntityInterface) and work in your presentation layer with those interfaces (supposing that you actually can force the client of your code to this). You can be cool and use dynamic proxy or static ones (really don't care) to create a ProxyEntity in the repository tier to return object that implement that interface. This object that return actually belongs to a class whose instance method are exactly the same (delegating the calls to the proxied object) except for those that works with collections that need to be "attached" to the repostory. That proxyEntity contains a reference to the proxied object (the entity itself) necessary to the CRUD operations on the repository.</p>
+
+<ul>
+<li>This resolves the problem at the cost of forcing use Interfaces instead of plain domain classes. Not a bad think actually... but also i guess is neither and standard. I think we all want to use the domain classes. Also for every domain object we have to write an interface... what happens if the object came in .JAR... aha! touche! We cannon't extract an interface an runtime :S, and therebefore we cannot create proxys.</li>
+</ul>
+
+<p>For the purposes of explain this better i write down an example of doing this...</p>
+
+<p>On the domain tier (where the core business class resides) </p>
+
+<pre><code>@Entity
+public class Bill implements Serializable, BillInterface
+{
+    private static final long serialVersionUID = 1L;
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    private Long id;
+
+    @OneToMany(fetch=FetchType.LAZY, cascade = {CascadeType.ALL}, mappedBy="bill")
+    private Collection&lt;Item&gt; items = new HashSet&lt;Item&gt; ();
+
+    @Temporal(javax.persistence.TemporalType.DATE)
+    private Date date;
+
+    private String descrip;
+
+    @Override
+    public Long getId()
+    {
+        return id;
+    }
+
+    public void setId(Long id)
+    {
+        this.id = id;
+    }
+
+    public void addItem (Item item)
+    {
+        item.setBill(this);
+        this.items.add(item);
+    }
+
+    public Collection&lt;Item&gt; getItems()
+    {
+        return items;
+    }
+
+    public void setItems(Collection&lt;Item&gt; items)
+    {
+        this.items = items;
+    }
+
+    public String getDescrip()
+    {
+        return descrip;
+    }
+
+    public void setDescrip(String descrip)
+    {
+        this.descrip = descrip;
+    }
+
+    public Date getDate()
+    {
+        return date;
+    }
+
+    public void setDate(Date date)
+    {
+        this.date = date;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        int hash = 0;
+        hash += (id != null ? id.hashCode() : 0);
+        return hash;
+    }
+
+    @Override
+    public boolean equals(Object object)
+    {
+        // TODO: Warning - this method won't work in the case the id fields are not set
+        if (!(object instanceof Bill))
+        {
+            return false;
+        }
+        Bill other = (Bill) object;
+        if ((this.id == null &amp;&amp; other.id != null) || (this.id != null &amp;&amp; !this.id.equals(other.id)))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public String toString()
+    {
+        return "domain.model.Bill[ id=" + id + " ]";
+    }
+
+    public BigDecimal getTotalAmount () {
+        BigDecimal total = new BigDecimal(0);
+        for (Item item : items)
+        {
+            total = total.add(item.getAmount());
+        }
+        return total;
+    }
+}
+</code></pre>
+
+<p>Item is another entity object modelling an item of a Bill (a Bill can contains many Items, an Item belongs only to one and only one Bill).</p>
+
+<p>The BillInterface is simply an interface declaring all Bill Methods. </p>
+
+<p>On the persistence tier i place the BillProxy...</p>
+
+<p>The BillProxy has this look :</p>
+
+<pre><code>class BillProxy implements BillInterface
+{
+    Bill bill; // protected so it can be used inside the BillRepository (take a look at the next class)
+
+    public BillProxy(Bill bill)
+    {
+        this.bill = bill;
+        this.setId(bill.getId());
+        this.setDate(bill.getDate());
+        this.setDescrip(bill.getDescrip());
+        this.setItems(bill.getItems());
+    }
+
+    @Override
+    public void addItem(Item item)
+    {
+        EntityManager em = null;
+        try
+        {
+            em = PersistenceUtil.createEntityManager();
+            this.bill = em.merge(this.bill); // attach the object
+            this.bill.addItem(item);
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+
+
+    @Override
+    public Collection&lt;Item&gt; getItems()
+    {
+        EntityManager em = null;
+        try
+        {
+            em = PersistenceUtil.createEntityManager();
+            this.bill = em.merge(this.bill); // attach the object
+            return this.bill.getItems();
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+    public Long getId()
+    {
+        return bill.getId(); // delegated
+    }
+
+    // More setters and getters are just delegated.
+}
+</code></pre>
+
+<p>Now let's take a look to the BillRepository (loosely based on a template given by NetBeans IDE)</p>
+
+<p>public class DBBillRepository implements BillRepository
+    {
+        private EntityManagerFactory emf = null;</p>
+
+<pre><code>    public DBBillRepository(EntityManagerFactory emf)
+    {
+        this.emf = emf;
+    }
+
+    private EntityManager createEntityManager()
+    {
+        return emf.createEntityManager();
+    }
+
+    @Override
+    public void create(BillInterface bill)
+    {
+        EntityManager em = null;
+        try
+        {
+            em = createEntityManager();
+            em.getTransaction().begin();
+            bill = ensureReference (bill);
+            em.persist(bill);
+            em.getTransaction().commit();
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+    @Override
+    public void update(BillInterface bill) throws NonexistentEntityException, Exception
+    {
+        EntityManager em = null;
+        try
+        {
+            em = createEntityManager();
+            em.getTransaction().begin();
+            bill = ensureReference (bill);
+            bill = em.merge(bill);
+            em.getTransaction().commit();
+        }
+        catch (Exception ex)
+        {
+            String msg = ex.getLocalizedMessage();
+            if (msg == null || msg.length() == 0)
+            {
+                Long id = bill.getId();
+                if (find(id) == null)
+                {
+                    throw new NonexistentEntityException("The bill with id " + id + " no longer exists.");
+                }
+            }
+            throw ex;
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+    @Override
+    public void destroy(Long id) throws NonexistentEntityException
+    {
+        EntityManager em = null;
+        try
+        {
+            em = createEntityManager();
+            em.getTransaction().begin();
+            Bill bill;
+            try
+            {
+                bill = em.getReference(Bill.class, id);
+                bill.getId();
+            }
+            catch (EntityNotFoundException enfe)
+            {
+                throw new NonexistentEntityException("The bill with id " + id + " no longer exists.", enfe);
+            }
+            em.remove(bill);
+            em.getTransaction().commit();
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+    @Override
+    public boolean createOrUpdate (BillInterface bill) 
+    {
+        if (bill.getId() == null) 
+        {
+            create(bill);
+            return true;
+        }
+        else 
+        {
+            try
+            {
+                update(bill);
+                return false;
+            }
+            catch (Exception e)
+            {
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+        }
+    }
+
+    @Override
+    public List&lt;BillInterface&gt; findEntities()
+    {
+        return findBillEntities(true, -1, -1);
+    }
+
+    @Override
+    public List&lt;BillInterface&gt; findEntities(int maxResults, int firstResult)
+    {
+        return findBillEntities(false, maxResults, firstResult);
+    }
+
+    private List&lt;BillInterface&gt; findBillEntities(boolean all, int maxResults, int firstResult)
+    {
+        EntityManager em = createEntityManager();
+        try
+        {
+            Query q = em.createQuery("select object(o) from Bill as o");
+            if (!all)
+            {
+                q.setMaxResults(maxResults);
+                q.setFirstResult(firstResult);
+            }
+            List&lt;Bill&gt; bills = q.getResultList();
+            List&lt;BillInterface&gt; res = new ArrayList&lt;BillInterface&gt; (bills.size());
+            for (Bill bill : bills)
+            {
+                res.add(new BillProxy(bill));
+            }
+            return res;
+        }
+        finally
+        {
+            em.close();
+        }
+    }
+
+    @Override
+    public BillInterface find(Long id)
+    {
+        EntityManager em = createEntityManager();
+        try
+        {
+            return new BillProxy(em.find(Bill.class, id));
+        }
+        finally
+        {
+            em.close();
+        }
+    }
+
+    @Override
+    public int getCount()
+    {
+        EntityManager em = createEntityManager();
+        try
+        {
+            Query q = em.createQuery("select count(o) from Bill as o");
+            return ((Long) q.getSingleResult()).intValue();
+        }
+        finally
+        {
+            em.close();
+        }
+    }
+
+    private Bill ensureReference (BillInterface bill) {
+        if (bill instanceof BillProxy) {
+            return ((BillProxy)bill).bill;
+        }
+        else
+            return (Bill) bill;
+    }
+
+}
+</code></pre>
+
+<p><em>as you noticed, the class is actually called DBBillRepository... that is because there can be several repositories (memory, file, net, ??) types an from others tiers there is no need to know from what kind of repository i am working.</em></p>
+
+<p>There is also a <code>ensureReference</code> internal method used by to get the real bill object, just for the case we pass a proxy object from the presentation layer. And talking about presentation layer we just use BillInterfaces instead of Bill an all will work well.</p>
+
+<p>In some controller class (or a callback method, in case of a SWING app), we can work the following way...</p>
+
+<pre><code>BillInterface bill = RepositoryFactory.getBillRepository().find(1L); 
+bill.addItem(new Item(...)); // this will call the method of the proxy
+Date date = bill.getDate(); // this will deleagte the call to the proxied object "hidden' behind the proxy.
+bill.setDate(new Date()); // idem before
+RepositoryFactory.getBillRepository().update(bill);
+</code></pre>
+
+<p>This is one more approach, at the cost of forcing using interfaces.</p>
+
+<p>4) Well there is actually one more thing that we can do to avoid working with interfaces... using somekind of degenerated proxy object...</p>
+
+<p>We could write a BillProxy this way :</p>
+
+<pre><code>class BillProxy extends Bill
+{
+    Bill bill;
+
+    public BillProxy (Bill bill)
+    {
+        this.bill = bill;
+        this.setId(bill.getId());
+        this.setDate(bill.getDate());
+        this.setDescrip(bill.getDescrip());
+        this.setItems(bill.getItems());
+    }
+
+    @Override
+    public void addItem(Item item)
+    {
+        EntityManager em = null;
+        try
+        {
+            em = PersistenceUtil.createEntityManager();
+            this.bill = em.merge(this.bill);
+            this.bill.addItem(item);
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+
+
+    @Override
+    public Collection&lt;Item&gt; getItems()
+    {
+        EntityManager em = null;
+        try
+        {
+            em = PersistenceUtil.createEntityManager();
+            this.bill = em.merge(this.bill);
+            return this.bill.getItems();
+        }
+        finally
+        {
+            if (em != null)
+            {
+                em.close();
+            }
+        }
+    }
+
+}
+</code></pre>
+
+<p>So in the presentation tier we could use the Bill class, also in the DBBillRepository without using the interface, so we get one constraint less :). I am not sure if this is good... but it works, and also maintains the code not polluted by adding additional calling to a specific repository type.</p>
+
+<p>If you want i can send you my entire app and you can see for yourself.</p>
+
+<p>Also, there are several post explaining the same thing, that are very interesting to read.</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/3569633/swing-and-lazy-loading-components?rq=1">Swing and lazy loading components</a></li>
+<li><a href="http://stackoverflow.com/questions/7491761/jpa-on-a-desktop-swing-application?rq=1">jpa on a Desktop SWING Application</a></li>
+<li><a href="http://stackoverflow.com/questions/10762974/should-jpa-entity-manager-be-closed">Should JPA Entity Manager be closed?</a></li>
+<li><a href="https://community.jboss.org/wiki/EqualsAndHashCode" rel="nofollow">Equals and hashcode in conjunction with collections</a></li>
+</ul>
+
+<p>Also i will appoint this references that i still don't read completely, but looks promising.</p>
+
+<p><a href="http://javanotepad.blogspot.com/2007/08/managing-jpa-entitymanager-lifecycle.html" rel="nofollow">http://javanotepad.blogspot.com/2007/08/managing-jpa-entitymanager-lifecycle.html</a>
+http://docs.jboss.org/hibernate/orm/4.0/hem/en-US/html/transactions.html</p>
+
+<p>Well we reach the end of the answer here... i know that it is so long and probably somekind of pain to read all of this :D (made more complicated by my grammatical errors jeje) but anyway hope it helps **us to find a more stable solution to a problem that we just cannot erase jeje.</p>
+
+<p>Greetings.</p>
+
+<p>Victor!!!</p>

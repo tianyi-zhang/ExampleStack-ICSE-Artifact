@@ -1,0 +1,148 @@
+<p>I solved this issue in my app like this:</p>
+
+<p>Create objects for the AsyncTasks (so you can check if they're in progress):</p>
+
+<pre><code>private AsyncTask&lt;String, Void, String&gt; releaseMP;
+private AsyncTask&lt;String, Void, String&gt; setSource;
+</code></pre>
+
+<p>Create an AsyncTask for the prepare call:</p>
+
+<pre><code>private class setSource extends AsyncTask&lt;String, Void, String&gt; {
+    @Override
+    protected synchronized String doInBackground(final String... urls) {
+        try {
+            mMediaPlayer.prepare();
+        } catch (final IllegalStateException e) {
+            e.printStackTrace();
+            return e.getMessage();
+        } catch (final IOException e) {
+            e.printStackTrace();
+            return e.getMessage();
+        } catch (final Exception e) {
+            e.printStackTrace();
+            return e.getMessage();
+        }
+
+        return null;
+    }
+
+    @Override
+    protected void onCancelled() {
+        if (setSource != null)
+            setSource = null;
+
+        // Send error to listener
+        mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+
+        releaseMP = new releaseMP().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
+    }
+
+    @Override
+    protected void onPostExecute(final String result) {
+        if (setSource != null)
+            setSource = null;
+
+        // Check for error result
+        if (result != null) {
+            mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+        }
+    }
+
+    @Override
+    protected void onPreExecute() {
+
+    }
+
+}
+</code></pre>
+
+<p>Now your prepare code:</p>
+
+<pre><code>    try {
+        mMediaPlayer = new MediaPlayer();
+        mMediaPlayer.setOnPreparedListener(mPreparedListener);
+        mMediaPlayer.setOnVideoSizeChangedListener(mSizeChangedListener);
+        mDuration = -1;
+        mMediaPlayer.setOnCompletionListener(mCompletionListener);
+        mMediaPlayer.setOnErrorListener(mErrorListener);
+        mMediaPlayer.setOnBufferingUpdateListener(mBufferingUpdateListener);
+        mCurrentBufferPercentage = 0;
+        mMediaPlayer.setDataSource(getContext(), mUri, mHeaders);
+        mMediaPlayer.setDisplay(mSurfaceHolder);
+        mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        mMediaPlayer.setScreenOnWhilePlaying(true);
+
+        // mMediaPlayer.prepareAsync();
+        // we don't set the target state here either, but preserve the
+        // target state that was there before.
+        mCurrentState = STATE_PREPARING;
+    } catch (final IOException ex) {
+        Log.w(TAG, "Unable to open content: " + mUri, ex);
+        mCurrentState = STATE_ERROR;
+        mTargetState = STATE_ERROR;
+        mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+        return;
+    } catch (final IllegalArgumentException ex) {
+        Log.w(TAG, "Unable to open content: " + mUri, ex);
+        mCurrentState = STATE_ERROR;
+        mTargetState = STATE_ERROR;
+        mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+        return;
+    } catch (final Exception ex) {
+        Log.w(TAG, "Unable to open content: " + mUri, ex);
+        mCurrentState = STATE_ERROR;
+        mTargetState = STATE_ERROR;
+        mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+        return;
+    }
+
+    setSource = new setSource().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
+</code></pre>
+
+<p>And lastly, when you need to kill the mediaPlayer, you'll check the setSource object to see if it is preparing before you release it. If it is preparing, you'll cancel the AsyncTask and in the AsyncTask onCancelled, you'll reset and release the object:</p>
+
+<pre><code>public void release(final boolean cleartargetstate) {
+    if (mMediaPlayer != null) {
+        if (setSource != null) {
+            setSource.cancel(true);
+        } else {
+            releaseMP = new releaseMP().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR);
+        }
+    }
+}
+</code></pre>
+
+<p>And this is my releaseMP AsyncTask (which just resets and releases the object):</p>
+
+<pre><code>private class releaseMP extends AsyncTask&lt;String, Void, String&gt; {
+
+    @Override
+    protected synchronized String doInBackground(final String... urls) {
+        Log.i(MethodNameTest.className() + "." + MethodNameTest.methodName(), "called");
+        if (mMediaPlayer != null) {
+            // Release listeners to avoid leaked window crash
+            mMediaPlayer.setOnPreparedListener(null);
+            mMediaPlayer.setOnVideoSizeChangedListener(null);
+            mMediaPlayer.setOnCompletionListener(null);
+            mMediaPlayer.setOnErrorListener(null);
+            mMediaPlayer.setOnBufferingUpdateListener(null);
+            mMediaPlayer.reset();
+            mMediaPlayer.release();
+            mMediaPlayer = null;
+        }
+        mCurrentState = STATE_IDLE;
+        mTargetState = STATE_IDLE;
+        return null;
+    }
+
+    @Override
+    protected void onPostExecute(final String result) {
+        Log.i(MethodNameTest.className() + "." + MethodNameTest.methodName(), "called");
+
+        if (releaseMP != null)
+            releaseMP = null;
+    }
+
+}
+</code></pre>

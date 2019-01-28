@@ -1,0 +1,130 @@
+<p>I can't post all changes, but here the ideas :</p>
+
+<p>1_ postInstanciate create many Entiy Loaders for all entities and collections (many type of loader for each entity and each collection), 
+this operation should be done on demande, entity or collection loader should be created when its needed, not during the build of session factory, even if you have 500 entities it dosent mean that the user will load data from all.</p>
+
+<pre><code>    private Map LoaderMap = new LoaderMap();//instead Hashmap  
+    class LoaderMap extends HashMap{
+        @Override
+        public Object get(Object key) {         
+            Object obj = super.get(key);
+            if (obj==null){
+                boolean disableForUpdate = getSubclassTableSpan() &gt; 1 &amp;&amp;
+                        hasSubclasses() &amp;&amp;
+                        !getFactory().getDialect().supportsOuterJoinForUpdate();
+
+                switch (key.toString()) {
+                case "NONE":
+                    obj = createEntityLoader( LockMode.NONE );
+                    break;
+                case "READ":
+                    obj = createEntityLoader( LockMode.READ );                  
+                    if (disableForUpdate){
+                        put(LockMode.UPGRADE, obj );
+                        put(LockMode.UPGRADE_NOWAIT, obj );
+                        put(LockMode.UPGRADE_SKIPLOCKED, obj );
+                        put(LockMode.FORCE, obj );                                          
+                        put(LockMode.PESSIMISTIC_READ, obj );
+                        put(LockMode.PESSIMISTIC_WRITE, obj );
+                        put(LockMode.PESSIMISTIC_FORCE_INCREMENT, obj );                        
+                    }
+                    break;
+                case "UPGRADE":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.UPGRADE );
+                case "UPGRADE_NOWAIT":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.UPGRADE_NOWAIT );
+                case "UPGRADE_SKIPLOCKED":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.UPGRADE_SKIPLOCKED );
+                case "FORCE":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.FORCE );
+                case "PESSIMISTIC_READ":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.PESSIMISTIC_READ );
+                case "PESSIMISTIC_WRITE":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.PESSIMISTIC_WRITE );
+                case "PESSIMISTIC_FORCE_INCREMENT":
+                    if (disableForUpdate)
+                        obj = get("READ");                       
+                    else
+                        obj = createEntityLoader( LockMode.PESSIMISTIC_FORCE_INCREMENT );
+                case "OPTIMISTIC":
+                    obj = createEntityLoader( LockMode.READ );
+                    break;
+                case "OPTIMISTIC_FORCE_INCREMENT":
+                    obj = createEntityLoader( LockMode.READ );
+                    break;
+                case "merge":
+                    obj = new CascadeEntityLoader( AbstractEntityPersister.this, CascadingActions.MERGE, getFactory() );
+                    break;                  
+                case "refresh":
+                    obj = new CascadeEntityLoader( AbstractEntityPersister.this, CascadingActions.REFRESH, getFactory() );
+                    break;  
+                default:
+                    break;
+                }
+                put(key, obj);
+            }
+            return obj;
+        }
+    }
+    //Relational based Persisters should be content with this implementation
+    protected void createLoaders() {
+        if (true)
+            return;
+....
+       }
+</code></pre>
+
+<p>2_ DirectPropertyAccessor is calling getDeclaredField twice once for the buildGetter Method and the second for buildSetter, using map is a good optimization.</p>
+
+<pre><code>public static final Map&lt;Double, Field&gt; tmp = new HashMap&lt;Double, Field&gt;();
+    private static Field getField(Class root, Class clazz, String name) throws PropertyNotFoundException {
+        if ( clazz==null || clazz==Object.class ) {
+            throw new PropertyNotFoundException("field [" + name + "] not found on " + root.getName()); 
+        }               
+        double hash = name.hashCode() + clazz.hashCode()*1.1;
+        Field field = tmp.get( hash );
+        if (field==null)
+        try {
+            field = clazz.getDeclaredField(name);
+            tmp.put( hash, field );
+        }
+        catch (NoSuchFieldException nsfe) {
+            field = getField( root, clazz.getSuperclass(), name );
+        }
+        field.setAccessible(true);
+        return field;
+    }
+</code></pre>
+
+<p><strong>Response to Ulrich Scholz</strong>:
+I add a jar containning all fixed Classes to the project, in my case its Webapp application deployed on Tomcat, all you need is to fix the loading order of the Jars using :</p>
+
+<pre><code>&lt;Context&gt;
+&lt;Resources&gt;
+      &lt;PreResources className="org.apache.catalina.webresources.FileResourceSet"
+                base="${catalina.base}/webapps/AGIWERP/WEB-INF/lib/AAACLZ-1.0.jar"
+                webAppMount="/WEB-INF/lib/AAACLZ-1.0.jar" /&gt;
+&lt;/Resources&gt;
+
+&lt;/Context&gt;
+</code></pre>
+
+<p>This mean your classes should be loaded before the original ones </p>

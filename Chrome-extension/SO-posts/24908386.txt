@@ -1,0 +1,181 @@
+<p>The following code shows a possible solution. Calling the synchronizeContact method will lead to adding the link in the contact app.
+Note it is not yet robust code but it shows the idea and is working.
+Note also the following two POJO classes are specific to my implementation and not essential to the working of the contact linking: PhoneNumber, ContactInfo.</p>
+
+<p>MainActivity.java:</p>
+
+<pre><code>private void synchronizeContact(ContactInfo contactInfo)
+{
+    ContactsSyncAdapterService syncAdapter = new ContactsSyncAdapterService();
+    Account account = new Account(contactInfo.getDisplayName(), getString(R.string.account_type)); //account_type = &lt;yourpackage&gt;.account
+    PhoneNumber phoneNumber = contactInfo.getPhoneNumbers().get(0);
+    syncAdapter.performSync(MainActivity.this, account, phoneNumber);
+}
+</code></pre>
+
+<p>ContactsSyncAdapterService:</p>
+
+<pre><code>private static ContentResolver itsContentResolver = null;
+
+public void performSync(Context context, Account account, PhoneNumber number)
+{
+    itsContentResolver = context.getContentResolver();
+    addContact(account, account.name, account.name, number.getNumber());
+}
+
+private void addContact(Account account, String name, String username, String number)
+{
+    ArrayList&lt;ContentProviderOperation&gt; operationList = new ArrayList&lt;ContentProviderOperation&gt;();
+
+    ContentProviderOperation.Builder builder = ContentProviderOperation.newInsert(RawContacts.CONTENT_URI);
+    builder.withValue(RawContacts.ACCOUNT_NAME, account.name);
+    builder.withValue(RawContacts.ACCOUNT_TYPE, account.type);
+    builder.withValue(RawContacts.SYNC1, username);
+    operationList.add(builder.build());
+
+    builder = ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI);
+    builder.withValueBackReference(ContactsContract.CommonDataKinds.StructuredName.RAW_CONTACT_ID, 0);
+    builder.withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE);
+    builder.withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, name);
+    operationList.add(builder.build());
+
+    builder = ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI);
+    builder.withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0);
+    builder.withValue(ContactsContract.Data.MIMETYPE, "vnd.android.cursor.item/vnd.&lt;yourpackage&gt;.profile");
+    builder.withValue(ContactsContract.Data.DATA1, username);
+    builder.withValue(ContactsContract.Data.DATA2, number);
+    operationList.add(builder.build());
+
+    try
+    {
+        itsContentResolver.applyBatch(ContactsContract.AUTHORITY, operationList);
+    }
+    catch (OperationApplicationException e)
+    {
+        e.printStackTrace();
+    }
+    catch (RemoteException e)
+    {
+        e.printStackTrace();
+    }
+}
+</code></pre>
+
+<p>ProfileActivity (class for the intent when tapping the contact app link):</p>
+
+<pre><code>@Override
+public void onCreate(Bundle savedInstanceState)
+{
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.profile);
+
+    Uri intentData = getIntent().getData();
+    if (isNotEmpty(intentData))
+    {
+        Cursor cursor = managedQuery(intentData, null, null, null, null);
+        if (cursor.moveToNext())
+        {
+            String username = cursor.getString(cursor.getColumnIndex("DATA1"));
+            String number = cursor.getString(cursor.getColumnIndex("DATA2"));
+            TextView view = (TextView) findViewById(R.id.profiletext);
+            view.setText("&lt;yourtext&gt;");
+            doSomething(getPhoneNumber(number));
+        }
+    }
+    else
+    {
+        handleIntentWithoutData();
+    }
+}
+
+private void doSomething(PhoneNumber phoneNumber)
+{
+    Uri uri = Uri.parse("tel:" + phoneNumber.getNumber());
+    Intent intent = new Intent(Intent.ACTION_CALL, uri);
+    startActivity(intent);
+}
+</code></pre>
+
+<p>contacts.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;ContactsSource xmlns:android="http://schemas.android.com/apk/res/android"&gt;
+    &lt;ContactsDataKind
+        android:icon="@drawable/ic_launcher"
+        android:mimeType="vnd.android.cursor.item/vnd.&lt;yourpackage&gt;.profile"
+        android:summaryColumn="data2"
+        android:detailColumn="data3"
+        android:detailSocialSummary="true"
+    /&gt;
+</code></pre>
+
+<p></p>
+
+<p>authenticator.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accountType="&lt;yourpackage&gt;.account"
+    android:icon="@drawable/ic_launcher"
+    android:smallIcon="@drawable/ic_launcher"
+    android:label="@string/app_name"
+    android:accountPreferences="@xml/account_preferences"
+/&gt;
+</code></pre>
+
+<p>account_preferences.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"&gt;
+&lt;/PreferenceScreen&gt;
+</code></pre>
+
+<p>sync_contacts.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
+    android:contentAuthority="com.android.contacts" 
+    android:accountType="&lt;yourpackage&gt;.account"
+    android:supportsUploading="false"
+/&gt;
+</code></pre>
+
+<p>PhoneNumber:</p>
+
+<pre><code>private String number;
+
+public String getNumber()
+{
+    return number;
+}
+
+public void setNumber(String number)
+{
+    this.number = number;
+}
+</code></pre>
+
+<p>ContactInfo:</p>
+
+<pre><code>private List&lt;PhoneNumber&gt; itsPhoneNumbers = new ArrayList&lt;PhoneNumber&gt;();
+
+public void setDisplayName(String displayName)
+{
+    this.itsDisplayName = displayName;
+}
+
+public String getDisplayName()
+{
+    return itsDisplayName;
+}
+
+public void addPhoneNumber(PhoneNumber phoneNumber)
+{
+    this.itsPhoneNumbers.add(phoneNumber);
+}
+
+public List&lt;PhoneNumber&gt; getPhoneNumbers()
+{
+    return itsPhoneNumbers;
+}
+</code></pre>

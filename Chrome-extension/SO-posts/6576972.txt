@@ -1,0 +1,270 @@
+<p>This is my solution which works fairly well:</p>
+
+<pre><code>private Location bestLocation = null;
+private Looper looper;
+private boolean networkEnabled = false, gpsEnabled = false;
+
+private synchronized void setLooper(Looper looper) {
+    this.looper = looper;
+}
+
+private synchronized void stopLooper() {
+    if (looper == null) return;
+    looper.quit();
+}
+
+@Override
+protected void runTask() {
+    final LocationManager locationManager = (LocationManager) service
+            .getSystemService(Context.LOCATION_SERVICE);
+    final SharedPreferences prefs = getPreferences();
+    final int maxPollingTime = Integer.parseInt(prefs.getString(
+            POLLING_KEY, "0"));
+    final int desiredAccuracy = Integer.parseInt(prefs.getString(
+            DESIRED_KEY, "0"));
+    final int acceptedAccuracy = Integer.parseInt(prefs.getString(
+            ACCEPTED_KEY, "0"));
+    final int maxAge = Integer.parseInt(prefs.getString(AGE_KEY, "0"));
+    final String whichProvider = prefs.getString(PROVIDER_KEY, "any");
+    final boolean canUseGps = whichProvider.equals("gps")
+            || whichProvider.equals("any");
+    final boolean canUseNetwork = whichProvider.equals("network")
+            || whichProvider.equals("any");
+    if (canUseNetwork)
+        networkEnabled = locationManager
+                .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+    if (canUseGps)
+        gpsEnabled = locationManager
+                .isProviderEnabled(LocationManager.GPS_PROVIDER);
+    // If any provider is enabled now and we displayed a notification clear it.
+    if (gpsEnabled || networkEnabled) removeErrorNotification();
+    if (gpsEnabled)
+        updateBestLocation(locationManager
+                .getLastKnownLocation(LocationManager.GPS_PROVIDER));
+    if (networkEnabled)
+        updateBestLocation(locationManager
+                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER));
+    if (desiredAccuracy == 0
+            || getLocationQuality(desiredAccuracy, acceptedAccuracy,
+                    maxAge, bestLocation) != LocationQuality.GOOD) {
+        // Define a listener that responds to location updates
+        LocationListener locationListener = new LocationListener() {
+
+            public void onLocationChanged(Location location) {
+                updateBestLocation(location);
+                if (desiredAccuracy != 0
+                        &amp;&amp; getLocationQuality(desiredAccuracy,
+                                acceptedAccuracy, maxAge, bestLocation)
+                                == LocationQuality.GOOD)
+                    stopLooper();
+            }
+
+            public void onProviderEnabled(String provider) {
+                if (isSameProvider(provider,
+                        LocationManager.NETWORK_PROVIDER))networkEnabled =true;
+                else if (isSameProvider(provider,
+                        LocationManager.GPS_PROVIDER)) gpsEnabled = true;
+                // The user has enabled a location, remove any error
+                // notification
+                if (canUseGps &amp;&amp; gpsEnabled || canUseNetwork
+                        &amp;&amp; networkEnabled) removeErrorNotification();
+            }
+
+            public void onProviderDisabled(String provider) {
+                if (isSameProvider(provider,
+                        LocationManager.NETWORK_PROVIDER))networkEnabled=false;
+                else if (isSameProvider(provider,
+                        LocationManager.GPS_PROVIDER)) gpsEnabled = false;
+                if (!gpsEnabled &amp;&amp; !networkEnabled) {
+                    showErrorNotification();
+                    stopLooper();
+                }
+            }
+
+            public void onStatusChanged(String provider, int status,
+                    Bundle extras) {
+                Log.i(LOG_TAG, "Provider " + provider + " statusChanged");
+                if (isSameProvider(provider,
+                        LocationManager.NETWORK_PROVIDER)) networkEnabled = 
+                        status == LocationProvider.AVAILABLE
+                        || status == LocationProvider.TEMPORARILY_UNAVAILABLE;
+                else if (isSameProvider(provider,
+                        LocationManager.GPS_PROVIDER))
+                    gpsEnabled = status == LocationProvider.AVAILABLE
+                      || status == LocationProvider.TEMPORARILY_UNAVAILABLE;
+                // None of them are available, stop listening
+                if (!networkEnabled &amp;&amp; !gpsEnabled) {
+                    showErrorNotification();
+                    stopLooper();
+                }
+                // The user has enabled a location, remove any error
+                // notification
+                else if (canUseGps &amp;&amp; gpsEnabled || canUseNetwork
+                        &amp;&amp; networkEnabled) removeErrorNotification();
+            }
+        };
+        if (networkEnabled || gpsEnabled) {
+            Looper.prepare();
+            setLooper(Looper.myLooper());
+            // Register the listener with the Location Manager to receive
+            // location updates
+            if (canUseGps)
+                locationManager.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER, 1000, 1,
+                        locationListener, Looper.myLooper());
+            if (canUseNetwork)
+                locationManager.requestLocationUpdates(
+                        LocationManager.NETWORK_PROVIDER, 1000, 1,
+                        locationListener, Looper.myLooper());
+            Timer t = new Timer();
+            t.schedule(new TimerTask() {
+
+                @Override
+                public void run() {
+                    stopLooper();
+                }
+            }, maxPollingTime * 1000);
+            Looper.loop();
+            t.cancel();
+            setLooper(null);
+            locationManager.removeUpdates(locationListener);
+        } else // No provider is enabled, show a notification
+        showErrorNotification();
+    }
+    if (getLocationQuality(desiredAccuracy, acceptedAccuracy, maxAge,
+            bestLocation) != LocationQuality.BAD) {
+        sendUpdate(new Event(EVENT_TYPE, locationToString(desiredAccuracy,
+                acceptedAccuracy, maxAge, bestLocation)));
+    } else Log.w(LOG_TAG, "LocationCollector failed to get a location");
+}
+
+private synchronized void showErrorNotification() {
+    if (notifId != 0) return;
+    ServiceHandler handler = service.getHandler();
+    NotificationInfo ni = NotificationInfo.createSingleNotification(
+            R.string.locationcollector_notif_ticker,
+            R.string.locationcollector_notif_title,
+            R.string.locationcollector_notif_text,
+            android.R.drawable.stat_notify_error);
+    Intent intent = new Intent(
+            android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+    ni.pendingIntent = PendingIntent.getActivity(service, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT);
+    Message msg = handler.obtainMessage(ServiceHandler.SHOW_NOTIFICATION);
+    msg.obj = ni;
+    handler.sendMessage(msg);
+    notifId = ni.id;
+}
+
+private void removeErrorNotification() {
+    if (notifId == 0) return;
+    ServiceHandler handler = service.getHandler();
+    if (handler != null) {
+        Message msg = handler.obtainMessage(
+                ServiceHandler.CLEAR_NOTIFICATION, notifId, 0);
+        handler.sendMessage(msg);
+        notifId = 0;
+    }
+}
+
+@Override
+public void interrupt() {
+    stopLooper();
+    super.interrupt();
+}
+
+private String locationToString(int desiredAccuracy, int acceptedAccuracy,
+        int maxAge, Location location) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(String.format(
+            "qual=%s time=%d prov=%s acc=%.1f lat=%f long=%f",
+            getLocationQuality(desiredAccuracy, acceptedAccuracy, maxAge,
+                    location), location.getTime() / 1000, // Millis to
+                                                            // seconds
+            location.getProvider(), location.getAccuracy(), location
+                    .getLatitude(), location.getLongitude()));
+    if (location.hasAltitude())
+        sb.append(String.format(" alt=%.1f", location.getAltitude()));
+    if (location.hasBearing())
+        sb.append(String.format(" bearing=%.2f", location.getBearing()));
+    return sb.toString();
+}
+
+private enum LocationQuality {
+    BAD, ACCEPTED, GOOD;
+
+    public String toString() {
+        if (this == GOOD) return "Good";
+        else if (this == ACCEPTED) return "Accepted";
+        else return "Bad";
+    }
+}
+
+private LocationQuality getLocationQuality(int desiredAccuracy,
+        int acceptedAccuracy, int maxAge, Location location) {
+    if (location == null) return LocationQuality.BAD;
+    if (!location.hasAccuracy()) return LocationQuality.BAD;
+    long currentTime = System.currentTimeMillis();
+    if (currentTime - location.getTime() &lt; maxAge * 1000
+            &amp;&amp; location.getAccuracy() &lt;= desiredAccuracy)
+        return LocationQuality.GOOD;
+    if (acceptedAccuracy == -1
+            || location.getAccuracy() &lt;= acceptedAccuracy)
+        return LocationQuality.ACCEPTED;
+    return LocationQuality.BAD;
+}
+
+private synchronized void updateBestLocation(Location location) {
+    bestLocation = getBestLocation(location, bestLocation);
+}
+
+protected Location getBestLocation(Location location,
+        Location currentBestLocation) {
+    if (currentBestLocation == null) {
+        // A new location is always better than no location
+        return location;
+    }
+    if (location == null) return currentBestLocation;
+    // Check whether the new location fix is newer or older
+    long timeDelta = location.getTime() - currentBestLocation.getTime();
+    boolean isSignificantlyNewer = timeDelta &gt; TWO_MINUTES;
+    boolean isSignificantlyOlder = timeDelta &lt; -TWO_MINUTES;
+    boolean isNewer = timeDelta &gt; 0;
+    // If it's been more than two minutes since the current location, use
+    // the new location
+    // because the user has likely moved
+    if (isSignificantlyNewer) {
+        return location;
+        // If the new location is more than two minutes older, it must be
+        // worse
+    } else if (isSignificantlyOlder) {
+        return currentBestLocation;
+    }
+    // Check whether the new location fix is more or less accurate
+    int accuracyDelta = (int) (location.getAccuracy() - currentBestLocation
+            .getAccuracy());
+    boolean isLessAccurate = accuracyDelta &gt; 0;
+    boolean isMoreAccurate = accuracyDelta &lt; 0;
+    boolean isSignificantlyLessAccurate = accuracyDelta &gt; 200;
+    // Check if the old and new location are from the same provider
+    boolean isFromSameProvider = isSameProvider(location.getProvider(),
+            currentBestLocation.getProvider());
+    // Determine location quality using a combination of timeliness and
+    // accuracy
+    if (isMoreAccurate) {
+        return location;
+    } else if (isNewer &amp;&amp; !isLessAccurate) {
+        return location;
+    } else if (isNewer &amp;&amp; !isSignificantlyLessAccurate
+            &amp;&amp; isFromSameProvider) {
+        return location;
+    }
+    return bestLocation;
+}
+
+/** Checks whether two providers are the same */
+private boolean isSameProvider(String provider1, String provider2) {
+    if (provider1 == null) return provider2 == null;
+    return provider1.equals(provider2);
+}
+</code></pre>

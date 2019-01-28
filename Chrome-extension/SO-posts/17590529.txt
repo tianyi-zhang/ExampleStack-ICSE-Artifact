@@ -1,0 +1,62 @@
+<p>The difference is, as <a href="http://stackoverflow.com/users/712548/shachaf/BigInteger.java">shachaf</a> said, that GHC (by default) uses GMP for <code>Integer</code> computations that exceed the <code>Int</code> range, and GMP is rather well optimised. It has nothing to do with purity, caching, tail-call optimisation or such.</p>
+
+<p>Java's <code>BigInteger</code> uses more or less the naive schoolbook algorithms. If you look at the code for <a href="http://hg.openjdk.java.net/jdk7/jdk7/jdk/raw-file/00cd9dc3c2b5/src/share/classes/java/math"><code>multiply</code></a> (openjdk7), the work horse is</p>
+
+
+
+<pre class="lang-java prettyprint-override"><code>/**
+ * Multiplies int arrays x and y to the specified lengths and places
+ * the result into z. There will be no leading zeros in the resultant array.
+ */
+private int[] multiplyToLen(int[] x, int xlen, int[] y, int ylen, int[] z) {
+    int xstart = xlen - 1;
+    int ystart = ylen - 1;
+
+    if (z == null || z.length &lt; (xlen+ ylen))
+        z = new int[xlen+ylen];
+
+    long carry = 0;
+    for (int j=ystart, k=ystart+1+xstart; j&gt;=0; j--, k--) {
+        long product = (y[j] &amp; LONG_MASK) *
+                       (x[xstart] &amp; LONG_MASK) + carry;
+        z[k] = (int)product;
+        carry = product &gt;&gt;&gt; 32;
+    }
+    z[xstart] = (int)carry;
+
+    for (int i = xstart-1; i &gt;= 0; i--) {
+        carry = 0;
+        for (int j=ystart, k=ystart+1+i; j&gt;=0; j--, k--) {
+            long product = (y[j] &amp; LONG_MASK) *
+                           (x[i] &amp; LONG_MASK) +
+                           (z[k] &amp; LONG_MASK) + carry;
+            z[k] = (int)product;
+            carry = product &gt;&gt;&gt; 32;
+        }
+        z[i] = (int)carry;
+    }
+    return z;
+}
+</code></pre>
+
+<p>a quadratic digit-by-digit multiplication (digits are of course not base 10). That doesn't hurt too much here, since one of the factors is always single-digit, but indicates that not too much work has yet been put into optimising <code>BigInteger</code> computations in Java.</p>
+
+<p>One thing that can be seen from the source is that in Java products of the form <code>smallNumber * largeNumber</code> are faster than <code>largeNumber * smallNumber</code> (in particular if the small number is single-digit, having that as the first number means the second loop with the nested loop doesn't run at all, so you have altogether less loop control overhead, and the loop that is run has a simpler body).</p>
+
+<p>So changing</p>
+
+<pre class="lang-java prettyprint-override"><code>f = f.multiply(BigInteger.valueOf(i));
+</code></pre>
+
+<p>in your Java version to</p>
+
+<pre class="lang-java prettyprint-override"><code>f = BigInteger.valueOf(i).multiply(f);
+</code></pre>
+
+<p>gives a considerable speedup (increasing with the argument, ~2× for 25000, ~2.5× for 50000, ~2.8× for 100000).</p>
+
+<p>The computation is still much slower than the GHC/GMP combination by a factor of roughly 4 in the tested range on my box, but, well, GMP's implementation is plain better optimised.</p>
+
+<p>If you make computations that often multiply two large numbers, the algorithmic difference between the quadratic <code>BigInteger</code> multiplication and GMP's that uses Karatsuba or Toom-Cook when the factors are large enough (FFT for really large numbers) would show.</p>
+
+<p>However, if multiplying is not all that you do, if you print out the factorials, hence convert them to a <code>String</code>, you get hit by the fact that <code>BigInteger</code>'s <code>toString</code> method is abominably slow (it's roughly quadratic, so since the computation of the factorial is altogether quadratic in the length of the result, you get no [much] higher algorithmic complexity, but you get a <strong>big</strong> constant factor on top of the computation). The <code>Show</code> instance for <code>Integer</code> is much better, <code>O(n * (log n)^x)</code> [not sure what <code>x</code> is, between 1 and 2], so converting the result to <code>String</code> adds just a little to the computation time.</p>

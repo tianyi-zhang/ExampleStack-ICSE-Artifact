@@ -1,0 +1,61 @@
+<p>When you annotate your handler method with <code>@ResponseBody</code>, Spring uses <code>RequestResponseBodyMethodProcessor</code> to generate the response body. It does this in its <code>handleReturnValue</code> method which is implemented as</p>
+
+<pre><code>@Override
+public void handleReturnValue(Object returnValue, MethodParameter returnType,
+        ModelAndViewContainer mavContainer, NativeWebRequest webRequest)
+        throws IOException, HttpMediaTypeNotAcceptableException {
+
+    mavContainer.setRequestHandled(true);
+    if (returnValue != null) {
+        writeWithMessageConverters(returnValue, returnType, webRequest);
+    }
+}
+</code></pre>
+
+<p>So if the returned value is  <code>null</code>, nothing will be written to the body.</p>
+
+<p>The <code>RestTemplate</code> will therefore try to deserialize a <code>MyDto</code> from an empty <code>String</code>. <code>RestTemplate</code> uses an <code>HttpMessageConvertExtractor</code> to deserialize the response. The <code>extractData</code> method is implemented as</p>
+
+<pre><code>@Override
+@SuppressWarnings({ "unchecked", "rawtypes" })
+public T extractData(ClientHttpResponse response) throws IOException {
+    if (!hasMessageBody(response)) {
+        return null;
+    }
+    MediaType contentType = getContentType(response);
+
+    for (HttpMessageConverter&lt;?&gt; messageConverter : this.messageConverters) {
+        if (messageConverter instanceof GenericHttpMessageConverter) {
+            GenericHttpMessageConverter&lt;?&gt; genericMessageConverter = (GenericHttpMessageConverter&lt;?&gt;) messageConverter;
+            if (genericMessageConverter.canRead(this.responseType, null, contentType)) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Reading [" + this.responseType + "] as \"" +
+                            contentType + "\" using [" + messageConverter + "]");
+                }
+                return (T) genericMessageConverter.read(this.responseType, null, response);
+            }
+        }
+        if (this.responseClass != null) {
+            if (messageConverter.canRead(this.responseClass, contentType)) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Reading [" + this.responseClass.getName() + "] as \"" +
+                            contentType + "\" using [" + messageConverter + "]");
+                }
+                return (T) messageConverter.read((Class) this.responseClass, response);
+            }
+        }
+    }
+    throw new RestClientException(
+            "Could not extract response: no suitable HttpMessageConverter found for response type [" +
+                    this.responseType + "] and content type [" + contentType + "]");
+}
+</code></pre>
+
+<p>In other words, if there is no body, it returns <code>null</code>.</p>
+
+<p>So your <code>MyDto</code> object here</p>
+
+<pre><code>MyDto obj = restTemplate.getForObject(url, MyDto.class);
+</code></pre>
+
+<p>will be <code>null</code>.</p>

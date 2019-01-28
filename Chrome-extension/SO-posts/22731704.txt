@@ -1,0 +1,138 @@
+<p>I have written something like this before:</p>
+
+<pre><code>package vonbulow.nicki;
+
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.jar.Manifest;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+/**
+ *
+ * @author Nicki
+ */
+public class AppLoader extends ClassLoader {
+
+    private static final String userdir = System.getenv("USERPROFILE");
+    private static final AppLoader instance = new AppLoader();
+
+    private static HashMap&lt;String, Class&gt; loaded = new HashMap&lt;String, Class&gt;();
+
+    public static void loadapp(final String name) {
+
+        if(loaded.containsKey(name)) {
+            Thread d = new Thread(new Runnable(){
+                public void run(){
+                    try {
+                        Class c = loaded.get(name);
+                        Method m = c.getDeclaredMethod("main", String[].class);
+                        m.invoke(null, (Object[])new String[]{null});
+                    } catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException | InvocationTargetException ex) {
+
+                    }
+                }
+            });
+            d.start();
+            return;
+        }
+
+        File ud = new File(userdir+"\\nvbapp");
+        ud.mkdir();
+        File[] fa = ud.listFiles(new FilenameFilter() {
+            public boolean accept(File dir, String name) {
+                return name.toLowerCase().endsWith(".appn");
+            }
+        });
+
+        for(final File f:fa) {
+            if(f.getName().split("\\.")[0].equalsIgnoreCase(name)) {
+                Thread t = new Thread(new Runnable() {
+                    public void run() {
+                        runapp(f, name);
+                    }
+                });
+                t.start();
+            }
+        }
+    }
+
+    private static void runapp(File f, String nam) {
+
+        List&lt;Class&gt; classes = new ArrayList&lt;Class&gt;();
+        ZipFile jf;
+        String name = "";
+        try {
+            jf = new ZipFile(f);
+            Enumeration&lt;? extends ZipEntry&gt; eze = jf.entries();
+            while(eze.hasMoreElements()){
+                ZipEntry ze = eze.nextElement();
+                if(ze.getName().endsWith(".class")&amp;&amp;!ze.isDirectory()){
+                    InputStream fis = jf.getInputStream(ze);
+                    byte[] bytes = new byte[(int)ze.getSize()];
+                    fis.read(bytes);
+                    classes.add(instance.defineClass(getClassName(bytes), bytes, 0, bytes.length));
+                }
+                if(ze.getName().equalsIgnoreCase("META-INF/MANIFEST.MF")) {
+                    Manifest manifest = new Manifest(jf.getInputStream(ze));
+                    name = manifest.getMainAttributes().getValue("Main-Class");
+                }
+            }
+            Iterator&lt;Class&gt; classit = classes.iterator();
+            while(classit.hasNext()) {
+                Class c = classit.next();
+                if(c.getName().equals(name)) {
+                    try {
+                        loaded.put(nam, c);
+                        Method m = c.getDeclaredMethod("main", String[].class);
+                        m.invoke(null, (Object[]) new String[]{null});
+                    } catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException | InvocationTargetException ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(AppLoader.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+
+    private static String getClassName(byte[] is) {
+        try {
+            DataInputStream dis = new DataInputStream(new ByteArrayInputStream(is));
+            dis.readLong(); // skip header and class version
+            int cpcnt = (dis.readShort()&amp;0xffff)-1;
+            int[] classes = new int[cpcnt];
+            String[] strings = new String[cpcnt];
+            for(int i=0; i&lt;cpcnt; i++) {
+                int t = dis.read();
+                if(t==7) classes[i] = dis.readShort()&amp;0xffff;
+                else if(t==1) strings[i] = dis.readUTF();
+                else if(t==5 || t==6) { dis.readLong(); i++; }
+                else if(t==8) dis.readShort();
+                else dis.readInt();
+            }
+            dis.readShort(); // skip access flags
+            return strings[classes[(dis.readShort()&amp;0xffff)-1]-1].replace("/", ".");
+        } catch (IOException ex) {
+            return null;
+        }
+    }
+
+}
+</code></pre>
+
+<p>I have not edited it; you will need to edit it so it loads your own classes.
+You also need to compile the files first with the <a href="http://docs.oracle.com/javase/7/docs/api/javax/tools/JavaCompiler.html" rel="nofollow">JavaCompiler</a> class. This also assumes that the classes are in the zip file.</p>

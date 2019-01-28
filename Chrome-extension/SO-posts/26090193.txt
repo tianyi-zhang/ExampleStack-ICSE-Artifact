@@ -1,0 +1,84 @@
+<p>Well, disabling SwipeLayoutAnimanion appeared to be a rather simple task, but it involves replication of <code>android.support.v4.widget.SwipeRefreshLayout</code> class inside one's project.
+<p>Diving in source code will reveal, that <code>SwipeRefreshLayout</code> consists of three classes:</p>
+
+<ul>
+<li><a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.L_preview/android/support/v4/widget/SwipeRefreshLayout.java#SwipeRefreshLayout">android.support.v4.widget.SwipeRefreshLayout</a></li>
+<li><a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.L_preview/android/support/v4/widget/SwipeProgressBar.java#SwipeProgressBar">android.support.v4.widget.SwipeProgressBar</a></li>
+<li><a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.L_preview/android/support/v4/widget/BakedBezierInterpolator.java#BakedBezierInterpolator">android.support.v4.widget.BakedBezierInterpolator</a></li>
+</ul>
+
+<p>All three classes should be included in the project. Then <code>SwipeRefreshLayout</code> can be customized as follows:
+<p>Add a new public method which will control either layout should follow the swipe down gesture or not:</p>
+
+<pre><code>private boolean mLayoutMovementEnabled = true;
+
+public void setLayoutMovementEnabled(boolean enabled) {
+    mLayoutMovementEnabled = enabled;
+}
+</code></pre>
+
+<p>All related computations are performed inside <code>onTouchEvent()</code>. To disable layout following the movement,</p>
+
+<p><code>updateContentOffsetTop((int) (offsetTop));</code> string should be changed to</p>
+
+<pre><code>if (mLayoutMovementEnabled) updateContentOffsetTop((int) (offsetTop));
+</code></pre>
+
+<p>The complete modified routine is below. </p>
+
+<pre><code>@Override
+public boolean onTouchEvent(MotionEvent event) {
+    final int action = event.getAction();
+    boolean handled = false;
+    switch (action) {
+        case MotionEvent.ACTION_DOWN:
+            mCurrPercentage = 0;
+            mDownEvent = MotionEvent.obtain(event);
+            mPrevY = mDownEvent.getY();
+            break;
+        case MotionEvent.ACTION_MOVE:
+            if (mDownEvent != null &amp;&amp; !mReturningToStart) {
+                final float eventY = event.getY();
+                float yDiff = eventY - mDownEvent.getY();
+                if (yDiff &gt; mTouchSlop) {
+                    // User velocity passed min velocity; trigger a refresh
+                    if (yDiff &gt; mDistanceToTriggerSync) {
+                        // User movement passed distance; trigger a refresh
+                        startRefresh();
+                        handled = true;
+                        break;
+                    } else {
+                        // Just track the user's movement
+                        setTriggerPercentage(
+                                mAccelerateInterpolator.getInterpolation(
+                                        yDiff / mDistanceToTriggerSync));
+                        float offsetTop = yDiff;
+                        if (mPrevY &gt; eventY) {
+                            offsetTop = yDiff - mTouchSlop;
+                        }
+                        if (mLayoutMovementEnabled) updateContentOffsetTop((int) (offsetTop));
+                        if (mPrevY &gt; eventY &amp;&amp; (mTarget.getTop() &lt; mTouchSlop)) {
+                            // If the user puts the view back at the top, we
+                            // don't need to. This shouldn't be considered
+                            // cancelling the gesture as the user can restart from the top.
+                            removeCallbacks(mCancel);
+                        } else {
+                            updatePositionTimeout();
+                        }
+                        mPrevY = event.getY();
+                        handled = true;
+                    }
+                }
+            }
+            break;
+        case MotionEvent.ACTION_UP:
+        case MotionEvent.ACTION_CANCEL:
+            if (mDownEvent != null) {
+                mDownEvent.recycle();
+                mDownEvent = null;
+            }
+            break;
+    }
+    return handled;
+}
+</code></pre>

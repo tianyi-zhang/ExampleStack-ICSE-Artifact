@@ -1,0 +1,212 @@
+<p>If you're obtaining the route by explicitly parsing an URL to Google try the following code, it will allow you to set the <code>PolyLine</code> parameters:</p>
+
+<pre><code>// URL constructor
+public String makeURL (double sourcelat, double sourcelog, double destlat, double destlog ){
+    StringBuilder urlString = new StringBuilder();
+    urlString.append("http://maps.googleapis.com/maps/api/directions/json");
+    urlString.append("?origin=");// from
+    urlString.append(Double.toString(sourcelat));
+    urlString.append(",");
+    urlString.append(Double.toString( sourcelog));
+    urlString.append("&amp;destination=");// to
+    urlString.append(Double.toString( destlat));
+    urlString.append(",");
+    urlString.append(Double.toString( destlog));
+    urlString.append("&amp;sensor=false&amp;mode=walking&amp;alternatives=true");
+    return urlString.toString();
+}
+
+// draws path from result String
+public void drawPath(String  result) {
+    try {
+        //Tranform the string into a json object
+        final JSONObject json = new JSONObject(result);
+        JSONArray routeArray = json.getJSONArray("routes");
+        JSONObject routes = routeArray.getJSONObject(0);
+        JSONObject overviewPolylines = routes.getJSONObject("overview_polyline");
+        String encodedString = overviewPolylines.getString("points");
+        List&lt;LatLng&gt; list = decodePoly(encodedString);
+
+        for(int z = 0; z&lt;list.size()-1;z++){
+            LatLng src= list.get(z);
+            LatLng dest= list.get(z+1);
+            map.addPolyline(new PolylineOptions()
+            .add(new LatLng(src.latitude, src.longitude), new LatLng(dest.latitude,   dest.longitude))
+            .width(8)
+            .color(Color.BLUE).geodesic(true));
+        }
+
+    } 
+    catch (JSONException e) {
+
+    }
+}
+
+// obtain route using AsyncTask
+private class connectAsyncTask extends AsyncTask&lt;Void, Void, String&gt;{
+    private ProgressDialog progressDialog;
+    String url;
+    connectAsyncTask(String urlPass){
+        url = urlPass;
+    }
+    @Override
+    protected void onPreExecute() {
+        super.onPreExecute();
+        progressDialog = new ProgressDialog(DisplayOnMapActivity.this);
+        progressDialog.setMessage(getResources().getString(R.string.waitCoord));
+        progressDialog.setIndeterminate(true);
+        progressDialog.show();
+    }
+    @Override
+    protected String doInBackground(Void... params) {
+        JSONParser jParser = new JSONParser();
+        String json = jParser.getJSONFromUrl(url);
+        return json;
+    }
+    @Override
+    protected void onPostExecute(String result) {
+        super.onPostExecute(result);   
+        progressDialog.hide();        
+        if(result!=null){
+            drawPath(result);
+        }
+    }
+}
+
+public void drawPath(LatLng src, LatLng dest) {
+    String url = makeURL(src.latitude,src.longitude,dest.latitude,dest.longitude);
+    new connectAsyncTask(url).execute();
+}
+
+// decodes encoded String into PolyLine object
+private List&lt;LatLng&gt; decodePoly(String encoded) {
+
+    List&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+    int index = 0, len = encoded.length();
+    int lat = 0, lng = 0;
+
+    while (index &lt; len) {
+        int b, shift = 0, result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lat += dlat;
+
+        shift = 0;
+        result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lng += dlng;
+
+        LatLng p = new LatLng( (((double) lat / 1E5)),
+                (((double) lng / 1E5) ));
+        poly.add(p);
+    }
+
+    return poly;
+}
+</code></pre>
+
+<p>You will also need the <code>JSONParser class</code>:</p>
+
+<pre><code>public class JSONParser {
+
+static InputStream is = null;
+static JSONObject jobj = null;
+static String json = "";
+public JSONParser(){
+
+}
+public JSONObject makeHttpRequest(String url){
+    DefaultHttpClient httpclient = new DefaultHttpClient();
+    HttpPost httppost = new HttpPost(url);
+    try {
+        HttpResponse httpresponse = httpclient.execute(httppost);
+        if(httpresponse!=null){
+            HttpEntity httpentity = httpresponse.getEntity();
+            is = httpentity.getContent();
+        }
+
+    } catch (UnsupportedEncodingException e) {
+        e.printStackTrace();
+    } catch (ClientProtocolException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+
+    try {
+        if(is!=null){
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is,"iso-8859-1"),8);
+            StringBuilder sb = new StringBuilder();
+            String line = null;
+            try {
+                while((line = reader.readLine())!=null){
+                    sb.append(line+"\n");   
+                    }
+                is.close();
+                json = sb.toString();
+                try {
+                    jobj = new JSONObject(json);
+                } catch (JSONException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            } catch (IOException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+        }
+
+    } catch (Exception e){
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+    return jobj;
+}
+
+public String getJSONFromUrl(String url) {
+    // Making HTTP request
+    try {
+        // defaultHttpClient
+        DefaultHttpClient httpClient = new DefaultHttpClient();
+        HttpPost httpPost = new HttpPost(url);
+
+        HttpResponse httpResponse = httpClient.execute(httpPost);
+        HttpEntity httpEntity = httpResponse.getEntity();
+        is = httpEntity.getContent();           
+
+    } catch (UnsupportedEncodingException e) {
+        e.printStackTrace();
+    } catch (ClientProtocolException e) {
+        e.printStackTrace();
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    try {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                is, "iso-8859-1"), 8);
+        StringBuilder sb = new StringBuilder();
+        String line = null;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line + "\n");
+        }
+
+        json = sb.toString();
+        is.close();
+    } catch (Exception e) {
+        Log.e("Buffer Error", "Error converting result " + e.toString());
+    }
+    return json;
+    }
+}
+</code></pre>

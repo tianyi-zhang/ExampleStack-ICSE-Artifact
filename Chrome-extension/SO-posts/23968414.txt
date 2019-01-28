@@ -1,0 +1,228 @@
+<p>yes this kind of functionality you can achive by use of 
+asynchronous servlet 3.0.it basically works like push 
+notification and also give you respose continously with
+out making request here i have one code that i share with 
+this code may help for you to make async request.</p>
+
+<pre><code>this example check live users
+
+
+
+@WebServlet(urlPatterns = { "/checkliveuser" }, asyncSupported = true)
+public class CheckLiveUser extends HttpServlet {
+    private static final long serialVersionUID = 1L;
+
+    private static final Queue&lt;AsyncContext&gt; queue = new ConcurrentLinkedQueue();
+
+    private static final BlockingQueue&lt;String&gt; messageQueue = new LinkedBlockingQueue();
+
+    private static final String BEGIN_SCRIPT_TAG = "&lt;script type='text/javascript'&gt;\n";
+
+    private static final String END_SCRIPT_TAG = "&lt;/script&gt;\n";
+
+    private Thread notifierThread = null;
+    @Override
+    public void init(ServletConfig config) throws ServletException {
+
+        ServletContext context = config.getServletContext();
+        Set&lt;String&gt; users = new HashSet&lt;String&gt;();
+        Map&lt;String, String&gt; page = new HashMap&lt;String, String&gt;();
+        context.setAttribute("page", page);
+        context.setAttribute("messageQueue", messageQueue);
+
+
+        Runnable notifierRunnable = new Runnable() {
+            public void run() {
+                boolean done = false;
+                while (!done) {
+                    System.out.println("in thread");
+                    String cMessage = null;
+                    try {
+                        cMessage = BEGIN_SCRIPT_TAG + toJsonp("&lt;b&gt;Live User:", messageQueue.take())
+                        + END_SCRIPT_TAG;
+                        for (AsyncContext ac : queue) {
+                            try {
+                                PrintWriter acWriter = ac.getResponse()
+                                        .getWriter();
+                                acWriter.println(cMessage);
+                                acWriter.flush();
+                            } catch (IOException ex) {
+                                System.out.println(ex);
+                                queue.remove(ac);
+
+                            }
+                        }
+                    } catch (InterruptedException iex) {
+                        done = true;
+                        System.out.println(iex);
+                    }
+                }
+            }
+        };
+        notifierThread = new Thread(notifierRunnable);
+        notifierThread.start();
+    }
+
+    /**
+     * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse
+     *      response)
+     */
+    protected void doGet(HttpServletRequest request,
+            HttpServletResponse response) throws ServletException, IOException {
+
+
+        response.setContentType("text/html");
+
+        PrintWriter writer = response.getWriter();
+
+request.setAttribute("org.apache.catalina.ASYNC_SUPPORTED", true);
+        final AsyncContext ac = request.startAsync();
+        ac.setTimeout(10 * 60 * 1000 * 1000);
+        ac.addListener(new AsyncListener() {
+            public void onComplete(AsyncEvent event) throws IOException {
+                queue.remove(ac);
+                System.out.println("on complete");
+            }
+
+            public void onTimeout(AsyncEvent event) throws IOException {
+                queue.remove(ac);
+                System.out.println("on timeout");
+            }
+
+            public void onError(AsyncEvent event) throws IOException {
+                queue.remove(ac);
+                System.out.println("on error");
+
+            }
+
+            public void onStartAsync(AsyncEvent event) throws IOException {
+                System.out.println("on startup");
+            }
+        });
+        queue.add(ac);
+    }
+
+    /**
+     * @see HttpServlet#doPost(HttpServletRequest request, HttpServletResponse
+     *      response)
+     */
+    protected void doPost(HttpServletRequest request,
+            HttpServletResponse response) throws ServletException, IOException {
+
+        response.setContentType("text/plain");
+        response.setCharacterEncoding("UTF-8");
+        ServletContext context = request.getServletContext();
+        HttpSession session = request.getSession();
+        Map&lt;String, String&gt; logins = (Map&lt;String, String&gt;) context
+                .getAttribute("page");
+        if (request.getParameter("action") != null
+                &amp;&amp; !request.getParameter("action").isEmpty()) {
+
+            if (request.getParameter("action").equalsIgnoreCase("logout")) {
+
+                logins.remove(request.getSession().getId());
+                request.getSession().invalidate();
+
+            }
+        }
+        String name = request.getParameter("loginID");
+        if (name != null) {
+
+            session.setAttribute("user", name);
+            session.setAttribute("jsessionId", session.getId());
+            logins.put(session.getId(), name);
+
+        }
+        String html = "";
+
+        for (Map.Entry&lt;String, String&gt; entry : logins.entrySet()) {
+            System.out.println("Key : " + entry.getKey() + " Value : "
+                    + entry.getValue());
+            html += entry.getValue() + "&lt;br&gt;";
+        }
+
+        String cMessage = BEGIN_SCRIPT_TAG + toJsonp("&lt;b&gt;Live User:", html)
+                + END_SCRIPT_TAG;
+        notify(cMessage);
+
+        response.getWriter().println("success");
+        if (request.getParameter("action") != null
+                &amp;&amp; !request.getParameter("action").isEmpty()) {
+
+            if (request.getParameter("action").equalsIgnoreCase("logout"))
+                response.sendRedirect("login.jsp");
+
+        } else {
+            response.sendRedirect("welcome.jsp");
+        }
+
+    }
+
+    @Override
+    public void destroy() {
+        queue.clear();
+        notifierThread.interrupt();
+    }
+
+    private void notify(String cMessage) throws IOException {
+        try {
+            messageQueue.put(cMessage);
+        } catch (Exception ex) {
+            IOException t = new IOException();
+            t.initCause(ex);
+            throw t;
+        }
+    }
+
+    private String escape(String orig) {
+        StringBuffer buffer = new StringBuffer(orig.length());
+
+        for (int i = 0; i &lt; orig.length(); i++) {
+            char c = orig.charAt(i);
+            switch (c) {
+            case '\b':
+                buffer.append("\\b");
+                break;
+            case '\f':
+                buffer.append("\\f");
+                break;
+            case '\n':
+                buffer.append("&lt;br /&gt;");
+                break;
+            case '\r':
+                // ignore
+                break;
+            case '\t':
+                buffer.append("\\t");
+                break;
+            case '\'':
+                buffer.append("\\'");
+                break;
+            case '\"':
+                buffer.append("\\\"");
+                break;
+            case '\\':
+                buffer.append("\\\\");
+                break;
+            case '&lt;':
+                buffer.append("&lt;");
+                break;
+            case '&gt;':
+                buffer.append("&gt;");
+                break;
+            case '&amp;':
+                buffer.append("&amp;");
+                break;
+            default:
+                buffer.append(c);
+            }
+        }
+
+        return buffer.toString();
+    }
+
+    private String toJsonp(String name, String message) {
+        return "window.parent.app.update({ name: \"" + escape(name)
+                + "\", message: \"" + escape(message) + "\" });\n";
+    }
+</code></pre>

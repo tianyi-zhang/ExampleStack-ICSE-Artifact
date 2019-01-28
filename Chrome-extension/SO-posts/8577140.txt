@@ -1,0 +1,683 @@
+<p>After another day of investigation I found some the problems with my code:</p>
+
+<ul>
+<li><p>forgot to unbind used buffers; these calls were missing after filling the buffer with data and after using them for drawing the primitive:  </p>
+
+<pre><code>GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mArray);
+GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, mIndices);
+// fill or draw
+// ...
+// unbind:
+GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, 0);
+</code></pre></li>
+<li><p>calling glBindAttribLocation must occur at the right time: After compiling the shaders, but BEFORE linking the program</p>
+
+<pre><code>// load and compile shaders ...
+mProgramId = loadProgram(vertexShaderSource, fragmentShaderSource);
+
+// Bind the locations
+GLES20.glBindAttribLocation(mProgramId, Shader.VERTEX_POS, "position");
+GLES20.glBindAttribLocation(mProgramId, Shader.NORMAL_POS, "normal");
+
+// finally link program
+GLES20.glLinkProgram(mProgramId);
+</code></pre></li>
+<li><p>misinterpretation of the index parameter in the</p>
+
+<pre><code>GLES20.glBindAttribLocation
+GLES20.glEnableVertexAttribArray
+GLES20.glVertexAttribPointer
+</code></pre>
+
+<p>calls. A deeper look in the spec helps me out. This seems to be always a good idea.</p></li>
+</ul>
+
+<p>It might be helpful for others who have some problems with VBO setup and usage to have a simple, but complete OpenGL ES 2.0 app as a starting point, so I will post the code here.</p>
+
+<p>I've modified the app found here: <a href="https://code.google.com/p/gdc2011-android-opengl">https://code.google.com/p/gdc2011-android-opengl</a>, removed everything but VBO relevant code,
+set up some classes to encapsule functionality and succeeded in making a Android / VBO starter kit.<br>
+This package is one single file, containing the Activity, some helper classes, a basic shader and a camera class and - most important -
+a basic VBO class, which wraps all the functionality to create, use and destroy vertex buffer objects.<br>
+The app does:</p>
+
+<ul>
+<li>set up an OpenGL ES 2.0 environment</li>
+<li>create a shader, which is capable of render lit / unlit geometries</li>
+<li>create a fixed camera</li>
+<li>instantiate 3 VBO based geometries, one of which is a wireframe grid</li>
+<li>render the colored geometries</li>
+</ul>
+
+<p>To use it, simply create a new Android project, create an activity 'GLES20VBOTest' and use the following file.</p>
+
+<pre><code>package com.example.vbo;
+
+/*
+Note: these not exist or not work before Android 2.3
+
+GLES20.glVertexAttribPointer
+GLES20.glDrawElements
+ */
+
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.nio.ShortBuffer;
+
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
+
+import android.app.Activity;
+import android.opengl.GLES20;
+import android.opengl.GLSurfaceView;
+import android.opengl.Matrix;
+import android.os.Bundle;
+import android.util.Log;
+
+
+public class GLES20VBOTest extends Activity {
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        GLSurfaceView view = new GLSurfaceView(this);
+        view.setEGLContextClientVersion(2);
+        view.setRenderer(new GDC11Renderer());
+
+        setContentView(view);
+    }
+
+}
+
+// Helper class to create some different geometries
+class GeoData {
+
+    public float[] mVertices;
+    public short[] mIndices;
+
+    private GeoData() {}
+
+    static public GeoData halfpipe() {
+        GeoData creator = new GeoData();
+        creator.mVertices = createVertices1(44);
+        creator.mIndices = createIndices1(44);
+        return creator;
+    }
+
+    static public GeoData circle() {
+        GeoData creator = new GeoData();
+        creator.mVertices = createVertices2(32);
+        creator.mIndices = createIndices2(32);
+        return creator;
+    }
+
+    static public GeoData grid() {
+        GeoData creator = new GeoData();
+        creator.mVertices = createGridVertices(30,30);
+        creator.mIndices = createGridIndices(30,30);
+        return creator;
+    }
+
+    static float[] createGridVertices(int m, int n) {
+        float[] vertices = new float[3*(2*m + 2*n + 4)];
+
+        float y = 0.1f;
+        float S = 2.8f;
+        for (int i=0; i&lt;=m; i++) {
+            float x = S*(float) (-0.5 + (1.0*i)/m);
+            float z = S*0.5f;
+            vertices[6*i + 0] = x;
+            vertices[6*i + 1] = y;
+            vertices[6*i + 2] = z;
+            vertices[6*i + 3] = x;
+            vertices[6*i + 4] = y;
+            vertices[6*i + 5] = -z;
+        }
+
+        int start = 3*(2*m + 2);
+        // start = 0;
+        for (int i=0; i&lt;=n; i++) {
+            float z = S*(float) (-0.5 + (1.0*i)/n);
+            float x = S*0.5f;
+            vertices[start + 6*i + 0] = x;
+            vertices[start + 6*i + 1] = y;
+            vertices[start + 6*i + 2] = z;
+            vertices[start + 6*i + 3] = -x;
+            vertices[start + 6*i + 4] = y;
+            vertices[start + 6*i + 5] = z;
+        }
+
+        float[] M = new float[16];
+        Matrix.setIdentityM(M, 0);
+        Matrix.rotateM(M, 0, 27, 0.76f, -0.9f, 1.5f);
+        int count = (2*m + 2*n + 4);
+        Log.d("MKZ", "A: " + count);
+        Log.d("MKZ", "B: " + vertices.length / 3);
+        for (int i=0; i&lt;count-1; i++) {
+            int offset = 3*i;
+            Log.d("MKZ", "offset: " + offset);
+            Matrix.multiplyMV(vertices, offset, M, 0, vertices, offset);
+        }
+
+        return vertices;
+    }
+
+    static short[] createGridIndices(int m, int n) {
+        int N = 2*(m+n+2);
+        short[] indices = new short[N];
+        for (int i=0; i&lt;N; i++) {
+            indices[i] = (short)i;
+        }
+        return indices;
+    }
+
+    static float[] createVertices1(int n) {
+        int NUM_COMPONENTS = 6;
+        float S = 0.75f;
+        float X = 1f;
+        float z0 = 1.3f;
+        float z1 = 1.1f;
+        float dx = 2*X / n;
+        float[] vertices = new float[NUM_COMPONENTS*(n+1)*2];
+        for (int i=0; i&lt;(n+1); i++) {
+            int I0 = 2*NUM_COMPONENTS*i;
+            int I1 = 2*NUM_COMPONENTS*i + NUM_COMPONENTS;
+            float x = -X + dx*i;
+            float y = -(float) Math.sqrt(1.0 - x*x);
+            vertices[I0 + 0] = S*x;
+            vertices[I0 + 1] = S*y;
+            vertices[I0 + 2] = S*z0;
+            vertices[I0 + 3] = x;
+            vertices[I0 + 4] = y;
+            vertices[I0 + 5] = 0;
+
+            vertices[I1 + 0] = S*x; 
+            vertices[I1 + 1] = S*y;
+            vertices[I1 + 2] = S*z1;
+            vertices[I1 + 3] = x;
+            vertices[I1 + 4] = y;
+            vertices[I1 + 5] = 0;
+        }
+        return vertices;
+    }
+    static short[] createIndices1(int n) {
+        short[] indices = new short[(n+1)*2];
+        for (short i=0; i&lt;(n+1)*2; i++) {
+            indices[i] = i;
+        }
+        return indices;
+    }
+
+    static float[] createVertices2(int n) {
+        int NUM_COMPONENTS = 6;
+        float[] vertices = new float[NUM_COMPONENTS*(n+2)];
+        final float S = 0.9f;
+        final float Y = -0.0f;
+        vertices[0] = 0;
+        vertices[1] = Y;
+        vertices[2] = 0;
+        vertices[3] = 0;
+        vertices[4] =-1;
+        vertices[5] = 0;
+        for (int i=0; i&lt;=n; i++) {
+            int I = 6 + 6*i;
+            float a = (float) (0.75*2*Math.PI*i/n);
+            float x = (float) (S*Math.cos(a));
+            float z = (float) (S*Math.sin(a));
+            vertices[I+0] = x;
+            vertices[I+1] = Y;
+            vertices[I+2] = z;
+            vertices[I+3] = 0;
+            vertices[I+4] =-1;
+            vertices[I+5] = 0;
+        }
+        return vertices;
+    }
+    static short[] createIndices2(int n) {
+        short[] indices = new short[(n+2)];
+        for (short i=0; i&lt;(n+2); i++) {
+            indices[i] = i;
+        }
+        return indices;
+    }
+}
+
+// all GLES20 calls are made here
+class Shader {
+    // THESE ARE ARBITRARY VALUES, the only constraints are
+    // - must be different
+    // - must be less than a maximum value
+    static final int VERTEX_POS = 3;
+    static final int NORMAL_POS = 4;
+    static final int TEX_POS = 5;
+    static final String TAG = "VBOTest";
+
+    private int mProgramId;
+    private int mViewProjectionLoc;
+    private int mLightVectorLoc;
+    private int mColorLoc;
+    private int mEnableLightLoc;
+
+
+    Shader() {
+        mProgramId = loadProgram(kVertexShader, kFragmentShader);
+        GLES20.glBindAttribLocation(mProgramId, Shader.VERTEX_POS, "position");
+        GLES20.glBindAttribLocation(mProgramId, Shader.NORMAL_POS, "normal");
+        GLES20.glLinkProgram(mProgramId);
+        mViewProjectionLoc =
+            GLES20.glGetUniformLocation(mProgramId, "worldViewProjection");
+        mLightVectorLoc =
+            GLES20.glGetUniformLocation(mProgramId, "lightVector");
+        mColorLoc =
+            GLES20.glGetUniformLocation(mProgramId, "color");
+        mEnableLightLoc =
+            GLES20.glGetUniformLocation(mProgramId, "enableLight");
+
+        // Other state.
+        GLES20.glClearColor(0.7f, 0.7f, 0.7f, 1.0f);
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+    }
+
+    public void use() {
+        GLES20.glUseProgram(mProgramId);
+    }
+    public void setCamera(float[] viewProjectionMatrix) {
+        GLES20.glUniformMatrix4fv(mViewProjectionLoc,
+                1,
+                false, // transpose isn't supported
+                viewProjectionMatrix, 0);
+    }
+    public void setLight(float[] transformedLightVector) {
+        GLES20.glUniform3fv(mLightVectorLoc, 1, transformedLightVector, 0);
+    }
+    public void setColor(float[] color) {
+        GLES20.glUniform3fv(mColorLoc, 1, color, 0);
+    }
+    public void enableLight(boolean val) {
+        GLES20.glUniform1i(mEnableLightLoc, val ? 1 : 0);
+    }
+
+    static public void setViewPort(int width, int height) {
+        GLES20.glViewport(0, 0, width, height);
+    }
+
+
+
+    private static String kLogTag = "GDC11";
+
+    private static int getShader(String source, int type) {
+        int shader = GLES20.glCreateShader(type);
+        if (shader == 0) return 0;
+
+        GLES20.glShaderSource(shader, source);
+        GLES20.glCompileShader(shader);
+        int[] compiled = { 0 };
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0);
+        if (compiled[0] == 0) {
+            Log.e(kLogTag, GLES20.glGetShaderInfoLog(shader));
+        }
+        return shader;
+    }
+
+    public static int loadProgram(String vertexShader,
+            String fragmentShader) {
+        int vs = getShader(vertexShader, GLES20.GL_VERTEX_SHADER);
+        int fs = getShader(fragmentShader, GLES20.GL_FRAGMENT_SHADER);
+        if (vs == 0 || fs == 0) return 0;
+
+        int program = GLES20.glCreateProgram();
+        GLES20.glAttachShader(program, vs);
+        GLES20.glAttachShader(program, fs);
+        GLES20.glLinkProgram(program);
+
+        int[] linked = { 0 };
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linked, 0);
+        if (linked[0] == 0) {
+            Log.e(kLogTag, GLES20.glGetProgramInfoLog(program));
+            return 0;
+        }
+        return program;
+    }
+
+
+    private static final String kVertexShader =
+        "precision mediump float;                                   \n" +
+        "uniform mat4 worldViewProjection;                          \n" +
+        "uniform vec3 lightVector;                                  \n" +
+        "attribute vec3 position;                                   \n" +
+        "attribute vec3 normal;                                     \n" +
+        "varying float light;                                       \n" +
+        "void main() {                                              \n" +
+        // |lightVector| is in the model space, so the model
+        // doesn't have to be transformed.
+        "  light = max(dot(normal, lightVector), 0.0) + 0.2;        \n" +
+        "  gl_Position = worldViewProjection * vec4(position, 1.0); \n" +
+        "}";
+
+    private static final String kFragmentShader =
+        "precision mediump float;                                   \n" +
+        "uniform sampler2D textureSampler;                          \n" +
+        "uniform vec3 color;                                        \n" +
+        "uniform int enableLight;                                   \n" +
+        "varying float light;                                       \n" +
+        "void main() {                                              \n" +
+        "  if (1 == enableLight) {                                  \n" +
+        "    gl_FragColor = light * vec4(color,1);                  \n" +
+        "  } else {                                                 \n" +
+        "    gl_FragColor = vec4(color,1);                          \n" +
+        "  }                                                        \n" +
+        // "  gl_FragColor = light * vec4(0.1,0.7,0.0,1);               \n" +
+        "}";
+
+
+    public void clearView() {
+        int clearMask = GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT;
+        GLES20.glClear(clearMask);
+    }
+}
+
+// view matrices
+class Camera {
+    private float mPhi, mZ = 3.5f;
+    private float[] mProjectionMatrix = new float[16];
+    private float[] mViewMatrix = new float[16];
+    private float[] mViewProjectionMatrix = new float[16];
+
+
+    // Updates mViewProjectionMatrix with the current camera position.
+    public void updateMatrices() {
+        Matrix.setIdentityM(mViewMatrix, 0);
+        Matrix.translateM(mViewMatrix, 0, 0, 0, -mZ);
+        Matrix.rotateM(mViewMatrix, 0, mPhi, 0, 1, 0);
+        Matrix.rotateM(mViewMatrix, 0, -90, 1, 0, 0);
+        Matrix.multiplyMM(
+                mViewProjectionMatrix, 0, mProjectionMatrix, 0, mViewMatrix, 0);
+    }
+
+    public float[] viewMatrix() {
+        return mViewMatrix;
+    }
+
+    public void perspective(int width, int height) {
+        float aspect = width / (float)height;
+        perspectiveM(
+                mProjectionMatrix,
+                (float)Math.toRadians(45),
+                aspect, 0.1f, 15.f);
+        // aspect, 0.5f, 5.f);
+        updateMatrices();
+    }
+
+    // Like gluPerspective(), but writes the output to a Matrix.
+    static private void perspectiveM(
+            float[] m, float angle, float aspect, float near, float far) {
+        float f = (float)Math.tan(0.5 * (Math.PI - angle));
+        float range = near - far;
+
+        m[0] = f / aspect;
+        m[1] = 0;
+        m[2] = 0;
+        m[3] = 0;
+
+        m[4] = 0;
+        m[5] = f;
+        m[6] = 0;
+        m[7] = 0;
+
+        m[8] = 0;
+        m[9] = 0; 
+        m[10] = far / range;
+        m[11] = -1;
+
+        m[12] = 0;
+        m[13] = 0;
+        m[14] = near * far / range;
+        m[15] = 0;
+    }
+
+    public void use(Shader shader) {
+        shader.setCamera(mViewProjectionMatrix);
+    }
+}
+
+// The renderer object.
+// Manages the graphic view / content
+class GDC11Renderer implements GLSurfaceView.Renderer {
+
+    // OpenGL state stuff.
+    private Shader mShader;
+    private Camera mCamera;
+
+    VBO mVBO1, mVBO2, mVBO3;
+
+    private float[] mLightVector = { 2/3.f, 1/3.f, 2/3.f };  // Needs to be normalized
+    private float[] mTransformedLightVector = new float[3];
+
+    private void updateLightVector() {
+
+        // Transform the light vector into model space. Since mViewMatrix
+        // is orthogonal, the reverse transform can be done by multiplying
+        // with the transpose.
+
+        float[] viewMatrix = mCamera.viewMatrix();
+
+        mTransformedLightVector[0] =
+            viewMatrix[0] * mLightVector[0] +
+            viewMatrix[1] * mLightVector[1] +
+            viewMatrix[2] * mLightVector[2];
+        mTransformedLightVector[1] =
+            viewMatrix[4] * mLightVector[0] +
+            viewMatrix[5] * mLightVector[1] +
+            viewMatrix[6] * mLightVector[2];
+        mTransformedLightVector[2] =
+            viewMatrix[8] * mLightVector[0] +
+            viewMatrix[9] * mLightVector[1] +
+            viewMatrix[10] * mLightVector[2];            
+    }
+
+    // This is called continuously to render.
+    @Override
+    public void onDrawFrame(GL10 unused) {
+
+        mShader.use();
+        mShader.clearView();
+        mCamera.use(mShader);
+        mShader.setLight(mTransformedLightVector);
+
+        // VBO
+        mShader.enableLight(true);
+
+        mShader.setColor(red);
+        mVBO1.draw();
+
+        mShader.setColor(gold);
+        mVBO2.draw();
+
+        mShader.enableLight(false);
+        mShader.setColor(brown);
+        mVBO3.draw();
+
+    }
+    static float[] green = {0.2f,1,0.2f};
+    static float[] brown = {0.7f,0.4f,0.2f};
+    static float[] red = {0.9f,0,0};
+    static float[] gold = {0.9f,0.8f,0.1f};
+    static float[] black = {0,0,0};
+
+
+    @Override
+    public void onSurfaceCreated(GL10 unused, EGLConfig config) {
+        // CREATE GEOMETRY
+        // NEVER load stuff on the render thread in real life!
+        // You'd call fc.map() and b.load() on a loader thread, and
+        // only then upload that to GL once it's done.
+
+        mShader = new Shader();
+        mCamera = new Camera();
+
+        GeoData data = GeoData.halfpipe();
+        mVBO1 = new VBO(data.mVertices, data.mIndices, GLES20.GL_TRIANGLE_STRIP, true, false, -1);
+
+        data = GeoData.circle();
+        mVBO2 = new VBO(data.mVertices, data.mIndices, GLES20.GL_TRIANGLE_FAN, true, false, -1);
+
+        data = GeoData.grid();
+        mVBO3 = new VBO(data.mVertices, data.mIndices, GLES20.GL_LINES, false, false, -1);
+    }
+
+    // This is called when the surface changes, e.g. after screen rotation.
+    @Override
+    public void onSurfaceChanged(GL10 unused, int width, int height) {
+        mCamera.perspective(width, height);
+
+        updateLightVector();
+
+        // Necessary if the manifest contains |android:configChanges="orientation"|.
+        Shader.setViewPort(width, height);
+    }
+}
+
+
+class VBO {
+    int mNumIndices;
+
+    int mIndexBufferId; 
+    int mVertexBufferId;
+    boolean mUseNormals;
+    boolean mUseTexCoords;
+
+    int mType;
+    int mNumComponents;
+    int mStride;
+
+    VBO(float[] vertices,               // array of vertex data
+            short[] indices,            // indices
+            int type,                   // GL_POINTS, GL_LINE_STRIP, GL_LINE_LOOP, GL_LINES,
+            // GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN, and GL_TRIANGLES
+            boolean vertexNormals,      // normals used ?
+            boolean vertexTexCoords,    // texCoords used ?
+            int stride) {               // struct size in bytes; if stride &lt;= 0 -&gt; stride will be calculated
+
+
+        mType = type;
+        mUseNormals = vertexNormals;
+        mUseTexCoords = vertexTexCoords;
+
+        mNumComponents = 3;
+        if (mUseNormals) {
+            mNumComponents += 3;
+        }
+        if (mUseTexCoords) {
+            mNumComponents += 2;
+        }
+
+        if (stride &lt;= 0) {
+            mStride = 4 * mNumComponents;
+        } else {
+            mStride = stride;
+        }
+
+        int[] buffers = {0,0};
+        GLES20.glGenBuffers(2, buffers, 0);
+
+        mVertexBufferId = buffers[0];
+        mIndexBufferId = buffers[1];
+
+        createVertexBuffer(GLES20.GL_ARRAY_BUFFER, vertices, mVertexBufferId);
+        createIndexBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, indices, mIndexBufferId);
+        mNumIndices = indices.length;
+    }
+
+    void deleteBuffers() {
+        int[] buffers = {mVertexBufferId, mIndexBufferId};
+        GLES20.glDeleteBuffers(2, buffers, 0);
+        mVertexBufferId = 0;
+        mIndexBufferId = 0;
+    }
+
+    void draw() {
+        if (0 == mVertexBufferId) {
+            return;
+        }
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mVertexBufferId);
+
+        GLES20.glEnableVertexAttribArray(Shader.VERTEX_POS);
+        if (mUseNormals) {
+            GLES20.glEnableVertexAttribArray(Shader.NORMAL_POS);
+        }
+        if (mUseTexCoords) {
+            GLES20.glEnableVertexAttribArray(Shader.TEX_POS);
+        }
+
+        int offset = 0;
+
+        GLES20.glVertexAttribPointer(
+                Shader.VERTEX_POS,      // generic id
+                3,                      // vertex has 3 components
+                GLES20.GL_FLOAT,        // data type
+                false,                  // no normalizing
+                mStride,                // stride: sizeof(float) * number of components
+                offset);                // offset 0; vertex starts at zero
+        offset += 4 * 3;
+
+        if (mUseNormals) {
+
+            GLES20.glVertexAttribPointer(
+                    Shader.NORMAL_POS,
+                    3,
+                    GLES20.GL_FLOAT,
+                    false,
+                    mStride,
+                    offset);
+            offset += 4 * 3;
+        }
+
+        if (mUseTexCoords) {
+
+            GLES20.glVertexAttribPointer(
+                    Shader.TEX_POS,
+                    2,                      // texCoord has 2 components
+                    GLES20.GL_FLOAT,
+                    false,
+                    mStride,
+                    offset);
+            offset += 4 * 3;
+        }
+
+        GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, mIndexBufferId);
+        GLES20.glDrawElements(mType, mNumIndices, GLES20.GL_UNSIGNED_SHORT, 0);
+
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+        GLES20.glBindBuffer(GLES20.GL_ELEMENT_ARRAY_BUFFER, 0);
+
+        GLES20.glDisableVertexAttribArray(Shader.VERTEX_POS);
+        GLES20.glDisableVertexAttribArray(Shader.NORMAL_POS);
+        GLES20.glDisableVertexAttribArray(Shader.TEX_POS);
+    }
+    static void createVertexBuffer(int target, float[] vertices, int bufferId) {
+        int size = vertices.length * 4;
+        FloatBuffer fb = ByteBuffer.allocateDirect(4*vertices.length).order(ByteOrder.nativeOrder()).asFloatBuffer();
+        fb.put(vertices);
+        fb.position(0);
+
+        createBuffer(target, fb, size, bufferId);
+    }
+    static void createIndexBuffer(int target, short[] indices, int bufferId) {
+        int size = indices.length * 2;
+        ShortBuffer sb = ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder()).asShortBuffer();
+        sb.put(indices);
+        sb.position(0);
+
+        createBuffer(target, sb, size, bufferId);
+    }
+    static void createBuffer(int target, Buffer buf, int size, int bufferId) {
+        GLES20.glBindBuffer(target, bufferId);
+        GLES20.glBufferData(target, size, buf, GLES20.GL_STATIC_DRAW);
+        GLES20.glBindBuffer(target, 0);
+    }
+}
+</code></pre>

@@ -1,0 +1,53 @@
+<p>I was getting the same error using the <strong>ThumbnailUtils</strong> class <a href="http://developer.android.com/reference/android/media/ThumbnailUtils.html" rel="nofollow">http://developer.android.com/reference/android/media/ThumbnailUtils.html</a><br>
+It uses <strong>MediaMetadataRetriever</strong> under the hood and most of the time you can send it a filepath using this method with no problem:</p>
+
+<pre><code>public static Bitmap createVideoThumbnail (String filePath, int kind)  
+</code></pre>
+
+<p>However, on Android 4.0.4, I kept getting the same error @gabi was seeing.  Using a file descriptor instead solved the problem and still works for non-4.0.4 devices.  I actually ended up subclassing ThumbnailUtils.  Here is my subclass method:</p>
+
+<pre><code> public static Bitmap createVideoThumbnail(FileDescriptor fDescriptor, int kind) 
+ {
+    Bitmap bitmap = null;
+    MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+    try {
+        retriever.setDataSource(fDescriptor);
+        bitmap = retriever.getFrameAtTime(-1);
+    } 
+    catch (IllegalArgumentException ex) {
+        // Assume this is a corrupt video file
+        Log.e(LOG_TAG, "Failed to create video thumbnail for file description: " + fDescriptor.toString());
+    }
+    catch (RuntimeException ex) {
+        // Assume this is a corrupt video file.
+        Log.e(LOG_TAG, "Failed to create video thumbnail for file description: " + fDescriptor.toString());
+    } finally {
+        try {
+            retriever.release();
+        } catch (RuntimeException ex) {
+            // Ignore failures while cleaning up.
+        }
+    }
+
+    if (bitmap == null) return null;
+
+    if (kind == Images.Thumbnails.MINI_KIND) {
+        // Scale down the bitmap if it's too large.
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int max = Math.max(width, height);
+        if (max &gt; 512) {
+            float scale = 512f / max;
+            int w = Math.round(scale * width);
+            int h = Math.round(scale * height);
+            bitmap = Bitmap.createScaledBitmap(bitmap, w, h, true);
+        }
+    } else if (kind == Images.Thumbnails.MICRO_KIND) {
+        bitmap = extractThumbnail(bitmap,
+                TARGET_SIZE_MICRO_THUMBNAIL,
+                TARGET_SIZE_MICRO_THUMBNAIL,
+                OPTIONS_RECYCLE_INPUT);
+    }
+    return bitmap;
+}
+</code></pre>

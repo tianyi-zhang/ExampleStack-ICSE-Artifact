@@ -1,0 +1,146 @@
+<p>Solved it by doing the following:</p>
+
+<ol>
+<li>Removed constructor from <code>AsyncTask</code> class</li>
+<li>Called <code>getAutocomplete(constraint)</code>, without setting the return value as mResultList</li>
+<li>Override <code>processFinish</code> as its own method in <code>Adapter</code> class, not nested within another method.</li>
+<li>Set <code>mResultList = DataBufferUtils.freezeAndClose(autocompletePredictions)</code> within <code>processFinish</code>. Since <code>mResultList</code> is a global variable, when it is then used in a different method it already has the right results in it. </li>
+</ol>
+
+<p>New Adapter:</p>
+
+<pre><code>public class PlaceAutocompleteAdapter extends ArrayAdapter&lt;AutocompletePrediction&gt; implements Filterable,AsyncResponse
+{
+
+private static final String TAG = "PlaceAutocompleteAdapter";
+private static final CharacterStyle STYLE_BOLD = new StyleSpan(Typeface.BOLD);
+
+// Current results returned by this adapter.
+private ArrayList&lt;AutocompletePrediction&gt; mResultList;
+
+// Handles autocomplete requests.
+private GoogleApiClient mGoogleApiClient;
+
+// The bounds used for Places Geo Data autocomplete API requests.
+private LatLngBounds mBounds;
+
+// The autocomplete filter used to restrict queries to a specific set of place types.
+private AutocompleteFilter mPlaceFilter;
+
+//constructor
+public PlaceAutocompleteAdapter(Context context, GoogleApiClient googleApiClient,
+                                LatLngBounds bounds, AutocompleteFilter filter){
+
+super(context, android.R.layout.simple_expandable_list_item_2, android.R.id.text1);
+    mGoogleApiClient = googleApiClient;
+    mBounds = bounds;
+    mPlaceFilter = filter;
+}
+
+ //returns the number of results received in the last autocomplete query
+@Override
+public int getCount(){
+    return mResultList.size();
+}
+
+// returns an item from the last autocomplete query
+@Override
+public AutocompletePrediction getItem(int position) {
+    return mResultList.get(position);
+}
+
+@Override
+public View getView(int position, View convertView, ViewGroup parent) {
+
+    View row = super.getView(position, convertView, parent);
+
+    // sets the primary and secondary text for a row.
+    // note that getPrimaryText() and getSecondaryText() return a CharSequence that may
+    // contain styling based on the given CharacterStyle
+
+    AutocompletePrediction item = getItem(position);
+
+    TextView textView1 = (TextView) row.findViewById(android.R.id.text1);
+    TextView textView2 = (TextView) row.findViewById(android.R.id.text2);
+    textView1.setText(item.getPrimaryText(STYLE_BOLD));
+    textView2.setText(item.getSecondaryText(STYLE_BOLD));
+
+    return row;
+}
+
+// returns the filter for the current set of autocomplete results
+@Override
+public Filter getFilter() {
+    return new Filter() {
+        @Override
+        protected FilterResults performFiltering(CharSequence constraint) {
+            FilterResults results = new FilterResults();
+
+            //skip the autocomplete query if no constraints are given
+            if (constraint != null) {
+
+                getAutocomplete(constraint);
+
+                if (mResultList != null) {
+                    //the API successfully returned results
+                    results.values = mResultList;
+                    results.count = mResultList.size();
+                }
+            }
+            return results;
+        }
+
+        @Override
+        protected void publishResults(CharSequence constraint, FilterResults results) {
+            if (results != null &amp;&amp; results.count &gt; 0) {
+                Log.i("notifyDataSetChanged","results are not null");
+                // The API returned at least one result, update the data.
+                notifyDataSetChanged();
+            } else {
+               Log.i("notifyDataSetInvalid", "results are null");
+                // The API did not return any results, invalidate the data set.
+                notifyDataSetInvalidated();
+            }
+        }
+
+        @Override
+        public CharSequence convertResultToString(Object resultValue) {
+            // override this method to display a readable result in the AutocompleteTextView
+            // when clicked.
+            if (resultValue instanceof AutocompletePrediction) {
+                return ((AutocompletePrediction) resultValue).getFullText(null);
+            } else {
+                return super.convertResultToString(resultValue);
+            }
+        }
+    };
+}
+
+        public void  getAutocomplete(CharSequence constraint) {
+
+            if (mGoogleApiClient.isConnected()) {
+                MyTaskParams params = new MyTaskParams(constraint, mGoogleApiClient, mBounds, mPlaceFilter);
+
+                updateSuggestionAsync myTask = new updateSuggestionAsync();
+                myTask.delegate=this;
+                myTask.execute(params);
+            }
+        }
+
+@Override
+public ArrayList&lt;AutocompletePrediction&gt; processFinish(AutocompletePredictionBuffer autocompletePredictions){
+    Log.i("made it processFinish","made it processFinish");
+    // Confirm that the query completed successfully, otherwise return null
+    final com.google.android.gms.common.api.Status status = autocompletePredictions.getStatus();
+    if (!status.isSuccess()) {
+        Log.i("Error contacting API","Error contacting API");
+        Toast.makeText(getContext(), "Error contacting API: " + status.toString(),
+                Toast.LENGTH_SHORT).show();
+        autocompletePredictions.release();
+        return null;
+    }
+    mResultList = DataBufferUtils.freezeAndClose(autocompletePredictions);
+    // Freeze the results immutable representation that can be stored safely.
+    return  mResultList;
+}
+</code></pre>

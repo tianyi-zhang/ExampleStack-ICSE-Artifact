@@ -1,0 +1,143 @@
+<p>It's pretty easy to write a custom scope to do this...</p>
+
+<pre><code>public class CustomScope implements Scope, BeanFactoryPostProcessor {
+
+    @Override
+    public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
+        String name = "myScope";
+
+        beanFactory.registerScope(name, this);
+
+        Assert.state(beanFactory instanceof BeanDefinitionRegistry,
+                "BeanFactory was not a BeanDefinitionRegistry, so CustomScope cannot be used.");
+        BeanDefinitionRegistry registry = (BeanDefinitionRegistry) beanFactory;
+
+        for (String beanName : beanFactory.getBeanDefinitionNames()) {
+            BeanDefinition definition = beanFactory.getBeanDefinition(beanName);
+            if (name.equals(definition.getScope())) {
+                BeanDefinitionHolder proxyHolder = ScopedProxyUtils.createScopedProxy(new BeanDefinitionHolder(definition, beanName), registry, false);
+                registry.registerBeanDefinition(beanName, proxyHolder.getBeanDefinition());
+            }
+        }
+    }
+
+    @Override
+    public Object get(String name, ObjectFactory&lt;?&gt; objectFactory) {
+        return objectFactory.getObject(); // a new one every time
+    }
+
+    @Override
+    public String getConversationId() {
+        return null;
+    }
+
+    @Override
+    public void registerDestructionCallback(String name, Runnable callback) {
+
+    }
+
+    @Override
+    public Object remove(String name) {
+        return null;
+    }
+
+    @Override
+    public Object resolveContextualObject(String arg0) {
+        return null;
+    }
+
+}
+
+
+public class Foo implements MessageListener {
+
+    private Bar bar;
+
+    public void setBar(Bar bar) {
+        this.bar = bar;
+    }
+
+    @Override
+    public void onMessage(Message message) {
+        System.out.println(bar.getId());
+    }
+
+}
+@ContextConfiguration
+@RunWith(SpringJUnit4ClassRunner.class)
+public class FooTests {
+
+    @Autowired
+    private Foo foo;
+
+    @Test
+    public void test() {
+        Message message = mock(Message.class);
+        foo.onMessage(message);
+        foo.onMessage(message);
+    }
+
+}
+</code></pre>
+
+<p>and a sample context...</p>
+
+<pre><code>&lt;bean class="foo.CustomScope" /&gt;
+
+&lt;bean id="baz" class="foo.BazImpl" scope="myScope" /&gt;
+
+&lt;bean id="bar" class="foo.BarImpl" scope="myScope"&gt;
+    &lt;property name="baz" ref="baz" /&gt;
+&lt;/bean&gt;
+
+&lt;bean id="foo" class="foo.Foo"&gt;
+    &lt;property name="bar" ref="bar" /&gt;
+&lt;/bean&gt;
+</code></pre>
+
+<p><strong>Note:</strong> with this simple scope, you have to put all the referenced beans in the scope as well (bar <strong>and</strong> baz above). You can make all the referenced beans inherit the scope, but it takes some work. That said - there's an example of how to do it in spring-batch's StepScope.</p>
+
+<p><strong>Note#2</strong> this will get a new instance for every method call. If you call multiple methods you'll get a new bean for each call. If you want to scope it to allow all calls within onMessage to use the same instance, you'll need to add some more tricks.</p>
+
+<p><strong>EDIT:</strong>
+Here are some updates to support multiple calls to an instance within the onMessage()...</p>
+
+<pre><code>private final ThreadLocal&lt;Map&lt;String, Object&gt;&gt; holder = new ThreadLocal&lt;Map&lt;String, Object&gt;&gt;();
+
+...
+
+@Override
+public Object get(String name, ObjectFactory&lt;?&gt; objectFactory) {
+    Map&lt;String, Object&gt; cache = this.holder.get();
+    if (cache == null) {
+        cache = new HashMap&lt;String, Object&gt;();
+        this.holder.set(cache);
+    }
+    Object object = cache.get(name);
+    if (object == null) {
+        object = objectFactory.getObject();
+        cache.put(name, object);
+    }
+    return object;
+}
+
+public void clearCache() {
+    this.holder.remove();
+}
+</code></pre>
+
+<p>Now, you <strong>do</strong> have to clear the cache...</p>
+
+<pre><code>@Override
+public void onMessage(Message message) {
+    try {
+        System.out.println(bar.getId());
+        System.out.println(bar.getId());
+    }
+    finally {
+        this.scope.clearCache();
+    }
+}
+</code></pre>
+
+<p>But even that could be done in an AOP @After advice, to keep the listener totally clean.</p>

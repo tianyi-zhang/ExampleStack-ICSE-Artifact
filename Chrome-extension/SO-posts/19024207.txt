@@ -1,0 +1,219 @@
+<p>I think what @thierry-dimitri-roy explained is correct, however I had a lot of issues actually implementing it. For example, just wrapping the handleconnection method isn't enough due to noendpointfoundexception not being thrown. As this is more general issue of handling exceptions nicely, I'm putting my code here to ease the pain for future generations. This is tested with spring-ws 2.1.3 and JBoss AS7.</p>
+
+<p>My message handler converts all problems to soap faults with response code 200.</p>
+
+<pre><code>package fi.eis.applications.spring.soap.server.transport.http;
+
+import java.io.IOException;
+import java.net.URISyntaxException;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.lang3.StringEscapeUtils;
+import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.core.Ordered;
+import org.springframework.web.servlet.HandlerAdapter;
+import org.springframework.web.servlet.ModelAndView;
+import org.springframework.ws.FaultAwareWebServiceMessage;
+import org.springframework.ws.InvalidXmlException;
+import org.springframework.ws.NoEndpointFoundException;
+import org.springframework.ws.WebServiceMessage;
+import org.springframework.ws.WebServiceMessageFactory;
+import org.springframework.ws.context.DefaultMessageContext;
+import org.springframework.ws.context.MessageContext;
+import org.springframework.ws.support.DefaultStrategiesHelper;
+import org.springframework.ws.transport.EndpointAwareWebServiceConnection;
+import org.springframework.ws.transport.FaultAwareWebServiceConnection;
+import org.springframework.ws.transport.WebServiceConnection;
+import org.springframework.ws.transport.WebServiceMessageReceiver;
+import org.springframework.ws.transport.context.DefaultTransportContext;
+import org.springframework.ws.transport.context.TransportContext;
+import org.springframework.ws.transport.context.TransportContextHolder;
+import org.springframework.ws.transport.http.HttpServletConnection;
+import org.springframework.ws.transport.http.HttpTransportConstants;
+import org.springframework.ws.transport.http.MessageDispatcherServlet;
+import org.springframework.ws.transport.http.WebServiceMessageReceiverHandlerAdapter;
+import org.springframework.ws.transport.support.TransportUtils;
+
+/**
+ * Adapter to map XML parsing and other low-level errors to SOAP faults instead of
+ * server standard error pages. Also, this class will always use return code HTTP_OK
+ * (status 200) to requests, even if there are errors.
+ *  
+ */
+public class MyWebServiceMessageReceiverHandlerAdapter
+    extends WebServiceMessageReceiverHandlerAdapter
+    implements HandlerAdapter, Ordered, InitializingBean, ApplicationContextAware {
+
+    private ApplicationContext context;
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext)
+            throws BeansException {
+        this.context = applicationContext;
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        DefaultStrategiesHelper defaultStrategiesHelper = new DefaultStrategiesHelper(MessageDispatcherServlet.class);
+        WebServiceMessageFactory factory = defaultStrategiesHelper
+                .getDefaultStrategy(WebServiceMessageFactory.class, context);
+        setMessageFactory(factory);
+    }
+
+    public ModelAndView handle(HttpServletRequest httpServletRequest,
+                               HttpServletResponse httpServletResponse,
+                               Object handler) throws Exception {
+        if (HttpTransportConstants.METHOD_POST.equals(httpServletRequest.getMethod())) {
+            WebServiceConnection connection = new MyWebServiceConnection(httpServletRequest, httpServletResponse);
+            try {
+                overriddenHandleConnection(connection, (WebServiceMessageReceiver) handler);
+            } catch (InvalidXmlException ex) {
+                handleInvalidXmlException(httpServletRequest, httpServletResponse, handler, ex);
+            } catch (Exception ex) {
+                handleGeneralException(httpServletRequest, httpServletResponse, handler, ex);
+            }
+        }
+        else {
+            handleNonPostMethod(httpServletRequest, httpServletResponse, handler);
+        }
+        return null;
+    }
+
+
+    /**
+     * Overridden version of handleConnection from WebServiceMessageReceiverObjectSupport to be able to handle
+     * missing endpoint ourselves. That method is final, so we need to use another method here.
+     * 
+     * This has been reported as https://jira.springsource.org/browse/SWS-850
+     * 
+     * @param connection
+     * @param receiver
+     * @throws Exception
+     */
+    protected void overriddenHandleConnection(WebServiceConnection connection, WebServiceMessageReceiver receiver)
+            throws Exception {
+        logUri(connection);
+        TransportContext previousTransportContext = TransportContextHolder.getTransportContext();
+        TransportContextHolder.setTransportContext(new DefaultTransportContext(connection));
+
+        try {
+            WebServiceMessage request = connection.receive(getMessageFactory());
+            MessageContext messageContext = new DefaultMessageContext(request, getMessageFactory());
+            receiver.receive(messageContext);
+            if (messageContext.hasResponse()) {
+                WebServiceMessage response = messageContext.getResponse();
+                if (response instanceof FaultAwareWebServiceMessage &amp;&amp;
+                        connection instanceof FaultAwareWebServiceConnection) {
+                    FaultAwareWebServiceMessage faultResponse = (FaultAwareWebServiceMessage) response;
+                    FaultAwareWebServiceConnection faultConnection = (FaultAwareWebServiceConnection) connection;
+                    faultConnection.setFault(faultResponse.hasFault());
+                }
+                connection.send(messageContext.getResponse());
+            }
+        }
+        catch (NoEndpointFoundException ex) {
+            if (connection instanceof EndpointAwareWebServiceConnection) {
+                ((EndpointAwareWebServiceConnection) connection).endpointNotFound();
+            }
+            throw ex;
+        }
+        finally {
+            TransportUtils.closeConnection(connection);
+            TransportContextHolder.setTransportContext(previousTransportContext);
+        }
+    }
+
+    private void logUri(WebServiceConnection connection) {
+        if (logger.isDebugEnabled()) {
+            try {
+                logger.debug("Accepting incoming [" + connection + "] at [" + connection.getUri() + "]");
+            }
+            catch (URISyntaxException e) {
+                // ignore
+            }
+        }
+    }
+
+
+
+    private void handleGeneralException(
+            HttpServletRequest httpServletRequest,
+            HttpServletResponse response, Object handler,
+            Exception ex) throws IOException {
+        writeErrorResponseWithMessage(response, ex.getClass().getName() + ": " + ex.getMessage());
+    }
+
+    /**
+     * By default, sets SC_BAD_REQUEST as response in Spring, so overwritten to
+     * provide HTTP_OK and reasonable SOAP fault response.
+     */
+    protected void handleInvalidXmlException(
+            HttpServletRequest httpServletRequest,
+            HttpServletResponse response, Object handler, InvalidXmlException ex)
+            throws IOException {
+        writeErrorResponseWithMessage(response, ex.getClass().getName() + ": " + ex.getMessage());
+    }
+
+    /**
+     * By default, sets SC_METHOD_NOT_ALLOWED as response in Spring, so overwritten to
+     * provide HTTP_OK and reasonable SOAP fault response.
+     */
+    protected void handleNonPostMethod(HttpServletRequest httpServletRequest,
+                                       HttpServletResponse response,
+                                       Object handler) throws Exception {
+        writeErrorResponseWithMessage(response, "HTTP Method not allowed");
+    }
+
+    private void writeErrorResponseWithMessage(HttpServletResponse response, String message)
+            throws IOException {
+        String errorXml = String.format(
+                 "&lt;SOAP-ENV:Envelope xmlns:SOAP-ENV=\"http://schemas.xmlsoap.org/soap/envelope/\"&gt;"
+                +"    &lt;SOAP-ENV:Header/&gt;"
+                +"    &lt;SOAP-ENV:Body&gt;"
+                +"        &lt;SOAP-ENV:Fault&gt;"
+                +"            &lt;faultcode&gt;SOAP-ENV:Client&lt;/faultcode&gt;"
+                +"            &lt;faultstring xml:lang=\"en\"&gt;%s&lt;/faultstring&gt;"
+                +"        &lt;/SOAP-ENV:Fault&gt;"
+                +"    &lt;/SOAP-ENV:Body&gt;"
+                +"&lt;/SOAP-ENV:Envelope&gt;",
+                StringEscapeUtils.escapeXml(message)
+                );
+
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("text/xml");
+        response.getWriter().write(errorXml);
+        response.getWriter().flush();
+    }
+    @Override
+    public int getOrder() {
+        return 1;
+    }
+
+    /**
+     * This class is needed as org.springframework.ws.transport.http.HttpServletConnection will throw an
+     * exception if it is used outside Spring framework files. However, extending it and using the same
+     * implementation seems to be fine.
+     *
+     */
+    static class MyWebServiceConnection extends HttpServletConnection {
+        protected MyWebServiceConnection(HttpServletRequest httpServletRequest,
+                HttpServletResponse httpServletResponse) {
+            super(httpServletRequest, httpServletResponse);
+        }
+    }    
+}
+</code></pre>
+
+<p>This needs to be also configured correctly. This is the thing that is needed on spring context:</p>
+
+<pre><code>&lt;!-- 'messageReceiverHandlerAdapter' is a magic name spring-ws
+     org.springframework.ws.transport.http.MessageDispatcherServlet
+     will bind to --&gt;
+&lt;bean id="messageReceiverHandlerAdapter"
+    class="fi.eis.applications.spring.soap.server.transport.http.MyWebServiceMessageReceiverHandlerAdapter"&gt;
+&lt;/bean&gt;
+</code></pre>

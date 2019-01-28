@@ -1,0 +1,64 @@
+<p>I think I have found the culprit (at least this fixed the issue for me). It seems <a href="https://github.com/rovo89/XposedInstaller/blob/cdb3f47895f5543eca0ff94861f5a98b343213c6/src/de/robv/android/xposed/installer/ModulesFragment.java#L154" rel="nofollow">Xposed automatically detects if the app has launchable activity</a>, and just starts it. There's no API. Source: Xposed sourcecode:</p>
+
+<pre><code>@Override
+public void onListItemClick(ListView l, View v, int position, long id) {
+    String packageName = (String) v.getTag();
+    if (packageName == null)
+        return;
+
+    if (packageName.equals(NOT_ACTIVE_NOTE_TAG)) {
+        Intent intent = new Intent(getActivity(), XposedInstallerActivity.class);
+        intent.putExtra(XposedInstallerActivity.EXTRA_SECTION, XposedDropdownNavActivity.TAB_INSTALL);
+        startActivity(intent);
+        return;
+    }
+
+    Intent launchIntent = getSettingsIntent(packageName);
+    if (launchIntent != null)
+        startActivity(launchIntent);
+    else
+        Toast.makeText(getActivity(), getActivity().getString(R.string.module_no_ui), Toast.LENGTH_LONG).show();
+}
+</code></pre>
+
+<p>Thus, you just need to create an activity, but I think that's not enough: you also have to make it a "Launcher Activity" in Eclipse, or you can do that manually by adding the <code>CATEGORY_LAUNCHER</code> intent filter.</p>
+
+<p>If it works, when you push the app from eclipse to your testing phone, the app will open automatically (just like any other app). If this happens, normally the app should also open inside Xposed.</p>
+
+<p>Here's for example what I have put inside <a href="https://github.com/lrq3000/JitteryGyroFixForCardboard/blob/master/SensorMedianFilter/src/net/kajos/median/MedianFilterSettingsActivity.java" rel="nofollow">my class</a>:</p>
+
+<pre><code>package xxx.xxx.xxx;
+
+import android.os.Bundle;
+import android.preference.PreferenceActivity;
+import android.preference.PreferenceManager;
+
+public class MainSettingsActivity extends PreferenceActivity {
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+       super.onCreate(savedInstanceState);
+       // Setup a non-default and world readable shared preferences, so that 1- we know the name (necessary for XSharedPreferences()), 2- the preferences are accessible from inside the hook.
+       PreferenceManager prefMgr = getPreferenceManager();
+       prefMgr.setSharedPreferencesName("pref_mine");
+       prefMgr.setSharedPreferencesMode(MODE_WORLD_READABLE);
+       addPreferencesFromResource(R.xml.pref_settings);
+    }
+
+}
+</code></pre>
+
+<p>Then to use the prefs inside your hook in your main class:</p>
+
+<pre><code>public class Main implements IXposedHookLoadPackage {
+    public XSharedPreferences pref;
+
+    @Override
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        XSharedPreferences pref = new XSharedPreferences(Main.class.getPackage().getName(), "pref_mine"); // load the preferences using Xposed (necessary to be accessible from inside the hook, SharedPreferences() won't work)
+        pref.makeWorldReadable();
+        pref.reload();
+        pref.getString("some_var", "default_value");
+        ...
+</code></pre>

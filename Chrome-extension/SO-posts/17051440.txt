@@ -1,0 +1,86 @@
+<p>There's quite a bunch of EL engines, of which most implement Java Expression Language API.</p>
+
+<ul>
+<li><p>Commons EL (<a href="http://jakarta.apache.org/commons/el/" rel="nofollow">http://jakarta.apache.org/commons/el/</a>)
+Implementation of the JSP EL API that's existed forever. This library can be found in many JSP containers (Tomcat for example) or used as a foundation for within many vendor's J2EE servers.</p></li>
+<li><p>OGNL (<a href="http://www.ognl.org/" rel="nofollow">http://www.ognl.org/</a>)
+One of the most expressive ELs available today and widely used with WebWork (Struts 2) and Tapestry.</p></li>
+<li><p>MVEL (<a href="https://github.com/mvel/mvel" rel="nofollow">https://github.com/mvel/mvel</a>)
+A newcomer to EL which is part of the MVFlex/Valhalla project. Features look more in line with OGNL's offering with method invocation and some interesting regular expression support.</p></li>
+<li><p>(Unified) Expression Language (<a href="https://jcp.org/aboutJava/communityprocess/final/jsr341/index.html" rel="nofollow">https://jcp.org/aboutJava/communityprocess/final/jsr341/index.html</a> and <a href="http://jcp.org/en/jsr/detail?id=245" rel="nofollow">http://jcp.org/en/jsr/detail?id=245</a>)
+Standard expression language first introduced in Java EE 5 (EL 2.1) and enhanced in Java EE 6 (EL 2.2) and Java EE 7 (EL 3.0). Reference implementation available from Glassfish project - <a href="https://uel.java.net/" rel="nofollow">
+Unified Expression Language</a>.</p></li>
+<li><p>JEXL (<a href="http://jakarta.apache.org/commons/jexl/" rel="nofollow">http://jakarta.apache.org/commons/jexl/</a>)
+An implementation based on Velocity's parser. Because of this, it acts more like a limited templating solution with things like method invocation.</p></li>
+</ul>
+
+<p><em><a href="https://weblogs.java.net/blog/jhook/archive/2006/11/el_comparisons.html" rel="nofollow">Source</a></em></p>
+
+<p>For now I ended up with this code using <strong>BeanUtils</strong> - ugly but works.</p>
+
+<pre><code>import java.lang.reflect.InvocationTargetException;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.StringTokenizer;
+import org.apache.commons.beanutils.PropertyUtils;
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.LoggerFactory;
+
+public static class SimpleEvaluator implements IExprLangEvaluator {
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger( SimpleEvaluator.class );
+
+    @Override
+    public String evaluateEL( String template, Map&lt;String, String&gt; properties ) {
+
+        StringTokenizer st = new StringTokenizer( template );
+        String text = st.nextToken("${");
+        StringBuilder sb = new StringBuilder();
+
+        // Parse the template: "Hello ${person.name} ${person.surname}, ${person.age}!"
+        do{
+            try {
+                sb.append(text);
+                if( ! st.hasMoreTokens() )
+                    break;
+
+                // "${foo.bar[a]"
+                String expr  = st.nextToken("}");
+                // "foo.bar[a].baz"
+                expr = expr.substring(2);
+                // "foo"
+                String var = StringUtils.substringBefore( expr, ".");
+
+                Object subject = properties.get( var );
+
+                // "bar[a].baz"
+                String propPath = StringUtils.substringAfter( expr, ".");
+
+                sb.append( resolveProperty( subject, propPath ) );
+
+                text = st.nextToken("${");
+                text = text.substring(1);
+            } catch( NoSuchElementException ex ){
+                // Unclosed ${
+                log.warn("Unclosed ${ expression, missing } : " + template);
+            }
+        } while( true );
+
+        return sb.toString();
+    }
+
+    // BeanUtils
+    private String resolveProperty( Object subject, String propPath ) {
+        if( subject == null ) return "";
+
+        if( propPath == null || propPath.isEmpty() ) return subject.toString();
+
+        try {
+            return "" + PropertyUtils.getProperty( subject, propPath );
+        } catch(     IllegalAccessException | InvocationTargetException | NoSuchMethodException ex ) {
+            log.warn("Failed resolving '" + propPath + "' on " + subject + ":\n    " + ex.getMessage(), ex);
+            return "";
+        }
+    }
+
+}// class SimpleEvaluator
+</code></pre>

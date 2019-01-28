@@ -1,0 +1,67 @@
+<p>Thanks to <a href="https://stackoverflow.com/users/171061/steven-schlansker">Steven Schlansker</a> it was pointed out that the reason I was having trouble trying to utilize PreparedStatement.setObject was because it was not the right solution to the problem.</p>
+
+<p>AnglerMapper needs to get the UUID from Postgres, not set it. Revisiting the error I was receiving:</p>
+
+<blockquote>
+  <p>java.sql.SQLFeatureNotSupportedException: Method
+  org.postgresql.jdbc4.Jdbc4ResultSet.getObject(int, Class) is not
+  yet implemented.</p>
+</blockquote>
+
+<p>Steven grep'd through the JDBC source and confirmed that it did not support the method but it did support getting a UUID with <code>(UUID)rs.getObject(1)</code>. Which is close to what I originally tried <code>rs.getObject(1, UUID.class)</code>.</p>
+
+<p><strong>JDBC Exception</strong></p>
+
+<pre><code>public &lt;T&gt; T getObject(int columnIndex, Class&lt;T&gt; type) throws SQLException { 
+    throw org.postgresql.Driver.notImplemented(this.getClass(), "getObject(int, Class&lt;T&gt;)"); 
+}
+</code></pre>
+
+<p><strong>org/postgresql/test/jdbc4/UUIDTest.java</strong></p>
+
+<pre><code>public void testUUID() throws SQLException {
+    UUID uuid = UUID.randomUUID();
+    PreparedStatement ps = _conn.prepareStatement("INSERT INTO uuidtest VALUES (?)");
+    ps.setObject(1, uuid, Types.OTHER);
+    ps.executeUpdate();
+    ps.close();
+
+    Statement stmt = _conn.createStatement();
+    ResultSet rs = stmt.executeQuery("SELECT id FROM uuidtest");
+    assertTrue(rs.next());
+
+    UUID uuid2 = (UUID)rs.getObject(1);
+    assertEquals(uuid, rs.getObject(1));
+    assertEquals(uuid.toString(), rs.getString(1));
+
+    rs.close();
+    stmt.close();
+}
+</code></pre>
+
+<p>The corrected and working version of AnglerMapper:</p>
+
+<p><strong>AnglerMapper.java</strong></p>
+
+<pre><code>package org.sachmo.hooktale.db;
+
+import org.sachmo.hooktale.core.Angler;
+import org.skife.jdbi.v2.StatementContext;
+import org.skife.jdbi.v2.tweak.ResultSetMapper;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.UUID;
+
+/**
+ * Created by jason on 5/27/14.
+ * angler mapper
+ */
+public class AnglerMapper implements ResultSetMapper&lt;Angler&gt; {
+  @Override
+  public Angler map(int i, ResultSet rs, StatementContext statementContext) throws     SQLException {
+    return new Angler((UUID)rs.getObject("angler_id"), rs.getString("first_name"),
+            rs.getString("last_name"), rs.getString("email"), rs.getString("password"));
+  }
+}
+</code></pre>

@@ -1,0 +1,43 @@
+<p>Since I didn't manage to find a way to make this work the way I want, I thought I'd post my alternative way to work around the problem, still avoiding asking for the password. I used Google Play Services to get Auth2 token.</p>
+
+<pre><code>String token = GoogleAuthUtil.getToken(context, userEmail, "oauth2:https://mail.google.com/");
+SMTPTransport smtpTransport = connectToSmtp("smtp.gmail.com", 587, userEmail, token, true);
+
+SMTPMessage smtpMessage = new SMTPMessage(smtpSession);
+smtpMessage.setFrom(new InternetAddress(userEmail));
+smtpMessage.addRecipient(Message.RecipientType.TO, toAddress);
+smtpMessage.setSubject(subject);
+smtpMessage.setContent(multipart, multipart.getContentType());
+smtpMessage.saveChanges();
+
+smtpTransport.sendMessage(smtpMessage, smtpMessage.getAllRecipients());
+smtpTransport.close();
+</code></pre>
+
+<p>Of course you can choose the oauth2 scope that suits your needs. To set SMTPTransport to accept the token (and create smtpSession for the code above):</p>
+
+<pre><code>private SMTPTransport connectToSmtp(String host, int port, String userEmail, String oauthToken, boolean debug) throws Exception {
+        Properties props = new Properties();
+        props.put("mail.smtp.starttls.enable", "true");
+        props.put("mail.smtp.starttls.required", "true");
+        props.put("mail.smtp.sasl.enable", "true");
+        props.put("mail.smtp.sasl.mechanisms", "XOAUTH2");
+        props.put("mail.imaps.sasl.mechanisms.oauth2.oauthToken", oauthToken);
+        smtpSession = Session.getInstance(props);
+        smtpSession.setDebug(debug);
+
+        final URLName unusedUrlName = null;
+        SMTPTransport transport = new SMTPTransport(smtpSession, unusedUrlName);
+        // If the password is non-null, SMTP tries to do AUTH LOGIN.
+        final String emptyPassword = null;
+        transport.connect(host, port, userEmail, emptyPassword);
+
+        byte[] responseTemp = String.format("user=%s\1auth=Bearer %s\1\1", userEmail, oauthToken).getBytes();
+        byte[] response = BASE64EncoderStream.encode(responseTemp);
+        transport.issueCommand("AUTH XOAUTH2 " + new String(response), 235);
+
+        return transport;
+}
+</code></pre>
+
+<p>For more information, see these links: <a href="http://developer.android.com/google/auth/http-auth.html" rel="nofollow">Authorizing with Google on Android</a>, <a href="https://developers.google.com/gmail/xoauth2_protocol" rel="nofollow">OAuth2 info</a></p>

@@ -1,0 +1,266 @@
+<p>The problem here is while(true) line in your thread's run method. As many times Activity is created, new Thread is being created and its being executed in infinite loop. If you launch app "n" times, n threads will be created.</p>
+
+<ol>
+<li>Note that socketServerReplyThread.run(); call does not starts a Thread. Its a simple method call. </li>
+<li><p>isAlive check in below code is use-less as a new Thread object has created above it.</p>
+
+<p>Thread t = new Thread(new SocketServerThread());
+        if (!t.isAlive()) {
+            t.start();
+        }</p></li>
+<li><p>To fix this issue, you can have a flag to check whether activity is destroyed or not. and run loop till activity is destroyed. This will make sure that Thread will have no task once activity is destroyed.</p>
+
+<p>while(isDestroyed){
+// do task
+}</p>
+
+<p>protected void onDestroy() {
+    super.onDestroy();
+isDestroyed = true;
+}</p></li>
+</ol>
+
+<p>I have edited your code below to make sure that multiple threads are not created.</p>
+
+<pre><code>public class MainActivity extends Activity {
+
+    TextView info, infoip, msg;
+     String message = "";
+     ServerSocket serverSocket;
+     String s;
+
+      String ipserver;
+
+      String replyip;
+       int i;
+       int j;
+
+private boolean mIsDestroyed = false;
+
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+
+      super.onCreate(savedInstanceState);
+      setContentView(R.layout.activity_main);
+      info = (TextView) findViewById(R.id.info);
+      infoip = (TextView) findViewById(R.id.infoip);
+      msg = (TextView) findViewById(R.id.msg);
+      i=0;
+      j=1;
+      infoip.setText(getIpAddress());
+      WifiManager manager = (WifiManager) this.getSystemService(Context.WIFI_SERVICE);
+      WifiInfo infor =manager.getConnectionInfo();
+      String addr=infor.getMacAddress();
+      this.s=addr;
+
+
+    Thread t = new Thread (new SocketServerThread());
+    if(!t.isAlive()){
+    t.start();
+    }
+
+
+     }
+
+     @Override
+     protected void onRestart(){
+
+
+     }
+
+
+     @Override
+     protected void onDestroy() {
+      super.onDestroy();
+mIsDestroyed = true;
+     i=1;
+     j=0;
+
+
+      if (serverSocket != null) {
+       try {
+        serverSocket.close();
+       } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+       }
+      }
+     }
+
+     private class SocketServerThread extends Thread {
+
+      static final int SocketServerPORT = 7000;
+      int count = 0;
+
+      @Override
+      public void run() {
+       try {
+        serverSocket = new ServerSocket(SocketServerPORT);
+        MainActivity.this.runOnUiThread(new Runnable() {
+
+         @Override
+         public void run() {
+          info.setText("\n+I'm waiting here: "
+            + serverSocket.getLocalPort()+"\n \n");
+         }
+        });
+
+        while (mIsDestroyed == false) {
+            MulticastSocket sock = new MulticastSocket(12345);
+
+            InetAddress addr = InetAddress.getByName("224.0.0.1");
+            sock.joinGroup(addr);
+
+            DatagramPacket packet;
+            byte [] buffer= new byte[256];
+            packet = new DatagramPacket(buffer, buffer.length);
+            sock.receive(packet);
+            String Message =  new String (packet.getData(),0,packet.getLength());
+
+            replyip =packet.getSocketAddress().toString().substring(0, 13);
+            message+=Message+replyip;
+
+            sock.close();
+
+         MainActivity.this.runOnUiThread(new Runnable() {
+
+          @Override
+          public void run() {
+           msg.setText(message);
+          }
+         });
+
+
+
+        SocketServerReplyThread socketServerReplyThread = new SocketServerReplyThread(replyip, count);
+
+       if(i==0 )
+       {
+        socketServerReplyThread.run();
+
+       }
+
+       if(j==0){
+
+           socketServerReplyThread.run();
+
+       }
+
+
+        }
+       } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+       }
+      }
+
+     }
+
+     private class SocketServerReplyThread extends Thread {
+
+
+
+      String ips;
+
+      SocketServerReplyThread(String ip, int c) {
+
+
+       ips=ip;
+      }
+
+      @Override
+      public void run() {
+
+
+
+
+       try {
+
+
+
+                    Socket s=new Socket(ips.toString(),12345);
+                    DataOutputStream dos =new DataOutputStream(s.getOutputStream());
+                    TelephonyManager telephonyManager = (TelephonyManager)getSystemService(Context.TELEPHONY_SERVICE);
+                    String a = telephonyManager.getDeviceId();
+                    dos.writeUTF(a);
+                    dos.flush();
+                    dos.close();
+                    s.close();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        MainActivity.this.runOnUiThread(new Runnable() {
+
+         @Override
+         public void run() {
+          msg.setText(message);
+         }
+        });
+
+       } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+        message += "Something wrong! " + e.toString() + "\n";
+
+       }
+
+       MainActivity.this.runOnUiThread(new Runnable() {
+
+        @Override
+        public void run() {
+         msg.setText(message);
+        }
+       });
+      }
+
+     }
+
+     private String getIpAddress() {
+      String ip = "";
+      try {
+       Enumeration&lt;NetworkInterface&gt; enumNetworkInterfaces = NetworkInterface
+         .getNetworkInterfaces();
+       while (enumNetworkInterfaces.hasMoreElements()) {
+        NetworkInterface networkInterface = enumNetworkInterfaces
+          .nextElement();
+        Enumeration&lt;InetAddress&gt; enumInetAddress = networkInterface
+          .getInetAddresses();
+        while (enumInetAddress.hasMoreElements()) {
+         InetAddress inetAddress = enumInetAddress.nextElement();
+
+
+
+         if (inetAddress.isSiteLocalAddress()) {
+
+          ip += "SiteLocalAddress: " 
+            + inetAddress.getHostAddress() + "\n";
+
+
+
+         }
+
+        }
+
+       }
+
+      } catch (SocketException e) {
+       // TODO Auto-generated catch block
+       e.printStackTrace();
+       ip += "Something Wrong! " + e.toString() + "\n";
+      }
+
+      return ip;
+     }
+}
+</code></pre>

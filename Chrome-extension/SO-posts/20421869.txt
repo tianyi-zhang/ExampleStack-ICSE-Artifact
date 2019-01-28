@@ -1,0 +1,443 @@
+<p>Ok, I did it but I have really too much sources to post it here. I will explain step by step how I did but won't post the classloading part which is simple for an average skilled developper.</p>
+
+<p>One thing is currently not supported by my code is the context config scan.</p>
+
+<p>First, the explanation below depends on your needs and also your application server. I use Glassfish 3.1.2 and I did not find how to configure a custom classpath :</p>
+
+<ul>
+<li>classpath prefix/suffix not supported anymore</li>
+<li><code>-classpath</code> parameter on the domain's java-config did not work</li>
+<li>CLASSPATH environment did not work either</li>
+</ul>
+
+<p>So the only available paths in classpath for GF3 are : <em>WEB-INF/classes</em>, <em>WEB-INF/lib</em>... If you find a way to do it on your application server, you can skip the first 4 steps.</p>
+
+<p>I know this is possible with Tomcat.</p>
+
+<h1>Step 1 : Create a custom namespace handler</h1>
+
+<p>Create a custom <code>NamespaceHandlerSupport</code> with its XSD, <em>spring.handlers</em> and <em>spring.schemas</em>. This namespace handler will contain a redefinition of <code>&lt;context:component-scan/&gt;</code>.</p>
+
+<pre><code>/**
+* Redefine {@code component-scan} to scan the module folder in addition to classpath
+* @author Ludovic Guillaume
+*/
+public class ModuleContextNamespaceHandler extends NamespaceHandlerSupport {
+    @Override
+    public void init() {
+        registerBeanDefinitionParser("component-scan", new ModuleComponentScanBeanDefinitionParser());
+    }
+}
+</code></pre>
+
+<p>The XSD contains only <code>component-scan</code> element which is a perfect copy of the Spring's one.</p>
+
+<p><em>spring.handlers</em></p>
+
+<pre><code>http\://www.yourwebsite.com/schema/context=com.yourpackage.module.spring.context.config.ModuleContextNamespaceHandler
+</code></pre>
+
+<p><em>spring.schemas</em></p>
+
+<pre><code>http\://www.yourwebsite.com/schema/context/module-context.xsd=com/yourpackage/module/xsd/module-context.xsd
+</code></pre>
+
+<p><strong>N.B.:</strong> I didn't override the Spring default namespace handler due to some issues like the name of the project which need to have a letter greater than 'S'. I wanted to avoid that so I made my own namespace.</p>
+
+<h1>Step 2 : Create the parser</h1>
+
+<p>This will be initialized by the namespace handler created above.</p>
+
+<pre><code>/**
+ * Parser for the {@code &lt;module-context:component-scan/&gt;} element.
+ * @author Ludovic Guillaume
+ */
+public class ModuleComponentScanBeanDefinitionParser extends ComponentScanBeanDefinitionParser {
+    @Override
+    protected ClassPathBeanDefinitionScanner createScanner(XmlReaderContext readerContext, boolean useDefaultFilters) {
+        return new ModuleBeanDefinitionScanner(readerContext.getRegistry(), useDefaultFilters);
+    }
+}
+</code></pre>
+
+<h1>Step 3 : Create the scanner</h1>
+
+<p>Here's the custom scanner which uses the same code as <code>ClassPathBeanDefinitionScanner</code>. The only code changed is <code>String packageSearchPath = "file:" + ModuleManager.getExpandedModulesFolder() + "/**/*.class";</code>.</p>
+
+<p><code>ModuleManager.getExpandedModulesFolder()</code> contains an absolute url. e.g.: <code>C:/&lt;project&gt;/modules/</code>.</p>
+
+<pre><code>/**
+ * Custom scanner that detects bean candidates on the classpath (through {@link ClassPathBeanDefinitionScanner} and on the module folder.
+ * @author Ludovic Guillaume
+ */
+public class ModuleBeanDefinitionScanner extends ClassPathBeanDefinitionScanner {
+    private ResourcePatternResolver resourcePatternResolver;
+    private MetadataReaderFactory metadataReaderFactory;
+
+    /**
+     * @see {@link ClassPathBeanDefinitionScanner#ClassPathBeanDefinitionScanner(BeanDefinitionRegistry, boolean)}
+     * @param registry
+     * @param useDefaultFilters
+     */
+    public ModuleBeanDefinitionScanner(BeanDefinitionRegistry registry, boolean useDefaultFilters) {
+        super(registry, useDefaultFilters);
+
+        try {
+            // get parent class variable
+            resourcePatternResolver = (ResourcePatternResolver)getResourceLoader();
+
+            // not defined as protected and no getter... so reflection to get it
+            Field field = ClassPathScanningCandidateComponentProvider.class.getDeclaredField("metadataReaderFactory");
+            field.setAccessible(true);
+            metadataReaderFactory = (MetadataReaderFactory)field.get(this);
+            field.setAccessible(false);
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Scan the class path for candidate components.&lt;br/&gt;
+     * Include the expanded modules folder {@link ModuleManager#getExpandedModulesFolder()}.
+     * @param basePackage the package to check for annotated classes
+     * @return a corresponding Set of autodetected bean definitions
+     */
+    @Override
+    public Set&lt;BeanDefinition&gt; findCandidateComponents(String basePackage) {
+        Set&lt;BeanDefinition&gt; candidates = new LinkedHashSet&lt;BeanDefinition&gt;(super.findCandidateComponents(basePackage));
+
+        logger.debug("Scanning for candidates in module path");
+
+        try {
+            String packageSearchPath = "file:" + ModuleManager.getExpandedModulesFolder() + "/**/*.class";
+
+            Resource[] resources = this.resourcePatternResolver.getResources(packageSearchPath);
+            boolean traceEnabled = logger.isTraceEnabled();
+            boolean debugEnabled = logger.isDebugEnabled();
+
+            for (Resource resource : resources) {
+                if (traceEnabled) {
+                    logger.trace("Scanning " + resource);
+                }
+                if (resource.isReadable()) {
+                    try {
+                        MetadataReader metadataReader = this.metadataReaderFactory.getMetadataReader(resource);
+
+                        if (isCandidateComponent(metadataReader)) {
+                            ScannedGenericBeanDefinition sbd = new ScannedGenericBeanDefinition(metadataReader);
+                            sbd.setResource(resource);
+                            sbd.setSource(resource);
+
+                            if (isCandidateComponent(sbd)) {
+                                if (debugEnabled) {
+                                    logger.debug("Identified candidate component class: " + resource);
+                                }
+                                candidates.add(sbd);
+                            }
+                            else {
+                                if (debugEnabled) {
+                                    logger.debug("Ignored because not a concrete top-level class: " + resource);
+                                }
+                            }
+                        }
+                        else {
+                            if (traceEnabled) {
+                                logger.trace("Ignored because not matching any filter: " + resource);
+                            }
+                        }
+                    }
+                    catch (Throwable ex) {
+                        throw new BeanDefinitionStoreException("Failed to read candidate component class: " + resource, ex);
+                    }
+                }
+                else {
+                    if (traceEnabled) {
+                        logger.trace("Ignored because not readable: " + resource);
+                    }
+                }
+            }
+        }
+        catch (IOException ex) {
+            throw new BeanDefinitionStoreException("I/O failure during classpath scanning", ex);
+        }
+
+        return candidates;
+    }
+}
+</code></pre>
+
+<h1>Step 4 : Create a custom resource caching implementation</h1>
+
+<p>This will allow Spring to resolve your module classes out of the classpath.</p>
+
+<pre><code>public class ModuleCachingMetadataReaderFactory extends CachingMetadataReaderFactory {
+    private Log logger = LogFactory.getLog(ModuleCachingMetadataReaderFactory.class);
+
+    @Override
+    public MetadataReader getMetadataReader(String className) throws IOException {
+        List&lt;Module&gt; modules = ModuleManager.getStartedModules();
+
+        logger.debug("Checking if " + className + " is contained in loaded modules");
+
+        for (Module module : modules) {
+            if (className.startsWith(module.getPackageName())) {
+                String resourcePath = module.getExpandedJarFolder().getAbsolutePath() + "/" + ClassUtils.convertClassNameToResourcePath(className) + ".class";
+
+                File file = new File(resourcePath);
+
+                if (file.exists()) {
+                    logger.debug("Yes it is, returning MetadataReader of this class");
+
+                    return getMetadataReader(getResourceLoader().getResource("file:" + resourcePath));
+                }
+            }
+        }
+
+        return super.getMetadataReader(className);
+    }
+}
+</code></pre>
+
+<p>And define it in the bean configuration :</p>
+
+<pre><code>&lt;bean id="customCachingMetadataReaderFactory" class="com.yourpackage.module.spring.core.type.classreading.ModuleCachingMetadataReaderFactory"/&gt;
+
+&lt;bean name="org.springframework.context.annotation.internalConfigurationAnnotationProcessor"
+      class="org.springframework.context.annotation.ConfigurationClassPostProcessor"&gt;
+      &lt;property name="metadataReaderFactory" ref="customCachingMetadataReaderFactory"/&gt;
+&lt;/bean&gt;
+</code></pre>
+
+<h1>Step 5 : Create a custom root classloader, module classloader and module manager</h1>
+
+<p>This is the part I won't post classes. All classloaders extend <code>URLClassLoader</code>.</p>
+
+<h2>Root classloader</h2>
+
+<p>I did mine as singleton so it can :</p>
+
+<ul>
+<li>initialize itself</li>
+<li>destroy</li>
+<li>loadClass (modules classes, parent classes, self classes)</li>
+</ul>
+
+<p>The most important part is <code>loadClass</code> which will allow context to load your modules classes after using <code>setCurrentClassLoader(XmlWebApplicationContext)</code> (see bottom of the next step). Concretly, this method will scan the children classloader (which I personaly store in my module manager) and if not found, it will scan parent/self classes.</p>
+
+<h2>Module classloader</h2>
+
+<p>This classloader simply adds the <em>module.jar</em> and the <em>.jar</em> it contains as url.</p>
+
+<h2>Module manager</h2>
+
+<p>This class can load/start/stop/unload your modules. I did like this :</p>
+
+<ul>
+<li>load : store a <code>Module</code> class which represent the <em>module.jar</em> (contains id, name, description, file...)</li>
+<li>start : expand the jar, create module classloader and assign it to the <code>Module</code> class</li>
+<li>stop : remove the expanded jar, dispose classloader</li>
+<li>unload : dispose <code>Module</code> class</li>
+</ul>
+
+<h1>Step 6 : Define a class which will help to do context refreshs</h1>
+
+<p>I named this class <code>WebApplicationUtils</code>. It contains a reference to the dispatcher servlet (see step 7). As you will see, <code>refreshContext</code> call methods on <code>AppClassLoader</code> which is actually my root classloader.</p>
+
+<pre><code>/**
+ * Refresh {@link DispatcherServlet}
+ * @return true if refreshed, false if not
+ * @throws RuntimeException
+ */
+private static boolean refreshDispatcherServlet() throws RuntimeException {
+    if (dispatcherServlet != null) {
+        dispatcherServlet.refresh();
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Refresh the given {@link XmlWebApplicationContext}.&lt;br&gt;
+ * Call {@link Module#onStarted()} after context refreshed.&lt;br&gt;
+ * Unload started modules on {@link RuntimeException}.
+ * @param context Application context
+ * @param startedModules Started modules
+ * @throws RuntimeException
+ */
+public static void refreshContext(XmlWebApplicationContext context, Module[] startedModules) throws RuntimeException {
+    try {
+        logger.debug("Closing web application context");
+        context.stop();
+        context.close();
+
+        AppClassLoader.destroyInstance();
+
+        setCurrentClassLoader(context);
+
+        logger.debug("Refreshing web application context");
+        context.refresh();
+
+        setCurrentClassLoader(context);
+
+        AppClassLoader.setThreadsToNewClassLoader();
+
+        refreshDispatcherServlet();
+
+        if (startedModules != null) {
+            for (Module module : startedModules) {
+                module.onStarted();
+            }
+        }
+    }
+    catch (RuntimeException e) {
+        for (Module module : startedModules) {
+            try {
+                ModuleManager.stopModule(module.getId());
+            }
+            catch (IOException e2) {
+                e.printStackTrace();
+            }
+        }
+
+        throw e;
+    }
+}
+
+/**
+ * Set the current classloader to the {@link XmlWebApplicationContext} and {@link Thread#currentThread()}.
+ * @param context ApplicationContext
+ */
+public static void setCurrentClassLoader(XmlWebApplicationContext context) {
+    context.setClassLoader(AppClassLoader.getInstance());
+    Thread.currentThread().setContextClassLoader(AppClassLoader.getInstance());
+}
+</code></pre>
+
+<h1>Step 7 : Define a custom context loader listener</h1>
+
+<pre><code>/**
+ * Initialize/destroy ModuleManager on context init/destroy
+ * @see {@link ContextLoaderListener}
+ * @author Ludovic Guillaume
+ */
+public class ModuleContextLoaderListener extends ContextLoaderListener {
+    public ModuleContextLoaderListener() {
+        super();
+    }
+
+    @Override
+    public void contextInitialized(ServletContextEvent event) {
+        // initialize ModuleManager, which will scan the given folder
+        // TODO: param in web.xml
+        ModuleManager.init(event.getServletContext().getRealPath("WEB-INF"), "/dev/temp/modules");
+
+        super.contextInitialized(event);
+    }
+
+    @Override
+    protected WebApplicationContext createWebApplicationContext(ServletContext sc) {
+        XmlWebApplicationContext context = (XmlWebApplicationContext)super.createWebApplicationContext(sc);
+
+        // set the current classloader
+        WebApplicationUtils.setCurrentClassLoader(context);
+
+        return context;
+    }
+
+    @Override
+    public void contextDestroyed(ServletContextEvent event) {
+        super.contextDestroyed(event);
+
+        // destroy ModuleManager, dispose every module classloaders
+        ModuleManager.destroy();
+    }
+}
+</code></pre>
+
+<p><em>web.xml</em></p>
+
+<pre><code>&lt;listener&gt;
+    &lt;listener-class&gt;com.yourpackage.module.spring.context.ModuleContextLoaderListener&lt;/listener-class&gt;
+&lt;/listener&gt;
+</code></pre>
+
+<h1>Step 8 : Define a custom dispatcher servlet</h1>
+
+<pre><code>/**
+ * Only used to keep the {@link DispatcherServlet} easily accessible by {@link WebApplicationUtils}.
+ * @author Ludovic Guillaume
+ */
+public class ModuleDispatcherServlet extends DispatcherServlet {
+    private static final long serialVersionUID = 1L;
+
+    public ModuleDispatcherServlet() {
+        WebApplicationUtils.setDispatcherServlet(this);
+    }
+}
+</code></pre>
+
+<p><em>web.xml</em></p>
+
+<pre><code>&lt;servlet&gt;
+    &lt;servlet-name&gt;dispatcher&lt;/servlet-name&gt;
+    &lt;servlet-class&gt;com.yourpackage.module.spring.web.servlet.ModuleDispatcherServlet&lt;/servlet-class&gt;
+
+    &lt;init-param&gt;
+        &lt;param-name&gt;contextConfigLocation&lt;/param-name&gt;
+        &lt;param-value&gt;/WEB-INF/dispatcher-servlet.xml&lt;/param-value&gt;
+    &lt;/init-param&gt;
+
+    &lt;load-on-startup&gt;1&lt;/load-on-startup&gt;
+&lt;/servlet&gt;
+</code></pre>
+
+<h1>Step 9 : Define a custom Jstl view</h1>
+
+<p>This part is 'optional' but it brings some clarity and cleanness in the controller implementation.</p>
+
+<pre><code>/**
+ * Used to handle module {@link ModelAndView}.&lt;br/&gt;&lt;br/&gt;
+ * &lt;b&gt;Usage:&lt;/b&gt;&lt;br/&gt;{@code new ModuleAndView("module:MODULE_NAME.jar:LOCATION");}&lt;br/&gt;&lt;br/&gt;
+ * &lt;b&gt;Example:&lt;/b&gt;&lt;br/&gt;{@code new ModuleAndView("module:test-module.jar:views/testModule");}
+ * @see JstlView
+ * @author Ludovic Guillaume
+ */
+public class ModuleJstlView extends JstlView {
+    @Override
+    protected String prepareForRendering(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        String beanName = getBeanName();
+
+        // checks if it starts 
+        if (beanName.startsWith("module:")) {
+            String[] values = beanName.split(":");
+
+            String location = String.format("/%s%s/WEB-INF/%s", ModuleManager.CONTEXT_ROOT_MODULES_FOLDER, values[1], values[2]);
+
+            setUrl(getUrl().replaceAll(beanName, location));
+        }
+
+        return super.prepareForRendering(request, response);
+    }
+}
+</code></pre>
+
+<p>Define it in the bean config :</p>
+
+<pre><code>&lt;bean id="viewResolver"
+      class="org.springframework.web.servlet.view.InternalResourceViewResolver"
+      p:viewClass="com.yourpackage.module.spring.web.servlet.view.ModuleJstlView"
+      p:prefix="/WEB-INF/"
+      p:suffix=".jsp"/&gt;
+</code></pre>
+
+<h1>Final step</h1>
+
+<p>Now you just need to create a module, interface it with <code>ModuleManager</code> and add resources in  the <em>WEB-INF/</em> folder.</p>
+
+<p>After that you can call load/start/stop/unload. I personaly refresh the context after each operation except for load.</p>
+
+<p>The code is probably optimizable (<code>ModuleManager</code> as singleton e.g.) and there's maybe a better alternative (though I did not find it).</p>
+
+<p>My next goal is to scan a module context config which shouldn't be so difficult.</p>

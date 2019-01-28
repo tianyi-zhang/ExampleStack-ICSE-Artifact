@@ -1,0 +1,107 @@
+<p>I just read the source code for <code>ImageView</code> and it is basically impossible without using the subclassing solutions in this thread. In <code>ImageView.onMeasure</code> we get to these lines:</p>
+
+<pre><code>        // Get the max possible width given our constraints
+        widthSize = resolveAdjustedSize(w + pleft + pright, mMaxWidth, widthMeasureSpec);
+
+        // Get the max possible height given our constraints
+        heightSize = resolveAdjustedSize(h + ptop + pbottom, mMaxHeight, heightMeasureSpec);
+</code></pre>
+
+<p>Where <code>h</code> and <code>w</code> are the dimensions of the image, and <code>p*</code> is the padding. </p>
+
+<p>And then:</p>
+
+<pre><code>private int resolveAdjustedSize(int desiredSize, int maxSize,
+                               int measureSpec) {
+    ...
+    switch (specMode) {
+        case MeasureSpec.UNSPECIFIED:
+            /* Parent says we can be as big as we want. Just don't be larger
+               than max size imposed on ourselves.
+            */
+            result = Math.min(desiredSize, maxSize);
+</code></pre>
+
+<p>So if you have a <code>layout_height="wrap_content"</code> it will set <code>widthSize = w + pleft + pright</code>, or in other words, the maximum width is equal to the image width.</p>
+
+<p>This means that <em>unless you set an exact size, images are NEVER enlarged</em>. I consider this to be a bug, but good luck getting Google to take notice or fix it. <strong><em>Edit: Eating my own words, I submitted <a href="http://code.google.com/p/android/issues/detail?id=38056">a bug report</a> and they say it has been fixed in a future release!</em></strong></p>
+
+<h1>Another solution</h1>
+
+<p>Here is another subclassed workaround, but you <em>should</em> (in theory, I haven't really tested it much!) be able to use it anywhere you <code>ImageView</code>. To use it set <code>layout_width="match_parent"</code>, and <code>layout_height="wrap_content"</code>. It is quite a lot more general than the accepted solution too. E.g. you can do fit-to-height as well as fit-to-width.</p>
+
+<pre><code>import android.content.Context;
+import android.util.AttributeSet;
+import android.widget.ImageView;
+
+// This works around the issue described here: http://stackoverflow.com/a/12675430/265521
+public class StretchyImageView extends ImageView
+{
+
+    public StretchyImageView(Context context)
+    {
+        super(context);
+    }
+
+    public StretchyImageView(Context context, AttributeSet attrs)
+    {
+        super(context, attrs);
+    }
+
+    public StretchyImageView(Context context, AttributeSet attrs, int defStyle)
+    {
+        super(context, attrs, defStyle);
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec)
+    {
+        // Call super() so that resolveUri() is called.
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+
+        // If there's no drawable we can just use the result from super.
+        if (getDrawable() == null)
+            return;
+
+        final int widthSpecMode = MeasureSpec.getMode(widthMeasureSpec);
+        final int heightSpecMode = MeasureSpec.getMode(heightMeasureSpec);
+
+        int w = getDrawable().getIntrinsicWidth();
+        int h = getDrawable().getIntrinsicHeight();
+        if (w &lt;= 0)
+            w = 1;
+        if (h &lt;= 0)
+            h = 1;
+
+        // Desired aspect ratio of the view's contents (not including padding)
+        float desiredAspect = (float) w / (float) h;
+
+        // We are allowed to change the view's width
+        boolean resizeWidth = widthSpecMode != MeasureSpec.EXACTLY;
+
+        // We are allowed to change the view's height
+        boolean resizeHeight = heightSpecMode != MeasureSpec.EXACTLY;
+
+        int pleft = getPaddingLeft();
+        int pright = getPaddingRight();
+        int ptop = getPaddingTop();
+        int pbottom = getPaddingBottom();
+
+        // Get the sizes that ImageView decided on.
+        int widthSize = getMeasuredWidth();
+        int heightSize = getMeasuredHeight();
+
+        if (resizeWidth &amp;&amp; !resizeHeight)
+        {
+            // Resize the width to the height, maintaining aspect ratio.
+            int newWidth = (int) (desiredAspect * (heightSize - ptop - pbottom)) + pleft + pright;
+            setMeasuredDimension(newWidth, heightSize);
+        }
+        else if (resizeHeight &amp;&amp; !resizeWidth)
+        {
+            int newHeight = (int) ((widthSize - pleft - pright) / desiredAspect) + ptop + pbottom;
+            setMeasuredDimension(widthSize, newHeight);
+        }
+    }
+}
+</code></pre>

@@ -1,0 +1,294 @@
+<p>I had the same problem in my app but i solved my issue first create service, use Periodic service. you are able to specify time limit for updating the data. In my case this was the code. </p>
+
+<p><strong>UpdateService.java</strong></p>
+
+<pre><code>public class UpdateServices extends Service implements LocationListener {
+
+    String id, latee, longee;
+    // j
+    private ProgressDialog pDialog;
+    ProgressDialog progressDialog;
+    JSONParser jsonParser = new JSONParser();
+    DBManager db;
+    private static String url_create_locationupdate = "http://192.168.0.175/simple_demo3/classes/create_locationupdate.php";
+    private static final String TAG_SUCCESS = "success";
+    public static String LOG = "Log";
+    private final Context mContext;
+    boolean isGPSEnabled = false;
+    boolean isNetworkEnabled = false;
+    boolean canGetLocation = false;
+    Location location; // location
+    double latitude; // latitude
+    double longitude; // longitude
+    private static final long MIN_DISTANCE_CHANGE_FOR_UPDATES = 3; // 0 meters
+    private long MIN_TIME_BW_UPDATES; // 10 second
+    private long MIN_LENGTH_BW_UPDATES;
+    SharedPreferences mPref;
+    protected LocationManager locationManager;
+
+    public UpdateServices(Context context) {
+        this.mContext = context;
+    }
+
+    public UpdateServices() {
+        super();
+        mContext = UpdateServices.this;
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        Toast.makeText(this, "service starting", Toast.LENGTH_SHORT).show();
+        Log.i(LOG, "Service started");
+
+        mPref = getSharedPreferences("mFile", 0);
+        MIN_TIME_BW_UPDATES = mPref.getLong("mint", 1) * 1000 * 60;
+        MIN_LENGTH_BW_UPDATES = mPref.getLong("kmeter", 1) * 1000;
+        Log.i("asd", "This is sparta");
+        latitude = getLocation().getLatitude();
+        longitude = getLocation().getLongitude();
+
+        return START_STICKY;
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        Log.i(LOG, "Service created");
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        Log.i(LOG, "Service destroyed");
+
+    }
+
+    public Location getLocation() {
+        try {
+            locationManager = (LocationManager) mContext
+                    .getSystemService(LOCATION_SERVICE);
+
+            isGPSEnabled = locationManager
+                    .isProviderEnabled(LocationManager.GPS_PROVIDER);
+            isNetworkEnabled = locationManager
+                    .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+
+            if (!isGPSEnabled &amp;&amp; !isNetworkEnabled) {
+            } else {
+                this.canGetLocation = true;
+                if (isNetworkEnabled) {
+                    locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER, 5000,
+                            MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                    Log.d("Network", "Network");
+                    if (locationManager != null) {
+                        location = locationManager
+                                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (location != null) {
+                            latitude = location.getLatitude();
+                            longitude = location.getLongitude();
+                        }
+                    }
+                }
+                // if GPS Enabled get lat/long using GPS Services
+                if (isGPSEnabled) {
+                    if (location == null) {
+                        locationManager.requestLocationUpdates(
+                                LocationManager.GPS_PROVIDER,
+                                MIN_TIME_BW_UPDATES,
+                                MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                        Log.d("GPS Enabled", "GPS Enabled");
+                        if (locationManager != null) {
+                            location = locationManager
+                                    .getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            if (location != null) {
+                                latitude = location.getLatitude();
+                                longitude = location.getLongitude();
+                            }
+                        }
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return location;
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+        // this will be called every second
+        String laty = Double.toString(getLocation().getLatitude());
+        String lagy = Double.toString(getLocation().getLongitude());
+        db = new DBManager(mContext);
+        db.open();
+        db.mInsertGPSCor(laty, lagy);
+        Toast.makeText(
+                getApplicationContext(),
+                "Your Location is - \nLat: " + location.getLatitude()
+                        + "\nLong: " + location.getLongitude(),
+                Toast.LENGTH_LONG).show();
+
+        Toast.makeText(UpdateServices.this, "record entered",
+                Toast.LENGTH_SHORT).show();
+        db.close();
+// store in server
+        new CreateNewProduct(this).execute();
+
+    }
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+
+    }
+
+    @Override
+    public void onProviderEnabled(String provider) {
+
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {
+
+    }
+
+    class CreateNewProduct extends AsyncTask&lt;String, String, String&gt; {
+        private Context mContext;
+
+        public CreateNewProduct(Context context) {
+            super();
+            mContext = context;
+        }
+
+        @Override
+        protected void onPreExecute() {
+            try {
+                super.onPreExecute();
+                progressDialog = ProgressDialog.show(mContext,
+                        "Press Back to Cancel", "Sending Data to Server..",
+                        true, false);
+            } catch (Exception e) {
+                // TODO: handle exception
+            }
+
+        }
+
+        /**
+         * Creating product
+         * */
+        protected String doInBackground(String... args) {
+            List&lt;NameValuePair&gt; params = new ArrayList&lt;NameValuePair&gt;();
+            params.add(new BasicNameValuePair("ID", id));
+            params.add(new BasicNameValuePair("LATITUDE", latee));
+            params.add(new BasicNameValuePair("LONGITUDE", longee));
+
+            JSONObject json = jsonParser.makeHttpRequest(
+                    url_create_locationupdate, "POST", params);
+
+            try {
+                int success = json.getInt(TAG_SUCCESS);
+
+                if (success == 1) {
+
+                    return "done";
+                } else {
+                    // failed to create product
+                    return "fail";
+                }
+            } catch (JSONException e) {
+                e.printStackTrace();
+                return "exec";
+            }
+
+        }
+
+        /**
+         * After completing background task Dismiss the progress dialog
+         * **/
+        protected void onPostExecute(String file_url) {
+            if (progressDialog.isShowing())
+                progressDialog.dismiss();
+
+            if (file_url.equalsIgnoreCase("done")) {
+
+                show.message(mContext, "uploading successed");
+            }
+            if (file_url.equalsIgnoreCase("fail")
+                    || file_url.equalsIgnoreCase("exec")) {
+                try {
+                    show.message(mContext, "uploading failed");
+                } catch (Exception e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    public void onConnectionSuspended(int arg0) {
+        // TODO Auto-generated method stub
+
+    }
+
+}
+</code></pre>
+
+<p>and Main.java</p>
+
+<pre><code>public class Main extends Activity {
+
+    Button btn_startGps, btn_stopGps;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        // TODO Auto-generated method stub
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.auto_gps_update);
+        btn_startGps = (Button) findViewById(R.id.button_service);
+        btn_stopGps = (Button) findViewById(R.id.button_stopservice);
+
+
+        btn_startGps.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View v) {           
+                startService(new Intent(About.this, UpdateServices.class));
+                Toast.makeText(About.this, "Service Started",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        btn_stopGps.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+                stopService(new Intent(About.this, UpdateServices.class));
+            Log.e("sss", "ddddd");
+                Toast.makeText(About.this, "Service Stopped",
+                        Toast.LENGTH_SHORT).show();
+
+            }
+        });
+}
+</code></pre>
+
+<blockquote>
+  <p>but here an issue service is not stop here to stop service</p>
+</blockquote>
+
+<p>Because i have return</p>
+
+<pre><code> return START_STICKY;
+</code></pre>
+
+<p>in <code>onStartCommand(...)</code></p>
+
+<p>read more at <a href="http://stackoverflow.com/questions/9093271/start-sticky-and-start-not-sticky">START_STICKY and START_NOT_STICKY</a></p>
+
+<p>and <a href="http://developer.android.com/guide/components/services.html" rel="nofollow">Official docs</a></p>

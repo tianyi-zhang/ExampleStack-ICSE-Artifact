@@ -1,0 +1,270 @@
+<p>I think I achieved it : you can actually use fragments and add a search icon to an action bar so that a search is possible inside the fragments. The trick is to use an action bar, an action view, a listener for it, a loader and an adapter of course. </p>
+
+<p>This works pretty well although it completely bypasses the android platform search mechanism (but it could be completed with some work to find what @Alex Lockwood describes and pass the search to fragments). It would not react to an intent as expected in the case of an activity, but it works : users can search inside fragments. </p>
+
+<p>Here is the code : </p>
+
+<blockquote>
+  <p>SearchInFragmentActivity</p>
+</blockquote>
+
+<pre><code>package com.sof.test.searchfragment;
+
+import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentTransaction;
+import android.view.View;
+
+import com.actionbarsherlock.app.ActionBar;
+import com.actionbarsherlock.app.ActionBar.Tab;
+import com.actionbarsherlock.app.ActionBar.TabListener;
+import com.actionbarsherlock.app.SherlockFragmentActivity;
+import com.sof.test.searchfragment.SearchFragment;
+import com.sof.test.R;
+
+
+public class SearchInFragmentActivity extends SherlockFragmentActivity implements TabListener {
+
+    private SearchFragment tab1 = new SearchFragment();
+    private SearchFragment tab2 = new SearchFragment();
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView( R.layout.search_in_fragments );
+
+        getSupportActionBar().setNavigationMode(ActionBar.NAVIGATION_MODE_TABS);
+        createTab( R.string.tab1, R.drawable.ic_menu_search );
+        createTab( R.string.tab2, R.drawable.ic_menu_search );
+        getSupportActionBar().setSelectedNavigationItem( 0 );
+        invalidateOptionsMenu();
+    }
+
+    private void createTab(int tabNameResId, int tabIconResId) {
+        ActionBar.Tab tab = getSupportActionBar().newTab();
+        tab.setText( tabNameResId );
+        tab.setTabListener(this);
+        getSupportActionBar().addTab(tab);
+    }// met
+
+    @Override
+    public void onTabSelected(Tab tab, FragmentTransaction ft) {
+        if( ft == null ) {
+            return;
+        }//if
+        View fragmentSlot = findViewById( R.id.fragment );
+        Fragment newFragment = null;
+        if( fragmentSlot != null ) {
+            newFragment = (tab.getPosition() == 0) ? tab1 : tab2;
+            ft.replace(R.id.fragment, newFragment );
+            ft.setTransition( FragmentTransaction.TRANSIT_FRAGMENT_FADE);
+        }//if
+    }
+
+    @Override
+    public void onTabUnselected(Tab tab, FragmentTransaction ft) {
+    }
+
+    @Override
+    public void onTabReselected(Tab tab, FragmentTransaction ft) {
+    }
+
+}//class
+</code></pre>
+
+<blockquote>
+  <p>The fragment class SearchFragment (I use 2 instances inside the activity above).</p>
+</blockquote>
+
+<pre><code>package com.sof.test.searchfragment;
+
+
+import java.util.ArrayList;
+import java.util.List;
+
+import android.content.Context;
+import android.os.Bundle;
+import android.support.v4.app.LoaderManager.LoaderCallbacks;
+import android.support.v4.content.AsyncTaskLoader;
+import android.support.v4.content.Loader;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
+import android.widget.SearchView;
+import android.widget.TextView;
+
+import com.sof.test.R;
+import com.actionbarsherlock.app.SherlockListFragment;
+import com.actionbarsherlock.view.Menu;
+import com.actionbarsherlock.view.MenuInflater;
+
+public class SearchFragment extends SherlockListFragment {
+
+    private StringLoader loader = null;
+    private StringAdapter adapter = null;
+    private List&lt;String&gt; listData = new ArrayList&lt;String&gt;();
+    private String query;
+
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = super.onCreateView(inflater, container, savedInstanceState);
+        createListData();
+
+        loader = new StringLoader( getActivity(), this );
+        adapter = new StringAdapter(listData);
+        setListAdapter(adapter);
+
+        getLoaderManager().initLoader(0, null,  new LoaderCallBacks() );
+        loader.forceLoad();
+        setHasOptionsMenu( true );
+        return view;
+    }
+
+    @Override
+    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater ) {
+        super.onCreateOptionsMenu(menu, inflater);
+        inflater.inflate( R.menu.menu_search, menu);
+        System.out.println( "inflating menu");
+
+        final SearchView searchView = (SearchView) menu.findItem(R.id.menu_search).getActionView();
+        final SearchView.OnQueryTextListener queryTextListener = new SearchView.OnQueryTextListener() {
+            @Override
+            public boolean onQueryTextChange(String newText) {
+                showFilteredItems( newText );
+                return true;
+            }
+
+            @Override
+            public boolean onQueryTextSubmit(String query) {
+                return true;
+            }
+        };
+
+        searchView.setOnQueryTextListener(queryTextListener);
+
+        return;
+    }//met
+
+    private void showFilteredItems( String query ) {
+        this.query = query;
+        loader.onContentChanged();
+    }
+
+    private void createListData() {
+        for( int i = 0; i &lt; 100 ; i ++ ) {
+          listData.add( "String "+ i ); 
+        }
+    }
+
+    public List&lt;String&gt; getData() {
+        List&lt;String&gt; listFilteredData = new ArrayList&lt;String&gt;();
+        for( String string : listData ) {
+            if( query == null || string.contains( query ) ) {
+                listFilteredData.add( string );
+            }
+        }
+        return listFilteredData;
+    }//met
+
+    private class LoaderCallBacks implements LoaderCallbacks&lt; List&lt;String&gt;&gt; {
+        @Override
+        public void onLoadFinished(Loader&lt;List&lt;String&gt;&gt; loader,
+                List&lt;String&gt; listData) {
+            adapter.setListData( listData );
+        }// met
+
+        @Override
+        public void onLoaderReset(Loader&lt;List&lt;String&gt;&gt; listData) {
+            adapter.setListData( new ArrayList&lt;String&gt;() );
+        }// met
+
+        @Override
+        public Loader&lt;List&lt;String&gt;&gt; onCreateLoader(int arg0,
+                Bundle arg1) {
+            return loader;
+        }// met
+    }//class
+
+    private class StringAdapter extends ArrayAdapter&lt; String &gt; {
+
+        private List&lt;String&gt; listDataToDisplay = new ArrayList&lt;String&gt;();
+        private LayoutInflater mInflater;
+
+        public StringAdapter( List&lt;String&gt; listData ) {
+            super( getActivity(), android.R.layout.simple_list_item_1, android.R.id.text1, listData );
+            listDataToDisplay = listData;
+            mInflater = (LayoutInflater)getActivity().getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        }//cons
+
+        private void setListData( List&lt;String&gt; newListData ) {
+            this.listDataToDisplay.clear();
+            this.listDataToDisplay.addAll( newListData );
+            notifyDataSetChanged();
+        }//met
+
+          /**
+         * Populate new items in the list.
+         */
+        @Override public View getView(int position, View convertView, ViewGroup parent) {
+            View view;
+
+            if (convertView == null) {
+                view = mInflater.inflate(android.R.layout.simple_list_item_1, parent, false);
+            } else {
+                view = convertView;
+            }
+
+            ((TextView)view.findViewById( android.R.id.text1)).setText( listDataToDisplay.get( position ) );
+
+            return view;
+        }
+    }//inner class
+}//class
+
+class StringLoader extends AsyncTaskLoader&lt;List&lt;String&gt;&gt; {
+
+    SearchFragment fragment = null;
+
+    public StringLoader(Context context, SearchFragment fragment) {
+        super(context);
+        this.fragment = fragment;
+    }// cons
+
+    @Override
+    public List&lt;String&gt; loadInBackground() {
+        return fragment.getData();
+    }// met
+}// class
+</code></pre>
+
+<p>The xml file for the menu of the search fragments res/menu/menu_search.xml: </p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:baselineAligned="false"
+    android:orientation="horizontal" &gt;
+    &lt;FrameLayout
+        android:id="@+id/fragment"
+        android:layout_width="0px"
+        android:layout_height="match_parent"
+        android:layout_weight="1" /&gt;
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>And the xml layout file res/layout/search_in_fragments.xml</p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:baselineAligned="false"
+    android:orientation="horizontal" &gt;
+    &lt;FrameLayout
+        android:id="@+id/fragment"
+        android:layout_width="0px"
+        android:layout_height="match_parent"
+        android:layout_weight="1" /&gt;
+&lt;/LinearLayout&gt;
+</code></pre>

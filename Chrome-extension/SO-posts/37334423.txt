@@ -1,0 +1,321 @@
+<p>Ok I managed to do it.</p>
+
+<p>So after a few hours of digging on their Source code here is what ended up doing. </p>
+
+<p>Note that it works but it's only to show how it could be done, it's still a work on progress (I did this in 3h) as I removed some code like observer etc.. </p>
+
+<p>As soon as I have some time, I'll digg onto the Californium Api more and make this generic and optimized I'll create a Github project and link it here.</p>
+
+<h1>1 : Create a model class</h1>
+
+<pre><code>public class ProxyRes {
+
+    public  CoapResource coapRes;
+    public  String  path;
+
+    public ProxyRes () {
+    }
+
+    public CoapResource getCoapRes () {
+        return coapRes;
+    }
+
+    public void setCoapRes (CoapResource coapRes) {
+        this.coapRes = coapRes;
+    }
+
+    public String getPath () {
+        return path;
+    }
+
+    public void setPath (String path) {
+        this.path = path;
+    }
+}
+</code></pre>
+
+<h1>2 : Create an abstract CoapResource that should inject the Wildcards list</h1>
+
+<pre><code>public abstract class AbstractResource extends CoapResource {
+
+    private LinkedList&lt;String&gt; wildcards;
+
+    protected AbstractResource (String name) {
+        super (name);
+    }
+
+    protected AbstractResource (String name, boolean visible) {
+        super (name, visible);
+    }
+
+    public LinkedList&lt;String&gt; getWildcards () {
+        return wildcards;
+    }
+
+    public void setWildcards (LinkedList&lt;String&gt; wildcards) {
+        this.wildcards = wildcards;
+    }
+}
+</code></pre>
+
+<h1>3 : Create a Temperature Resource extending AbstractResource</h1>
+
+<pre><code>public class TemperatureResource extends AbstractResource {
+
+    public TemperatureResource () {
+        super (ResourceSpecs.House.Sensors.Temperature);
+
+        getAttributes ().setTitle ("Temperature resource !");
+    }
+
+    @Override
+    public void handleGET (CoapExchange exchange) {
+        String response = "The temperature";
+        if (getWildcard () != null) {
+            response += " of the " + getWildcard ().get (0) + " on the " + getWildcard ().get (1);
+        }
+        response += " is : 25 degree C";
+
+        exchange.respond (response);
+    }
+}
+</code></pre>
+
+<h1>4 : Create a resources directory on the root of my eclipse project, with json conf files of my resources</h1>
+
+<pre><code>{
+    "verb": "get",
+    "endpoint": "/houses/*/rooms/*/sensors/temperature",
+
+    "class": "com.wild.coap.resources.TemperatureResource"
+}
+</code></pre>
+
+<h1>5 : Create a Resources Loader (class that will load the specs definition of the resources and instantiate them independently instead of creating a Tree on the server)</h1>
+
+<pre><code>public class ResourcesLoader {
+
+    private final static String Path = new File (".").getAbsolutePath () + File.separator + "resources";
+
+    private List&lt;ProxyRes&gt;  resourcesList;
+
+    public ResourcesLoader () throws Exception {
+        resourcesList   = new ArrayList&lt;ProxyRes&gt; ();
+
+        File resources  = new File (Path);
+        for (String resName : resources.list ()) {
+            File resFile    = new File (resources, resName);
+            InputStream is  = new FileInputStream (resFile);
+            JsonObject o    = new JsonObject (is);
+
+            resourcesArr.add (o);
+            resourcesList.add (buildObject (o));
+        }
+    }
+
+    private ProxyRes buildObject (JsonObject o) throws ClassNotFoundException, InstantiationException, IllegalAccessException {
+        ProxyRes r = new ProxyRes ();
+        r.setPath (o.getString ("endpoint"));
+
+        Class&lt;?&gt; clazz  = Class.forName (o.getString ("class"));
+        CoapResource coapRes = (CoapResource)clazz.newInstance ();
+        r.setCoapRes (coapRes);
+
+        return r;
+    }
+
+    public List&lt;ProxyRes&gt; getResourcesList () {
+        return resourcesList;
+    }
+}
+</code></pre>
+
+<h1>6 : Create a Custom MessageDelieverer</h1>
+
+<pre><code>public class DynamicMessageDeliverer implements MessageDeliverer {
+
+    private final List&lt;ProxyRes&gt;    resources;
+
+    public DynamicMessageDeliverer (List&lt;ProxyRes&gt; resources) {
+        this.resources  = resources;
+    }
+
+    public void deliverRequest (final Exchange exchange) {
+        Request request         = exchange.getRequest ();
+        List&lt;String&gt; path       = request.getOptions ().getUriPath ();
+
+        final Resource resource = registerResources (path);     
+        if (resource != null) {
+            executeResource (exchange, resource);           
+        } else {
+            exchange.sendResponse (new Response (ResponseCode.NOT_FOUND));
+            throw new RuntimeException ("Did not find resource " + path.toString() + " requested by " + request.getSource()+":"+request.getSourcePort());
+        }
+    }
+
+    private void executeResource (final Exchange exchange, final Resource resource) {
+        // Get the executor and let it process the request
+        Executor executor = resource.getExecutor ();
+        if (executor != null) {
+            exchange.setCustomExecutor ();
+            executor.execute (new Runnable () {
+
+                public void run () {
+                    resource.handleRequest (exchange);
+                } 
+            });
+        } else {
+            resource.handleRequest (exchange);
+        }
+    }
+
+    private Resource registerResources (List&lt;String&gt; list) {
+        LinkedList&lt;String&gt; path         = new LinkedList&lt;String&gt; (list);
+        String flatRequestedEndpoint    = Arrays.toString (path.toArray ());
+        LinkedList&lt;String&gt; wildcards    = new LinkedList &lt;String&gt; ();
+        ProxyRes retainedResource       = null;
+
+        for (ProxyRes proxyRes : resources) {
+            String[] res = proxyRes.getPath ().replaceFirst ("/", "").split ("/");
+
+            int length = res.length;
+            if (length != path.size ()) {
+                continue;
+            }
+
+            String flatResEndpoint = Arrays.toString (res);
+            if (flatResEndpoint.equals (flatRequestedEndpoint)) {
+                retainedResource = proxyRes;
+                break;
+            }
+
+            boolean match = true;
+
+            for (int i = 0; i &lt; length; i ++) {
+                String str = res[i];
+                if (str.equals ("*")) {
+                    wildcards.add (path.get (i));
+                    continue;
+                }
+
+                if (!str.equals (path.get (i))) {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (!match) {
+                wildcards.clear ();
+                continue;
+            }
+
+            retainedResource = proxyRes;
+            break;
+        }
+
+        if (retainedResource == null) {
+            return null;
+        }
+
+        ((AbstractResource)retainedResource.getCoapRes ()).setWildcard (wildcards);
+        return retainedResource.getCoapRes ();
+    }
+
+    public void deliverResponse (Exchange exchange, Response response) {
+        if (response == null) throw new NullPointerException();
+        if (exchange == null) throw new NullPointerException();
+        if (exchange.getRequest() == null) throw new NullPointerException();
+        exchange.getRequest().setResponse(response);
+        Request request         = exchange.getRequest ();
+        List&lt;String&gt; path       = request.getOptions ().getUriPath ();
+        System.out.println ("Path retrieved : " + Arrays.toString (path.toArray ()));
+    }
+}
+</code></pre>
+
+<h1>7 : Create the Server</h1>
+
+<pre><code>public class WildCoapServer extends CoapServer {
+
+    private static final int COAP_PORT = NetworkConfig.getStandard  ().getInt  (NetworkConfig.Keys.COAP_PORT);
+
+    public WildCoapServer () throws Exception {
+
+        // add endpoints on all IP addresses
+        addEndpoints ();
+
+        ResourcesLoader resLoader   = new ResourcesLoader ();
+        List&lt;ProxyRes&gt; resources    = resLoader.getResourcesList ();
+
+        setMessageDeliverer (new DynamicMessageDeliverer (resources));
+    }
+
+    @Override
+    protected Resource createRoot () {
+        return new WildRootResource ();
+    }
+
+    // Add individual endpoints listening on default CoAP port on all IPv4 addresses of all network interfaces.
+    private void addEndpoints () {
+        for (InetAddress addr : EndpointManager.getEndpointManager ().getNetworkInterfaces ()) {
+            // only binds to IPv4 addresses and localhost
+            if (addr instanceof Inet4Address || addr.isLoopbackAddress ()) {
+                InetSocketAddress bindToAddress = new InetSocketAddress (addr, COAP_PORT);
+                addEndpoint (new CoapEndpoint (bindToAddress));
+            }
+        }
+    }
+}
+</code></pre>
+
+<h1>8 : Start the server</h1>
+
+<pre><code>public class Main {
+
+    public static void main (String[] args) {
+
+        try {
+            WildCoapServer server = new WildCoapServer ();
+            server.start ();
+        } catch  (Exception e) {
+            throw new RuntimeException (e.getMessage (), e);
+        }
+    }
+}
+</code></pre>
+
+<h1>9 : Consume the Temperature resource from a client</h1>
+
+<pre><code>public class Client {
+
+    public static void main  (String[] args) {
+
+        URI uri = null;
+        try {
+            uri = new URI ("coap://192.168.200.1:5683/houses/house1/rooms/kitchen/sensors/temperature");
+        } catch  (URISyntaxException e) {
+            throw new RuntimeException (e.getMessage (), e);
+        }
+
+        CoapClient client       = new CoapClient (uri);
+
+        CoapResponse response   = client.get ();
+
+        if (response != null) {
+
+            System.out.println (response.getCode ());
+            System.out.println (response.getOptions ());
+            System.out.println (response.getResponseText ());
+
+            System.out.println ("\nADVANCED\n");
+            // access advanced API with access to more details through .advanced ()
+            System.out.println (Utils.prettyPrint (response));
+
+        } else {
+            System.out.println ("No response received.");
+        }       
+    }
+}
+</code></pre>
+
+<p>Hope that helps someone.</p>

@@ -1,0 +1,306 @@
+<p>The decision of whether a cell must be highlighted must be made in the TableCellRenderer. It can not be made in the JTable. So there is (probably) no reason to override the methods in JTable. Instead, you can set the CellRenderer for the columns to be your own implmenentation of the TableCellRenderer. </p>
+
+<p>In this example, the columns 2 and 3 receive a "ColoringCellRenderer". This ColoringCellRenderer will highlight a certain cell if the value in this cell is not null and the same as the value in column 1. </p>
+
+<pre><code>import java.awt.Color;
+import java.awt.Component;
+
+import javax.swing.JFrame;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.SwingUtilities;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableColumn;
+
+
+public class ColoredTableCells
+{
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                createAndShowGUI();
+            }
+        });
+    }
+
+    private static void createAndShowGUI()
+    {
+        JFrame f = new JFrame();
+        f.getContentPane().add(new JScrollPane(createTable()));
+        f.pack();
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+    }
+
+    static JTable createTable()
+    {
+        class ColoringTableCellRenderer extends DefaultTableCellRenderer
+        {
+            ColoringTableCellRenderer()
+            {
+                setOpaque(true);
+            }
+
+            @Override
+            public Component getTableCellRendererComponent(JTable table,
+                Object value, boolean isSelected, boolean hasFocus, int row,
+                int column)
+            {
+                super.getTableCellRendererComponent(
+                    table, value, isSelected, hasFocus, row, column);
+                if (highlightCell(table, row, column))
+                {
+                    setBackground(Color.CYAN);
+                }
+                else
+                {
+                    setBackground(Color.WHITE);
+                }
+                return this;
+            }
+
+            private boolean highlightCell(JTable table, int row, int column)
+            {
+                Object thisValue = table.getValueAt(row, column);
+                Object referenceValue = table.getValueAt(row, 1);
+                if (thisValue != null &amp;&amp; referenceValue != null)
+                {
+                    return thisValue.equals(referenceValue);
+                }
+                return false;
+            }
+        }
+
+        JTable table = new JTable();
+        table.setModel(new DefaultTableModel(new Object[][] {
+            { "Row1", "1", "2", "3" },
+            { "Row2", "2", "2", "3" },
+            { "Row3", "2", "2", "2" }, 
+            { "Row3", "2", "1", "2" } },
+            new String[] { "Header1", "Header2", "Header3", "Header4" }));
+
+
+        for (int i=2; i&lt;table.getColumnCount(); i++)
+        {
+            TableColumn column = table.getColumnModel().getColumn(i);
+            column.setCellRenderer(new ColoringTableCellRenderer());
+        }
+        return table;
+    }
+}
+</code></pre>
+
+<hr>
+
+<p>EDIT: The answer was accepted already, but in response to the comments, a different version:</p>
+
+<p>This one uses two classes, "DelegatingTableCellRenderer" and "DelegatingTableCellEditor". These classes each receive the respective delegate, and only set the background color of the cell component that is delivered by the delegate. </p>
+
+<p>This way, the functionality of coloring table cells (for renderers or editors) is decoupled from the actual renderer. Thus, it is possible to color, for example, the background of a the default CellRenderer for <code>Boolean</code> values (which shows a JCheckBox).</p>
+
+<pre><code>import java.awt.Color;
+import java.awt.Component;
+import java.util.EventObject;
+
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.SwingUtilities;
+import javax.swing.event.CellEditorListener;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellEditor;
+import javax.swing.table.TableCellRenderer;
+
+
+public class ColoredTableCells2
+{
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                createAndShowGUI();
+            }
+        });
+    }
+
+    private static void createAndShowGUI()
+    {
+        JFrame f = new JFrame();
+        f.getContentPane().add(new JScrollPane(createTable()));
+        f.pack();
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+    }
+
+    static JTable createTable()
+    {
+        JTable table = new JTable()
+        {
+            @Override
+            public Class&lt;?&gt; getColumnClass(int column) 
+            {
+                if (column == 0)
+                {
+                    return Object.class;
+                }
+                return Boolean.class;
+            }
+        };
+
+        table.setDefaultEditor(Boolean.class, 
+            new DelegatingTableCellEditor(table.getDefaultEditor(Boolean.class)));
+
+        table.setDefaultRenderer(Boolean.class, 
+            new DelegatingTableCellRenderer(table.getDefaultRenderer(Boolean.class)));
+
+        table.setModel(new DefaultTableModel(new Object[][] {
+            { "Row1", true,  false, true },
+            { "Row2", true,  true,  false },
+            { "Row3", false, false, true }, 
+            { "Row3", false, true,  false } },
+            new String[] { "Header1", "Header2", "Header3", "Header4" }));
+
+
+        return table;
+    }
+
+
+    static class DelegatingTableCellEditor implements TableCellEditor
+    {
+        private final TableCellEditor delegate;
+
+        DelegatingTableCellEditor(TableCellEditor delegate)
+        {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Object getCellEditorValue()
+        {
+            return delegate.getCellEditorValue();
+        }
+
+        @Override
+        public boolean isCellEditable(EventObject anEvent)
+        {
+            return delegate.isCellEditable(anEvent); 
+        }
+
+        @Override
+        public boolean shouldSelectCell(EventObject anEvent)
+        {
+            return delegate.shouldSelectCell(anEvent);
+        }
+
+        @Override
+        public boolean stopCellEditing()
+        {
+            return delegate.stopCellEditing();
+        }
+
+        @Override
+        public void cancelCellEditing()
+        {
+            delegate.cancelCellEditing();
+        }
+
+        @Override
+        public void addCellEditorListener(CellEditorListener l)
+        {
+            delegate.addCellEditorListener(l);
+        }
+
+        @Override
+        public void removeCellEditorListener(CellEditorListener l)
+        {
+            delegate.removeCellEditorListener(l);
+        }
+
+        @Override
+        public Component getTableCellEditorComponent(JTable table,
+            Object value, boolean isSelected, int row, int column)
+        {
+
+            Component component = 
+                delegate.getTableCellEditorComponent(
+                    table, value, isSelected, row, column);
+            if (component instanceof JComponent)
+            {
+                JComponent c = (JComponent)component;
+                c.setOpaque(true);
+            }
+            if (highlightCell(table, row, column))
+            {
+                component.setBackground(Color.CYAN);
+            }
+            else
+            {
+                component.setBackground(Color.WHITE);
+            }
+            return component;
+        }
+
+    }
+
+
+    static class DelegatingTableCellRenderer extends DefaultTableCellRenderer          
+    {
+        private final TableCellRenderer delegate;
+
+        DelegatingTableCellRenderer(TableCellRenderer delegate)
+        {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(
+            JTable table, Object value, boolean isSelected,
+            boolean hasFocus, int row, int column)
+        {
+            Component component = 
+                delegate.getTableCellRendererComponent(
+                    table, value, isSelected, hasFocus, row, column);
+            if (component instanceof JComponent)
+            {
+                JComponent c = (JComponent)component;
+                c.setOpaque(true);
+            }
+            if (highlightCell(table, row, column))
+            {
+                component.setBackground(Color.CYAN);
+            }
+            else
+            {
+                component.setBackground(Color.WHITE);
+            }
+            return component;
+        } 
+    }
+
+    private static boolean highlightCell(JTable table, int row, int column)
+    {
+        if (column == 1)
+        {
+            return false;
+        }
+        Object thisValue = table.getModel().getValueAt(row, column);
+        Object referenceValue = table.getModel().getValueAt(row, 1);
+        if (thisValue != null &amp;&amp; referenceValue != null)
+        {
+            return thisValue.equals(referenceValue);
+        }
+        return false;
+    }
+
+}
+</code></pre>

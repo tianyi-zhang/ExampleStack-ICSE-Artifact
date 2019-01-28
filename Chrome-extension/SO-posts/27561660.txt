@@ -1,0 +1,345 @@
+<p>As @CommonsWare said, I tried to implement sticky with LocalBroadcastManager source codes. Check this:
+<a href="https://gist.github.com/lidemin/5cd4080ebbc74154a0e7">https://gist.github.com/lidemin/5cd4080ebbc74154a0e7</a></p>
+
+<p>Not sure whether it is the best way to do that. It works well until now . Personally I prefer using Otto.</p>
+
+<pre><code>public class StickyLocalBroadcastManager {
+
+private static class ReceiverRecord {
+    final IntentFilter filter;
+    final BroadcastReceiver receiver;
+    boolean broadcasting;
+
+    ReceiverRecord(IntentFilter _filter, BroadcastReceiver _receiver) {
+        filter = _filter;
+        receiver = _receiver;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder builder = new StringBuilder(128);
+        builder.append("Receiver{");
+        builder.append(receiver);
+        builder.append(" filter=");
+        builder.append(filter);
+        builder.append("}");
+        return builder.toString();
+    }
+}
+
+private static class BroadcastRecord {
+    final Intent intent;
+    final ArrayList&lt;ReceiverRecord&gt; receivers;
+
+    BroadcastRecord(Intent _intent, ArrayList&lt;ReceiverRecord&gt; _receivers) {
+        intent = _intent;
+        receivers = _receivers;
+    }
+}
+
+private static final String TAG = "LocalBroadcastManager";
+private static final boolean DEBUG = false;
+
+private final Context mAppContext;
+
+private final HashMap&lt;BroadcastReceiver, ArrayList&lt;IntentFilter&gt;&gt; mReceivers
+        = new HashMap&lt;BroadcastReceiver, ArrayList&lt;IntentFilter&gt;&gt;();
+private final HashMap&lt;String, ArrayList&lt;ReceiverRecord&gt;&gt; mActions
+        = new HashMap&lt;String, ArrayList&lt;ReceiverRecord&gt;&gt;();
+
+private final ArrayList&lt;BroadcastRecord&gt; mPendingBroadcasts
+        = new ArrayList&lt;BroadcastRecord&gt;();
+
+private final ArrayList&lt;Intent&gt; mStickyBroadcasts
+        = new ArrayList&lt;Intent&gt;();
+
+static final int MSG_EXEC_PENDING_BROADCASTS = 1;
+
+private final Handler mHandler;
+
+private static final Object mLock = new Object();
+private static StickyLocalBroadcastManager mInstance;
+
+public static StickyLocalBroadcastManager getInstance(Context context) {
+    synchronized (mLock) {
+        if (mInstance == null) {
+            mInstance = new StickyLocalBroadcastManager(context.getApplicationContext());
+        }
+        return mInstance;
+    }
+}
+
+private StickyLocalBroadcastManager(Context context) {
+    mAppContext = context;
+    mHandler = new Handler(context.getMainLooper()) {
+
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case MSG_EXEC_PENDING_BROADCASTS:
+                    executePendingBroadcasts();
+                    break;
+                default:
+                    super.handleMessage(msg);
+            }
+        }
+    };
+}
+
+/**
+ * Register a receive for any local broadcasts that match the given IntentFilter.
+ *
+ * @param receiver The BroadcastReceiver to handle the broadcast.
+ * @param filter   Selects the Intent broadcasts to be received.
+ * @see #unregisterReceiver
+ */
+public void registerReceiver(BroadcastReceiver receiver, IntentFilter filter) {
+    synchronized (mReceivers) {
+        ReceiverRecord entry = new ReceiverRecord(filter, receiver);
+        ArrayList&lt;IntentFilter&gt; filters = mReceivers.get(receiver);
+        if (filters == null) {
+            filters = new ArrayList&lt;IntentFilter&gt;(1);
+            mReceivers.put(receiver, filters);
+        }
+        filters.add(filter);
+        for (int i = 0; i &lt; filter.countActions(); i++) {
+            String action = filter.getAction(i);
+            ArrayList&lt;ReceiverRecord&gt; entries = mActions.get(action);
+            if (entries == null) {
+                entries = new ArrayList&lt;ReceiverRecord&gt;(1);
+                mActions.put(action, entries);
+            }
+            entries.add(entry);
+        }
+        //check sticky broadcasts
+        for (Intent intent : mStickyBroadcasts) {
+            if (mActions.containsKey(intent.getAction())) {
+                sendBroadcast(intent, false);
+            }
+        }
+    }
+}
+
+/**
+ * Unregister a previously registered BroadcastReceiver.  &lt;em&gt;All&lt;/em&gt;
+ * filters that have been registered for this BroadcastReceiver will be
+ * removed.
+ *
+ * @param receiver The BroadcastReceiver to unregister.
+ * @see #registerReceiver
+ */
+public void unregisterReceiver(BroadcastReceiver receiver) {
+    synchronized (mReceivers) {
+        ArrayList&lt;IntentFilter&gt; filters = mReceivers.remove(receiver);
+        if (filters == null) {
+            return;
+        }
+        for (int i = 0; i &lt; filters.size(); i++) {
+            IntentFilter filter = filters.get(i);
+            for (int j = 0; j &lt; filter.countActions(); j++) {
+                String action = filter.getAction(j);
+                ArrayList&lt;ReceiverRecord&gt; receivers = mActions.get(action);
+                if (receivers != null) {
+                    for (int k = 0; k &lt; receivers.size(); k++) {
+                        if (receivers.get(k).receiver == receiver) {
+                            receivers.remove(k);
+                            k--;
+                        }
+                    }
+                    if (receivers.size() &lt;= 0) {
+                        mActions.remove(action);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * remove the sticky broadcasts .
+ * @param action is the action need to be removed.
+ */
+public void removeStickyBroadcast(String action) {
+    if (action == null || action.length() &lt;= 0) {
+        return;
+    }
+    synchronized (mStickyBroadcasts) {
+        Iterator&lt;Intent&gt; intentIterator = mStickyBroadcasts.iterator();
+        while (intentIterator.hasNext()) {
+            Intent intent = intentIterator.next();
+            if (action.equalsIgnoreCase(intent.getAction())) {
+                intentIterator.remove();
+            }
+        }
+    }
+}
+
+/**
+ * remove all the sticky broadcasts.
+ */
+public void removeAllStickyBroadcasts(){
+    synchronized (mStickyBroadcasts){
+        mStickyBroadcasts.clear();
+    }
+}
+
+/**
+ * send broadcast with specified action.
+ * @param action is the action .
+ * @return
+ */
+public boolean sendBroadcast(String action){
+    Intent intent = new Intent(action);
+    return sendBroadcast(intent);
+}
+
+/**
+ * send broadcast with specified action.
+ * @param action is the action .
+ * @return
+ */
+public boolean sendBroadcast(String action, boolean isSticky){
+    Intent intent = new Intent(action);
+    return sendBroadcast(intent, isSticky);
+}
+
+/**
+ * Broadcast the given intent to all interested BroadcastReceivers.  This
+ * call is asynchronous; it returns immediately, and you will continue
+ * executing while the receivers are run.
+ *
+ * @param intent The Intent to broadcast; all receivers matching this
+ *               Intent will receive the broadcast.
+ * @see #registerReceiver
+ */
+public boolean sendBroadcast(Intent intent) {
+    return sendBroadcast(intent, false);
+}
+
+/**
+ * Broadcast the given intent to all interested BroadcastReceivers.  This
+ * call is asynchronous; it returns immediately, and you will continue
+ * executing while the receivers are run.
+ *
+ * @param intent   The Intent to broadcast; all receivers matching this
+ *                 Intent will receive the broadcast.
+ * @param isSticky The flag of this intent is need to be sticky or not.
+ * @see #registerReceiver
+ */
+public boolean sendBroadcast(Intent intent, boolean isSticky) {
+    if (isSticky) {
+        mStickyBroadcasts.add(intent);
+    }
+    synchronized (mReceivers) {
+        final String action = intent.getAction();
+        final String type = intent.resolveTypeIfNeeded(
+                mAppContext.getContentResolver());
+        final Uri data = intent.getData();
+        final String scheme = intent.getScheme();
+        final Set&lt;String&gt; categories = intent.getCategories();
+
+        final boolean debug = DEBUG ||
+                ((intent.getFlags() &amp; Intent.FLAG_DEBUG_LOG_RESOLUTION) != 0);
+        if (debug) Log.v(
+                TAG, "Resolving type " + type + " scheme " + scheme
+                        + " of intent " + intent);
+
+        ArrayList&lt;ReceiverRecord&gt; entries = mActions.get(intent.getAction());
+        if (entries != null) {
+            if (debug) Log.v(TAG, "Action list: " + entries);
+
+            ArrayList&lt;ReceiverRecord&gt; receivers = null;
+            for (int i = 0; i &lt; entries.size(); i++) {
+                ReceiverRecord receiver = entries.get(i);
+                if (debug) Log.v(TAG, "Matching against filter " + receiver.filter);
+
+                if (receiver.broadcasting) {
+                    if (debug) {
+                        Log.v(TAG, "  Filter's target already added");
+                    }
+                    continue;
+                }
+
+                int match = receiver.filter.match(action, type, scheme, data,
+                        categories, "LocalBroadcastManager");
+                if (match &gt;= 0) {
+                    if (debug) Log.v(TAG, "  Filter matched!  match=0x" +
+                            Integer.toHexString(match));
+                    if (receivers == null) {
+                        receivers = new ArrayList&lt;ReceiverRecord&gt;();
+                    }
+                    receivers.add(receiver);
+                    receiver.broadcasting = true;
+                } else {
+                    if (debug) {
+                        String reason;
+                        switch (match) {
+                            case IntentFilter.NO_MATCH_ACTION:
+                                reason = "action";
+                                break;
+                            case IntentFilter.NO_MATCH_CATEGORY:
+                                reason = "category";
+                                break;
+                            case IntentFilter.NO_MATCH_DATA:
+                                reason = "data";
+                                break;
+                            case IntentFilter.NO_MATCH_TYPE:
+                                reason = "type";
+                                break;
+                            default:
+                                reason = "unknown reason";
+                                break;
+                        }
+                        Log.v(TAG, "  Filter did not match: " + reason);
+                    }
+                }
+            }
+
+            if (receivers != null) {
+                for (int i = 0; i &lt; receivers.size(); i++) {
+                    receivers.get(i).broadcasting = false;
+                }
+                mPendingBroadcasts.add(new BroadcastRecord(intent, receivers));
+                if (!mHandler.hasMessages(MSG_EXEC_PENDING_BROADCASTS)) {
+                    mHandler.sendEmptyMessage(MSG_EXEC_PENDING_BROADCASTS);
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Like {@link #sendBroadcast(Intent, boolean)}, but if there are any receivers for
+ * the Intent this function will block and immediately dispatch them before
+ * returning.
+ */
+public void sendBroadcastSync(Intent intent) {
+    if (sendBroadcast(intent, false)) {
+        executePendingBroadcasts();
+    }
+}
+
+private void executePendingBroadcasts() {
+    while (true) {
+        BroadcastRecord[] brs = null;
+        synchronized (mReceivers) {
+            final int N = mPendingBroadcasts.size();
+            if (N &lt;= 0) {
+                return;
+            }
+            brs = new BroadcastRecord[N];
+            mPendingBroadcasts.toArray(brs);
+            mPendingBroadcasts.clear();
+        }
+        for (int i = 0; i &lt; brs.length; i++) {
+            BroadcastRecord br = brs[i];
+            for (int j = 0; j &lt; br.receivers.size(); j++) {
+                br.receivers.get(j).receiver.onReceive(mAppContext, br.intent);
+            }
+        }
+    }
+}
+}
+</code></pre>

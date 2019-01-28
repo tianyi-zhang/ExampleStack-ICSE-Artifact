@@ -1,0 +1,87 @@
+<p>OK, here you go:</p>
+
+<pre><code>// Copy the bytes out of |src| and into |dst|, ignoring and overwriting
+// positon &amp; limit in both buffers.
+//** copied from org/webrtc/VideoRenderer.java **//
+private static void copyPlane(ByteBuffer src, ByteBuffer dst) {
+  src.position(0).limit(src.capacity());
+  dst.put(src);
+  dst.position(0).limit(dst.capacity());
+}
+
+public static android.graphics.YuvImage ConvertTo(org.webrtc.VideoRenderer.I420Frame src, int imageFormat) {
+    switch (imageFormat) {
+    default:
+        return null;
+
+    case android.graphics.ImageFormat.YV12: {
+        byte[] bytes = new byte[src.yuvStrides[0]*src.height +
+                            src.yuvStrides[1]*src.height/2 + 
+                            src.yuvStrides[2]*src.height/2];
+        ByteBuffer tmp = ByteBuffer.wrap(bytes, 0, src.yuvStrides[0]*src.height);
+        copyPlane(src.yuvPlanes[0], tmp);
+        tmp = ByteBuffer.wrap(bytes, src.yuvStrides[0]*src.height, src.yuvStrides[2]*src.height/2);
+        copyPlane(src.yuvPlanes[2], tmp);
+        tmp = ByteBuffer.wrap(bytes, src.yuvStrides[0]*src.height+src.yuvStrides[2]*src.height/2, src.yuvStrides[1]*src.height/2);
+        copyPlane(src.yuvPlanes[1], tmp);
+        int[] strides = src.yuvStrides.clone();
+        return new YuvImage(bytes, imageFormat, src.width, src.height, strides);
+    }
+
+    case android.graphics.ImageFormat.NV21: {
+        if (src.yuvStrides[0] != src.width)
+            return convertLineByLine(src);
+        if (src.yuvStrides[1] != src.width/2)
+            return convertLineByLine(src);
+        if (src.yuvStrides[2] != src.width/2)
+            return convertLineByLine(src);
+
+        byte[] bytes = new byte[src.yuvStrides[0]*src.height +
+                            src.yuvStrides[1]*src.height/2 + 
+                            src.yuvStrides[2]*src.height/2];
+        ByteBuffer tmp = ByteBuffer.wrap(bytes, 0, src.width*src.height);
+        copyPlane(src.yuvPlanes[0], tmp);
+
+        byte[] tmparray = new byte[src.width/2*src.height/2];
+        tmp = ByteBuffer.wrap(tmparray, 0, src.width/2*src.height/2);
+
+        copyPlane(src.yuvPlanes[2], tmp);
+        for (int row=0; row&lt;src.height/2; row++) {
+            for (int col=0; col&lt;src.width/2; col++) {
+                bytes[src.width*src.height + row*src.width + col*2] = tmparray[row*src.width/2 + col];
+            }
+        }
+        copyPlane(src.yuvPlanes[1], tmp);
+        for (int row=0; row&lt;src.height/2; row++) {
+            for (int col=0; col&lt;src.width/2; col++) {
+                bytes[src.width*src.height + row*src.width + col*2+1] = tmparray[row*src.width/2 + col];
+            }
+        }
+        return new YuvImage(bytes, imageFormat, src.width, src.height, null);
+    }
+    }
+}
+
+public static android.graphics.YuvImage convertLineByLine(org.webrtc.VideoRenderer.I420Frame src) {
+    byte[] bytes = new byte[src.width*src.height*3/2];
+    int i=0;
+    for (int row=0; row&lt;src.height; row++) {
+        for (int col=0; col&lt;src.width; col++) {
+            bytes[i++] = src.yuvPlanes[0][col+row*src.yuvStrides[0]];
+        }
+    }
+    for (int row=0; row&lt;src.height/2; row++) {
+        for (int col=0; col&lt;src.width/2; col++) {
+            bytes[i++] = src.yuvPlanes[2][col+row*src.yuvStrides[2]];
+            bytes[i++] = src.yuvPlanes[1][col+row*src.yuvStrides[1]];
+        }
+    }
+    return new YuvImage(bytes, android.graphics.ImageFormat.NV21, src.width, src.height, null);
+
+    }
+}
+</code></pre>
+
+<p>This converts I420Frame to Android YuvImage of <a href="http://developer.android.com/reference/android/graphics/ImageFormat.html#NV21" rel="nofollow">android.graphics.ImageFormat.NV21</a>, which you can <a href="http://developer.android.com/reference/android/graphics/YuvImage.html#compressToJpeg(android.graphics.Rect,%20int,%20java.io.OutputStream)" rel="nofollow">compressToJpeg()</a>. ImageFormat.YV12 support seems to be limited in SDK. Note that the Y and V must be shuffled.</p>
+
+<p>Most error checking is skipped for brevity.</p>

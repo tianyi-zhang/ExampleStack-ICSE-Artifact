@@ -1,0 +1,46 @@
+<p>It's not that straightforward, since you would want to maintain the type parameters in order to build a map containing the right types. To do that, you can go with a <code>TypeAdapterFactory</code>, and ask there for a delegate <code>TypeAdapter</code>, using the fully specified <code>TypeToken</code>.</p>
+
+<pre><code>public class ImmutableMapTypeAdapterFactory implements TypeAdapterFactory {
+
+    public static final ImmutableMapTypeAdapterFactory INSTANCE = new ImmutableMapTypeAdapterFactory();
+
+    @Override
+    public &lt;T&gt; TypeAdapter&lt;T&gt; create(Gson gson, TypeToken&lt;T&gt; type) {
+        if (!ImmutableMap.class.isAssignableFrom(type.getRawType())) {
+            return null;
+        }
+        final TypeAdapter&lt;T&gt; delegate = gson.getDelegateAdapter(this, type);
+        return new TypeAdapter&lt;T&gt;() {
+            @Override
+            public void write(JsonWriter out, T value) throws IOException {
+                delegate.write(out, value);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public T read(JsonReader in) throws IOException {
+                return (T) ImmutableMap.copyOf((Map) delegate.read(in));
+            }
+        };
+    }
+}
+</code></pre>
+
+<p>Now you have another problem: the default GSON <code>MapTypeAdapterFactory</code> will try to create an instance of <code>ImmutableMap</code>, and modify it. This obviously won't work. You should create a <code>TypeToken&lt;HashMap&lt;K, V&gt;&gt;</code> from the <code>TypeToken&lt;ImmutableMap&lt;K, V&gt;&gt;</code>, but I honestly don't know how you can do that. Instead, you can use an <code>InstanceCreator</code> to trick GSON into building a <code>HashMap</code> when an <code>ImmutableMap</code> is actually required:</p>
+
+<pre><code>public static &lt;K,V&gt; InstanceCreator&lt;Map&lt;K, V&gt;&gt; newCreator() {
+    return new InstanceCreator&lt;Map&lt;K, V&gt;&gt;() {
+        @Override
+        public Map&lt;K, V&gt; createInstance(Type type) {
+            return new HashMap&lt;K, V&gt;();
+        }
+    };
+}
+</code></pre>
+
+<p>Clearly you have to register both the TypeAdapterFactory and the InstanceCreator:</p>
+
+<pre><code>GsonBuilder b = new GsonBuilder();
+b.registerTypeAdapterFactory(new ImmutableMapTypeAdapterFactory());
+b.registerTypeAdapter(ImmutableMap.class, ImmutableMapTypeAdapterFactory.newCreator());
+</code></pre>

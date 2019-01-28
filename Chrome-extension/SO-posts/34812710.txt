@@ -1,0 +1,381 @@
+<p>here are some more information:</p>
+
+<p>this class might be interesting as well:</p>
+
+<pre><code>/**
+ * Servlet 3.0+ environments allow to replace the web.xml file with a programmatic configuration.
+ * &lt;p/&gt;
+ * Created by owahlen on 01.01.14.
+ */
+public class Deployment extends SpringBootServletInitializer {
+
+    @Override
+    protected SpringApplicationBuilder configure(SpringApplicationBuilder application) {
+        return application.sources(Application.class);
+    }
+
+    /**
+     * This method is copied from SpringBootServletInitializer.
+     * Only the registration of the ErrorPageFilter is omitted.
+     * This was done since errors shall never be sent as redirects but as ErrorDto
+     * @param servletContext
+     * @return
+     */
+    protected WebApplicationContext createRootApplicationContext(ServletContext servletContext) {
+        SpringApplicationBuilder builder = new SpringApplicationBuilder();
+        ApplicationContext parent = getExistingRootWebApplicationContext(servletContext);
+        if (parent != null) {
+            this.logger.info("Root context already created (using as parent).");
+            servletContext.setAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE, null);
+            builder.initializers(new ParentContextApplicationContextInitializer(parent));
+        }
+        builder.initializers(new ServletContextApplicationContextInitializer(servletContext));
+        builder.contextClass(AnnotationConfigEmbeddedWebApplicationContext.class);
+        builder = configure(builder);
+        SpringApplication application = builder.build();
+        if (application.getSources().isEmpty()
+                &amp;&amp; AnnotationUtils.findAnnotation(getClass(), Configuration.class) != null) {
+            application.getSources().add(getClass());
+        }
+        Assert.state(application.getSources().size() &gt; 0,
+                "No SpringApplication sources have been defined. Either override the "
+                        + "configure method or add an @Configuration annotation");
+        // Error pages are handled by the ExceptionHandlerController. No ErrorPageFilter is needed.
+        // application.getSources().add(ErrorPageFilter.class);
+        return run(application);
+    }
+
+    private ApplicationContext getExistingRootWebApplicationContext(ServletContext servletContext) {
+        Object context = servletContext.getAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE);
+        if (context instanceof ApplicationContext) {
+            return (ApplicationContext) context;
+        }
+        return null;
+    }
+
+}
+</code></pre>
+
+<p>and another configuration - class:</p>
+
+<pre><code>@Configuration
+public class H2Console {
+
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
+
+
+    /**
+     * Define the H2 Console Servlet
+     *
+     * @return ServletRegistrationBean to be processed by Spring
+     */
+    @Bean(name= "h2servlet")
+    public ServletRegistrationBean h2servletRegistration() {
+        ServletRegistrationBean registration = new ServletRegistrationBean(new WebServlet());
+        registration.addInitParameter("webAllowOthers", "true"); // allow access from URLs other than localhost
+        registration.addUrlMappings("/console/*");
+        return registration;
+    }
+}
+</code></pre>
+
+<p>main build.gradle:</p>
+
+<pre><code>import java.util.concurrent.CountDownLatch
+
+buildscript {
+    repositories {
+        jcenter()
+    }
+
+    dependencies {
+        classpath 'org.asciidoctor:asciidoctor-gradle-plugin:1.5.0'
+    }
+}
+
+apply plugin: 'org.asciidoctor.gradle.asciidoctor'
+
+ext {
+    applicationVersion = 'UNDEFINED'
+    appBackend = null
+}
+
+asciidoctor {
+    sourceDir = file('asciidoc')
+    options = [
+            doctype   : 'book',
+            attributes: [
+                    'source-highlighter': 'coderay',
+                    toc                 : '',
+                    idprefix            : '',
+                    idseparator         : '-'
+            ]
+    ]
+}
+
+def defaultEnvironment() {
+    def environment = ["PATH=${System.env.PATH}"]
+    environment += "HOME=${System.env.HOME}"
+    return environment
+}
+
+def execAsync(command, printStdOutput, dir, expectedOutput) {
+    println("Starting async command $command")
+
+    final CountDownLatch condition = new CountDownLatch(1)
+
+    def commandEnvironment = defaultEnvironment()
+
+    def proc = command.execute(commandEnvironment, new File(dir as String))
+    Thread.start {
+        try {
+            proc.in.eachLine { line -&gt;
+                if (printStdOutput) {
+                    println "$line"
+                }
+                if (expectedOutput != null &amp;&amp; line?.contains(expectedOutput)) {
+                    condition.countDown()
+                }
+            }
+        }
+        catch (ignored) {
+        }
+    }
+    Thread.start {
+        try {
+            proc.err.eachLine { line -&gt;
+                if (printStdOutput) {
+                    println line
+                }
+            }
+        }
+        catch (ignored) {
+        }
+    }
+    return [proc, expectedOutput != null ? condition : null]
+}
+
+
+task startServer() {
+    doLast {
+        def condBackend
+        (appBackend, condBackend) = execAsync(["./gradlew", "run"], true, "$projectDir", "Started Application")
+        condBackend.await()
+    }
+}
+
+task stopProcesses &lt;&lt; {
+    appBackend?.destroy()
+}
+
+task e2eReport(dependsOn: [startServer, ':atobcarry-client:clean', ':project-client:e2eTest'])
+tasks.getByPath(':project-client:e2eTest').mustRunAfter(startServer)
+stopProcesses.mustRunAfter(':project-client:e2eTest')
+startServer.finalizedBy(stopProcesses)
+e2eReport.finalizedBy(stopProcesses)
+tasks.getByPath(':project-client:e2eTest').finalizedBy(stopProcesses)
+task validate(dependsOn: [':project-client:grunt_default', ':project-server:cobertura', ':project-server:coberturaCheck'])
+</code></pre>
+
+<p>the settings.gradle:</p>
+
+<pre><code>// This file includes the gradle subprojects of project project
+include 'project-server'           // REST webserver backend (WAR)
+include 'project-client'           // AngularJS frontend (JAR)
+include 'project-tracking'         // TomTom tracking server (WAR)
+include 'project-tracking-commons' // Shared code between tracking and server
+</code></pre>
+
+<p>querydsl.graddle (from project-server)</p>
+
+<pre><code>configurations {
+    // configuration to hold the build dependency on the querydsl generator
+    querydslapt
+}
+
+String queryDslVersion = '3.5.1'
+dependencies {
+    querydslapt "com.mysema.querydsl:querydsl-apt:$queryDslVersion"
+    compile "com.mysema.querydsl:querydsl-jpa:$queryDslVersion"
+}
+
+task generateQueryDSL(type: JavaCompile, group: 'build', description: 'Generate the QueryDSL query types.') {
+    // only process entity classes and enums to avoid compilation errors from code that needs the generated sources
+    source = fileTree('src/main/java/com/infinit/atobcarry/entity') + fileTree('src/main/java/com/infinit/project/enums')
+    // include the querydsl generator into the compilation classpath
+    classpath = configurations.compile + configurations.querydslapt
+    options.compilerArgs = [
+            "-proc:only",
+            "-processor", "com.mysema.query.apt.jpa.JPAAnnotationProcessor"
+    ]
+    options.warnings = false
+    // the compiler puts the generated sources into the gensrcDir
+    destinationDir = gensrcDir
+}
+
+gensrc {
+    // extend the gensrc task to also generate querydsl
+    dependsOn generateQueryDSL
+}
+</code></pre>
+
+<p>liquibase.graddle (from server)</p>
+
+<pre><code>configurations {
+    liquibase
+}
+
+dependencies {
+    liquibase 'org.liquibase:liquibase-core:3.3.2'
+    liquibase 'org.liquibase.ext:liquibase-hibernate4:3.5'
+    // liquibase 'org.yaml:snakeyaml:1.14'
+    liquibase 'org.postgresql:postgresql:9.3-1103-jdbc41'
+    liquibase 'org.springframework:spring-beans'
+    liquibase 'org.springframework:spring-orm'
+    liquibase 'org.springframework:spring-context'
+    liquibase 'org.springframework.boot:spring-boot' // contains the SpringNamingStrategy
+    liquibase 'org.hibernate.javax.persistence:hibernate-jpa-2.1-api:1.0.0.Final'
+}
+
+[
+        'status'                 : 'Outputs count (list if --verbose) of unrun change sets.',
+        'validate'               : 'Checks the changelog for errors.',
+        'changelogSync'          : 'Mark all changes as executed in the database.',
+        'changelogSyncSQL'       : 'Writes SQL to mark all changes as executed in the database to STDOUT.',
+        'listLocks'              : 'Lists who currently has locks on the database changelog.',
+        'releaseLocks'           : 'Releases all locks on the database changelog.',
+        'markNextChangesetRan'   : 'Mark the next change set as executed in the database.',
+        'markNextChangesetRanSQL': 'Writes SQL to mark the next change set as executed in the database to STDOUT.',
+        'dropAll'                : 'Drops all database objects owned by the user. Note that functions, procedures and packages are not dropped (limitation in 1.8.1).',
+        'clearChecksums'         : 'Removes current checksums from database. On next run checksums will be recomputed.',
+        'generateChangelog'      : 'generateChangeLog of the database to standard out. v1.8 requires the dataDir parameter currently.',
+        'futureRollbackSQL'      : 'Writes SQL to roll back the database to the current state after the changes in the changeslog have been applied.',
+        'update'                 : 'Updates the database to the current version.',
+        'updateSQL'              : 'Writes SQL to update the database to the current version to STDOUT.',
+        'updateTestingRollback'  : 'Updates the database, then rolls back changes before updating again.',
+        'diff'                   : 'Writes description of differences to standard out.',
+        'diffChangeLog'          : 'Writes Change Log XML to update the base database to the target database to standard out.',
+        'updateCount'            : 'Applies the next &lt;liquibaseCommandValue&gt; change sets.',
+        'updateCountSql'         : 'Writes SQL to apply the next &lt;liquibaseCommandValue&gt; change sets to STDOUT.',
+        'tag'                    : 'Tags the current database state with &lt;liquibaseCommandValue&gt; for future rollback',
+        'rollback'               : 'Rolls back the database to the state it was in when the &lt;liquibaseCommandValue&gt; tag was applied.',
+        'rollbackToDate'         : 'Rolls back the database to the state it was in at the &lt;liquibaseCommandValue&gt; date/time.',
+        'rollbackCount'          : 'Rolls back the last &lt;liquibaseCommandValue&gt; change sets.',
+        'rollbackSQL'            : 'Writes SQL to roll back the database to the state it was in when the &lt;liquibaseCommandValue&gt; tag was applied to STDOUT.',
+        'rollbackToDateSQL'      : 'Writes SQL to roll back the database to the state it was in at the &lt;liquibaseCommandValue&gt; date/time to STDOUT.',
+        'rollbackCountSQL'       : 'Writes SQL to roll back the last &lt;liquibaseCommandValue&gt; change sets to STDOUT.'
+].each { String taskName, String taskDescription -&gt;
+    String prefixedTaskName = 'dbm' + taskName.capitalize()
+    task(prefixedTaskName, type: JavaExec) { JavaExec task -&gt;
+        initLiquibaseTask(task)
+        args += taskName
+        String liquibaseCommandValue = project.properties.get("liquibaseCommandValue")
+        if (liquibaseCommandValue) {
+            args += liquibaseCommandValue
+        }
+    }
+}
+
+void initLiquibaseTask(JavaExec task) {
+    String changeLogFile = 'src/main/resources/db/changelog/db.changelog-master.xml'
+    task.main = 'liquibase.integration.commandline.Main'
+    task.classpath = configurations.liquibase + sourceSets.main.runtimeClasspath
+    task.args = [
+            // "--logLevel=debug",
+            "--changeLogFile=${changeLogFile}",
+            "--url=jdbc:postgresql://localhost:15432/roject",
+            "--username=project",
+            "--password=project",
+            "--referenceUrl=hibernate:spring:com.infinit.atobcarry?dialect=org.hibernate.dialect.PostgreSQL9Dialect&amp;hibernate.ejb.naming_strategy=org.springframework.boot.orm.jpa.hibernate.SpringNamingStrategy&amp;hibernate.enhanced_id=true",
+    ]
+    task.group = 'liquibase'
+}
+</code></pre>
+
+<p>jreleaseinfo.gradle</p>
+
+<pre><code>configurations {
+    // configuration to hold the build dependency on the jreleaseinfo ant task
+    jreleaseinfo
+}
+
+dependencies {
+    jreleaseinfo 'ch.oscg.jreleaseinfo:jreleaseinfo:1.3.0'
+}
+
+task generateJReleaseInfo(group: 'build', description: 'Generate the VersionInfo class.') { Task task -&gt;
+    Map&lt;String, ?&gt; parameters = [
+            buildKey: project.hasProperty('buildKey') ? project.buildKey : '',
+            buildResultKey: project.hasProperty('buildResultKey') ? project.buildResultKey : '',
+            buildNumber: project.hasProperty('buildNumber') ? project.buildNumber : '',
+            buildResultsUrl: project.hasProperty('buildResultsUrl') ? project.buildResultsUrl : '',
+            gitBranch: project.hasProperty('gitBranch') ? project.gitBranch : '',
+            gitCommit: project.hasProperty('gitCommit') ? project.gitCommit : ''
+    ]
+    task.inputs.properties(parameters)
+    task.inputs.property('version', project.version)
+    task.outputs.file( new File(gensrcDir, 'com/infinit/atobcarry/config/VersionInfo.java') )
+    task.doLast {
+        // gradle properties that can be passed to the JReleaseInfoAntTask task
+        ant.taskdef(name: 'jreleaseinfo', classname: 'ch.oscg.jreleaseinfo.anttask.JReleaseInfoAntTask', classpath: configurations.jreleaseinfo.asPath)
+        ant.jreleaseinfo(targetDir: gensrcDir, className: 'VersionInfo', packageName: 'com.infinit.atobcarry.config', version: project.version) {
+            parameters.each { String key, String value -&gt;
+                parameter(name: key, type: 'String', value: value)
+            }
+        }
+    }
+}
+
+gensrc {
+    // extend the gensrc task to also generate JReleaseInfo
+    dependsOn generateJReleaseInfo
+}
+</code></pre>
+
+<p>gensrc.gradle</p>
+
+<pre><code>// register directory where generated sources are located with the project
+ext.gensrcDir = file('src/main/generated')
+
+// create a wrapper task for source generation that the generators can depend upon
+task gensrc(group: 'build', description: 'Execute all tasks that generate source code.')
+
+// include the source code generators
+apply from: 'querydsl.gradle'
+apply from: 'jreleaseinfo.gradle'
+
+// add the gensrcDir to the sourceSets
+sourceSets {
+    generated
+}
+sourceSets.generated.java.srcDirs = [gensrcDir]
+
+// extend the conventional compileJava task to also compile the generated sources
+compileJava {
+    dependsOn gensrc
+    source gensrcDir
+}
+
+clean {
+    delete gensrcDir
+}
+</code></pre>
+
+<p>orm.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;entity-mappings xmlns="http://java.sun.com/xml/ns/persistence/orm"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xsi:schemaLocation="http://java.sun.com/xml/ns/persistence/orm http://java.sun.com/xml/ns/persistence/orm_2_0.xsd"
+                 version="2.0"&gt;
+
+    &lt;persistence-unit-metadata&gt;
+        &lt;persistence-unit-defaults&gt;
+            &lt;entity-listeners&gt;
+                &lt;entity-listener class="org.springframework.data.jpa.domain.support.AuditingEntityListener"/&gt;
+            &lt;/entity-listeners&gt;
+        &lt;/persistence-unit-defaults&gt;
+    &lt;/persistence-unit-metadata&gt;
+
+&lt;/entity-mappings&gt;
+</code></pre>

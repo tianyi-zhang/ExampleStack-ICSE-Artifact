@@ -1,0 +1,298 @@
+<p>This simple Fixed Time Step game loop (I adapted from reference credit to the author) has never let me down. </p>
+
+<p>It will allow drawing at exactly 60 fps (or whatever you make it) the hertz can be changed too, it enables anti-aliasing via Graphics2D and a few other effects as well. </p>
+
+<p>The original authors example included interpolation checking but I found it giving me a few problems in my games like pictures flickering in and out of their positions so I have kept that included but if you experience problems at least you will know what is causing it):</p>
+
+<p><img src="http://i.stack.imgur.com/kwpgv.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import javax.swing.*;
+
+public class GameLoopTest implements ActionListener {
+
+    private GamePanel gamePanel;
+    private JButton startButton;
+    private JButton quitButton;
+    private JButton pauseButton;
+    private boolean running = false;
+    private boolean paused = false;
+
+    public GameLoopTest() {
+        JFrame frame = new JFrame("Fixed Timestep Game Loop Test");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+        gamePanel = new GamePanel(500, 500);
+        startButton = new JButton("Start");
+        quitButton = new JButton("Quit");
+        pauseButton = new JButton("Pause");
+        pauseButton.setEnabled(false);
+
+        JPanel buttonPanel = new JPanel();
+        buttonPanel.setLayout(new GridLayout(1, 2));
+
+        startButton.addActionListener(this);
+        quitButton.addActionListener(this);
+        pauseButton.addActionListener(this);
+
+        buttonPanel.add(startButton);
+        buttonPanel.add(pauseButton);
+        buttonPanel.add(quitButton);
+        frame.add(gamePanel);
+        frame.add(buttonPanel, BorderLayout.SOUTH);
+
+        frame.pack();
+        frame.setVisible(true);
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                new GameLoopTest();
+            }
+        });
+    }
+
+    @Override
+    public void actionPerformed(ActionEvent e) {
+        Object s = e.getSource();
+        if (s == startButton) {
+            running = !running;
+            if (running) {
+                startButton.setText("Stop");
+                pauseButton.setEnabled(true);
+                runGameLoop();
+            } else {
+                startButton.setText("Start");
+                pauseButton.setEnabled(false);
+            }
+        } else if (s == pauseButton) {
+            paused = !paused;
+            if (paused) {
+                pauseButton.setText("Unpause");
+            } else {
+                pauseButton.setText("Pause");
+            }
+        } else if (s == quitButton) {
+            System.exit(0);
+        }
+    }
+
+    //Starts a new thread and runs the game loop in it.
+    public void runGameLoop() {
+        Thread loop = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                gameLoop();
+            }
+        });
+        loop.start();
+    }
+
+    //Only run this in another Thread!
+    private void gameLoop() {
+        //This value would probably be stored elsewhere.
+        final double GAME_HERTZ = 30.0;
+        //Calculate how many ns each frame should take for our target game hertz.
+        final double TIME_BETWEEN_UPDATES = 1000000000 / GAME_HERTZ;
+        //At the very most we will update the game this many times before a new render.
+        //If you're worried about visual hitches more than perfect timing, set this to 1.
+        final int MAX_UPDATES_BEFORE_RENDER = 5;
+        //We will need the last update time.
+        double lastUpdateTime = System.nanoTime();
+        //Store the last time we rendered.
+        double lastRenderTime = System.nanoTime();
+
+        //If we are able to get as high as this FPS, don't render again.
+        final double TARGET_FPS = 60;
+        final double TARGET_TIME_BETWEEN_RENDERS = 1000000000 / TARGET_FPS;
+
+        //Simple way of finding FPS.
+        int lastSecondTime = (int) (lastUpdateTime / 1000000000);
+
+        while (running) {
+            double now = System.nanoTime();
+            int updateCount = 0;
+
+            if (!paused) {
+                //Do as many game updates as we need to, potentially playing catchup.
+                while (now - lastUpdateTime &gt; TIME_BETWEEN_UPDATES &amp;&amp; updateCount &lt; MAX_UPDATES_BEFORE_RENDER) {
+                    updateGame();
+                    lastUpdateTime += TIME_BETWEEN_UPDATES;
+                    updateCount++;
+                }
+
+                //If for some reason an update takes forever, we don't want to do an insane number of catchups.
+                //If you were doing some sort of game that needed to keep EXACT time, you would get rid of this.
+                if (now - lastUpdateTime &gt; TIME_BETWEEN_UPDATES) {
+                    lastUpdateTime = now - TIME_BETWEEN_UPDATES;
+                }
+
+                //Render. To do so, we need to calculate interpolation for a smooth render.
+                float interpolation = Math.min(1.0f, (float) ((now - lastUpdateTime) / TIME_BETWEEN_UPDATES));
+                drawGame(interpolation);
+                lastRenderTime = now;
+
+                //Update the frames we got.
+                int thisSecond = (int) (lastUpdateTime / 1000000000);
+                int frameCount = gamePanel.getFrameCount();
+                if (thisSecond &gt; lastSecondTime) {
+                    System.out.println("NEW SECOND " + thisSecond + " " + frameCount);
+                    gamePanel.setFps(frameCount);
+                    frameCount = 0;
+                    lastSecondTime = thisSecond;
+                }
+
+                //Yield until it has been at least the target time between renders. This saves the CPU from hogging.
+                while (now - lastRenderTime &lt; TARGET_TIME_BETWEEN_RENDERS &amp;&amp; now - lastUpdateTime &lt; TIME_BETWEEN_UPDATES) {
+                    //allow the threading system to play threads that are waiting to run.
+                    Thread.yield();
+
+                    //This stops the app from consuming all your CPU. It makes this slightly less accurate, but is worth it.
+                    //You can remove this line and it will still work (better), your CPU just climbs on certain OSes.
+                    //FYI on some OS's this can cause pretty bad stuttering. Scroll down and have a look at different peoples' solutions to this.
+                    //On my OS it does not unpuase the game if i take this away
+                    try {
+                        Thread.sleep(1);
+                    } catch (Exception e) {
+                    }
+
+                    now = System.nanoTime();
+                }
+            }
+        }
+    }
+
+    private void updateGame() {
+        gamePanel.update();
+    }
+
+    private void drawGame(float interpolation) {
+        gamePanel.setInterpolation(interpolation);
+
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                gamePanel.repaint();
+            }
+        });
+    }
+}
+
+class GamePanel extends JPanel {
+
+    float interpolation;
+    float ballX, ballY, lastBallX, lastBallY;
+    int ballWidth, ballHeight;
+    float ballXVel, ballYVel;
+    float ballSpeed;
+    int lastDrawX, lastDrawY;
+    private int frameCount = 0;
+    private int fps = 0;
+    int width, height;
+
+    public GamePanel(int width, int height) {
+        super(true);
+        ballX = lastBallX = 100;
+        ballY = lastBallY = 100;
+        ballWidth = 25;
+        ballHeight = 25;
+        ballSpeed = 25;
+        ballXVel = (float) Math.random() * ballSpeed * 2 - ballSpeed;
+        ballYVel = (float) Math.random() * ballSpeed * 2 - ballSpeed;
+        this.width = width;
+        this.height = height;
+    }
+
+    public void setInterpolation(float interp) {
+        interpolation = interp;
+    }
+
+    public void update() {
+        lastBallX = ballX;
+        lastBallY = ballY;
+
+        ballX += ballXVel;
+        ballY += ballYVel;
+
+        if (ballX + ballWidth / 2 &gt;= getWidth()) {
+            ballXVel *= -1;
+            ballX = getWidth() - ballWidth / 2;
+            ballYVel = (float) Math.random() * ballSpeed * 2 - ballSpeed;
+        } else if (ballX - ballWidth / 2 &lt;= 0) {
+            ballXVel *= -1;
+            ballX = ballWidth / 2;
+        }
+
+        if (ballY + ballHeight / 2 &gt;= getHeight()) {
+            ballYVel *= -1;
+            ballY = getHeight() - ballHeight / 2;
+            ballXVel = (float) Math.random() * ballSpeed * 2 - ballSpeed;
+        } else if (ballY - ballHeight / 2 &lt;= 0) {
+            ballYVel *= -1;
+            ballY = ballHeight / 2;
+        }
+    }
+
+    public int getFrameCount() {
+        return frameCount;
+    }
+
+    public void setFrameCount(int frameCount) {
+        this.frameCount = frameCount;
+    }
+
+    void setFps(int fps) {
+        this.fps = fps;
+    }
+    private final static RenderingHints textRenderHints = new RenderingHints(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+    private final static RenderingHints imageRenderHints = new RenderingHints(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+    private final static RenderingHints colorRenderHints = new RenderingHints(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
+    private final static RenderingHints interpolationRenderHints = new RenderingHints(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+    private final static RenderingHints renderHints = new RenderingHints(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+
+    public void applyRenderHints(Graphics2D g2d) {
+        g2d.setRenderingHints(textRenderHints);
+        g2d.setRenderingHints(imageRenderHints);
+        g2d.setRenderingHints(colorRenderHints);
+        g2d.setRenderingHints(interpolationRenderHints);
+        g2d.setRenderingHints(renderHints);
+    }
+
+    @Override
+    public void paintComponent(Graphics g) {
+        super.paintComponent(g);
+
+        Graphics2D g2d = (Graphics2D) g;
+
+        //applys effects like anti alising for images and tetx, as well as sets the renderinf value to quality etc
+        applyRenderHints(g2d);
+
+        g2d.setColor(Color.RED);
+        int drawX = (int) ((ballX - lastBallX) + lastBallX - ballWidth / 2);
+        int drawY = (int) ((ballY - lastBallY) + lastBallY - ballHeight / 2);
+        g2d.fillOval(drawX, drawY, ballWidth, ballHeight);
+
+        lastDrawX = drawX;
+        lastDrawY = drawY;
+
+        g2d.setColor(Color.BLACK);
+        g2d.drawString("FPS: " + fps, 5, 10);
+
+        frameCount++;
+    }
+
+    @Override
+    public Dimension getPreferredSize() {
+        return new Dimension(width, height);
+    }
+}
+</code></pre>
+
+<p><strong>Reference:</strong></p>
+
+<ul>
+<li><a href="http://www.java-gaming.org/index.php/topic,24220.0" rel="nofollow">http://www.java-gaming.org/index.php/topic,24220.0</a></li>
+</ul>

@@ -1,0 +1,295 @@
+<p>You can use my <code>AnimationPanel</code> class and do your drawing in it instead. This technique is based on <a href="http://docs.oracle.com/javase/tutorial/extra/fullscreen/rendering.html" rel="nofollow">Active Rendering</a>.</p>
+
+<h1>Code:</h1>
+
+<pre><code>// AnimationPanel.java
+import javax.swing.*;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+
+public abstract class AnimationPanel extends JPanel implements Runnable
+{
+  private static final long serialVersionUID = 6892533030374996243L;
+  private static final int NO_DELAYS_PER_YIELD = 16;
+  private static final int MAX_FRAME_SKIPS = 5;
+
+  private static long fps = 30; // Frames Per Second.
+  private static long period = 1000000L * (long) 1000.0 / fps;
+
+  protected final int WIDTH;
+  protected final int HEIGHT;
+  private Thread animator;
+
+  private volatile boolean running = false;
+  private volatile boolean isWindowPaused = false;
+
+  private Graphics dbg;
+  private Image dbImage = null;
+
+  public AnimationPanel(int width, int height)
+  {
+    WIDTH = width;
+    HEIGHT = height;
+
+    setPreferredSize(new Dimension(WIDTH, HEIGHT));
+
+    setFocusable(true);
+    requestFocus();
+  }
+
+  public void addNotify()
+  {
+    super.addNotify();
+    startAnimation();
+  }
+
+  void startAnimation()
+  {
+    if (animator == null || !running)
+    {
+      animator = new Thread(this);
+      animator.start();
+    }
+  }
+
+  public void run()
+  {
+    long beforeTime, afterTime, timeDiff, sleepTime;
+    long overSleepTime = 0L;
+    int noDelays = 0;
+    long excess = 0L;
+
+    beforeTime = System.nanoTime();
+
+    running = true;
+
+    while (running)
+    {
+      requestFocus();
+      animationUpdate();
+      animationRender();
+      paintScreen();
+
+      afterTime = System.nanoTime();
+
+      timeDiff = afterTime - beforeTime;
+      sleepTime = (period - timeDiff) - overSleepTime;
+
+      if (sleepTime &gt; 0)
+      {
+        try
+        {
+          Thread.sleep(sleepTime / 1000000L);
+        }
+        catch (InterruptedException ignored)
+        {
+        }
+
+        overSleepTime = (System.nanoTime() - afterTime - sleepTime);
+      }
+      else
+      {
+        excess -= sleepTime;
+        overSleepTime = 0L;
+
+        if (++noDelays &gt;= NO_DELAYS_PER_YIELD)
+        {
+          Thread.yield();
+          noDelays = 0;
+        }
+      }
+
+      beforeTime = System.nanoTime();
+
+      int skips = 0;
+
+      while ((excess &gt; period) &amp;&amp; (skips &lt; MAX_FRAME_SKIPS))
+      {
+        excess -= period;
+        animationUpdate();
+        skips++;
+      }
+    }
+
+    stopAnimation();
+    System.exit(0);
+  }
+
+  void stopAnimation()
+  {
+    running = false;
+  }
+
+  private void animationUpdate()
+  {
+    if (!isWindowPaused)
+    {
+      update();
+    }
+  }
+
+  public abstract void update();
+
+  private void animationRender()
+  {
+    if (dbImage == null)
+    {
+      dbImage = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB);
+
+      if (dbImage == null)
+      {
+        System.out.println("Image is null.");
+        return;
+      }
+      else
+      {
+        dbg = dbImage.getGraphics();
+      }
+    }
+
+    draw(dbg);
+  }
+
+  public abstract void draw(Graphics graphics);
+
+  private void paintScreen()
+  {
+    Graphics g;
+
+    try
+    {
+      g = this.getGraphics();
+      if ((g != null) &amp;&amp; (dbImage != null))
+      {
+        g.drawImage(dbImage, 0, 0, null);
+      }
+
+      Toolkit.getDefaultToolkit().sync();
+
+      if (g != null)
+      {
+        g.dispose();
+      }
+    }
+    catch (Exception e)
+    {
+      System.out.println("Graphics context error : " + e);
+    }
+  }
+
+  public void setWindowPaused(boolean isPaused)
+  {
+    isWindowPaused = isPaused;
+  }
+}
+</code></pre>
+
+<h1>How to use:</h1>
+
+<p><code>AnimationPanel</code> is a <code>JPanel</code>. Copy-Paste this class in your project.<br>
+Make another class, and make it extend <code>AnimationPanel</code>.<br>
+Override the <code>update()</code> and <code>draw()</code> methods of the <code>AnimationPanel</code> which are declared abstract in it.  </p>
+
+<p>Inside <code>update()</code> method you can change the values of variables which are declared in this custom class of yours. These variables will be the ones which are required for the animation purposes and which keep changing from frame to frame.  </p>
+
+<p>Inside <code>draw()</code> method, do all your custom painting using the variables that you've defined in your custom class.  </p>
+
+<p>You can use <code>setWindowPaused()</code> method to pause the animation if you like to as well.</p>
+
+<h1>Demonstration:</h1>
+
+<pre><code>// DemonstrationPanel.java
+import java.awt.*;
+
+public class DemonstrationPanel extends AnimationPanel
+{
+  private int red, green, blue;
+  private int a, b, c, d;
+
+  public DemonstrationPanel(int WIDTH, int HEIGHT)
+  {
+    super(WIDTH, HEIGHT);
+
+    red = 100;
+    green = blue = 5;
+
+    a = 2;
+    b = 500;
+    c = 200;
+    d = 5;
+  }
+
+  @Override
+  public void update()
+  {
+    red += 5;
+    red %= 255;
+
+    blue += 1;
+    blue %= 255;
+
+    green += 10;
+    green %= 255;
+
+    a += 20;
+    a %= HEIGHT;
+
+    b += 1;
+    b %= WIDTH;
+
+    c += 15;
+    c %= HEIGHT;
+
+    d += 20;
+    d %= WIDTH;
+  }
+
+  @Override
+  public void draw(Graphics graphics)
+  {
+    // Uncomment the below two statements to just see
+    // one line per frame of animation:
+
+    // graphics.setColor(BACKGROUND_COLOR);
+    // graphics.fillRect(0, 0, WIDTH, HEIGHT);
+
+    graphics.setColor(new Color(red, green, blue));
+    graphics.drawLine(b, c, d, a);
+  }
+}
+</code></pre>
+
+<p>And here's <code>Demo</code> class:</p>
+
+<pre><code>// Demo.java
+import javax.swing.*;
+import java.awt.*;
+
+public class Demo
+{
+  public Demo()
+  {
+    JFrame frame = new JFrame("Demo");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.add(new DemonstrationPanel(800, 600));
+    frame.setBackground(Color.BLACK);
+    frame.setSize(800, 600);
+    frame.setLocationRelativeTo(null);
+    frame.setVisible(true);
+  }
+
+  public static void main(String[] args)
+  {
+    SwingUtilities.invokeLater(new Runnable()
+    {
+      @Override
+      public void run()
+      {
+        new Demo();
+      }
+    });
+  }
+}
+</code></pre>
+
+<p>You can adjust the value of <code>fps</code> in the <code>AnimationPanel</code> class to change the speed of the animation.</p>

@@ -1,0 +1,214 @@
+<p>After researching on several sites, I managed to piece enough information together to come up with a solution. I am using older HTTP authentication code that is in some instances deprecated - but it works when nothing else would. If anyone has a better solution, I would be interested in seeing it. Anyway, here it is:</p>
+
+<p>Main Class:</p>
+
+<pre><code>package stackoverflow.answer;
+
+import java.util.List;
+import java.util.Scanner;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import org.apache.http.NameValuePair;
+import org.apache.http.message.BasicNameValuePair;
+
+public class sample {
+    public static void main(String[] args) throws Exception {
+        final Logger log = Logger.getLogger(sample.class.getCanonicalName());
+        JobData jd = new JobData();
+
+        Scanner input = new Scanner(System.in);
+        try {
+            System.out.print("What is your user name? ");
+            jd.setUsername(input.next());
+            System.out.print("What is your password? ");
+            jd.setPassword(input.next());
+        } catch (Exception e) {
+            log.log(Level.SEVERE, "The system encountered an exception while attempting to login");
+        } finally {
+              input.close();
+        }
+
+        jd.setJob("TestREST");
+        jd.setServer("http://YOUR-SERVER");
+        jd.setPort("YOUR-PORT");
+        // set the parameters
+        List&lt;NameValuePair&gt; parameters = jd.getParameters();
+        parameters.add(new BasicNameValuePair("SONAR-TARGET", "true"));
+        parameters.add(new BasicNameValuePair("RELEASE", "1311.1.1"));
+        parameters.add(new BasicNameValuePair("REVISION", "HEAD"));
+        // run the job
+        JenkinsPoster jp = new JenkinsPoster(jd);
+        log.info("executing postJenkinsJob");
+        jp.postJenkinsJob();
+        log.info("executed postJenkinsJob");
+    }   
+}
+</code></pre>
+
+<p>The JobData class (holds information about the job you need to run)</p>
+
+<pre><code>package stackoverflow.answer;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.http.NameValuePair;
+
+public class JobData {
+    private String username;
+    private String password;
+    private String token;
+    private String server;
+    private String port;
+    private String job;
+    private List&lt;NameValuePair&gt; parameters;
+
+    public JobData() {
+        parameters = new ArrayList&lt;NameValuePair&gt;();
+    }
+
+    public String getUsername() {return username;}
+    public void setUsername(String username) {this.username = username;}
+    public String getPassword() {return password;}
+    public void setPassword(String password) {this.password = password;}
+    public String getToken() {return token;}
+    public void setToken(String token) {this.token = token;}
+    public String getServer() {return server;}
+    public void setServer(String server) {this.server = server;}
+    public String getPort() {return port;}
+    public void setPort(String port) {this.port = port;}
+    public String getJob() {return job;}
+    public void setJob(String job) {this.job = job;}
+    public List&lt;NameValuePair&gt; getParameters() {return parameters;}
+}
+</code></pre>
+
+<p>The JenkinsPoster class (contains the business logic to connect to Jenkins and POST the job)</p>
+
+<pre><code>package stackoverflow.answer;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.util.List;
+import java.util.logging.Logger;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.protocol.BasicHttpContext;
+import org.apache.http.util.EntityUtils;
+
+public class JenkinsPoster {
+    final Logger log = Logger.getLogger(getClass().getCanonicalName());
+    private JobData jd;
+
+    public JenkinsPoster(JobData jobData) {
+        this.jd = jobData;
+    }
+
+    @SuppressWarnings("deprecation")
+    public void postJenkinsJob() throws UnsupportedEncodingException {
+        log.entering(getClass().getCanonicalName(), "JenkinsPoster");
+        // Jenkins url
+        String jenkinsUrl = String.format("%s:%s/jenkins", jd.getServer(), jd.getPort());
+        log.info("url = " + jenkinsUrl);
+        // Create your httpclient
+        DefaultHttpClient client = new DefaultHttpClient();
+        // Then provide the right credentials
+        client.getCredentialsProvider().setCredentials(new AuthScope(AuthScope.ANY_HOST, AuthScope.ANY_PORT),
+        new UsernamePasswordCredentials(jd.getUsername(), jd.getPassword()));
+        // Generate BASIC scheme object and stick it to the execution context
+        BasicScheme basicAuth = new BasicScheme();
+        BasicHttpContext context = new BasicHttpContext();
+        context.setAttribute("preemptive-auth", basicAuth);
+        // Add as the first (because of the zero) request interceptor
+        // It will first intercept the request and preemptively initialize the authentication scheme if there is not
+        client.addRequestInterceptor(new PreemptiveAuth(), 0);
+
+        // Post the request to start the build
+        List&lt;NameValuePair&gt; parameters = jd.getParameters();
+        UrlEncodedFormEntity uefe = null;
+        String buildUrl = "";
+        if (parameters.isEmpty()) {
+            buildUrl = jenkinsUrl + "/job/" + jd.getJob() + "/build";
+        }
+        else {
+            buildUrl = jenkinsUrl + "/job/" + jd.getJob() + "/buildWithParameters";
+            uefe = new UrlEncodedFormEntity(parameters);
+        }
+        HttpPost post = new HttpPost(buildUrl);
+        post.setHeader("User-Agent", "Mozilla/5.0");
+        if (uefe != null) {
+            post.setEntity(uefe);
+        }
+
+        try {
+            // Execute your request with the given context
+            HttpResponse response = client.execute(post, context);
+            HttpEntity entity = response.getEntity();
+            log.info(EntityUtils.toString(entity));
+            EntityUtils.consume(entity);
+        }
+        catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        finally {
+            client.close();
+        }
+        log.exiting(getClass().getCanonicalName(), "JenkinsPoster");
+    }
+}
+</code></pre>
+
+<p>... and finally, the PreemptiveAuth class that the previous class uses to preemptively login to Jenkins.</p>
+
+<pre><code>package stackoverflow.answer;
+import java.io.IOException;
+
+import org.apache.http.HttpException;
+import org.apache.http.HttpHost;
+import org.apache.http.HttpRequest;
+import org.apache.http.HttpRequestInterceptor;
+import org.apache.http.auth.AuthScheme;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.AuthState;
+import org.apache.http.auth.Credentials;
+import org.apache.http.client.CredentialsProvider;
+import org.apache.http.client.protocol.ClientContext;
+import org.apache.http.protocol.ExecutionContext;
+import org.apache.http.protocol.HttpContext;
+
+public class PreemptiveAuth implements HttpRequestInterceptor {
+
+    public void process(HttpRequest request, HttpContext context)
+            throws HttpException, IOException {
+        // Get the AuthState
+        AuthState authState = (AuthState) context.getAttribute(ClientContext.TARGET_AUTH_STATE);
+
+        // If no auth scheme available yet, try to initialize it preemptively
+        if (authState.getAuthScheme() == null) {
+            AuthScheme authScheme = (AuthScheme) context.getAttribute("preemptive-auth");
+            CredentialsProvider credsProvider = (CredentialsProvider) context
+                    .getAttribute(ClientContext.CREDS_PROVIDER);
+            HttpHost targetHost = (HttpHost) context.getAttribute(ExecutionContext.HTTP_TARGET_HOST);
+            if (authScheme != null) {
+                Credentials creds = credsProvider.getCredentials(new AuthScope(targetHost.getHostName(), targetHost
+                        .getPort()));
+                if (creds == null) {
+                    throw new HttpException("No credentials for preemptive authentication");
+                }
+                authState.setAuthScheme(authScheme);
+                authState.setCredentials(creds);
+            }
+        }
+    }
+}
+</code></pre>

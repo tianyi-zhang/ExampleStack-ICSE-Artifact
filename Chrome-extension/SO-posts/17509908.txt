@@ -1,0 +1,99 @@
+<p>Found out how to do it. Hopefully this may help someone else. Party mine, partly from other posts. It is aiming to handle .gcsb file attachments.</p>
+
+<p>The intent-filter is</p>
+
+<pre><code>&lt;intent-filter&gt;
+    &lt;action android:name="android.intent.action.VIEW" /&gt;
+    &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+    &lt;category android:name="android.intent.category.BROWSABLE" /&gt;
+    &lt;data android:mimeType="application/octet-stream" /&gt;
+&lt;/intent-filter&gt;
+</code></pre>
+
+<p>and the code in the activity onCreate() / onRestart() is</p>
+
+<pre><code>Intent intent = getIntent();
+InputStream is = null;
+FileOutputStream os = null;
+String fullPath = null;
+
+try {
+    String action = intent.getAction();
+    if (!Intent.ACTION_VIEW.equals(action)) {
+        return;
+    }
+
+    Uri uri = intent.getData();
+    String scheme = uri.getScheme();
+    String name = null;
+
+    if (scheme.equals("file")) {
+        List&lt;String&gt; pathSegments = uri.getPathSegments();
+        if (pathSegments.size() &gt; 0) {
+            name = pathSegments.get(pathSegments.size() - 1);
+        }
+    } else if (scheme.equals("content")) {
+        Cursor cursor = getContentResolver().query(uri, new String[] {
+            MediaStore.MediaColumns.DISPLAY_NAME
+        }, null, null, null);
+        cursor.moveToFirst();
+        int nameIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
+        if (nameIndex &gt;= 0) {
+            name = cursor.getString(nameIndex);
+        }
+    } else {
+        return;
+    }
+
+    if (name == null) {
+        return;
+    }
+
+    int n = name.lastIndexOf(".");
+    String fileName, fileExt;
+
+    if (n == -1) {
+        return;
+    } else {
+        fileName = name.substring(0, n);
+        fileExt = name.substring(n);
+        if (!fileExt.equals(".gcsb")) {
+            return;
+        }
+    }
+
+    fullPath = ""/* create full path to where the file is to go, including name/ext */;
+
+    is = getContentResolver().openInputStream(uri);
+    os = new FileOutputStream(fullPath);
+
+    byte[] buffer = new byte[4096];
+    int count;
+    while ((count = is.read(buffer)) &gt; 0) {
+        os.write(buffer, 0, count);
+    }
+    os.close();
+    is.close();
+} catch (Exception e) {
+    if (is != null) {
+        try {
+            is.close();
+        } catch (Exception e1) {
+        }
+    }
+    if (os != null) {
+        try {
+            os.close();
+        } catch (Exception e1) {
+        }
+    }
+    if (fullPath != null) {
+        File f = new File(fullPath);
+        f.delete();
+    }
+}
+</code></pre>
+
+<p>It appears to work in the standard Android gmail and mail applications. The file name is obtained two different ways depending if 'download' (scheme file) or 'preview' (scheme content) was pressed in gmail.</p>
+
+<p>Note that it is extremely important that the activity is not set to be single instance.</p>

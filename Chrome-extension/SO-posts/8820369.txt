@@ -1,0 +1,109 @@
+<p>You can get the object index with Unsafe.  Depending on how the JVM is using the memory (32-bit addresses, 32-bit index, 32-bit index with offset, 64-bit address) can affect how useful the object index is.</p>
+
+<p>Here is a program which assumes you have 32-bit index in a 64-bit JVM.</p>
+
+<pre><code>import sun.misc.Unsafe;
+
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.Collections;
+
+public class OrderOfObjectsAfterGCMain {
+    static final Unsafe unsafe = getUnsafe();
+    static final boolean is64bit = true; // auto detect if possible.
+
+    public static void main(String... args) {
+        Double[] ascending = new Double[16];
+        for(int i=0;i&lt;ascending.length;i++)
+            ascending[i] = (double) i;
+
+        Double[] descending = new Double[16];
+        for(int i=descending.length-1; i&gt;=0; i--)
+            descending[i] = (double) i;
+
+        Double[] shuffled = new Double[16];
+        for(int i=0;i&lt;shuffled.length;i++)
+            shuffled[i] = (double) i;
+        Collections.shuffle(Arrays.asList(shuffled));
+
+        System.out.println("Before GC");
+        printAddresses("ascending", ascending);
+        printAddresses("descending", descending);
+        printAddresses("shuffled", shuffled);
+
+        System.gc();
+        System.out.println("\nAfter GC");
+        printAddresses("ascending", ascending);
+        printAddresses("descending", descending);
+        printAddresses("shuffled", shuffled);
+
+        System.gc();
+        System.out.println("\nAfter GC 2");
+        printAddresses("ascending", ascending);
+        printAddresses("descending", descending);
+        printAddresses("shuffled", shuffled);
+    }
+
+    public static void printAddresses(String label, Object... objects) {
+        System.out.print(label + ": 0x");
+        long last = 0;
+        int offset = unsafe.arrayBaseOffset(objects.getClass());
+        int scale = unsafe.arrayIndexScale(objects.getClass());
+        switch (scale) {
+            case 4:
+                long factor = is64bit ? 8 : 1;
+                final long i1 = (unsafe.getInt(objects, offset) &amp; 0xFFFFFFFFL) * factor;
+                System.out.print(Long.toHexString(i1));
+                last = i1;
+                for (int i = 1; i &lt; objects.length; i++) {
+                    final long i2 = (unsafe.getInt(objects, offset + i * 4) &amp; 0xFFFFFFFFL) * factor;
+                    if (i2 &gt; last)
+                        System.out.print(", +" + Long.toHexString(i2 - last));
+                    else
+                        System.out.print(", -" + Long.toHexString( last - i2));
+                    last = i2;
+                }
+                break;
+                case 8:
+                    throw new AssertionError("Not supported");
+        }
+        System.out.println();
+    }
+
+    private static Unsafe getUnsafe() {
+        try {
+            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+            theUnsafe.setAccessible(true);
+            return (Unsafe) theUnsafe.get(null);
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+}
+</code></pre>
+
+<p>Running on Java 6 update 26 (64-bit with compressed oops) and Java 7. Note: addresses and relative addresses are in hex.</p>
+
+<pre><code>Before GC
+ascending: 0x782322b20, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18
+descending: 0x782322e58, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18
+shuffled: 0x782322ec0, +78, -30, +90, -c0, +18, +90, +a8, -30, -d8, +f0, -30, -90, +60, -48, +60
+
+After GC
+ascending: 0x686811590, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18
+descending: 0x686811410, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18
+shuffled: 0x686811290, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18
+</code></pre>
+
+<p>OR sometimes</p>
+
+<pre><code>Before GC
+ascending: 0x782322b20, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18, +18
+descending: 0x782322e58, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18, -18
+shuffled: 0x782323028, -168, +150, -d8, -30, +60, +18, +30, +30, +18, -108, +30, -48, +78, +78, -30
+
+After GC
+ascending: 0x6868143c8, +4db0, +7120, -bd90, +bda8, -bd90, +4d40, +18, +18, -12710, +18, +80, +18, +ffa8, +220, +6b40
+descending: 0x68681d968, +18, +d0, +e0, -165d0, +a8, +fea8, +c110, -5230, -d658, +6bd0, +be10, +1b8, +75e0, -19f68, +19f80
+shuffled: 0x686823938, -129d8, +129f0, -17860, +4e88, +19fe8, -1ee58, +18, +18, +bb00, +6a78, -d648, -4e18, +4e40, +133e0, -c770
+</code></pre>

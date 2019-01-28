@@ -1,0 +1,58 @@
+<p>I've experienced the same problem. The issue appears to occur when you've more than 20 SKUs in your inventory.</p>
+
+<p>The solution was to get the SKU details in chunks. Replace <code>querySkuDetails</code> in <code>IabHelper.java</code> with:</p>
+
+<pre><code>int querySkuDetails(String itemType, Inventory inv, List&lt;String&gt; moreSkus)
+    throws RemoteException, JSONException {
+    logDebug("Querying SKU details.");
+    ArrayList&lt;String&gt; skuList = new ArrayList&lt;String&gt;();
+    skuList.addAll(inv.getAllOwnedSkus(itemType));
+    if (moreSkus != null) {
+        for (String sku : moreSkus) {
+            if (!skuList.contains(sku)) {
+                skuList.add(sku);
+            }
+        }
+    }
+
+    if (skuList.size() == 0) {
+        logDebug("queryPrices: nothing to do because there are no SKUs.");
+        return BILLING_RESPONSE_RESULT_OK;
+    }
+
+    while (skuList.size() &gt; 0) {
+        ArrayList&lt;String&gt; skuSubList = new ArrayList&lt;String&gt;(
+                skuList.subList(0, Math.min(19, skuList.size())));
+        skuList.removeAll(skuSubList);
+
+        Bundle querySkus = new Bundle();
+        querySkus.putStringArrayList(GET_SKU_DETAILS_ITEM_LIST, skuSubList);
+        Bundle skuDetails = mService.getSkuDetails(3,
+                mContext.getPackageName(), itemType, querySkus);
+
+        if (!skuDetails.containsKey(RESPONSE_GET_SKU_DETAILS_LIST)) {
+            int response = getResponseCodeFromBundle(skuDetails);
+            if (response != BILLING_RESPONSE_RESULT_OK) {
+                logDebug("getSkuDetails() failed: "
+                        + getResponseDesc(response));
+                return response;
+            } else {
+                logError("getSkuDetails() returned a bundle with neither an error nor a detail list.");
+                return IABHELPER_BAD_RESPONSE;
+            }
+        }
+
+        ArrayList&lt;String&gt; responseList = skuDetails
+                .getStringArrayList(RESPONSE_GET_SKU_DETAILS_LIST);
+
+        for (String thisResponse : responseList) {
+            SkuDetails d = new SkuDetails(itemType, thisResponse);
+            logDebug("Got sku details: " + d);
+            inv.addSkuDetails(d);
+        }
+    }
+    return BILLING_RESPONSE_RESULT_OK;
+}
+</code></pre>
+
+<p>This method gets the SKUs in chunks of 18. It worked for me.</p>

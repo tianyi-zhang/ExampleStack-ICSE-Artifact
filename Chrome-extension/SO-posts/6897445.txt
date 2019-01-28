@@ -1,0 +1,76 @@
+<p>It depends on your system settings (certain options can be enabled for debugging but are disabled on normal devices). They are settings enabled when android is compiled for the device and possibly the kernel.</p>
+
+<p>I would suggest using Log.e() with a prefix instead of Log.wtf() to avoid any problems e.g. <code>WTF: Something terrible happened</code> </p>
+
+<p>Here is what happens when you call a Log.wtf()</p>
+
+<p>-> Log.java</p>
+
+<pre><code>/**
+ * What a Terrible Failure: Report an exception that should never happen.
+ * Similar to {@link #wtf(String, Throwable)}, with a message as well.
+ * @param tag Used to identify the source of a log message.
+ * @param msg The message you would like logged.
+ * @param tr An exception to log.  May be null.
+ */
+public static int wtf(String tag, String msg, Throwable tr) {
+    TerribleFailure what = new TerribleFailure(msg, tr);
+    int bytes = println_native(LOG_ID_MAIN, ASSERT, tag, getStackTraceString(tr));
+    sWtfHandler.onTerribleFailure(tag, what);
+    return bytes;
+}
+</code></pre>
+
+<p>-> Log.java</p>
+
+<pre><code>private static TerribleFailureHandler sWtfHandler = new TerribleFailureHandler() {
+        public void onTerribleFailure(String tag, TerribleFailure what) {
+            RuntimeInit.wtf(tag, what);
+        }
+    };
+</code></pre>
+
+<p>-> RuntimeInit.java</p>
+
+<pre><code>/**
+ * Report a serious error in the current process.  May or may not cause
+ * the process to terminate (depends on system settings).
+ *
+ * @param tag to record with the error
+ * @param t exception describing the error site and conditions
+ */
+public static void wtf(String tag, Throwable t) {
+    try {
+        if (ActivityManagerNative.getDefault()
+                .handleApplicationWtf(mApplicationObject, tag,
+                        new ApplicationErrorReport.CrashInfo(t))) {
+            // The Activity Manager has already written us off -- now exit.
+            Process.killProcess(Process.myPid());
+            System.exit(10);
+        }
+    } catch (Throwable t2) {
+        Slog.e(TAG, "Error reporting WTF", t2);
+    }
+}
+</code></pre>
+
+<p>-> ActivityManagerNative.java</p>
+
+<pre><code>public boolean handleApplicationWtf(IBinder app, String tag,
+        ApplicationErrorReport.CrashInfo crashInfo)
+        throws RemoteException {
+    Parcel data = Parcel.obtain();
+    Parcel reply = Parcel.obtain();
+    data.writeInterfaceToken(IActivityManager.descriptor);
+    data.writeStrongBinder(app);
+    data.writeString(tag);
+    crashInfo.writeToParcel(data, 0);
+    mRemote.transact(HANDLE_APPLICATION_WTF_TRANSACTION, data,
+            reply, 0);
+    reply.readException();
+    boolean res = reply.readInt() != 0;
+    reply.recycle();
+    data.recycle();
+    return res;
+} 
+</code></pre>

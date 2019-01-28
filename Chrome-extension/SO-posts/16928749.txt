@@ -1,0 +1,113 @@
+<p>As far as I know this is not possible because <code>TextOutputFormat</code> uses <code>toString()</code> to get the text representation of the values, and in case of <code>ArrayWritable</code> it doesn't implement <code>toString()</code>, so you would probably end up with the default <code>Object.toString()</code> if you were to write an <code>ArrayWritable</code> to the output of your <code>Reducer</code>. Or maybe you meant to change the separator between lines, in which case it's the same issue as <code>TextOutputFormat</code> uses a <strong>\n</strong> character by default as pointed by climbage.</p>
+
+<p>That being said, you could do it by implementing a custom output format where you would define your own <code>RecordWriter</code> and have a custom configuration property in the <code>getRecordWriter</code> method. Here is a quick &amp; dirty implementation of such a class (not tested) which should do what you need and let you control the separator for an <code>ArrayWritable</code> via the property <strong>mapred.arraywritable.separator</strong> and the separator between lines with <strong>mapred.line.separator</strong> :</p>
+
+<pre><code>import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.ArrayWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.GzipCodec;
+import org.apache.hadoop.mapreduce.RecordWriter;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+import org.apache.hadoop.util.ReflectionUtils;
+
+public class ArrayTextOutputFormat&lt;K, V&gt; extends TextOutputFormat&lt;K, V&gt; {
+
+protected static class ArrayLineRecordWriter&lt;K, V&gt; extends
+        LineRecordWriter&lt;K, V&gt; {
+
+
+    private static final String utf8 = "UTF-8";
+    private final byte[] arraySeparator;
+    private final byte[] keyValueSeparator;
+    private final byte[] lineSeparator;
+
+    public ArrayLineRecordWriter(DataOutputStream out,
+            String keyValueSeparator, String arraySeparator, String lineSeparator) {
+        super(out);
+        try {
+            this.keyValueSeparator = keyValueSeparator.getBytes(utf8);
+            this.arraySeparator = arraySeparator.getBytes(utf8);
+            this.lineSeparator = lineSeparator.getBytes(utf8);
+        } catch (UnsupportedEncodingException uee) {
+            throw new IllegalArgumentException("can't find " + utf8
+                    + " encoding");
+        }
+    }
+
+    private void writeObject(Object o) throws IOException {
+        if (o instanceof Text) {
+            Text to = (Text) o;
+            out.write(to.getBytes(), 0, to.getLength());
+        } else if (o instanceof ArrayWritable) {
+            ArrayWritable awo = (ArrayWritable) o;
+            for (String wrt : awo.toStrings()) {
+                out.write(wrt.toString().getBytes(utf8));
+                out.write(arraySeparator);
+            }
+        } else {
+            out.write(o.toString().getBytes(utf8));
+        }
+    }
+
+    public synchronized void write(K key, V value) throws IOException {
+
+        boolean nullKey = key == null || key instanceof NullWritable;
+        boolean nullValue = value == null || value instanceof NullWritable;
+        if (nullKey &amp;&amp; nullValue) {
+            return;
+        }
+        if (!nullKey) {
+            writeObject(key);
+        }
+        if (!(nullKey || nullValue)) {
+            out.write(keyValueSeparator);
+        }
+        if (!nullValue) {
+            writeObject(value);
+        }
+        out.write(lineSeparator);
+    }
+}
+
+public RecordWriter&lt;K, V&gt; getRecordWriter(TaskAttemptContext job)
+        throws IOException, InterruptedException {
+    Configuration conf = job.getConfiguration();
+    boolean isCompressed = getCompressOutput(job);
+    String keyValueSeparator = conf.get(
+            "mapred.textoutputformat.separator", "\t");
+    String arraySeparator = conf.get("mapred.arraywritable.separator", "|");
+    String lineSeparator = conf.get("mapred.line.separator");
+    CompressionCodec codec = null;
+    String extension = "";
+    if (isCompressed) {
+        Class&lt;? extends CompressionCodec&gt; codecClass = getOutputCompressorClass(
+                job, GzipCodec.class);
+        codec = (CompressionCodec) ReflectionUtils.newInstance(codecClass,
+                conf);
+        extension = codec.getDefaultExtension();
+    }
+    Path file = getDefaultWorkFile(job, extension);
+    FileSystem fs = file.getFileSystem(conf);
+    if (!isCompressed) {
+        FSDataOutputStream fileOut = fs.create(file, false);
+        return new ArrayLineRecordWriter&lt;K, V&gt;(fileOut, keyValueSeparator,
+                arraySeparator, lineSeparator);
+    } else {
+        FSDataOutputStream fileOut = fs.create(file, false);
+        return new ArrayLineRecordWriter&lt;K, V&gt;(new DataOutputStream(
+                codec.createOutputStream(fileOut)), keyValueSeparator,
+                arraySeparator, lineSeparator);
+    }
+}
+}
+</code></pre>

@@ -1,0 +1,65 @@
+<p>You are right, Spring SAML queries the local security context during each request and forwards user to IDP once it becomes invalid.</p>
+
+<p>The typical mechanism which defines when the context becomes invalid is usage of SAML's attribute <code>SessionNotOnOrAfter</code>. The attribute is included inside the Assertion's AuthenticationStatement sent back from IDP. Spring SAML will automatically re-authenticate the user once the time goes beyond the value provided in the <code>SessionNotOnOrAfter</code>.</p>
+
+<p>In case you would like to re-authenticate on every request, you could for example add a new custom filter similar to this:</p>
+
+<pre><code>package fi.test;
+
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.FilterInvocation;
+import org.springframework.web.filter.GenericFilterBean;
+
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import java.io.IOException;
+
+public class ReAuthenticateFilter extends GenericFilterBean {
+
+    private static final String FILTER_APPLIED = "__spring_security_filterReAuthenticate_filterApplied";
+
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        FilterInvocation fi = new FilterInvocation(request, response, chain);
+        invoke(fi);
+    }
+
+    protected void invoke(FilterInvocation fi) throws IOException, ServletException {
+
+        if ((fi.getRequest() != null) &amp;&amp; (fi.getRequest().getAttribute(FILTER_APPLIED) != null)) {
+            fi.getChain().doFilter(fi.getRequest(), fi.getResponse());
+        } else {
+            if (fi.getRequest() != null) {
+                fi.getRequest().setAttribute(FILTER_APPLIED, Boolean.TRUE);
+            }
+        }
+
+       Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        try {
+            fi.getChain().doFilter(fi.getRequest(), fi.getResponse());
+        } finally {
+            if (authentication != null) {
+                authentication.setAuthenticated(false);
+            }
+        }
+
+    }
+
+}
+</code></pre>
+
+<p>You would then include the filter in your Spring configuration:</p>
+
+<pre><code>&lt;security:http entry-point-ref="samlEntryPoint"&gt;
+    &lt;security:custom-filter after="SECURITY_CONTEXT_FILTER" ref="reAuthenticateFilter"/&gt;
+    ...
+&lt;/security:http&gt;
+
+&lt;bean id="reAuthenticateFilter" class="fi.test.ReAuthenticateFilter"/&gt;
+</code></pre>
+
+<p>Re-authenticating on every request is rather expensive operation (a round-trip to the IDP through user's browser) and is likely to result in poor responsiveness of the application.</p>

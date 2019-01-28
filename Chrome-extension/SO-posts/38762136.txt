@@ -1,0 +1,236 @@
+<p>For Android push notification with GCM 2016 :</p>
+
+<p>1) in Android SDK-> SDK Tools check Google Play services</p>
+
+<p>2) in gradle add in dependencies just one line : </p>
+
+<pre><code>compile 'com.google.android.gms:play-services-gcm:9.4.0'
+</code></pre>
+
+<p>(there is no specific classpath and it works for me)</p>
+
+<p>3) you must create 3 class (GCMPushReceiverService, GCMRegistrationIntentService, GCMTokenRefreshListenerService)</p>
+
+<p>4.1) code for GCMTokenRefreshListenerService : </p>
+
+<pre><code>package com.myapp.android;
+
+/**
+ * Created by skygirl on 02/08/2016.
+ */
+import android.content.Intent;
+import com.google.android.gms.iid.InstanceIDListenerService;
+
+public class GCMTokenRefreshListenerService extends InstanceIDListenerService {
+
+    //If the token is changed registering the device again
+    @Override
+    public void onTokenRefresh() {
+        Intent intent = new Intent(this, GCMRegistrationIntentService.class);
+        startService(intent);
+    }
+}
+</code></pre>
+
+<p>4.2) Code for GCMRegistrationIntentService (change authorizedEntity with your project number) : </p>
+
+<pre><code>package com.myapp.android;
+
+/**
+ * Created by Skygirl on 02/08/2016.
+ */
+import android.app.IntentService;
+import android.content.Intent;
+import android.support.v4.content.LocalBroadcastManager;
+import android.util.Log;
+
+import com.google.android.gms.gcm.GoogleCloudMessaging;
+import com.google.android.gms.iid.InstanceID;
+
+public class GCMRegistrationIntentService extends IntentService {
+    //Constants for success and errors
+    public static final String REGISTRATION_SUCCESS = "RegistrationSuccess";
+    public static final String REGISTRATION_ERROR = "RegistrationError";
+
+    //Class constructor
+    public GCMRegistrationIntentService() {
+        super("");
+    }
+
+
+    @Override
+    protected void onHandleIntent(Intent intent) {
+        //Registering gcm to the device
+        registerGCM();
+    }
+
+    private void registerGCM() {
+        //Registration complete intent initially null
+        Intent registrationComplete = null;
+
+        //Register token is also null
+        //we will get the token on successfull registration
+        String token = null;
+        try {
+            //Creating an instanceid
+            InstanceID instanceID = InstanceID.getInstance(this);
+            String authorizedEntity = "XXXXXXXXXX"; //  your project number
+
+            //Getting the token from the instance id
+            token = instanceID.getToken(authorizedEntity, GoogleCloudMessaging.INSTANCE_ID_SCOPE, null);
+
+            //Displaying the token in the log so that we can copy it to send push notification
+            //You can also extend the app by storing the token in to your server
+            Log.w("GCMRegIntentService", "token:" + token);
+
+            //on registration complete creating intent with success
+            registrationComplete = new Intent(REGISTRATION_SUCCESS);
+
+            //Putting the token to the intent
+            registrationComplete.putExtra("token", token);
+        } catch (Exception e) {
+            //If any error occurred
+            Log.w("GCMRegIntentService", "Registration error");
+            registrationComplete = new Intent(REGISTRATION_ERROR);
+        }
+
+        //Sending the broadcast that registration is completed
+        LocalBroadcastManager.getInstance(this).sendBroadcast(registrationComplete);
+    }
+}
+</code></pre>
+
+<p>4.3) Code for GCMPushReceiverService :</p>
+
+<pre><code>package com.myapp.android;
+
+/**
+ * Created by Skygirl on 02/08/2016.
+ */
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.media.RingtoneManager;
+import android.os.Bundle;
+import android.support.v4.app.NotificationCompat;
+
+import com.google.android.gms.gcm.GcmListenerService;
+
+//Class is extending GcmListenerService
+public class GCMPushReceiverService extends GcmListenerService {
+
+    //This method will be called on every new message received
+    @Override
+    public void onMessageReceived(String from, Bundle data) {
+        //Getting the message from the bundle
+        String message = data.getString("message");
+        //Displaying a notiffication with the message
+        sendNotification(message);
+    }
+
+    //This method is generating a notification and displaying the notification
+    private void sendNotification(String message) {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int requestCode = 0;
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, requestCode, intent, PendingIntent.FLAG_ONE_SHOT);
+        NotificationCompat.Builder noBuilder = new NotificationCompat.Builder(this)
+                .setSmallIcon(R.drawable.your_logo)
+                .setContentTitle("Your Amazing Title")
+                .setContentText(message)
+                .setPriority(Notification.PRIORITY_MAX)
+                .setContentIntent(pendingIntent);
+        noBuilder.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
+
+        NotificationManager notificationManager = (NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.notify(0, noBuilder.build()); //0 = ID of notification
+    }
+}
+</code></pre>
+
+<p>5) Don't forget to change package name </p>
+
+<p>6) In your mainActivity paste this code : </p>
+
+<pre><code>protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // Setup view
+        setContentView(R.layout.main);
+    mRegistrationBroadcastReceiver = new BroadcastReceiver() {
+
+        //When the broadcast received
+        //We are sending the broadcast from GCMRegistrationIntentService
+
+        public void onReceive(Context context, Intent intent) {
+            //If the broadcast has received with success
+            //that means device is registered successfully
+            if(intent.getAction().equals(GCMRegistrationIntentService.REGISTRATION_SUCCESS)){
+                //Getting the registration token from the intent
+                String token = intent.getStringExtra("token");
+                //Displaying the token as toast
+                Toast.makeText(getApplicationContext(), "Registration token:" + token, Toast.LENGTH_LONG).show();
+
+                //if the intent is not with success then displaying error messages
+            } else if(intent.getAction().equals(GCMRegistrationIntentService.REGISTRATION_ERROR)){
+                Toast.makeText(getApplicationContext(), "GCM registration error!", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(getApplicationContext(), "Error occurred", Toast.LENGTH_LONG).show();
+            }
+        }
+    };
+
+    //Checking play service is available or not
+    int resultCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(getApplicationContext());
+
+    //if play service is not available
+    if(ConnectionResult.SUCCESS != resultCode) {
+        //If play service is supported but not installed
+        if(GooglePlayServicesUtil.isUserRecoverableError(resultCode)) {
+            //Displaying message that play service is not installed
+            Toast.makeText(getApplicationContext(), "Google Play Service is not install/enabled in this device!", Toast.LENGTH_LONG).show();
+            GooglePlayServicesUtil.showErrorNotification(resultCode, getApplicationContext());
+
+            //If play service is not supported
+            //Displaying an error message
+        } else {
+            Toast.makeText(getApplicationContext(), "This device does not support for Google Play Service!", Toast.LENGTH_LONG).show();
+        }
+
+        //If play service is available
+    } else {
+        //Starting intent to register device
+        Intent itent = new Intent(this, GCMRegistrationIntentService.class);
+        startService(itent);
+    }
+}
+
+//Unregistering receiver on activity paused
+@Override
+public void onPause() {
+    super.onPause();
+    Log.w("MainActivity", "onPause");
+    LocalBroadcastManager.getInstance(this).unregisterReceiver(mRegistrationBroadcastReceiver);
+}
+
+
+
+    @Override
+    public void onResume() {
+ super.onResume();
+        Log.w("MainActivity", "onResume");
+        LocalBroadcastManager.getInstance(this).registerReceiver(mRegistrationBroadcastReceiver,
+                new IntentFilter(GCMRegistrationIntentService.REGISTRATION_SUCCESS));
+        LocalBroadcastManager.getInstance(this).registerReceiver(mRegistrationBroadcastReceiver,
+                new IntentFilter(GCMRegistrationIntentService.REGISTRATION_ERROR));
+    }
+</code></pre>
+
+<p>7) In your AndroidManifest.xml add following lines : </p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+</code></pre>
+
+<p>8) in your console logcat copy your token and paste on this <a href="https://www.internetfaqs.net/sc/gcm/index.php?success" rel="nofollow">site</a> 
+add your project number, your token and a message. It's work fine for me :)</p>

@@ -1,0 +1,403 @@
+<h2>With your current approach...</h2>
+
+<ul>
+<li>The main problem I can see is that you are placing two opaque components on top of each other...actually you may find you're circumventing one of them for the other...</li>
+<li>You should be using a <code>null</code> layout manager, otherwise it will take over and layout your balls as it sees fit.</li>
+<li>You need to ensure that you are controlling the size and location of the ball pane.  This means you've taken over the role as the layout manager...</li>
+<li>You need to randomize the speed and location of the balls to give them less chances of starting in the same location and moving in the same location...</li>
+<li>Only update the <code>Ball</code> within the context of the EDT.</li>
+<li>You don't really need the X/Y values, you can use the panels.</li>
+</ul>
+
+<p>.</p>
+
+<pre><code>public class AnimatedBalls {
+
+    public static void main(String[] args) {
+        new AnimatedBalls();
+    }
+
+    public AnimatedBalls() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException ex) {
+                } catch (InstantiationException ex) {
+                } catch (IllegalAccessException ex) {
+                } catch (UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame();
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new Balls());
+                frame.setSize(400, 400);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public class Balls extends JPanel {
+
+        public Balls() {
+            setLayout(null);
+            // Randomize the speed and direction...
+            add(new Ball("red", 10 - (int) Math.round((Math.random() * 20)), 10 - (int) Math.round((Math.random() * 20))));
+            add(new Ball("blue", 10 - (int) Math.round((Math.random() * 20)), 10 - (int) Math.round((Math.random() * 20))));
+        }
+    }
+
+    public class Ball extends JPanel implements Runnable {
+
+        Color color;
+        int diameter;
+        long delay;
+        private int vx;
+        private int vy;
+
+        public Ball(String ballcolor, int xvelocity, int yvelocity) {
+            if (ballcolor == "red") {
+                color = Color.red;
+            } else if (ballcolor == "blue") {
+                color = Color.blue;
+            } else if (ballcolor == "black") {
+                color = Color.black;
+            } else if (ballcolor == "cyan") {
+                color = Color.cyan;
+            } else if (ballcolor == "darkGray") {
+                color = Color.darkGray;
+            } else if (ballcolor == "gray") {
+                color = Color.gray;
+            } else if (ballcolor == "green") {
+                color = Color.green;
+            } else if (ballcolor == "yellow") {
+                color = Color.yellow;
+            } else if (ballcolor == "lightGray") {
+                color = Color.lightGray;
+            } else if (ballcolor == "magenta") {
+                color = Color.magenta;
+            } else if (ballcolor == "orange") {
+                color = Color.orange;
+            } else if (ballcolor == "pink") {
+                color = Color.pink;
+            } else if (ballcolor == "white") {
+                color = Color.white;
+            }
+            diameter = 30;
+            delay = 100;
+
+            vx = xvelocity;
+            vy = yvelocity;
+
+            new Thread(this).start();
+
+        }
+
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g;
+
+            int x = getX();
+            int y = getY();
+
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setColor(color);
+            g.fillOval(0, 0, 30, 30); //adds color to circle
+            g.setColor(Color.black);
+            g2.drawOval(0, 0, 30, 30); //draws circle
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            return new Dimension(30, 30);
+        }
+
+        public void run() {
+
+            try {
+                // Randamize the location...
+                SwingUtilities.invokeAndWait(new Runnable() {
+                    @Override
+                    public void run() {
+                        int x = (int) (Math.round(Math.random() * getParent().getWidth()));
+                        int y = (int) (Math.round(Math.random() * getParent().getHeight()));
+
+                        setLocation(x, y);
+                    }
+                });
+            } catch (InterruptedException exp) {
+                exp.printStackTrace();
+            } catch (InvocationTargetException exp) {
+                exp.printStackTrace();
+            }
+
+            while (isVisible()) {
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException e) {
+                    System.out.println("interrupted");
+                }
+
+                try {
+                    SwingUtilities.invokeAndWait(new Runnable() {
+                        @Override
+                        public void run() {
+                            move();
+                            repaint();
+                        }
+                    });
+                } catch (InterruptedException exp) {
+                    exp.printStackTrace();
+                } catch (InvocationTargetException exp) {
+                    exp.printStackTrace();
+                }
+            }
+        }
+
+        public void move() {
+
+            int x = getX();
+            int y = getY();
+
+            if (x + vx &lt; 0 || x + diameter + vx &gt; getParent().getWidth()) {
+                vx *= -1;
+            }
+            if (y + vy &lt; 0 || y + diameter + vy &gt; getParent().getHeight()) {
+                vy *= -1;
+            }
+            x += vx;
+            y += vy;
+
+            // Update the size and location...
+            setSize(getPreferredSize());
+            setLocation(x, y);
+
+        }
+    }
+}
+</code></pre>
+
+<p>The "major" problem with this approach, is each <code>Ball</code> has it's own <code>Thread</code>.  This is going to eat into your systems resources real quick as you scale the number of balls up...</p>
+
+<h2>A Different Approach</h2>
+
+<p>As started by Hovercraft, you're better off creating a container for the balls to live in, where the balls are not components but are "virtual" concepts of a ball, containing enough information to make it possible to bounce them off the walls...</p>
+
+<p><img src="http://i.stack.imgur.com/zkWum.png" alt="enter image description here"></p>
+
+<pre><code>public class SimpleBalls {
+
+    public static void main(String[] args) {
+        new SimpleBalls();
+    }
+
+    public SimpleBalls() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException ex) {
+                } catch (InstantiationException ex) {
+                } catch (IllegalAccessException ex) {
+                } catch (UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame("Spot");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                Balls balls = new Balls();
+                frame.add(balls);
+                frame.setSize(400, 400);
+                frame.setVisible(true);
+
+                new Thread(new BounceEngine(balls)).start();
+
+            }
+        });
+    }
+
+    public static int random(int maxRange) {
+        return (int) Math.round((Math.random() * maxRange));
+    }
+
+    public class Balls extends JPanel {
+
+        private List&lt;Ball&gt; ballsUp;
+
+        public Balls() {
+            ballsUp = new ArrayList&lt;Ball&gt;(25);
+
+            for (int index = 0; index &lt; 10 + random(90); index++) {
+                ballsUp.add(new Ball(new Color(random(255), random(255), random(255))));
+            }
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g.create();
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            for (Ball ball : ballsUp) {
+                ball.paint(g2d);
+            }
+            g2d.dispose();
+        }
+
+        public List&lt;Ball&gt; getBalls() {
+            return ballsUp;
+        }
+    }
+
+    public class BounceEngine implements Runnable {
+
+        private Balls parent;
+
+        public BounceEngine(Balls parent) {
+            this.parent = parent;
+        }
+
+        @Override
+        public void run() {
+
+            int width = getParent().getWidth();
+            int height = getParent().getHeight();
+
+            // Randomize the starting position...
+            for (Ball ball : getParent().getBalls()) {
+                int x = random(width);
+                int y = random(height);
+
+                Dimension size = ball.getSize();
+
+                if (x + size.width &gt; width) {
+                    x = width - size.width;
+                }
+                if (y + size.height &gt; height) {
+                    y = height - size.height;
+                }
+
+                ball.setLocation(new Point(x, y));
+
+            }
+
+            while (getParent().isVisible()) {
+
+                // Repaint the balls pen...
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        getParent().repaint();
+                    }
+                });
+
+                // This is a little dangrous, as it's possible
+                // for a repaint to occur while we're updating...
+                for (Ball ball : getParent().getBalls()) {
+                    move(ball);
+                }
+
+                // Some small delay...
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ex) {
+                }
+
+            }
+
+        }
+
+        public Balls getParent() {
+            return parent;
+        }
+
+        public void move(Ball ball) {
+
+            Point p = ball.getLocation();
+            Point speed = ball.getSpeed();
+            Dimension size = ball.getSize();
+
+            int vx = speed.x;
+            int vy = speed.y;
+
+            int x = p.x;
+            int y = p.y;
+
+            if (x + vx &lt; 0 || x + size.width + vx &gt; getParent().getWidth()) {
+                vx *= -1;
+            }
+            if (y + vy &lt; 0 || y + size.height + vy &gt; getParent().getHeight()) {
+                vy *= -1;
+            }
+            x += vx;
+            y += vy;
+
+            ball.setSpeed(new Point(vx, vy));
+            ball.setLocation(new Point(x, y));
+
+        }
+    }
+
+    public class Ball {
+
+        private Color color;
+        private Point location;
+        private Dimension size;
+        private Point speed;
+
+        public Ball(Color color) {
+
+            setColor(color);
+
+            speed = new Point(10 - random(20), 10 - random(20));
+            size = new Dimension(30, 30);
+
+        }
+
+        public Dimension getSize() {
+            return size;
+        }
+
+        public void setColor(Color color) {
+            this.color = color;
+        }
+
+        public void setLocation(Point location) {
+            this.location = location;
+        }
+
+        public Color getColor() {
+            return color;
+        }
+
+        public Point getLocation() {
+            return location;
+        }
+
+        public Point getSpeed() {
+            return speed;
+        }
+
+        public void setSpeed(Point speed) {
+            this.speed = speed;
+        }
+
+        protected void paint(Graphics2D g2d) {
+
+            Point p = getLocation();
+            if (p != null) {
+                g2d.setColor(getColor());
+                Dimension size = getSize();
+                g2d.fillOval(p.x, p.y, size.width, size.height);
+            }
+
+        }
+    }
+}
+</code></pre>
+
+<p>Because this is driven by a single thread, it is much more scalable.</p>
+
+<p>You can also check out <a href="http://stackoverflow.com/questions/12642852/the-images-are-not-loading/12648265#12648265">the images are not loading</a> which is a similar question ;)</p>

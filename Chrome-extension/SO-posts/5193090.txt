@@ -1,0 +1,473 @@
+<p>If you are removing (in the middle) as well as accessing by index and by key (which means that the indexes are changing), you are possible out of look - I think there simply can't be an implementation which provides <code>O(1)</code> for both of <code>remove</code> (by index, key or iterator) and <code>get(index)</code>. This is why we have both <code>LinkedList</code> (with <code>iterator.remove()</code> or <code>remove(0)</code> in <code>O(1)</code>) and ArrayList (with <code>get(index)</code> in <code>O(1)</code>) in the standard API.</p>
+
+<p>You could have both removing and index-getting in <code>O(log n)</code> if you use a tree structure instead of array or linked list (which could be combined with a O(1) key based read access - getting the index for your key-value-pair would still need O(log n), though).</p>
+
+<p>If you don't want to remove anything, or can live with following indexed not shifted (i.e. <code>remove(i)</code> being equivalent to <code>set(i, null)</code>, there is nothing which forbids having both O(1) index and key access - in fact, then the index is simply a second key here, so you could simply use a HashMap and a ArrayList (or two HashMaps) then, with a thin wrapper combining both.</p>
+
+<hr>
+
+<p><strong>Edit:</strong> So, here is an implementation of <code>ArrayHashMap</code> like described in the last paragraph above (using the "expensive remove" variant). It implements the interface <code>IndexedMap</code> below. (If you don't want to copy+paste here, both are also in my <a href="https://github.com/ePaul/stackoverflow-examples/tree/master/src/de/fencing_game/paul/examples" rel="nofollow">github account</a> which will be updated in case of later changes).</p>
+
+<pre><code>package de.fencing_game.paul.examples;
+
+import java.util.*;
+
+/**
+ * A combination of ArrayList and HashMap which allows O(1) for read and
+ * modifiying access by index and by key.
+ * &lt;p&gt;
+ *   Removal (either by key or by index) is O(n), though,
+ *   as is indexed addition of a new Entry somewhere else than the end.
+ *   (Adding at the end is in amortized O(1).)
+ * &lt;/p&gt;
+ * &lt;p&gt;
+ *   (The O(1) complexity for key based operations is under the condition
+ *    "if the hashCode() method of the keys has a suitable distribution and
+ *     takes constant time", as for any hash-based data structure.)
+ * &lt;/p&gt;
+ * &lt;p&gt;
+ *  This map allows null keys and values, but clients should think about
+ *  avoiding using these, since some methods return null to show
+ *  "no such mapping".
+ * &lt;/p&gt;
+ * &lt;p&gt;
+ *   This class is not thread-safe (like ArrayList and HashMap themselves).
+ * &lt;/p&gt;
+ * &lt;p&gt;
+ *  This class is inspired by the question
+ *    &lt;a href="http://stackoverflow.com/questions/5192706/java-is-there-a-container-which-effectively-combines-hashmap-and-arraylist"&gt;Is there a container which effectively combines HashMap and ArrayList?&lt;/a&gt; on Stackoverflow.
+ * &lt;/p&gt;
+ * @author Pa?lo Ebermann
+ */
+public class ArrayHashMap&lt;K,V&gt;
+    extends AbstractMap&lt;K,V&gt;
+    implements IndexedMap&lt;K,V&gt;
+{
+
+    /**
+     * Our backing map.
+     */
+    private Map&lt;K, SimpleEntry&lt;K,V&gt;&gt; baseMap;
+    /**
+     * our backing list.
+     */
+    private List&lt;SimpleEntry&lt;K,V&gt;&gt; entries;
+
+    /**
+     * creates a new ArrayHashMap with default parameters.
+     * (TODO: add more constructors which allow tuning.)
+     */
+    public ArrayHashMap() {
+        this.baseMap = new HashMap&lt;K,SimpleEntry&lt;K,V&gt;&gt;();
+        this.entries = new ArrayList&lt;SimpleEntry&lt;K,V&gt;&gt;();
+    }
+
+
+    /**
+     * puts a new key-value mapping, or changes an existing one.
+     *
+     * If new, the mapping gets an index at the end (i.e. {@link #size()}
+     * before it gets increased).
+     *
+     * This method runs in O(1) time for changing an existing value,
+     *  amortized O(1) time for adding a new value.
+     *
+     * @return the old value, if such, else null.
+     */
+    public V put(K key, V value) {
+        SimpleEntry&lt;K,V&gt; entry = baseMap.get(key);
+        if(entry == null) {
+            entry = new SimpleEntry&lt;K,V&gt;(key, value);
+            baseMap.put(key, entry);
+            entries.add(entry);
+            return null;
+        }
+        return entry.setValue(value);
+    }
+
+    /**
+     * retrieves the value for a key.
+     *
+     *   This method runs in O(1) time.
+     *
+     * @return null if there is no such mapping,
+     *   else the value for the key.
+     */
+    public V get(Object key) {
+        SimpleEntry&lt;K,V&gt; entry = baseMap.get(key);
+        return entry == null ? null : entry.getValue();
+    }
+
+    /**
+     * returns true if the given key is in the map.
+     *
+     *   This method runs in O(1) time.
+     *
+     */
+    public boolean containsKey(Object key) {
+        return baseMap.containsKey(key);
+    }
+
+    /**
+     * removes a key from the map.
+     *
+     *   This method runs in O(n) time, n being the size of this map.
+     *
+     * @return the old value, if any.
+     */
+    public V remove(Object key) {
+        SimpleEntry&lt;K,V&gt; entry = baseMap.remove(key);
+        if(entry == null) {
+            return null;
+        }
+        entries.remove(entry);
+        return entry.getValue();
+    }
+
+
+    /**
+     * returns a key by index.
+     *
+     *   This method runs in O(1) time.
+     *
+     */
+    public K getKey(int index) {
+        return entries.get(index).getKey();
+    }
+
+    /**
+     * returns a value by index.
+     *
+     *   This method runs in O(1) time.
+     *
+     */
+    public V getValue(int index) {
+        return entries.get(index).getValue();
+    }
+
+    /**
+     * Returns a set view of the keys of this map.
+     *
+     * This set view is ordered by the indexes.
+     *
+     * It supports removal by key or iterator in O(n) time.
+     * Containment check runs in O(1).
+     */
+    public Set&lt;K&gt; keySet() {
+        return new AbstractSet&lt;K&gt;() {
+            public void clear() {
+                entryList().clear();
+            }
+
+            public int size() {
+                return entries.size();
+            }
+
+            public Iterator&lt;K&gt; iterator() {
+                return keyList().iterator();
+            }
+
+            public boolean remove(Object key) {
+                return keyList().remove(key);
+            }
+
+            public boolean contains(Object key) {
+                return keyList().contains(key);
+            }
+        };
+    }  // keySet()
+
+    /**
+     * Returns a set view of the entries of this map.
+     *
+     * This set view is ordered by the indexes.
+     *
+     * It supports removal by entry or iterator in O(n) time.
+     *
+     * It supports adding new entries at the end, if the key
+     * is not already used in this map, in amortized O(1) time.
+     *
+     * Containment check runs in O(1).
+     */
+    public Set&lt;Map.Entry&lt;K,V&gt;&gt; entrySet() {
+        return new AbstractSet&lt;Map.Entry&lt;K,V&gt;&gt;() {
+
+            public void clear() {
+                entryList().clear();
+            }
+
+            public int size() {
+                return entries.size();
+            }
+            public Iterator&lt;Map.Entry&lt;K,V&gt;&gt; iterator() {
+                return entryList().iterator();
+            }
+            public boolean add(Map.Entry&lt;K,V&gt; e) {
+                return entryList().add(e);
+            }
+
+            public boolean contains(Object o) {
+                return entryList().contains(o);
+            }
+
+            public boolean remove(Object o) {
+                return entryList().remove(o);
+            }
+
+
+        };
+    }  // entrySet()
+
+    /**
+     * Returns a list view of the entries of this map.
+     *
+     * This list view is ordered by the indexes.
+     *
+     * It supports removal by entry, iterator or sublist.clear in O(n) time.
+     * (n being the length of the total list, not the sublist).
+     *
+     * It supports adding new entries at the end, if the key
+     * is not already used in this map, in amortized O(1) time.
+     *
+     * Containment check runs in O(1).
+     */
+    public List&lt;Map.Entry&lt;K,V&gt;&gt; entryList() {
+        return new AbstractList&lt;Map.Entry&lt;K,V&gt;&gt;() {
+            public void clear() {
+                baseMap.clear();
+                entries.clear();
+            }
+            public Map.Entry&lt;K,V&gt; get(int index) {
+                return entries.get(index);
+            }
+            public int size() {
+                return entries.size();
+            }
+            public Map.Entry&lt;K,V&gt; remove(int index) {
+                Map.Entry&lt;K,V&gt; e = entries.remove(index);
+                baseMap.remove(e.getKey());
+                return e;
+            }
+            public void add(int index, Map.Entry&lt;K,V&gt; newEntry) {
+                K key = newEntry.getKey();
+                SimpleEntry&lt;K,V&gt; clone = new SimpleEntry&lt;K,V&gt;(newEntry);
+                if(baseMap.containsKey(key)) {
+                    throw new IllegalArgumentException("duplicate key " +
+                                                       key);
+                }
+                entries.add(index, clone);
+                baseMap.put(key, clone);
+            }
+
+            public boolean contains(Object o) {
+                if(o instanceof Map.Entry) {
+                    SimpleEntry&lt;K,V&gt; inMap =
+                        baseMap.get(((Map.Entry&lt;?,?&gt;)o).getKey());
+                    return inMap != null &amp;&amp;
+                        inMap.equals(o);
+                }
+                return false;
+            }
+
+            public boolean remove(Object o) {
+                if (!(o instanceof Map.Entry)) {
+                    Map.Entry&lt;?,?&gt; e = (Map.Entry&lt;?,?&gt;)o;
+                    SimpleEntry&lt;K,V&gt; inMap = baseMap.get(e.getKey());
+                    if(inMap != null &amp;&amp; inMap.equals(e)) {
+                        entries.remove(inMap);
+                        baseMap.remove(inMap.getKey());
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            protected void removeRange(int fromIndex, int toIndex) {
+                List&lt;SimpleEntry&lt;K,V&gt;&gt; subList =
+                    entries.subList(fromIndex, toIndex);
+                for(SimpleEntry&lt;K,V&gt; entry : subList){
+                    baseMap.remove(entry.getKey());
+                }
+                subList.clear();
+            }
+
+        };
+    }   // entryList()
+
+
+    /**
+     * Returns a List view of the keys in this map.
+     *
+     * It allows index read access and key containment check in O(1).
+     * Changing a key is not allowed.
+     *
+     * Removal by key, index, iterator or sublist.clear runs in O(n) time
+     * (this removes the corresponding values, too).
+     */
+    public List&lt;K&gt; keyList() {
+        return new AbstractList&lt;K&gt;() {
+            public void clear() {
+                entryList().clear();
+            }
+            public K get(int index) {
+                return entries.get(index).getKey();
+            }
+            public int size() {
+                return entries.size();
+            }
+            public K remove(int index) {
+                Map.Entry&lt;K,V&gt; e = entries.remove(index);
+                baseMap.remove(e.getKey());
+                return e.getKey();
+            }
+
+            public boolean remove(Object key) {
+                SimpleEntry&lt;K,V&gt; entry = baseMap.remove(key);
+                if(entry == null) {
+                    return false;
+                }
+                entries.remove(entry);
+                return true;
+            }
+
+            public boolean contains(Object key) {
+                return baseMap.containsKey(key);
+            }
+
+            protected void removeRange(int fromIndex, int toIndex) {
+                entryList().subList(fromIndex, toIndex).clear();
+            }
+        };
+    }  // keyList()
+
+    /**
+     * Returns a List view of the values in this map.
+     *
+     * It allows get and set by index in O(1) time (set changes the mapping).
+     *
+     * Removal by value, index, iterator or sublist.clear is possible
+     * in O(n) time, this removes the corresponding keys too (only the first
+     * key with this value for remove(value)).
+     *
+     * Containment check needs an iteration, thus O(n) time.
+     */
+    public List&lt;V&gt; values() {
+        return new AbstractList&lt;V&gt;() {
+            public int size() {
+                return entries.size();
+            }
+            public void clear() {
+                entryList().clear();
+            }
+            public V get(int index) {
+                return entries.get(index).getValue();
+            }
+            public V set(int index, V newValue) {
+                Map.Entry&lt;K,V&gt; e = entries.get(index);
+                return e.setValue(newValue);
+            }
+
+            public V remove(int index) {
+                Map.Entry&lt;K,V&gt; e = entries.remove(index);
+                baseMap.remove(e.getKey());
+                return e.getValue();
+            }
+            protected void removeRange(int fromIndex, int toIndex) {
+                entryList().subList(fromIndex, toIndex).clear();
+            }
+        };
+    }  // values()
+
+
+    /**
+     * an usage example method.
+     */
+    public static void main(String[] args) {
+        IndexedMap&lt;String,String&gt; imap = new ArrayHashMap&lt;String, String&gt;();
+
+        for(int i = 0; i &lt; args.length-1; i+=2) {
+            imap.put(args[i], args[i+1]);
+        }
+        System.out.println(imap.values());
+        System.out.println(imap.keyList());
+        System.out.println(imap.entryList());
+        System.out.println(imap);
+        System.out.println(imap.getKey(0));
+        System.out.println(imap.getValue(0));
+
+    }
+
+
+}
+</code></pre>
+
+<p>Here the interface:</p>
+
+<pre><code>package de.fencing_game.paul.examples;
+
+
+import java.util.*;
+
+/**
+ * A map which additionally to key-based access allows index-based access
+ * to keys and values.
+ * &lt;p&gt;
+ * Inspired by the question &lt;a href="http://stackoverflow.com/questions/5192706/java-is-there-a-container-which-effectively-combines-hashmap-and-arraylist"&gt;Is there a container which effectively combines HashMap and ArrayList?&lt;/a&gt; on Stackoverflow.
+ * &lt;/p&gt;
+ * @author Pa?lo Ebermann
+ * @see ArrayHashMap
+ */
+public interface IndexedMap&lt;K,V&gt;
+    extends Map&lt;K,V&gt;
+{
+
+    /**
+     * returns a list view of the {@link #entrySet} of this Map.
+     *
+     * This list view supports removal of entries, if the map is mutable.
+     *
+     * It may also support indexed addition of new entries per the
+     *  {@link List#add add} method - but this throws an
+     *  {@link IllegalArgumentException} if the key is already used.
+     */
+    public List&lt;Map.Entry&lt;K,V&gt;&gt; entryList();
+
+
+    /**
+     * returns a list view of the {@link #keySet}.
+     * 
+     * This list view supports removal of keys (with the corresponding
+     * values), but does not support addition of new keys.
+     */
+    public List&lt;K&gt; keyList();
+
+
+    /**
+     * returns a list view of values contained in this map.
+     *
+     * This list view supports removal of values (with the corresponding
+     * keys), but does not support addition of new values.
+     * It may support the {@link List#set set} operation to change the
+     * value for a key.
+     */
+    public List&lt;V&gt; values();
+
+
+    /**
+     * Returns a value of this map by index.
+     *
+     * This is equivalent to
+     *   {@ #values() values()}.{@link List#get get}{@code (index)}.
+     */
+    public V getValue(int index);
+
+    /**
+     * Returns a key of this map by index.
+     *
+     * This is equivalent to
+     *   {@ #keyList keyList()}.{@link List#get get}{@code (index)}.
+     */
+    public K getKey(int index);
+
+}
+</code></pre>

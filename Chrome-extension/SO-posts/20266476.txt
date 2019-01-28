@@ -1,0 +1,273 @@
+<p>First create a class name EasySSLSocketFactory</p>
+
+<pre><code>public class EasySSLSocketFactory implements SocketFactory,
+        LayeredSocketFactory {
+
+    private SSLContext sslcontext = null;
+
+    private static SSLContext createEasySSLContext() throws IOException {
+        try {
+            SSLContext context = SSLContext.getInstance("TLS");
+            context.init(null, new TrustManager[] { new EasyX509TrustManager(
+                    null) }, null);
+            return context;
+        } catch (Exception e) {
+            throw new IOException(e.getMessage());
+        }
+    }
+
+    private SSLContext getSSLContext() throws IOException {
+        if (this.sslcontext == null) {
+            this.sslcontext = createEasySSLContext();
+        }
+        return this.sslcontext;
+    }
+
+    /**
+     * @see org.apache.http.conn.scheme.SocketFactory#connectSocket(java.net.Socket,
+     *      java.lang.String, int, java.net.InetAddress, int,
+     *      org.apache.http.params.HttpParams)
+     */
+    public Socket connectSocket(Socket sock, String host, int port,
+            InetAddress localAddress, int localPort, HttpParams params)
+            throws IOException, UnknownHostException, ConnectTimeoutException {
+        int connTimeout = HttpConnectionParams.getConnectionTimeout(params);
+        int soTimeout = HttpConnectionParams.getSoTimeout(params);
+        InetSocketAddress remoteAddress = new InetSocketAddress(host, port);
+        SSLSocket sslsock = (SSLSocket) ((sock != null) ? sock : createSocket());
+
+        if ((localAddress != null) || (localPort &gt; 0)) {
+            // we need to bind explicitly
+            if (localPort &lt; 0) {
+                localPort = 0; // indicates "any"
+            }
+            InetSocketAddress isa = new InetSocketAddress(localAddress,
+                    localPort);
+            sslsock.bind(isa);
+        }
+
+        sslsock.connect(remoteAddress, connTimeout);
+        sslsock.setSoTimeout(soTimeout);
+        return sslsock;
+
+    }
+
+    /**
+     * @see org.apache.http.conn.scheme.SocketFactory#createSocket()
+     */
+    public Socket createSocket() throws IOException {
+        return getSSLContext().getSocketFactory().createSocket();
+    }
+
+    /**
+     * @see org.apache.http.conn.scheme.SocketFactory#isSecure(java.net.Socket)
+     */
+    public boolean isSecure(Socket socket) throws IllegalArgumentException {
+        return true;
+    }
+
+    /**
+     * @see org.apache.http.conn.scheme.LayeredSocketFactory#createSocket(java.net.Socket,
+     *      java.lang.String, int, boolean)
+     */
+    public Socket createSocket(Socket socket, String host, int port,
+            boolean autoClose) throws IOException, UnknownHostException {
+        return getSSLContext().getSocketFactory().createSocket(socket, host,
+                port, autoClose);
+    }
+
+    // -------------------------------------------------------------------
+    // javadoc in org.apache.http.conn.scheme.SocketFactory says :
+    // Both Object.equals() and Object.hashCode() must be overridden
+    // for the correct operation of some connection managers
+    // -------------------------------------------------------------------
+
+    public boolean equals(Object obj) {
+        return ((obj != null) &amp;&amp; obj.getClass().equals(
+                EasySSLSocketFactory.class));
+    }
+
+    public int hashCode() {
+        return EasySSLSocketFactory.class.hashCode();
+    }
+
+}
+</code></pre>
+
+<p>Then implement X509 Trust Manager</p>
+
+<pre><code>public class EasyX509TrustManager implements X509TrustManager {
+
+    private X509TrustManager standardTrustManager = null;
+
+    /**
+     * Constructor for EasyX509TrustManager.
+     */
+    public EasyX509TrustManager(KeyStore keystore)
+            throws NoSuchAlgorithmException, KeyStoreException {
+        super();
+        TrustManagerFactory factory = TrustManagerFactory
+                .getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        factory.init(keystore);
+        TrustManager[] trustmanagers = factory.getTrustManagers();
+        if (trustmanagers.length == 0) {
+            throw new NoSuchAlgorithmException("no trust manager found");
+        }
+        this.standardTrustManager = (X509TrustManager) trustmanagers[0];
+    }
+
+    /**
+     * @see javax.net.ssl.X509TrustManager#checkClientTrusted(X509Certificate[],
+     *      String authType)
+     */
+    public void checkClientTrusted(X509Certificate[] certificates,
+            String authType) throws CertificateException {
+        standardTrustManager.checkClientTrusted(certificates, authType);
+    }
+
+    /**
+     * @see javax.net.ssl.X509TrustManager#checkServerTrusted(X509Certificate[],
+     *      String authType)
+     */
+    public void checkServerTrusted(X509Certificate[] certificates,
+            String authType) throws CertificateException {
+        if ((certificates != null) &amp;&amp; (certificates.length == 1)) {
+            certificates[0].checkValidity();
+        } else {
+            standardTrustManager.checkServerTrusted(certificates, authType);
+        }
+    }
+
+    /**
+     * @see javax.net.ssl.X509TrustManager#getAcceptedIssuers()
+     */
+    public X509Certificate[] getAcceptedIssuers() {
+        return this.standardTrustManager.getAcceptedIssuers();
+    }
+
+}
+</code></pre>
+
+<p>Now you can get your content</p>
+
+<pre><code>public class GetContent{
+
+    private ClientConnectionManager clientConnectionManager = null;
+    private HttpContext context = null;
+    private HttpParams params = null;
+
+    public GetContent() {
+        setup();
+    }
+
+    private HttpResponse getResponseFromUrl(String url) {
+
+        HttpResponse response = null;
+        try {
+
+            HttpConnectionParams.setConnectionTimeout(params, 300000);
+            HttpConnectionParams.setSoTimeout(params, 300000);
+
+            // connection (client has to be created for every new connection)
+            HttpClient client = new DefaultHttpClient(clientConnectionManager,
+                    params);
+            HttpGet get = new HttpGet(url);
+
+            response = client.execute(get, context);
+
+        } catch (ClientProtocolException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+
+        }
+        return response;
+    }
+
+    public ClientConnectionManager getClientConnectionManager() {
+        return clientConnectionManager;
+    }
+
+    public HttpParams getHttpParams() {
+        return params;
+    }
+
+    public HttpContext getHttpContext() {
+        return context;
+    }
+
+    public InputStream getInputStream(final Context context, String url) {
+
+        InputStream is = null;
+
+        try {
+
+            HttpResponse response = getResponseFromUrl(url);
+            if (response != null) {
+                HttpEntity entity = response.getEntity();
+
+                if (entity != null) 
+
+                    is = entity.getContent();
+
+                    return is;
+                   }
+        } catch (ClientProtocolException e) {
+
+            Log.e("log_tag", "Error in http connection " + e.toString());
+            return null;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        } catch (JSONException e) {
+            Log.e("log_tag", "Error parsing data " + e.toString());
+            return null;
+        }
+
+        return null;
+
+    }
+
+    private final void setup() {
+
+        SchemeRegistry schemeRegistry = new SchemeRegistry();
+
+        // http scheme
+        schemeRegistry.register(new Scheme("http", PlainSocketFactory
+                .getSocketFactory(), 80));
+        // https scheme
+        schemeRegistry.register(new Scheme("https", new EasySSLSocketFactory(),
+                443));
+
+        params = new BasicHttpParams();
+        params.setParameter(ConnManagerPNames.MAX_TOTAL_CONNECTIONS, 1);
+        params.setParameter(ConnManagerPNames.MAX_CONNECTIONS_PER_ROUTE,
+                new ConnPerRouteBean(1));
+        params.setParameter(HttpProtocolParams.USE_EXPECT_CONTINUE, false);
+
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+        HttpProtocolParams.setContentCharset(params, "utf8");
+
+        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+        // set the user credentials for our site "example.com"
+        credentialsProvider.setCredentials(new AuthScope("example.com",
+                AuthScope.ANY_PORT), new UsernamePasswordCredentials(
+                "UserNameHere", "UserPasswordHere"));
+        clientConnectionManager = new ThreadSafeClientConnManager(params,
+                schemeRegistry);
+
+        context = new BasicHttpContext();
+        context.setAttribute("http.auth.credentials-provider",
+                credentialsProvider);
+
+    }
+
+}
+</code></pre>
+
+<p>This is How to get InputStream</p>
+
+<pre><code>GetContent content =new GetContent();
+InputStream is = content.getInputStream(this,MY_URL);
+</code></pre>

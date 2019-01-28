@@ -1,0 +1,239 @@
+<p>Okay. To answer my own question here after the motto "self is the man": I ended up with programming my own preference panel. Below is the code. If somebody likes to look over it and give some times how to make it even more stable: feel free. </p>
+
+<p>But to sum up what I did: I created my own ArrayAdapter. But <code>DialogPreference</code> didn't allowed me to create my own multi selector. You need to change the final dialog fragment to create a working multi selector list (see here: <a href="http://stackoverflow.com/a/17907379/5759814">http://stackoverflow.com/a/17907379/5759814</a>). That is not an easy task if you work with the DialogPreferences. The reason is these few amounts of code:</p>
+
+<pre><code>/**
+ * Shows the dialog associated with this Preference. This is normally initiated
+ * automatically on clicking on the preference. Call this method if you need to
+ * show the dialog on some other event.
+ * 
+ * @param state Optional instance state to restore on the dialog
+ */
+protected void showDialog(Bundle state) {
+    Context context = getContext();
+
+    mWhichButtonClicked = DialogInterface.BUTTON_NEGATIVE;
+
+    mBuilder = new AlertDialog.Builder(context)
+        .setTitle(mDialogTitle)
+        .setIcon(mDialogIcon)
+        .setPositiveButton(mPositiveButtonText, this)
+        .setNegativeButton(mNegativeButtonText, this);
+
+    View contentView = onCreateDialogView();
+    if (contentView != null) {
+        onBindDialogView(contentView);
+        mBuilder.setView(contentView);
+    } else {
+        mBuilder.setMessage(mDialogMessage);
+    }
+
+    onPrepareDialogBuilder(mBuilder);
+
+    getPreferenceManager().registerOnActivityDestroyListener(this);
+
+    // Create the dialog
+    final Dialog dialog = mDialog = mBuilder.create();
+    if (state != null) {
+        dialog.onRestoreInstanceState(state);
+    }
+    if (needInputMethod()) {
+        requestInputMethod(dialog);
+    }
+    dialog.setOnDismissListener(this);
+    dialog.show();
+}
+</code></pre>
+
+<p>As you can see here is a method triggered to change my dialog builder with <code>onPrepareDialogBuilder</code>, but it doesn't seem like that there is any other function triggered afterwards, that would allow me to change the dialog directly after its creation. And the second idea of changing the <code>onPrepareDialogBuilder</code> so that I can init everything there, doesn't really help, because I end up with displayed dialog windows. That lead me to my decision of creating my completely own Preference class. With that decision I loose all those nice prepared functions like <code>onRestoreInstanceState</code> and Co, but I now have an application with a much more persistent flow, that doesn't do any stupid things when I select zero units for my thermal view. </p>
+
+<p>Below the non commented code. I'm sorry, but I think its simple enough for everybody who landing here. </p>
+
+<pre><code>import android.app.AlertDialog;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.SharedPreferences;
+import android.preference.Preference;
+import android.util.AttributeSet;
+import android.util.Log;
+import android.view.View;
+import android.widget.AbsListView;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.ListView;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import georg.com.flironetest_01.Variables.Units;
+
+/**
+ * Created by Georg on 16/03/16.
+ */
+public class UnitMultipleSelectorPreference extends Preference implements DialogInterface.OnClickListener, Preference.OnPreferenceClickListener {
+
+    String[] human_entries = null;
+    String[] machine_entries = null;
+
+
+
+    public SharedPreferences prev;
+
+    public UnitMultipleSelectorPreference(Context context, AttributeSet attrs) {
+        super(context, attrs);
+
+
+        prev = getSharedPreferences();
+
+        List&lt;String&gt; humanU = new ArrayList&lt;&gt;();
+        List&lt;String&gt; machineU = new ArrayList&lt;&gt;();
+
+        Units[] all = Units.values();
+        for (Units elem : all) {
+            humanU.add(elem.toString());
+            machineU.add(elem.name());
+        }
+
+        human_entries = humanU.toArray(new String[humanU.size()]);
+        machine_entries = machineU.toArray(new String[machineU.size()]);
+
+        Set&lt;String&gt; mU = new HashSet&lt;&gt;();
+        mU.add(Units.C.name());
+        mU.add(Units.K.name());
+
+        setDefaultValue(mU);
+
+        setOnPreferenceClickListener(this);
+    }
+
+    boolean[] selected = new boolean[0];
+
+    protected void onPrepareDialogBuilder(AlertDialog.Builder builder) {
+        if (prev == null)
+            return;
+
+        if (human_entries == null || machine_entries == null || human_entries.length != machine_entries.length ) {
+            throw new IllegalStateException(
+                    "ListPreference requires an entries array and an entryValues array which are both the same length");
+        }
+
+        selected = new boolean[human_entries.length];
+        for (int i = 0; i &lt; human_entries.length; i++)
+            selected[i] = prefSet.contains(machine_entries[i]);
+
+
+        String[] stringObj = new String[human_entries.length];
+        int i = 0;
+        for(CharSequence ch : human_entries)
+            stringObj[i++] = ch.toString();
+
+
+        builder.setAdapter(new MyAdapter(getContext(), android.R.layout.simple_list_item_multiple_choice, stringObj), new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+            }
+        });
+
+        AlertDialog mDialog = builder.create();
+        mDialog.getListView().setChoiceMode(AbsListView.CHOICE_MODE_MULTIPLE);
+        mDialog.getListView().setItemsCanFocus(false);
+        mDialog.getListView().setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView&lt;?&gt; parent, View view,
+                                    int position, long id) {
+                // Manage selected items here
+
+                ListView mParent = (ListView)parent;
+
+
+                if (mParent.getCheckedItemCount() &gt;= 1)
+                    selected[position] = mParent.isItemChecked(position);
+                if (mParent.getCheckedItemCount() == 0)
+                    mParent.setItemChecked(position, true);
+            }
+        });
+
+
+        mDialog.show();
+
+
+
+        i = 0;
+        for (boolean select : selected)
+            mDialog.getListView().setItemChecked(i++, select);
+    }
+
+    @Override
+    public boolean onPreferenceClick(Preference preference) {
+        AlertDialog.Builder mBuilder = new AlertDialog.Builder(getContext());
+        mBuilder.setTitle(getTitle())
+                .setPositiveButton(android.R.string.ok, this)
+                .setNegativeButton(android.R.string.cancel, this);
+        onPrepareDialogBuilder(mBuilder);
+
+        return true;
+    }
+
+
+
+    @Override
+    public void onClick(DialogInterface dialog, int which) {
+        Toast.makeText(getContext(), "W:"+which + " | " + Arrays.toString(selected), Toast.LENGTH_SHORT).show();
+
+        switch (which) {
+            case -1:
+                if (isPersistent()) {
+                    prefSet = new HashSet&lt;&gt;();
+
+                    for (int i = 0; i &lt; selected.length; i++) {
+                        if (selected[i])
+                            prefSet.add(machine_entries[i]);
+                    }
+                    getEditor().putStringSet(getKey(), prefSet).apply();
+
+                    Toast.makeText(getContext(), "W:"+which + " | " + getSharedPreferences().getStringSet(getKey(),null).toString(), Toast.LENGTH_SHORT).show();
+
+                }
+                return;
+        }
+    }
+
+
+
+    public class MyAdapter extends ArrayAdapter&lt;String&gt; {
+
+        public MyAdapter(Context context, int textViewResourceId, String[] objects) {
+            super(context, textViewResourceId, objects);
+        }
+
+        @Override
+        public boolean isEnabled(int n) {
+            return true;
+        }
+    }
+
+    Set&lt;String&gt; prefSet;
+
+    @Override
+    protected void onSetInitialValue(boolean restorePersistedValue, Object defaultValue) {
+        super.onSetInitialValue(restorePersistedValue, defaultValue);
+        prev = getSharedPreferences();
+
+        if(restorePersistedValue) {
+            prefSet = prev.getStringSet(getKey(), new HashSet&lt;String&gt;());
+        } else {
+            try {
+                prefSet = (Set&lt;String&gt;)defaultValue;
+                if(isPersistent())
+                    getEditor().putStringSet(getKey(), prefSet);
+            } catch (ClassCastException e) {
+                Log.e("ERROR_CAST", "Error casting the default value to Set&lt;String&gt;.");
+            }
+        }
+    }
+}
+</code></pre>

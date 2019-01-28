@@ -1,0 +1,83 @@
+<p>Having a tool breaking because of a BOM in an UTF-8 file is a <strong>very</strong> common thing in my experience.  I don't know why there where so many downvotes (but then it gives me the chance to try to get enough vote to win a special SO badge ; )</p>
+
+<p>More seriously: an UTF-8 BOM doesn't typically make that much sense <em>but</em> it is fully valid (although discouraged) by the specs.  Now the problem is that a lot of people aren't aware that a BOM is valid in UTF-8 and hence wrote broken tools / APIs that do not process correctly these files.</p>
+
+<p>Now you may have two different issues: you may want to process the file from Java or you need to use Java to programmatically create/fix files that other (broken) tools need.</p>
+
+<p>I've had the case in one consulting gig where the helpdesk would keep getting messages from users that had problems with some text editor that would mess up perfectly valid UTF-8 files produced by Java.  So I had to work around that issue by making sure to remove the BOM from every single UTF-8 file we were dealing with.</p>
+
+<p>I you want to delete a BOM from a file, you could create a new file and skip the first three bytes.  For example:</p>
+
+<pre><code>... $  file  /tmp/src.txt 
+/tmp/src.txt: UTF-8 Unicode (with BOM) English text
+
+... $  ls -l  /tmp/src.txt 
+-rw-rw-r-- 1 tact tact 1733 2012-03-16 14:29 /tmp/src.txt
+
+... $  hexdump  -C  /tmp/src.txt | head -n 1
+00000000  ef bb bf 50 6f 6b 65 ...
+</code></pre>
+
+<p>As you can see, the file starts with "ef bb bf", this is the (fully valid) UTF-8 BOM.</p>
+
+<p>Here's a method that takes a file and makes a copy of it by skipping the first three bytes:</p>
+
+<pre><code> public static void workAroundbrokenToolsAndAPIs(File sourceFile, File destFile) throws IOException {
+    if(!destFile.exists()) {
+        destFile.createNewFile();
+    }
+
+    FileChannel source = null;
+    FileChannel destination = null;
+
+    try {
+        source = new FileInputStream(sourceFile).getChannel();
+        source.position(3);
+        destination = new FileOutputStream(destFile).getChannel();
+        destination.transferFrom( source, 0, source.size() - 3 );
+    }
+    finally {
+        if(source != null) {
+            source.close();
+        }
+        if(destination != null) {
+            destination.close();
+        }
+    }
+}
+</code></pre>
+
+<p>Note that it's "raw": you'd typically want to first make sure you have a BOM before calling this or "Bad Thinks May Happen" [TM].</p>
+
+<p>You can look at your file afterwards:</p>
+
+<pre><code>... $  file  /tmp/dst.txt 
+/tmp/dst.txt: UTF-8 Unicode English text
+
+... $  ls -l  /tmp/dst.txt 
+-rw-rw-r-- 1 tact tact 1730 2012-03-16 14:41 /tmp/dst.txt
+
+... $  hexdump -C /tmp/dst.txt
+00000000  50 6f 6b 65 ...
+</code></pre>
+
+<p>And the BOM is gone...</p>
+
+<p>Now if you simply want to transparently remove the BOM for one your broken Java API, then you could use the <em>pushbackInputStream</em> described here: <a href="http://stackoverflow.com/questions/5353783/">why org.apache.xerces.parsers.SAXParser does not skip BOM in utf8 encoded xml?</a></p>
+
+<pre><code>private static InputStream checkForUtf8BOMAndDiscardIfAny(InputStream inputStream) throws IOException {
+    PushbackInputStream pushbackInputStream = new PushbackInputStream(new BufferedInputStream(inputStream), 3);
+    byte[] bom = new byte[3];
+    if (pushbackInputStream.read(bom) != -1) {
+        if (!(bom[0] == (byte) 0xEF &amp;&amp; bom[1] == (byte) 0xBB &amp;&amp; bom[2] == (byte) 0xBF)) {
+            pushbackInputStream.unread(bom);
+        }
+    }
+    return pushbackInputStream; }
+</code></pre>
+
+<p>Note that this works, but shall definitely <strong>NOT</strong> fix the more serious issue where you can have other tools in the work chain not working correctly with UTF-8 files having a BOM.</p>
+
+<p>And here's a link to a question with a more complete answer, covering other encodings as well:</p>
+
+<p><a href="http://stackoverflow.com/questions/1835430/">Byte order mark screws up file reading in Java</a></p>

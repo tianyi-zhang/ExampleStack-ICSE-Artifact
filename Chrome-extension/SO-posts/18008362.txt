@@ -1,0 +1,86 @@
+<p>The strategy of this code is to keep the PID around from the last run in the registry, if that PID is found running on the system, don't start.  If you finish, reset.  </p>
+
+<p>The preferences are stored on Windows Registry in <code>HKEY_LOCAL_MACHINE\SOFTWARE\JavaSoft\Prefs</code></p>
+
+<pre><code>import java.io.*;
+import java.util.prefs.Preferences;
+public class JavaApplication3 {
+    public static void main(String[] args){
+        if(isRunning()){
+            System.out.println("Two instances of this program cannot " +
+                    "be running at the same time.  Exiting now");
+        }
+        else{
+            onStart();
+            epicHeavyWorkGoesHere();
+            onFinish();
+        }
+    }
+    public static void epicHeavyWorkGoesHere(){
+        try {
+            Thread.sleep(15000);
+        } catch (InterruptedException ex) {}
+    }
+    public static void onStart(){
+        Preferences prefs = Preferences.systemRoot().node("JavaApplication3");
+        prefs.put("RUNNINGPID", getCurrentPID());
+    }
+    public static void onFinish(){
+        Preferences prefs = Preferences.systemRoot().node("JavaApplication3");
+        prefs.put("RUNNINGPID", "");
+    }
+    public static boolean isRunning(){
+        Preferences prefs = Preferences.systemRoot().node("JavaApplication3");
+
+        if (prefs.get("RUNNINGPID", null) == null || prefs.get("RUNNINGPID", null).equals(""))
+            return false;
+
+        if (isProcessIdRunningOnWindows(Integer.parseInt(prefs.get("RUNNINGPID", null))))
+            return true;
+        return false;
+    }
+    public static String getCurrentPID(){
+        //This function should work with Windows, Linux and Mac but you'll have to 
+        //test to make sure.  If not then get a suitable getCurrentPID function replacement.
+        try{
+            java.lang.management.RuntimeMXBean runtime = java.lang.management.ManagementFactory.getRuntimeMXBean();
+            java.lang.reflect.Field jvm = runtime.getClass().getDeclaredField("jvm");
+            jvm.setAccessible(true);
+            sun.management.VMManagement mgmt = (sun.management.VMManagement) jvm.get(runtime);
+            java.lang.reflect.Method pid_method = mgmt.getClass().getDeclaredMethod("getProcessId");
+            pid_method.setAccessible(true);
+            return pid_method.invoke(mgmt) + "";
+        }
+        catch(Exception e){
+            throw new RuntimeException("Cannot get the current PID");
+        }
+    }
+    public static boolean isProcessIdRunningOnWindows(int pid){
+        //This Function only works for windows, if you want it to work on linux
+        //or mac, you will have to go find a replacement method that 
+        //takes the processID as a parameter and spits out a true/false 
+        //if it is running on the operating system.
+        try {
+            Runtime runtime = Runtime.getRuntime();
+            String cmds[] = {"cmd", "/c", "tasklist /FI \"PID eq " + pid + "\""};
+            Process proc = runtime.exec(cmds);
+
+            InputStream inputstream = proc.getInputStream();
+            InputStreamReader inputstreamreader = new InputStreamReader(inputstream);
+            BufferedReader bufferedreader = new BufferedReader(inputstreamreader);
+            String line;
+            while ((line = bufferedreader.readLine()) != null) {
+                if (line.contains(" " + pid + " ")){
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch (Exception ex) {
+            throw new RuntimeException("Cannot run the tasklist command to query if a pid is running or not");
+        }
+    }
+}
+</code></pre>
+
+<p>If the program is hung and the pid remains in the task list this will be blocked.  You could add an additional registry key that will store the last successful run time, and if the run time becomes too great, the stored PID is killed, and the program re-run.</p>

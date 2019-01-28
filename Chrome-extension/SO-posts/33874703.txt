@@ -1,0 +1,442 @@
+<p>Try this code</p>
+
+<p>This is your layout which contain an trigger for image capture and an imageview to display captured image :-</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:orientation="vertical"
+    tools:context="com.serveroverload.cube.ui.HomeActivity" &gt;
+
+    &lt;ImageView
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_above="@+id/take_picture"
+        android:layout_alignParentTop="true"
+        android:layout_margin="5dp" /&gt;
+
+    &lt;ImageView
+        android:id="@+id/take_picture"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:layout_alignParentBottom="true"
+        android:layout_centerHorizontal="true"
+        android:layout_gravity="center"
+        android:layout_margin="10dp"
+        android:background="@drawable/flat_selector"
+        android:padding="5dp"
+        android:scaleType="fitXY"
+        android:src="@drawable/take_pic" /&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>This is your android manifest with required permisions</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.camtest"
+    android:versionCode="1"
+    android:versionName="1.0" &gt;
+
+    &lt;uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /&gt;
+    &lt;uses-permission android:name="android.permission.CAMERA" /&gt;
+    &lt;uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /&gt;
+
+    &lt;uses-sdk
+        android:minSdkVersion="8"
+        android:targetSdkVersion="21" /&gt;
+
+    &lt;application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme" &gt;
+        &lt;activity
+            android:name="com.serveroverload.cube.ui.HomeActivity"
+            android:label="@string/app_name" &gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;
+</code></pre>
+
+<p>This is camera handler class to re-size and rotate images if required currently it will sample image to 1024x1280 for UI</p>
+
+<pre><code>public class CamerHandler {
+
+    private CamerHandler() {
+
+        getAllImages();
+    }
+
+    private static CamerHandler camerHandler;
+
+    public static CamerHandler GetCamerHandlerInstance() {
+        if (null == camerHandler) {
+            camerHandler = new CamerHandler();
+        }
+        return camerHandler;
+    }
+
+    private static final String CAM_DIRECTORY = "CamDirectory";
+    private static final int MAX_HEIGHT = 1024;
+    private static final int MAX_WIDTH = 1280;
+
+    private ArrayList&lt;File&gt; imageURL = new ArrayList&lt;File&gt;();
+
+    public ArrayList&lt;File&gt; getImageURL() {
+        return imageURL;
+    }
+
+    public void setImageURL(ArrayList&lt;File&gt; imageURL) {
+        this.imageURL = imageURL;
+    }
+
+    public void getAllImages() {
+
+        imageURL.clear();
+
+        File folder = new File(getImageDirectory());
+        File[] listOfFiles = folder.listFiles();
+
+        if (null != listOfFiles &amp;&amp; listOfFiles.length != 0) {
+
+            for (int i = 0; i &lt; listOfFiles.length; i++) {
+                if (listOfFiles[i].isFile()) {
+
+                    imageURL.add(listOfFiles[i]);
+
+                    System.out.println("File " + listOfFiles[i].getName());
+                } else if (listOfFiles[i].isDirectory()) {
+                    System.out.println("Directory " + listOfFiles[i].getName());
+                }
+            }
+        }
+    }
+
+    /**
+     * This method is responsible for solving the rotation issue if exist. Also
+     * scale the images to 1024x1024 resolution
+     *
+     * @param context
+     *            The current context
+     * @param selectedImage
+     *            The Image URI
+     * @return Bitmap image results
+     * @throws IOException
+     */
+    public Bitmap handleSamplingAndRotationBitmap(Context context, Uri selectedImage) throws IOException {
+
+        // First decode with inJustDecodeBounds=true to check dimensions
+        final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+
+        InputStream imageStream = context.getContentResolver().openInputStream(selectedImage);
+        BitmapFactory.decodeStream(imageStream, null, options);
+        imageStream.close();
+
+        // Calculate inSampleSize
+        options.inSampleSize = calculateInSampleSize(options, MAX_WIDTH, MAX_HEIGHT);
+
+        // Decode bitmap with inSampleSize set
+        options.inJustDecodeBounds = false;
+        imageStream = context.getContentResolver().openInputStream(selectedImage);
+        Bitmap img = BitmapFactory.decodeStream(imageStream, null, options);
+
+        // img = rotateImageIfRequired(img, selectedImage);
+
+        img = rotateBitmap(context, img, selectedImage);
+        return img;
+    }
+
+    public Bitmap rotateBitmap(Context context, Bitmap bitmap, Uri selectedImage) {
+
+        ExifInterface exif;
+        try {
+            exif = new ExifInterface(selectedImage.getPath());
+
+            int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED);
+
+            Matrix matrix = new Matrix();
+            switch (orientation) {
+            case ExifInterface.ORIENTATION_NORMAL:
+                return bitmap;
+            case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
+                matrix.setScale(-1, 1);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_180:
+                matrix.setRotate(180);
+                break;
+            case ExifInterface.ORIENTATION_FLIP_VERTICAL:
+                matrix.setRotate(180);
+                matrix.postScale(-1, 1);
+                break;
+            case ExifInterface.ORIENTATION_TRANSPOSE:
+                matrix.setRotate(90);
+                matrix.postScale(-1, 1);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_90:
+                matrix.setRotate(90);
+                break;
+            case ExifInterface.ORIENTATION_TRANSVERSE:
+                matrix.setRotate(-90);
+                matrix.postScale(-1, 1);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_270:
+                matrix.setRotate(-90);
+                break;
+            default:
+                return bitmap;
+            }
+            // try {
+            Bitmap bmRotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            bitmap.recycle();
+            return bmRotated;
+
+        } catch (IOException e) {
+
+            e.printStackTrace();
+
+            return null;
+        } catch (OutOfMemoryError e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * Calculate an inSampleSize for use in a {@link BitmapFactory.Options}
+     * object when decoding bitmaps using the decode* methods from
+     * {@link BitmapFactory}. This implementation calculates the closest
+     * inSampleSize that will result in the final decoded bitmap having a width
+     * and height equal to or larger than the requested width and height. This
+     * implementation does not ensure a power of 2 is returned for inSampleSize
+     * which can be faster when decoding but results in a larger bitmap which
+     * isn't as useful for caching purposes.
+     *
+     * @param options
+     *            An options object with out* params already populated (run
+     *            through a decode* method with inJustDecodeBounds==true
+     * @param reqWidth
+     *            The requested width of the resulting bitmap
+     * @param reqHeight
+     *            The requested height of the resulting bitmap
+     * @return The value to be used for inSampleSize
+     */
+    private int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        // Raw height and width of image
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height &gt; reqHeight || width &gt; reqWidth) {
+
+            // Calculate ratios of height and width to requested height and
+            // width
+            final int heightRatio = Math.round((float) height / (float) reqHeight);
+            final int widthRatio = Math.round((float) width / (float) reqWidth);
+
+            // Choose the smallest ratio as inSampleSize value, this will
+            // guarantee a final image
+            // with both dimensions larger than or equal to the requested height
+            // and width.
+            inSampleSize = heightRatio &lt; widthRatio ? heightRatio : widthRatio;
+
+            // This offers some additional logic in case the image has a strange
+            // aspect ratio. For example, a panorama may have a much larger
+            // width than height. In these cases the total pixels might still
+            // end up being too large to fit comfortably in memory, so we should
+            // be more aggressive with sample down the image (=larger
+            // inSampleSize).
+
+            final float totalPixels = width * height;
+
+            // Anything more than 2x the requested pixels we'll sample down
+            // further
+            final float totalReqPixelsCap = reqWidth * reqHeight * 2;
+
+            while (totalPixels / (inSampleSize * inSampleSize) &gt; totalReqPixelsCap) {
+                inSampleSize++;
+            }
+        }
+        return inSampleSize;
+    }
+
+    public void openGallery(Context context) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("content://media/internal/images/media"));
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(intent);
+    }
+
+    private void convertToBase64(Bitmap bitmap) {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        bitmap.compress(CompressFormat.JPEG, 30, byteArrayOutputStream);
+        byte[] byteArray = byteArrayOutputStream.toByteArray();
+        String encoded = Base64.encodeToString(byteArray, Base64.NO_WRAP);
+
+        // bitmap.recycle();
+
+        encoded = null;
+        byteArray = null;
+    }
+
+    public String getImageDirectory() {
+
+        return createDirIfNotExists().getAbsolutePath();
+    }
+
+    public File createDirIfNotExists() {
+
+        File imageDirectory = new File(Environment.getExternalStorageDirectory(), CAM_DIRECTORY);
+        if (!imageDirectory.exists()) {
+
+            if (!imageDirectory.mkdirs()) {
+
+                Log.e("imageDirectory:: ", "Problem creating Image folder");
+            }
+        }
+        return imageDirectory;
+    }
+}
+</code></pre>
+
+<p>and this is activity code which take pictures and perform all down sampling and  image rotation in background before updating on UI</p>
+
+<pre><code>public class HomeActivity extends Activity {
+
+    static final int REQUEST_IMAGE_CAPTURE = 1;
+    private ImageView previewLayout;
+    private static final String TAG = "MainActivity";
+
+    static Uri capturedImageUri = null;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_home);
+
+        // Imageview to display Image
+        previewLayout = (ImageView) findViewById(R.id.preview);
+
+        findViewById(R.id.take_picture).setOnClickListener(
+                new OnClickListener() {
+
+                    @Override
+                    public void onClick(View v) {
+                        dispatchTakePictureIntent();
+
+                    }
+                });
+
+    }
+
+    private void dispatchTakePictureIntent() {
+
+        Intent intent = new Intent("android.media.action.IMAGE_CAPTURE");
+
+        if (intent.resolveActivity(getPackageManager()) != null) {
+
+            Calendar cal = Calendar.getInstance();
+
+            // store image in new File in image directory
+            File file = new File(CamerHandler.GetCamerHandlerInstance()
+                    .getImageDirectory(), (cal.getTimeInMillis() + ".png"));
+
+            if (!file.exists()) {
+                try {
+                    file.createNewFile();
+                } catch (IOException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                    Toast.makeText(getApplicationContext(),
+                            "Failed to make file", 500).show();
+                }
+            } else {
+                file.delete();
+                try {
+                    file.createNewFile();
+                } catch (IOException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                    Toast.makeText(getApplicationContext(),
+                            "Failed to make file", 500).show();
+                }
+            }
+
+            capturedImageUri = Uri.fromFile(file);
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, capturedImageUri);
+            startActivityForResult(intent, REQUEST_IMAGE_CAPTURE);
+        }
+
+    }
+
+    @SuppressLint("NewApi")
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (resultCode == RESULT_OK &amp;&amp; requestCode == REQUEST_IMAGE_CAPTURE) {
+
+            // update file in gallery
+            sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
+                    capturedImageUri));
+
+            // Downsample image before displaying in imageview to avoi OOM
+            // exception
+            new LoadBitMap(previewLayout, HomeActivity.this)
+                    .execute(capturedImageUri);
+
+        } else {
+            Log.e(TAG, "FAILED TO TAKE IMAGE");
+        }
+    }
+
+}
+
+class LoadBitMap extends AsyncTask&lt;Uri, Void, Void&gt; {
+
+    public LoadBitMap(ImageView preview, Context context) {
+        this.prevImageView = preview;
+        this.mContext = context;
+    }
+
+    private Bitmap bitmap = null;
+    private ImageView prevImageView;
+    private Context mContext;
+
+    @Override
+    protected Void doInBackground(Uri... params) {
+        try {
+
+            bitmap = CamerHandler.GetCamerHandlerInstance()
+                    .handleSamplingAndRotationBitmap(mContext, params[0]);
+
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    @Override
+    protected void onPostExecute(Void result) {
+        if (null != bitmap) {
+
+    prevImageView.setBackground(new BitmapDrawable(mContext
+                    .getResources(), bitmap));
+        }
+        super.onPostExecute(result);
+    }
+}
+</code></pre>
+
+<p>Points to note here you can use <a href="https://www.google.co.in/url?sa=t&amp;rct=j&amp;q=&amp;esrc=s&amp;source=web&amp;cd=1&amp;cad=rja&amp;uact=8&amp;ved=0ahUKEwiYx8GX76bJAhWDco4KHZh1BygQFggdMAA&amp;url=http%3A%2F%2Fsquare.github.io%2Fpicasso%2F&amp;usg=AFQjCNHtRDFJvt8HPDMbENo3RvpkdPZYsA&amp;sig2=oH9Z-n9ReVnK5ltTLX8BBA" rel="nofollow">Picasso</a> or <a href="https://www.google.co.in/url?sa=t&amp;rct=j&amp;q=&amp;esrc=s&amp;source=web&amp;cd=1&amp;cad=rja&amp;uact=8&amp;ved=0ahUKEwiJoJma76bJAhXRH44KHZv3BL0QFggdMAA&amp;url=https%3A%2F%2Fgithub.com%2Fbumptech%2Fglide&amp;usg=AFQjCNHZ_1a6kVBhhXyyVxpVvJaRrbqnZQ&amp;sig2=VOuoQ8Hjakld6Jsy6TQfaQ" rel="nofollow">Glide</a> for image loading task as we already have uri path in captureuri variable.</p>

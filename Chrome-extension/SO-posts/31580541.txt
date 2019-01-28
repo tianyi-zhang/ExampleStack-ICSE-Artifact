@@ -1,0 +1,193 @@
+<p>I simply added my custom PushReceiver with same package name as ParsePushReceiver</p>
+
+<pre><code>package com.parse;
+
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.BitmapFactory;
+import android.os.Build;
+import android.os.Bundle;
+
+import com.squareup.otto.EventBus;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.Locale;
+import java.util.Random;
+
+public class ParsePushReceiver extends ParsePushBroadcastReceiver {
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String intentAction = intent.getAction();
+        byte var5 = -1;
+        switch (intentAction.hashCode()) {
+            case -824874927:
+                if (intentAction.equals("com.parse.push.intent.DELETE")) {
+                    var5 = 1;
+                }
+                break;
+            case -269490979:
+                if (intentAction.equals("com.parse.push.intent.RECEIVE")) {
+                    var5 = 0;
+                }
+                break;
+            case 374898288:
+                if (intentAction.equals("com.parse.push.intent.OPEN")) {
+                    var5 = 2;
+                }
+        }
+
+        switch (var5) {
+            case 0:
+                onPushReceive(context, intent);
+                break;
+            case 1:
+                super.onPushDismiss(context, intent);
+                break;
+            case 2:
+                super.onPushOpen(context, intent);
+        }
+    }
+
+    @Override
+    protected void onPushReceive(Context context, Intent intent) {
+
+        try {
+            JSONObject pushData = new JSONObject(intent.getStringExtra("com.parse.Data"));
+
+            String action;
+            action = pushData.optString("action", null);
+
+            if (action != null) {
+                Bundle notification = intent.getExtras();
+                Intent broadcastIntent = new Intent();
+                broadcastIntent.putExtras(notification);
+                broadcastIntent.setAction(action);
+                broadcastIntent.setPackage(context.getPackageName());
+                context.sendBroadcast(broadcastIntent);
+            }
+
+            if (pushData.has(Push.PUSH_TYPE)) {
+                String type = pushData.getString(Push.PUSH_TYPE);
+                switch (PushType.fromString(type)) {
+                    case chat:
+                    case booked:
+                    case rate:
+                    case unknown:
+                        break;
+                }
+            } else {
+                sendGlobalNoti(context, intent, null);
+            }
+        } catch (JSONException var7) {
+            PLog.e("ParsePushReceiver", "Unexpected JSONException when receiving push data: ", var7);
+        }
+    }
+
+    private void sendChattingNoti(Context context, Intent intent, PushType pushType) {
+
+        JSONObject pushData = this.getPushData(intent);
+        if (((User) ParseUser.getCurrentUser()).getChattingNotiEnabled()
+                &amp;&amp; pushData != null
+                &amp;&amp; pushData.has("title")) {
+            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            android.support.v4.app.NotificationCompat.Builder builder = new android.support.v4.app.NotificationCompat.Builder(context);
+
+            String title = pushData.optString("title", context.getString(R.string.app_name));
+            String message = pushData.optString("alert", "Notification received.");
+
+            switch (pushType) {
+                case booked:
+                    message = context.getString(R.string.lesson_booked_message);
+                    break;
+                case lessonConfirmed:
+                    message = context.getString(R.string.lesson_confirmed);
+                    break;
+                case lessonCanceled:
+                    message = context.getString(R.string.lesson_canceled);
+                    break;
+            }
+
+            builder.setContentTitle(title);
+            builder.setContentText(message);
+            builder.setTicker(title + ": " + message);
+            builder.setAutoCancel(true);
+            builder.setOnlyAlertOnce(false);
+
+            if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB)
+                builder.setLargeIcon(BitmapFactory.decodeResource(context.getResources(), R.drawable.ic_notification));
+            builder.setSmallIcon(R.drawable.ic_notification);
+
+            Intent chatIntent = new Intent(Keys.IntentKeys.ACTION_SHOW_CHAT);
+            chatIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            chatIntent.addCategory(Intent.CATEGORY_DEFAULT);
+            String chatId = pushData.optString(Push.PUSH_CHAT_ID, null);
+            if (chatId != null)
+                chatIntent.putExtra(Keys.EXTRA_CHAT_ID, chatId);
+
+            PendingIntent pending = PendingIntent.getActivity(context, 0, chatIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            builder.setContentIntent(pending);
+
+            Notification noti = builder.build();
+            noti.defaults |= Notification.DEFAULT_VIBRATE;
+            noti.defaults |= Notification.DEFAULT_SOUND;
+            noti.defaults |= Notification.DEFAULT_LIGHTS;
+            nm.notify(pushType.ordinal(), noti);
+        }
+    }
+
+    private void sendGlobalNoti(Context context, Intent intent, String defaultAlert) {
+        // Global Notification
+        if (((User) ParseUser.getCurrentUser()).getGlobalNotiEnabled()) {
+            Notification notification = getNotification(context, intent, defaultAlert);
+            if (notification != null)
+                ParseNotificationManager.getInstance().showNotification(context, notification);
+        }
+    }
+
+    protected Notification getNotification(Context context, Intent intent, String defaultAlert) {
+        JSONObject pushData = this.getPushData(intent);
+        if (pushData != null &amp;&amp; (pushData.has("alert") || pushData.has("title"))) {
+            String title = pushData.optString("title", ManifestInfo.getDisplayName(context));
+            String alert = pushData.optString("alert", defaultAlert == null ? "Notification received." : defaultAlert);
+            String tickerText = String.format(Locale.getDefault(), "%s: %s", new Object[]{title, alert});
+            Bundle extras = intent.getExtras();
+            Random random = new Random();
+            int contentIntentRequestCode = random.nextInt();
+            int deleteIntentRequestCode = random.nextInt();
+            String packageName = context.getPackageName();
+            Intent contentIntent = new Intent("com.parse.push.intent.OPEN");
+            contentIntent.putExtras(extras);
+            contentIntent.setPackage(packageName);
+            Intent deleteIntent = new Intent("com.parse.push.intent.DELETE");
+            deleteIntent.putExtras(extras);
+            deleteIntent.setPackage(packageName);
+            PendingIntent pContentIntent = PendingIntent.getBroadcast(context, contentIntentRequestCode, contentIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            PendingIntent pDeleteIntent = PendingIntent.getBroadcast(context, deleteIntentRequestCode, deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            NotificationCompat.Builder parseBuilder = new NotificationCompat.Builder(context);
+            parseBuilder.setContentTitle(title).setContentText(alert).setTicker(tickerText).setSmallIcon(this.getSmallIconId(context, intent)).setLargeIcon(this.getLargeIcon(context, intent)).setContentIntent(pContentIntent).setDeleteIntent(pDeleteIntent).setAutoCancel(true).setDefaults(-1);
+            if (alert != null &amp;&amp; alert.length() &gt; 38) {
+                parseBuilder.setStyle((new NotificationCompat.Builder.BigTextStyle()).bigText(alert));
+            }
+
+            return parseBuilder.build();
+        } else {
+            return null;
+        }
+    }
+
+    private JSONObject getPushData(Intent intent) {
+        try {
+            return new JSONObject(intent.getStringExtra("com.parse.Data"));
+        } catch (JSONException var3) {
+            PLog.e("ParsePushReceiver", "Unexpected JSONException when receiving push data: ", var3);
+            return null;
+        }
+    }
+}
+</code></pre>

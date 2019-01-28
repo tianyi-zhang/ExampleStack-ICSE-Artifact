@@ -1,0 +1,125 @@
+<p>Actually you just need 3 classes:</p>
+
+<p>A <a href="http://developer.android.com/reference/android/content/ContentProvider.html" rel="nofollow">ContentProvider</a>, as found here: <a href="http://developer.android.com/guide/topics/providers/content-providers.html" rel="nofollow">http://developer.android.com/guide/topics/providers/content-providers.html</a></p>
+
+<p>Second you need is a <a href="http://developer.android.com/reference/android/database/sqlite/SQLiteOpenHelper.html" rel="nofollow">SQLiteOpenHelper</a> and last but not least a <a href="http://developer.android.com/reference/android/database/Cursor.html" rel="nofollow">Cursor</a></p>
+
+<p><strong>Edit: Just noticed it's not obvious from the snippets what the <code>db</code> variable is. It's the SQLiteOpenHelper or better my extension of it (where I've only overridden the onCreate, onUpgrade and constructor. See below ^^</strong></p>
+
+<p>The ContentProvider is the one which will be communicating with the database and do the inserts, updates, deletes. The content provider will also allow other parts of your code (even other Apps, if you allow it) to access the data stored in the sqlite. </p>
+
+<p>You can then override the insert/delete/query/update functions and add your functionality to it, for example perform different actions depending on the URI of the intent. </p>
+
+<pre><code>public int delete(Uri uri, String whereClause, String[] whereArgs) {
+    int count = 0;
+
+    switch(URI_MATCHER.match(uri)){
+    case ITEMS:
+        // uri = content://com.yourname.yourapp.Items/item
+        // delete all rows
+        count = db.delete(TABLE_ITEMS, whereClause, whereArgs);
+        break;
+    case ITEMS_ID:
+        // uri = content://com.yourname.yourapp.Items/item/2
+        // delete the row with the id 2
+        String segment = uri.getPathSegments().get(1);
+        count = db.delete(TABLE_ITEMS, 
+                Item.KEY_ITEM_ID +"="+segment
+                +(!TextUtils.isEmpty(whereClause)?" AND ("+whereClause+")":""),
+                whereArgs);
+        break;
+    default:
+        throw new IllegalArgumentException("Unknown Uri: "+uri);
+    }
+
+    return count;
+}
+</code></pre>
+
+<p>The UriMatcher is defined as </p>
+
+<pre><code>private static final int ITEMS = 1;
+private static final int ITEMS_ID = 2;
+private static final String AUTHORITY_ITEMS ="com.yourname.yourapp.Items";
+private static final UriMatcher URI_MATCHER;
+
+static {
+    URI_MATCHER = new UriMatcher(UriMatcher.NO_MATCH);
+    URI_MATCHER.addURI(AUTHORITY_ITEMS, "item", ITEMS);
+    URI_MATCHER.addURI(AUTHORITY_ITEMS, "item/#", ITEMS_ID);
+}
+</code></pre>
+
+<p>This way you can decide if only 1 result shall be returned or updated or if all should be queried or not. </p>
+
+<p>The SQLiteOpenHelper will actually perform the insert and also take care of upgrades if the structure of your SQLite database changes, you can perform it there by overriding </p>
+
+<pre><code>class ItemDatabaseHelper extends SQLiteOpenHelper {
+    public ItemDatabaseHelper(Context context){
+        super(context, "myDatabase.db", null, ITEMDATABASE_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        // TODO Auto-generated method stub
+        String createItemsTable = "create table " + TABLE_ITEMS + " (" +
+            ...
+        ");";
+
+        // Begin Transaction
+        db.beginTransaction();
+        try{
+            // Create Items table
+            db.execSQL(createItemsTable);
+
+            // Transaction was successful
+            db.setTransactionSuccessful();
+        } catch(Exception ex) {
+            Log.e(this.getClass().getName(), ex.getMessage(), ex);
+        } finally {
+            // End transaction
+            db.endTransaction();
+        }
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        String dropItemsTable = "DROP TABLE IF EXISTS " + TABLE_ITEMS;
+
+        // Begin transaction
+        db.beginTransaction();
+
+        try {
+            if(oldVersion&lt;2){
+                // Upgrade from version 1 to version 2: DROP the whole table
+                db.execSQL(dropItemsTable);
+                onCreate(db);
+                Log.i(this.getClass().toString(),"Successfully upgraded to Version 2");
+            }
+            if(oldVersion&lt;3) {
+                // minor change, perform an ALTER query
+                db.execSQL("ALTER ...");
+            }
+
+            db.setTransactionSuccessful();
+        } catch(Exception ex){
+            Log.e(this.getClass().getName(), ex.getMessage(), ex);
+        } finally {
+            // Ends transaction
+            // If there was an error, the database won't be altered
+            db.endTransaction();
+        }
+    }
+}
+</code></pre>
+
+<p>and then the easiest part of all: Perform a query:</p>
+
+<pre><code>String[] rows = new String[] {"_ID", "_name", "_email" };
+Uri uri = Uri.parse("content://com.yourname.yourapp.Items/item/2";
+
+// Alternatively you can also use getContentResolver().insert/update/query/delete methods
+Cursor c = managedQuery(uri, rows, "someRow=1", null, null); 
+</code></pre>
+
+<p>That's basically all and the most elegant way to do it as far as I know. </p>

@@ -1,0 +1,204 @@
+<p>Here's JLayer(Java 1.7.0) version, based on <a href="http://docs.oracle.com/javase/tutorial/uiswing/misc/jlayer.html">How to Decorate Components with the JLayer Class &#40;The Java Tutorials &gt; Creating a GUI With JFC/Swing &gt; Using Other Swing Features&#41;</a></p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import java.beans.PropertyChangeEvent;
+import javax.swing.*;
+import javax.swing.plaf.LayerUI;
+import javax.swing.table.*;
+
+public class TableWaitLayerTest {
+  private final String[] columnNames = {"String", "Integer", "Boolean"};
+  private final Object[][] data = {
+    {"aaa", 12, true}, {"bbb", 5, false}, {"ccc", 9, false},
+  };
+  private final DefaultTableModel model = new DefaultTableModel(data, columnNames) {
+    @Override public Class&lt;?&gt; getColumnClass(int column) {
+      return getValueAt(0, column).getClass();
+    }
+  };
+  private final JTable table = new JTable(model);
+  private final JButton startButton = new JButton();
+  private final WaitLayerUI layerUI = new WaitLayerUI();
+  public JComponent makeUI() {
+    startButton.setAction(new AbstractAction("start") {
+      @Override public void actionPerformed(ActionEvent e) {
+        layerUI.start();
+        startButton.setEnabled(false);
+        SwingWorker&lt;String, Object[]&gt; worker = new SwingWorker&lt;String, Object[]&gt;() {
+          @Override public String doInBackground() {
+            int current = 0, lengthOfTask = 120;
+            while(current&lt;lengthOfTask &amp;&amp; !isCancelled()) {
+              try {
+                Thread.sleep(50);
+              } catch(InterruptedException ie) {
+                return "Interrupted";
+              }
+              publish(new Object[] {"aaa", current++, false});
+            }
+            return "Done";
+          }
+          @Override protected void process(java.util.List&lt;Object[]&gt; chunks) {
+            for(Object[] array: chunks) {
+              model.addRow(array);
+            }
+            table.scrollRectToVisible(
+                table.getCellRect(model.getRowCount()-1, 0, true));
+          }
+          @Override public void done() {
+            layerUI.stop();
+            startButton.setEnabled(true);
+            String text = null;
+            if(isCancelled()) {
+              text = "Cancelled";
+            } else {
+              try {
+                text = get();
+              } catch(Exception ex) {
+                ex.printStackTrace();
+                text = "Exception";
+              }
+            }
+          }
+        };
+        worker.execute();
+      }
+    });
+    JPanel p = new JPanel(new BorderLayout());
+    p.add(new JButton("dummy"), BorderLayout.NORTH);
+    p.add(new JLayer&lt;JComponent&gt;(new JScrollPane(table), layerUI));
+    p.add(startButton, BorderLayout.SOUTH);
+    return p;
+  }
+  public static void main(String[] args) {
+    EventQueue.invokeLater(new Runnable() {
+      @Override public void run() {
+        createAndShowGUI();
+      }
+    });
+  }
+  public static void createAndShowGUI() {
+    JFrame f = new JFrame();
+    f.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+    f.getContentPane().add(new TableWaitLayerTest().makeUI());
+    f.setSize(320, 240);
+    f.setLocationRelativeTo(null);
+    f.setVisible(true);
+  }
+}
+
+//http://docs.oracle.com/javase/tutorial/uiswing/misc/jlayer.html
+//How to Decorate Components with the JLayer Class
+//(The Java? Tutorials &gt; Creating a GUI With JFC/Swing &gt; Using Other Swing Features)
+//TapTapTap.java
+class WaitLayerUI extends LayerUI&lt;JComponent&gt; implements ActionListener {
+  private boolean mIsRunning;
+  private boolean mIsFadingOut;
+  private Timer mTimer;
+
+  private int mAngle;
+  private int mFadeCount;
+  private int mFadeLimit = 15;
+
+  @Override public void paint (Graphics g, JComponent c) {
+    int w = c.getWidth();
+    int h = c.getHeight();
+
+    // Paint the view.
+    super.paint (g, c);
+
+    if (!mIsRunning) {
+      return;
+    }
+
+    Graphics2D g2 = (Graphics2D)g.create();
+
+    float fade = (float)mFadeCount / (float)mFadeLimit;
+    // Gray it out.
+    Composite urComposite = g2.getComposite();
+    g2.setComposite(AlphaComposite.getInstance(
+                      AlphaComposite.SRC_OVER, .5f * fade));
+    g2.fillRect(0, 0, w, h);
+    g2.setComposite(urComposite);
+
+    // Paint the wait indicator.
+    int s = Math.min(w, h) / 5;
+    int cx = w / 2;
+    int cy = h / 2;
+    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+    g2.setStroke(
+      new BasicStroke(s / 4, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+    g2.setPaint(Color.white);
+    g2.rotate(Math.PI * mAngle / 180, cx, cy);
+    for (int i = 0; i &lt; 12; i++) {
+      float scale = (11.0f - (float)i) / 11.0f;
+      g2.drawLine(cx + s, cy, cx + s * 2, cy);
+      g2.rotate(-Math.PI / 6, cx, cy);
+      g2.setComposite(AlphaComposite.getInstance(
+                        AlphaComposite.SRC_OVER, scale * fade));
+    }
+
+    g2.dispose();
+  }
+
+  @Override public void actionPerformed(ActionEvent e) {
+    if (mIsRunning) {
+      firePropertyChange("tick", 0, 1);
+      mAngle += 3;
+      if (mAngle &gt;= 360) {
+        mAngle = 0;
+      }
+      if (mIsFadingOut) {
+        if (--mFadeCount == 0) {
+          mIsRunning = false;
+          mTimer.stop();
+        }
+      } else if (mFadeCount &lt; mFadeLimit) {
+        mFadeCount++;
+      }
+    }
+  }
+
+  public void start() {
+    if (mIsRunning) {
+      return;
+    }
+    // Run a thread for animation.
+    mIsRunning = true;
+    mIsFadingOut = false;
+    mFadeCount = 0;
+    int fps = 24;
+    int tick = 1000 / fps;
+    mTimer = new Timer(tick, this);
+    mTimer.start();
+  }
+
+  public void stop() {
+    mIsFadingOut = true;
+  }
+
+  @Override public void applyPropertyChange(PropertyChangeEvent pce, JLayer l) {
+    if ("tick".equals(pce.getPropertyName())) {
+      l.repaint();
+    }
+  }
+
+  @Override public void installUI(JComponent c) {
+    super.installUI(c);
+    ((JLayer)c).setLayerEventMask(
+      AWTEvent.MOUSE_EVENT_MASK | AWTEvent.MOUSE_MOTION_EVENT_MASK |
+      AWTEvent.MOUSE_WHEEL_EVENT_MASK | AWTEvent.KEY_EVENT_MASK |
+      AWTEvent.FOCUS_EVENT_MASK | AWTEvent.COMPONENT_EVENT_MASK);
+  }
+  @Override public void uninstallUI(JComponent c) {
+    ((JLayer)c).setLayerEventMask(0);
+    super.uninstallUI(c);
+  }
+  @Override public void eventDispatched(AWTEvent e, JLayer&lt;? extends JComponent&gt; l) {
+    if(mIsRunning &amp;&amp; e instanceof InputEvent) {
+      ((InputEvent)e).consume();
+    }
+  }
+}
+</code></pre>

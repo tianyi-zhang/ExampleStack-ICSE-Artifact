@@ -1,0 +1,217 @@
+<p>You must generate a new <code>timestamp</code> and <code>nonce</code> for <strong>every</strong> request, i.e., every new request must have its unique <code>timestamp</code> and <code>nonce</code>.</p>
+
+<p>In java, <code>timestamp</code> can be set as <code>System.currentTimeMillis()</code> and <code>nonce</code> can be set using <code>UUID</code> (<code>UUID.randomUUID().toString()</code>).</p>
+
+<p>Finally, make sure that your <code>Authorization</code> is correctly computed (I see they use <code>HMAC-SHA1</code> using API secret key).</p>
+
+<p>I hope this helps.</p>
+
+<hr>
+
+<p><strong>Edit</strong>: As suspected, it's your <code>HMAC-SHA1</code> Authorization value that is incorrect. I get the following response when running your code (after few coding of my own).</p>
+
+<pre><code>Connection = keep-alive
+Content-Length = 51
+Content-Type = application/json
+{"code":"403", "message":"HMAC validation Failure"}
+</code></pre>
+
+<p>Make sure that you compute your <code>HMAC-SHA1</code> value correctly (as I said above).</p>
+
+<p>See the below (updated) code that you can compile and run for yourself. You will need Java 8 as it comes with Base 64 encoder/decoder now.</p>
+
+<pre><code>import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.net.URI;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.text.SimpleDateFormat;
+import java.util.Base64;
+import java.util.Date;
+import java.util.TimeZone;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+//import org.apache.commons.codec.binary.Base64;
+
+public class MainJava {
+    private static final String    myEncoding            = "UTF-8";
+    private static final String    myMessageDigest        = "SHA-1";
+    private static final String    myKeySpec            = "HmacSHA1";
+    private static String        NEWLINE                = "\n";
+    private static String        authorizationHeader;
+    private static String        contentSha1;
+    // private static String keyId = "230297";
+    // private static String hmacKey = "tcwR9r1OR85V9bcV5tc7a9d1XkWigjqY";
+    private static String        ApiSecretkey        = "0779eb593286b278aaf8cfcf83c8e33bc757d53a8a642b53d24d63bda844da5b";
+    private static String        MerchantToken        = "fdoa-a480ce8951daa73262734cf102641994c1e55e7cdf4c02b6";
+    private static String        reportingToken        = "e56a0223d0415067";
+    private static String        apikey                = "XSjbv8PLDINJ28qXLEYAhcrz8rxKXQ4Y";
+    private static long            nonce;
+    public static String        headerContentType    = "application/json";
+    private static long            epoch;
+
+    public static void main(String[] args) throws Exception {
+        String json_string_dataTwo = "{\"type\":\"visa\",\"cardholder_name\":\"John Smith\",\"card_number\":\"4788250000028291\",\"exp_date\":1020,\"cvv\":\"123\"}";
+        // String json_string =
+        // "{\"gateway_id\":\"AI2010-01\",\"password\":\"w226638qtot48xu503zumwt2iy46g26q\",\"transaction_type\":\"00\",\"amount\":10,\"cardholder_name\":\"test\",\"cc_number\":\"4111111111111111\",\"cc_expiry\":\"1219\"}";
+        String json_string_data = "{\"merchant_ref\":\"Astonishing-Sale\",\"transaction_type\":\"authorize\",\"method\":\"credit_card\",\"amount\":1299,\"currency_code\":\"USD\",\"credit_card\":"
+                + json_string_dataTwo + "}";
+        // "{\r\n  \"merchant_ref\": \"Astonishing-Sale\",\r\n  \"transaction_type\": \"authorize\",\r\n  \"method\": \"credit_card\",\r\n  \"amount\": \"1299\",\r\n  \"currency_code\": \"USD\",\r\n  \"credit_card\": {\r\n    \"type\": \"visa\",\r\n    \"cardholder_name\": \"John Smith\",\r\n    \"card_number\": \"4788250000028291\",\r\n    \"exp_date\": \"1020\",\r\n    \"cvv\": \"123\"\r\n  }\r\n}";
+
+        epoch = System.currentTimeMillis();// / 1000;
+        // nonce = UUID.randomUUID().toString();
+        nonce = Math.abs(SecureRandom.getInstance("SHA1PRNG").nextLong());
+        contentSha1 = contentSha1(json_string_data);
+        authorizationHeader = authHeader(epoch, contentSha1);
+        System.out.println(excutePost(json_string_data));
+    }
+
+    private static String authHeader(long hashTime, String contentSha1) {
+        String authorizationHeader = null;
+        try {
+            String hmacString = "POST" + NEWLINE + "application/json" + NEWLINE + contentSha1 + NEWLINE + hashTime + NEWLINE + apikey + NEWLINE
+                    + new URI("https://api-cert.payeezy.com/v1/transactions");
+
+            return sha1(hmacString, ApiSecretkey);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static String contentSha1(String content) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-1");
+        byte[] sha1hash = new byte[40];
+        md.update(content.getBytes("UTF-8"), 0, content.length());
+        sha1hash = md.digest();
+        return convertToHex(sha1hash);
+    }
+
+    private static String convertToHex(byte[] data) {
+        StringBuffer buf = new StringBuffer();
+        for (int i = 0; i &lt; data.length; i++) {
+            int halfbyte = data[i] &gt;&gt;&gt; 4 &amp; 0xF;
+            int two_halfs = 0;
+            do {
+                if ((0 &lt;= halfbyte) &amp;&amp; (halfbyte &lt;= 9))
+                    buf.append((char) (48 + halfbyte));
+                else
+                    buf.append((char) (97 + (halfbyte - 10)));
+                halfbyte = data[i] &amp; 0xF;
+            } while (two_halfs++ &lt; 1);
+        }
+        return buf.toString();
+    }
+
+//     private static String sha1(String s, String keyString) {
+//     Base64 base64 = new Base64();
+//     try {
+//     SecretKeySpec key = new SecretKeySpec(keyString.getBytes("UTF-8"),
+//     "HmacSHA1");
+//     Mac mac = Mac.getInstance("HmacSHA1");
+//     mac.init(key);
+//     byte[] bytes = mac.doFinal(s.getBytes("UTF-8"));
+//    
+//     return new String(base64.encode(bytes));
+//     } catch (Exception e) {
+//     throw new RuntimeException(e);
+//     }
+//     }
+    private static String sha1(String s, String keyString) {
+        byte[] bytes = null;
+        try {
+            Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
+            SecretKeySpec secret_key = new SecretKeySpec(keyString.getBytes(), "HmacSHA256");
+            sha256_HMAC.init(secret_key);
+            bytes = sha256_HMAC.doFinal(s.getBytes("UTF-8"));
+            //return new String(Base64.encodeBase64String(bytes));
+        } catch (Exception e) {
+            System.out.println("Error");
+        }
+        return  Base64.getEncoder().encodeToString(bytes);
+    }
+
+    private static String hashTime() {
+        String time = getUTCFormattedDate("yyyy-MM-dd'T'HH:mm:ss'Z'");
+
+        return time;
+    }
+
+    private static String getUTCFormattedDate(String format) {
+        SimpleDateFormat dateFormat = new SimpleDateFormat(format);
+        dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return dateFormat.format(new Date());
+    }
+
+    public static String excutePost(String urlParameters) throws IOException {
+    System.out.println(urlParameters);
+    System.out.println(headerContentType);
+    System.out.println(MerchantToken);
+    System.out.println(authorizationHeader);
+    System.out.println(epoch);
+    System.out.println(nonce);
+        URL url = new URL("https://api-cert.payeezy.com/v1/transactions");
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        try {
+            // Create connection
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", headerContentType);
+            connection.setRequestProperty("apikey ", apikey);
+            connection.setRequestProperty("token", MerchantToken);
+            connection.setRequestProperty("Authorization", authorizationHeader);
+            connection.setRequestProperty("timestamp", "" + epoch);
+            connection.setRequestProperty("nonce", "" + nonce);
+            connection.setDoOutput(true);
+            connection.setReadTimeout(30000);
+
+            // Send request
+            DataOutputStream wr = new DataOutputStream(connection.getOutputStream());
+            wr.writeBytes(urlParameters);
+            wr.flush();
+            wr.close();
+
+            // Get Response
+            InputStream is = null;
+            int statusCode = connection.getResponseCode();
+
+        try {
+            is = connection.getInputStream();
+        } catch (IOException e) {
+            if (statusCode &gt;= 400) {
+                is = connection.getErrorStream();
+            }
+        }
+        BufferedReader rd = new BufferedReader(new InputStreamReader(is));
+            String line;
+            StringBuffer response = new StringBuffer();
+            while ((line = rd.readLine()) != null) {
+                response.append(line);
+                response.append('\r');
+            }
+            rd.close();
+            return response.toString();
+
+        } catch (Exception e) {
+
+            e.printStackTrace();
+            return null;
+
+        } finally {
+
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+}
+</code></pre>

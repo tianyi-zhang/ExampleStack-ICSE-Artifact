@@ -1,0 +1,99 @@
+<p>Here's from my own code:<br>
+Window.setTimeout executes only when browser is idle. <br>
+So calling the function recursively (42 times) will take 100ms if there is no activity in the browser and much more if the browser is busy doing something else.<br></p>
+
+<pre><code>    ExpectedCondition&lt;Boolean&gt; javascriptDone = new ExpectedCondition&lt;Boolean&gt;() {
+        public Boolean apply(WebDriver d) {
+            try{//window.setTimeout executes only when browser is idle,
+                //introduces needed wait time when javascript is running in browser
+                return  ((Boolean) ((JavascriptExecutor) d).executeAsyncScript( 
+
+                        " var callback =arguments[arguments.length - 1]; " +
+                        " var count=42; " +
+                        " setTimeout( collect, 0);" +
+                        " function collect() { " +
+                            " if(count--&gt;0) { "+
+                                " setTimeout( collect, 0); " +
+                            " } "+
+                            " else {callback(" +
+                            "    true" +                            
+                            " );}"+                             
+                        " } "
+                    ));
+            }catch (Exception e) {
+                return Boolean.FALSE;
+            }
+        }
+    };
+    WebDriverWait w = new WebDriverWait(driver,timeOut);  
+    w.until(javascriptDone);
+    w=null;
+</code></pre>
+
+<p>As a bonus the counter can be reset on document.readyState or on jQuery Ajax calls or if any jQuery animations are running (only if your app uses jQuery for ajax calls...) <br>...</p>
+
+<pre><code>" function collect() { " +
+                            " if(!((typeof jQuery === 'undefined') || ((jQuery.active === 0) &amp;&amp; ($(\":animated\").length === 0))) &amp;&amp; (document.readyState === 'complete')){" +
+                            "    count=42;" +
+                            "    setTimeout( collect, 0); " +
+                            " }" +
+                            " else if(count--&gt;0) { "+
+                                " setTimeout( collect, 0); " +
+                            " } "+ 
+</code></pre>
+
+<p>...</p>
+
+<p>EDIT: I notice executeAsyncScript doesn't work well if a new page loads and the test might stop responding indefinetly, better to use this on instead.</p>
+
+<pre><code>public static ExpectedCondition&lt;Boolean&gt; documentNotActive(final int counter){ 
+    return new ExpectedCondition&lt;Boolean&gt;() {
+        boolean resetCount=true;
+        @Override
+        public Boolean apply(WebDriver d) {
+
+            if(resetCount){
+                ((JavascriptExecutor) d).executeScript(
+                        "   window.mssCount="+counter+";\r\n" + 
+                        "   window.mssJSDelay=function mssJSDelay(){\r\n" + 
+                        "       if((typeof jQuery != 'undefined') &amp;&amp; (jQuery.active !== 0 || $(\":animated\").length !== 0))\r\n" + 
+                        "           window.mssCount="+counter+";\r\n" + 
+                        "       window.mssCount--&gt;0 &amp;&amp;\r\n" + 
+                        "       setTimeout(window.mssJSDelay,window.mssCount+1);\r\n" + 
+                        "   }\r\n" + 
+                        "   window.mssJSDelay();");
+                resetCount=false;
+            }
+
+            boolean ready=false;
+            try{
+                ready=-1==((Long) ((JavascriptExecutor) d).executeScript(
+                        "if(typeof window.mssJSDelay!=\"function\"){\r\n" + 
+                        "   window.mssCount="+counter+";\r\n" + 
+                        "   window.mssJSDelay=function mssJSDelay(){\r\n" + 
+                        "       if((typeof jQuery != 'undefined') &amp;&amp; (jQuery.active !== 0 || $(\":animated\").length !== 0))\r\n" + 
+                        "           window.mssCount="+counter+";\r\n" + 
+                        "       window.mssCount--&gt;0 &amp;&amp;\r\n" + 
+                        "       setTimeout(window.mssJSDelay,window.mssCount+1);\r\n" + 
+                        "   }\r\n" + 
+                        "   window.mssJSDelay();\r\n" + 
+                        "}\r\n" + 
+                        "return window.mssCount;"));
+            }
+            catch (NoSuchWindowException a){
+                a.printStackTrace();
+                return true;
+            }
+            catch (Exception e) {
+                e.printStackTrace();
+                return false;
+            }
+            return ready;
+        }
+        @Override
+        public String toString() {
+            return String.format("Timeout waiting for documentNotActive script");
+        }
+    };
+}
+</code></pre>

@@ -1,0 +1,140 @@
+<p>Using Retrofit is quite simple and straightforward. </p>
+
+<p>First of all you need to add retrofit to your project, as example with Gradle build sytem. </p>
+
+<pre><code>compile 'com.squareup.retrofit:retrofit:1.7.1' |
+</code></pre>
+
+<p>another way you can download .jar and place it to your libs folder. </p>
+
+<p>Then you need to define interfaces that will be used by Retrofit to make API calls to your REST endpoints. For example for users:  </p>
+
+<pre><code>public interface YourUsersApi {
+
+   //You can use rx.java for sophisticated composition of requests 
+   @GET("/users/{user}")
+   public Observable&lt;SomeUserModel&gt; fetchUser(@Path("user") String user);
+
+   //or you can just get your model if you use json api
+   @GET("/users/{user}")
+   public SomeUserModel fetchUser(@Path("user") String user);
+
+   //or if there are some special cases you can process your response manually 
+   @GET("/users/{user}")
+   public Response fetchUser(@Path("user") String user);
+
+}
+</code></pre>
+
+<p>Ok. Now you have defined your API interface an you can try to use it. </p>
+
+<p>To start you need to create an instance of <strong><em>RestAdapter</em></strong> and set base url of your API back-end. It's also quite simple: </p>
+
+<pre><code>RestAdapter restAdapter = new RestAdapter.Builder()
+   .setEndpoint("https://yourserveraddress.com")
+    .build();
+
+YourUsersApi yourUsersApi = restAdapter.create(YourUsersApi.class);
+</code></pre>
+
+<p>Here Retrofit will read your information from interface and under the hood it will create <strong><em>RestHandler</em></strong> according to meta-info your provided which actually will perform HTTP  requests. </p>
+
+<p>Then under the hood, once response is received, in case of json api your data will be transformed to your model using Gson library so you should be aware of that fact that limitations that are present in Gson are actually there in Retrofit. </p>
+
+<p>To extend/override process of serialisers/deserialisation your response data to your models you might want to provide your custom serialisers/deserialisers to retrofit.</p>
+
+<p>Here you need to implement Converter interface and implement 2 methods <strong><em>fromBody()</em></strong> and <strong><em>toBody()</em></strong>.</p>
+
+<p>Here is example: </p>
+
+<pre><code>public class SomeCustomRetrofitConverter implements Converter {
+
+    private GsonBuilder gb;
+
+    public SomeCustomRetrofitConverter() {
+        gb = new GsonBuilder();
+
+        //register your cursom custom type serialisers/deserialisers if needed
+        gb.registerTypeAdapter(SomeCutsomType.class, new SomeCutsomTypeDeserializer());
+    }
+
+    public static final String ENCODING = "UTF-8";
+
+    @Override
+    public Object fromBody(TypedInput body, Type type) throws ConversionException {
+        String charset = "UTF-8";
+        if (body.mimeType() != null) {
+            charset = MimeUtil.parseCharset(body.mimeType());
+        }
+        InputStreamReader isr = null;
+        try {
+           isr = new InputStreamReader(body.in(), charset);
+           Gson gson = gb.create();
+           return gson.fromJson(isr, type);
+        } catch (IOException e) {
+            throw new ConversionException(e);
+        } catch (JsonParseException e) {
+            throw new ConversionException(e);
+        } finally {
+            if (isr != null) {
+                   try {
+                      isr.close();
+                   } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    @Override
+    public TypedOutput toBody(Object object) {
+        try {
+            Gson gson = gb.create();
+            return new JsonTypedOutput(gson.toJson(object).getBytes(ENCODING), ENCODING);
+        } catch (UnsupportedEncodingException e) {
+            throw new AssertionError(e);
+        }
+     }
+
+    private static class JsonTypedOutput implements TypedOutput {
+        private final byte[] jsonBytes;
+        private final String mimeType;
+
+        JsonTypedOutput(byte[] jsonBytes, String encode) {
+            this.jsonBytes = jsonBytes;
+            this.mimeType = "application/json; charset=" + encode;
+        }
+
+        @Override
+        public String fileName() {
+            return null;
+        }
+
+       @Override
+       public String mimeType() {
+           return mimeType;
+       }
+
+       @Override
+       public long length() {
+          return jsonBytes.length;
+       }
+
+       @Override
+       public void writeTo(OutputStream out) throws IOException {
+           out.write(jsonBytes);
+       }
+    }
+ }
+</code></pre>
+
+<p>And now you need to enable your custom adapters, if it was needed by using <strong><em>setConverter()</em></strong> on building RestAdapter </p>
+
+<p>Ok. Now you are aware how you can get your data from server to your Android application. But you need somehow mange your data and invoke REST call in right place. 
+There I would suggest to use android Service or AsyncTask or loader or rx.java that would query your data on background thread in order to not block your UI. </p>
+
+<p>So now you can find the most appropriate place to call  </p>
+
+<pre><code>SomeUserModel yourUser = yourUsersApi.fetchUser("someUsers")
+</code></pre>
+
+<p>to fetch your remote data.</p>

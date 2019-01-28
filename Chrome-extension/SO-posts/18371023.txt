@@ -1,0 +1,194 @@
+<p>Parsing a raw websocket frame is easy enough.
+But you have to inspect the header one byte at a time.</p>
+
+<p>Here's a rough example:</p>
+
+<p><em>I left a few TODO's for you to work out on your own (after reading the RFC-6455 spec of course)</em></p>
+
+<p>Things you can validate:</p>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.2" rel="nofollow">Base Framing Protocol: RFC-6455 - Section 5.2</a></p>
+
+<ul>
+<li>Is the opcode found one of the valid ones defined in the spec?</li>
+<li>Are RSV bits being used improperly?</li>
+</ul>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.3" rel="nofollow">Client-to-Server Masking: RFC 6455 - Section 5.3</a></p>
+
+<ul>
+<li>If Frame was sent by Client, is the Frame Masked?</li>
+<li>Is the Mask random from frame to frame?</li>
+<li>Don't allow [0x00, 0x00, 0x00, 0x00] as a mask.</li>
+</ul>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.4" rel="nofollow">Fragmentation: RFC 6455 - Section 5.4</a></p>
+
+<ul>
+<li>Is it a fragmented Control frame?</li>
+<li>Is the fragmentation of a large message, consisting of multiple frames, out of order?</li>
+<li>Was a new message started before prior one completed with a FIN flag?</li>
+</ul>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.5" rel="nofollow">Control Frames: RFC 6455 - Section 5.5</a></p>
+
+<ul>
+<li>Does the payload length of a control frame exceed 125 bytes?</li>
+<li>Is the payload fragmented?</li>
+</ul>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.5.1" rel="nofollow">Close Frames: RFC 6455 - Section 5.5.1</a></p>
+
+<ul>
+<li>If a status code is provided in the payload, does the status code conform to one of the status codes declared in <a href="http://tools.ietf.org/html/rfc6455#section-7.4.1" rel="nofollow">section 7.4.1</a>?  Don't forget to to check the <a href="https://www.iana.org/assignments/websocket/websocket.xhtml#close-code-number" rel="nofollow">IANA registry of websocket status codes</a> that were added after the RFC was finalized)</li>
+<li>Is the status code one that is allowed to be sent over the network in a Frame? (see codes 1005, and 1006 for example)</li>
+<li>If a /reason/ is provided in the frame, does it conform to UTF-8 encoding rules?</li>
+<li>Have you received any frames, of any kind, after a Close frame? (this is a no-no)</li>
+</ul>
+
+<p><a href="http://tools.ietf.org/html/rfc6455#section-5.6" rel="nofollow">Data Frames: RFC 6455 - Section 5.6</a></p>
+
+<ul>
+<li>If you receive a TEXT payload data (from TEXT + CONTINUATION frames), does the payload data conform to UTF-8 encoding rules?</li>
+</ul>
+
+<p>While you can validate at the individual frame level, you will find that some of the validations above are validations of state and behavior between multiple frames.  You can find more of these kinds of validations in <a href="http://tools.ietf.org/html/rfc6455#section-6" rel="nofollow">Sending and Receiving Data: RFC 6455 - Section 6</a>.</p>
+
+<p>However, if you have extensions in the mix, then you will also need to process the frames from the point of view of the negotiated extension stack as well.
+Some tests above would appear to be invalid when an extension is being used.</p>
+
+<p>Example: You have the <a href="https://tools.ietf.org/html/draft-ietf-hybi-permessage-compression" rel="nofollow"><code>permessage-deflate</code></a> extension in use, then the validation of TEXT payload cannot be done with the raw frame off the network, as you must first pass the frame through the extension first.  Note that the extension can change the fragmentation to suit its needs, which might mess up your validation as well.</p>
+
+<pre class="lang-java prettyprint-override"><code>package websocket;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+
+public class RawParse
+{
+    public static class Frame
+    {
+        byte opcode;
+        boolean fin;
+        byte payload[];
+    }
+
+    public static Frame parse(byte raw[])
+    {
+        // easier to do this via ByteBuffer
+        ByteBuffer buf = ByteBuffer.wrap(raw);
+
+        // Fin + RSV + OpCode byte
+        Frame frame = new Frame();
+        byte b = buf.get();
+        frame.fin = ((b &amp; 0x80) != 0);
+        boolean rsv1 = ((b &amp; 0x40) != 0);
+        boolean rsv2 = ((b &amp; 0x20) != 0);
+        boolean rsv3 = ((b &amp; 0x10) != 0);
+        frame.opcode = (byte)(b &amp; 0x0F);
+
+        // TODO: add control frame fin validation here
+        // TODO: add frame RSV validation here
+
+        // Masked + Payload Length
+        b = buf.get();
+        boolean masked = ((b &amp; 0x80) != 0);
+        int payloadLength = (byte)(0x7F &amp; b);
+        int byteCount = 0;
+        if (payloadLength == 0x7F)
+        {
+            // 8 byte extended payload length
+            byteCount = 8;
+        }
+        else if (payloadLength == 0x7E)
+        {
+            // 2 bytes extended payload length
+            byteCount = 2;
+        }
+
+        // Decode Payload Length
+        while (--byteCount &gt; 0)
+        {
+            b = buf.get();
+            payloadLength |= (b &amp; 0xFF) &lt;&lt; (8 * byteCount);
+        }
+
+        // TODO: add control frame payload length validation here
+
+        byte maskingKey[] = null;
+        if (masked)
+        {
+            // Masking Key
+            maskingKey = new byte[4];
+            buf.get(maskingKey,0,4);
+        }
+
+        // TODO: add masked + maskingkey validation here
+
+        // Payload itself
+        frame.payload = new byte[payloadLength];
+        buf.get(frame.payload,0,payloadLength);
+
+        // Demask (if needed)
+        if (masked)
+        {
+            for (int i = 0; i &lt; frame.payload.length; i++)
+            {
+                frame.payload[i] ^= maskingKey[i % 4];
+            }
+        }
+
+        return frame;
+    }
+
+    public static void main(String[] args)
+    {
+        Charset UTF8 = Charset.forName("UTF-8");
+
+        Frame closeFrame = parse(hexToByteArray("8800"));
+        System.out.printf("closeFrame.opcode = %d%n",closeFrame.opcode);
+        System.out.printf("closeFrame.payload.length = %d%n",closeFrame.payload.length);
+
+        // Examples from http://tools.ietf.org/html/rfc6455#section-5.7
+        Frame unmaskedTextFrame = parse(hexToByteArray("810548656c6c6f"));
+        System.out.printf("unmaskedTextFrame.opcode = %d%n",unmaskedTextFrame.opcode);
+        System.out.printf("unmaskedTextFrame.payload.length = %d%n",unmaskedTextFrame.payload.length);
+        System.out.printf("unmaskedTextFrame.payload = \"%s\"%n",new String(unmaskedTextFrame.payload,UTF8));
+
+        Frame maskedTextFrame = parse(hexToByteArray("818537fa213d7f9f4d5158"));
+        System.out.printf("maskedTextFrame.opcode = %d%n",maskedTextFrame.opcode);
+        System.out.printf("maskedTextFrame.payload.length = %d%n",maskedTextFrame.payload.length);
+        System.out.printf("maskedTextFrame.payload = \"%s\"%n",new String(maskedTextFrame.payload,UTF8));
+    }
+
+    public static byte[] hexToByteArray(String hstr)
+    {
+        if ((hstr.length() &lt; 0) || ((hstr.length() % 2) != 0))
+        {
+            throw new IllegalArgumentException(String.format("Invalid string length of &lt;%d&gt;",hstr.length()));
+        }
+
+        int size = hstr.length() / 2;
+        byte buf[] = new byte[size];
+        byte hex;
+        int len = hstr.length();
+
+        int idx = (int)Math.floor(((size * 2) - (double)len) / 2);
+        for (int i = 0; i &lt; len; i++)
+        {
+            hex = 0;
+            if (i &gt;= 0)
+            {
+                hex = (byte)(Character.digit(hstr.charAt(i),16) &lt;&lt; 4);
+            }
+            i++;
+            hex += (byte)(Character.digit(hstr.charAt(i),16));
+
+            buf[idx] = hex;
+            idx++;
+        }
+
+        return buf;
+    }
+}
+</code></pre>

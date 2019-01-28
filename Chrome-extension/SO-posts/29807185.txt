@@ -1,0 +1,308 @@
+<p>Ok, since you uploaded your project I <em>think</em> I got it working the way you want. It is working nonetheless.</p>
+
+<p>There were several errors - mostly with logic. I tried to comment as much as I could so you can understand what/why I was doing everything.</p>
+
+<p>One thing I did not comment was that the <code>AndroidManifest</code> needed permission:</p>
+
+<p><code>&lt;uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/&gt;</code></p>
+
+<hr>
+
+<p>You can <a href="https://www.dropbox.com/s/j51fzpj7j4uhe6b/PrimeOriginal.zip?dl=0" rel="nofollow">download the project here</a>, or just look at the snippets:</p>
+
+<h2><strong>MainActivity</strong></h2>
+
+<p>I added a <code>ListView</code> so you can see all the primes. Also changed how/where we get the data from the DB, and how we save to DB.</p>
+
+<pre><code>public class MainActivity extends ActionBarActivity {
+
+    private static final String TAG = MainActivity.class.getSimpleName();
+    private int max = 500;
+    private TextView primeText;
+    private int previousPrimeNumber;
+    private List&lt;Prime&gt; primes;
+    private PrimeAdapter adapter;
+    private MyDBHandler dbManager;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        primeText = (TextView) findViewById(R.id.primeText);
+
+        //get the object from previous session. Remember these are sorted by date
+        dbManager = new MyDBHandler(this);
+        primes = dbManager.getPrimeObjects();
+
+        //get the first prime. (AKA the last one added)
+        if (primes.size() != 0) {
+            previousPrimeNumber = primes.get(0).get_primeno(); //get the first item
+            primeText.setText(String.valueOf(previousPrimeNumber));
+        } else {
+            previousPrimeNumber = 2;
+        }
+
+        //create list view and adapter to display the data
+        ListView listView = (ListView) findViewById(R.id.listView);
+        adapter = new PrimeAdapter(this, primes);
+        listView.setAdapter(adapter);
+
+        findViewById(R.id.primeButton).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                int primeNumber = -1;
+                //increment previousPrimeNumber by one so we wont keep using previousPrimeNumber
+                for (int i = previousPrimeNumber + 1; i &lt;= max; i++) {
+                    if (isPrimeNumber(i)) {
+                        primeNumber = i;
+                        primeText.setText(String.valueOf(i));
+                        previousPrimeNumber = i + 1;
+                        break;
+                    }
+                }
+
+                if (primeNumber != -1) {
+                    Prime prime = new Prime(primeNumber);
+                    dbManager.addPrime(prime);
+                    /* Yes, it saved to our database. But there is no reason for us to read from
+                     * it too when we have the prime object right here. So just add it to the
+                     * adapter and be done */
+                    //The adapter is looking at the list primes. So add it to the top and notify
+                    primes.add(0, prime);
+                    adapter.notifyDataSetChanged();
+                } else {
+                    Log.e(TAG, "Oops, there was an error. Invalid prime number");
+                }
+            }
+        });
+    }
+
+    public boolean isPrimeNumber(int number) {
+        for (int i = 2; i &lt;= number / 2; i++) {
+            if (number % i == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * If this is too confusing you can ignore it for now.
+     * However, I recommend understanding the android UIs before diving in to database storage.
+     * Take a look at this link:
+     * http://www.vogella.com/tutorials/AndroidListView/article.html
+     */
+    private class PrimeAdapter extends ArrayAdapter&lt;Prime&gt; {
+
+        public PrimeAdapter(Context context, List&lt;Prime&gt; primes) {
+            // I am just using androids views. (android.R.id...)
+            super(context, android.R.layout.simple_list_item_2, primes);
+        }
+
+        @Override
+        public View getView(int position, View view, ViewGroup parent) {
+            /* This method will automagically get called for every item in the list.
+             * This is an ARRAY adapter. So it has a list of the data we passed in on
+             * the constructor. So by calling "this" we are accessing it like it were a list
+             * which it really is. */
+
+            final Prime prime = this.getItem(position);
+
+            if (view == null) {
+                view = LayoutInflater.from(MainActivity.this)
+                        .inflate(android.R.layout.simple_list_item_2, null);
+            }
+
+            /* if you look at simple_list_item_2, you will see two textViews. text1 and text2.
+             * Normally you would create this view yourself, but like i said, that is not the
+             * reason I am here */
+
+            // Notice I am referencing android.R.id. and not R.id. That is cause I am lazy and
+            // didn't create my own views.
+            TextView tv1 = (TextView) view.findViewById(android.R.id.text1);
+            TextView tv2 = (TextView) view.findViewById(android.R.id.text2);
+
+            tv1.setText(String.valueOf(prime.get_primeno()));
+            tv2.setText(prime.getDateTimeFormatted());
+
+            //now return the view so the listView knows to show it
+            return view;
+        }
+
+    }
+</code></pre>
+
+<h2><strong>MyDBHandler:</strong></h2>
+
+<p>Changed the queries and added two methods that will convert <code>Prime</code> to a <code>ContentValues</code> object and from <code>Cursor</code> to a prime. </p>
+
+<pre><code>public class MyDBHandler extends SQLiteOpenHelper {
+    private static final int DATABASE_VERSION = 1;
+    private static final String DATABASE_NAME = "prime.db";
+    public static final String TABLE_PRIME = "prime";
+    public static final String COLUMN_ID = "_id";
+    public static final String COLUMN_PRIMENO = "primeno";
+    public static final String COLUMN_DATETIME = "datetime";
+
+    public MyDBHandler(Context context) {
+        super(context, DATABASE_NAME, null, DATABASE_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        String query = "CREATE TABLE " + TABLE_PRIME + "(" +
+                /* This must be in same order everywhere! */
+                COLUMN_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +    // ID will be index 0
+                COLUMN_PRIMENO + " INTEGER, " +                         // Prime will be index 1
+                COLUMN_DATETIME + " LONG);";                            // Date will be index 2
+        db.execSQL(query);
+
+        /* Something else to note: I changed the column types. You had text for these,
+         * which is fine. But the object that you are storing in each of these is not
+         * a string. So for consistency store the object as its original class type:
+         * PrimeNo == integer
+         * Datetime == long (milliseconds)
+         * This also makes it so sorting is much easier */
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        db.execSQL("DROP TABLE IF EXISTS " + TABLE_PRIME);
+        onCreate(db);
+    }
+
+    /**
+     * You want to save the entire Prime object at once. Not bits and pieces.
+     *
+     * @param prime
+     */
+    public void addPrime(Prime prime) {
+        ContentValues values = writePrime(prime);
+        SQLiteDatabase db = getWritableDatabase();
+        db.insert(TABLE_PRIME, null, values);
+        /* DON'T FORGET TO CLOSE YOUR DATABASE! */
+        db.close();
+    }
+
+    /**
+     * Again, you want to receive the entire prime object at once. Not bits.
+     *
+     * @return List of previous prime objects
+     */
+    public List&lt;Prime&gt; getPrimeObjects() {
+        final List&lt;Prime&gt; primes = new ArrayList&lt;Prime&gt;();
+        final SQLiteDatabase db = getWritableDatabase();
+        /* Normally i would use this line of code:
+
+        final Cursor c = db.rawQuery("SELECT * FROM " + TABLE_PRIME, null);
+
+        but, you want to be sure you will get them order by DATE so you know
+        the first prime in the list is the last added. so I switched the query to this:
+         */
+
+        final Cursor c = db.query(TABLE_PRIME,
+                new String[]{COLUMN_ID, COLUMN_PRIMENO, COLUMN_DATETIME},
+                null, null, null, null, //much null. So wow.
+                COLUMN_DATETIME + " DESC"); //order in descending.
+
+        /* After queried the first item will be our starting point */
+
+        c.moveToFirst();
+        while (c.moveToNext()) {
+            Prime p = buildPrime(c);
+            //check not null
+            if (p != null)
+                primes.add(p); //add to list
+        }
+
+        /* DON'T FORGET TO CLOSE YOUR DATABASE AND CURSOR! */
+        c.close();
+        db.close();
+        return primes;
+    }
+
+    /**
+     * Convert the Cursor object back in to a prime number
+     *
+     * @param cursor Cursor
+     * @return Prime
+     */
+    private Prime buildPrime(Cursor cursor) {
+        final Prime prime = new Prime();
+        prime.set_id(cursor.getInt(0));             // id index as stated above
+        prime.set_primeno(cursor.getInt(1));        // prime index as stated above
+        prime.setDateTime(cursor.getLong(2));        // date index as stated above
+        return prime;
+    }
+
+    /**
+     * Convert the prime object in to ContentValues to write to DB
+     *
+     * @param prime prime
+     * @return ContentValues
+     */
+    private ContentValues writePrime(Prime prime) {
+        ContentValues values = new ContentValues();
+        values.put(COLUMN_PRIMENO, prime.get_primeno());    //must insert first
+        values.put(COLUMN_DATETIME, prime.getDateTime());    //must insert second
+        return values;
+    }
+
+}
+</code></pre>
+
+<h2><strong>Prime:</strong></h2>
+
+<p>I just changed the value types. <code>Prime</code>'s purpose is to store a prime integer. So why not make that field a integer? </p>
+
+<pre><code>public class Prime {
+
+    private static final String format = "yyyy-MM-dd HH:mm:ss";
+    private static final SimpleDateFormat formatter = new SimpleDateFormat(format, Locale.ENGLISH);
+
+    private int _id;
+    private int _primeno;
+    private long dateTime = 0; //this is in milliseconds. Makes it easier to manage
+
+    public Prime() { }
+
+    public Prime(int primeNumber) {
+        //create a new prime object with a prime already known. set the date while we are at it
+        this._primeno = primeNumber;
+        this.dateTime = System.currentTimeMillis();
+    }
+
+    public void set_id(int _id) {
+        this._id = _id;
+    }
+
+    public void set_primeno(int _primeno) {
+        this._primeno = _primeno;
+    }
+
+    public int get_id() {
+        return _id;
+    }
+
+    public int get_primeno() {
+        return _primeno;
+    }
+
+    public long getDateTime() {
+        return dateTime;
+    }
+
+    public String getDateTimeFormatted() {
+        if (dateTime == 0) {
+            dateTime = System.currentTimeMillis();
+        }
+        Date date = new Date(dateTime);
+        return formatter.format(date);
+    }
+
+    public void setDateTime(long dateTime) {
+        this.dateTime = dateTime;
+    }
+
+}
+</code></pre>

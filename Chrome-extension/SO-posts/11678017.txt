@@ -1,0 +1,216 @@
+<p>This is what I use:</p>
+
+<pre><code>import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.regex.Pattern;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelExec;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+
+public class Scp {
+    private static final Logger log = LoggerFactory.getLogger( Scp.class );
+    private static final Pattern validMode = Pattern.compile( "^[0-8]{3,4}$" );
+    private Session session;
+    private String message;
+    private String mode = "0664";
+    private int bufferSize = 1024;
+
+    public Scp( Session session ) {
+        log.trace( "creating scp object" );
+        this.session = session;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public String getMode() {
+        return mode;
+    }
+
+    public int send( String localPath, String remotePath )
+            throws JSchException, IOException {
+        log.trace( "copying '{}' to '{}'", localPath, remotePath );
+        int ack = 0;
+
+        Channel channel = null;
+        try {
+            channel = session.openChannel( "exec" );
+            ((ChannelExec) channel).setCommand( new StringBuilder( "scp -p -t " )
+                    .append( remotePath ).toString() );
+            OutputStream channelOut = channel.getOutputStream();
+            InputStream channelIn = channel.getInputStream();
+
+            channel.connect();
+
+            if ( (ack = checkAck( channelIn )) != 0 ) return ack;
+
+            File localFile = new File( localPath );
+            channelOut.write( new StringBuilder( "C" )
+                    .append( mode )
+                    .append( " " )
+                    .append( localFile.length() )
+                    .append( " " )
+                    .append( localFile.getName() )
+                    .append( "\n" )
+                    .toString().getBytes() );
+            channelOut.flush();
+
+            if ( (ack = checkAck( channelIn )) != 0 ) return ack;
+
+            FileInputStream fileIn = new FileInputStream( localFile );
+            try {
+                byte[] buffer = new byte[bufferSize];
+                int bytesRead;
+                while ( (bytesRead = fileIn.read( buffer, 0, bufferSize )) &gt;= 0 ) {
+                    channelOut.write( buffer, 0, bytesRead );
+                }
+
+                // finish the stream by writing a null terminator
+                buffer[0] = 0;
+                channelOut.write( buffer, 0, 1 );
+                channelOut.flush();
+            }
+            finally {
+                if ( fileIn != null ) {
+                    try {
+                        fileIn.close();
+                    }
+                    catch ( Exception e ) {
+                        log.warn( "failed to close filehandle: {}", e );
+                    }
+                }
+                fileIn = null;
+            }
+
+            if ( (ack = checkAck( channelIn )) != 0 ) return ack;
+        }
+        finally {
+            if ( channel != null &amp;&amp; channel.isConnected() ) {
+                channel.disconnect();
+            }
+        }
+
+        message = "success";
+        return ack;
+    }
+
+    private int checkAck( InputStream in ) throws IOException {
+        int b = in.read();
+
+        if ( b == 1 || b == 2 ) {
+            StringBuilder builder = new StringBuilder();
+            int c;
+            while ( (c = in.read()) != '\n' ) {
+                builder.append( (char) c );
+            }
+            message = builder.toString();
+        }
+
+        return b;
+    }
+
+    public void setBufferSize( int bufferSize ) {
+        this.bufferSize = bufferSize;
+    }
+
+    /**
+     * Sets the mode of the destination file. By default, it is 0664.
+     * 
+     * @param mode
+     *            The mode to set the destination file to.
+     */
+    public void setMode( String mode ) {
+        if ( !validMode.matcher( mode ).matches() ) {
+            throw new IllegalArgumentException( "invalid mode, must be 3 or 4 octal numbers (/^[0-8]{3,4}$/)" );
+        }
+        this.mode = (mode.length() == 3) ? ("0" + mode) : mode;
+    }
+}
+</code></pre>
+
+<p>It has worked reliably for transferring all types of media.</p>
+
+<p><strong>---------- EDIT ----------</strong></p>
+
+<p>Here is a unit test demonstrating that this works for wav files:</p>
+
+<pre><code>import static org.junit.Assert.assertTrue;
+
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+
+
+import javax.crypto.NoSuchPaddingException;
+
+
+import org.junit.Test;
+import org.mitre.asias.sch.Scp;
+
+
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
+
+
+public class ScpTest {
+    @Test
+    public void testScpWav() throws JSchException, IOException, NoSuchAlgorithmException, NoSuchPaddingException {
+        String dotSshDir = "C:/Cygwin/home/me/.ssh";
+        JSch jsch = new JSch();
+        jsch.setKnownHosts( dotSshDir + "/known_hosts" );
+        jsch.addIdentity( dotSshDir + "/id_dsa" );
+
+        Session session = jsch.getSession( "me", "localhost" );
+        session.connect();
+
+        Scp scp = new Scp( session );
+        scp.send( "data/SpeechOn.wav", "/tmp/" );
+
+        assertTrue( Arrays.equals( readFileFully( "data/SpeechOn.wav" ), readFileFully( "C:/Cygwin/tmp/SpeechOn.wav" ) ) );
+    }
+
+    public byte[] readFileFully( String fileName ) throws IOException {
+        InputStream is = null;
+        try {
+            is = new FileInputStream( new File( fileName ) );
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+            int nRead;
+            byte[] data = new byte[16384];
+
+            while ( (nRead = is.read( data, 0, data.length )) != -1 ) {
+                buffer.write( data, 0, nRead );
+            }
+
+            buffer.flush();
+
+            return buffer.toByteArray();
+        }
+        finally {
+            if ( is != null ) {
+                is.close();
+            }
+        }
+
+    }
+}
+</code></pre>
+
+<p>You should be able to slap this unit test in place modifying the location of the source/destination files an your <code>dotSshDir</code> and it should work.  It does for me.</p>

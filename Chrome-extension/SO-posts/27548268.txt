@@ -1,0 +1,47 @@
+<p>This heavily depends on the nature of the <code>Stream</code>. Keep in mind that “simple” doesn’t necessarily mean “efficient”. If you suspect the stream to be very large, carrying heavy operations or having a source which knows the size in advance, the following might be substantially more efficient than the simple solution:</p>
+
+<pre><code>static &lt;T&gt; T getLast(Stream&lt;T&gt; stream) {
+    Spliterator&lt;T&gt; sp=stream.spliterator();
+    if(sp.hasCharacteristics(Spliterator.SIZED|Spliterator.SUBSIZED)) {
+        for(;;) {
+            Spliterator&lt;T&gt; part=sp.trySplit();
+            if(part==null) break;
+            if(sp.getExactSizeIfKnown()==0) {
+                sp=part;
+                break;
+            }
+        }
+    }
+    T value=null;
+    for(Iterator&lt;T&gt; it=recursive(sp); it.hasNext(); )
+        value=it.next();
+    return value;
+}
+
+private static &lt;T&gt; Iterator&lt;T&gt; recursive(Spliterator&lt;T&gt; sp) {
+    Spliterator&lt;T&gt; prev=sp.trySplit();
+    if(prev==null) return Spliterators.iterator(sp);
+    Iterator&lt;T&gt; it=recursive(sp);
+    if(it!=null &amp;&amp; it.hasNext()) return it;
+    return recursive(prev);
+}
+</code></pre>
+
+<p>You may illustrate the difference with the following example:</p>
+
+<pre><code>String s=getLast(
+    IntStream.range(0, 10_000_000).mapToObj(i-&gt; {
+        System.out.println("potential heavy operation on "+i);
+        return String.valueOf(i);
+    }).parallel()
+);
+System.out.println(s);
+</code></pre>
+
+<p>It will print:</p>
+
+<pre><code>potential heavy operation on 9999999
+9999999
+</code></pre>
+
+<p>In other words, it did not perform the operation on the first 9999999 elements but only on the last one.</p>

@@ -1,0 +1,105 @@
+<p>There are limited resources for framework development as far as I am aware, most of what is available is spread out over different blogs and mailing lists. To get started I would recommend the open source project site, <a href="http://source.android.com">source.android.com</a>. It contains limited documentation on how to do things but at least provides the setup for working with the open source project. Then there are the <a href="http://source.android.com/community/index.html">official mailing lists</a> related to platform and framework level development. The different ROM-projects may also have useful information on sites such as the <a href="http://wiki.cyanogenmod.com">Cyanogenmod wiki</a>.</p>
+
+<p>Then to answer your specific question about how permissions are implemented in the framework. There is no specific component that handles the checks, each service provider in the framework need to perform a permission check before allowing a service call to go through. There are to two important pieces involved in such a check, the package manager in the system server and the Binder IPC mechanism. The package manager is the OS component that handles installation of applications. This will parse the AndroidManifest.xml file at installation, prompt the user for permissions and maintain a registry of what permissions a specific app holds. This is based on the idea that each application runs with its own Linux user id. For each uid there is a list of permissions.</p>
+
+<p>The second part is the Binder inter-process communication mechanism. The Binder is an object oriented way of performing IPC but it also implements some security features. The most important one related to permissions is that it makes it possible for the receiving end of an IPC call to check the uid of caller. A service that is protected with a permission will have a Binder interface and will do two things for every request it receives. First it will call the binder to get the uid of the caller and then it will call the system server providing the uid and the permission to check if it has been granted. If the check is ok it will continue and execute the service call otherwise it will raise a security exception.</p>
+
+<p>If we take a look in the source code, starting with a simple call to the vibrator service. (All code below is copyright the Android Open Source Project under the Apache 2.0 license).</p>
+
+<pre><code>public void vibrate(long milliseconds, IBinder token) {
+    if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.VIBRATE)
+            != PackageManager.PERMISSION_GRANTED) {
+        throw new SecurityException("Requires VIBRATE permission");
+    }
+</code></pre>
+
+<p>The implementation for the framework level permissions checks belongs to the Context class and more specifically we have the ContextImpl.java file where</p>
+
+<pre><code>@Override
+public int checkCallingOrSelfPermission(String permission) {
+    if (permission == null) {
+        throw new IllegalArgumentException("permission is null");
+    }
+
+    return checkPermission(permission, Binder.getCallingPid(),
+            Binder.getCallingUid());
+}
+@Override
+public int checkPermission(String permission, int pid, int uid) {
+    if (permission == null) {
+        throw new IllegalArgumentException("permission is null");
+    }
+
+    try {
+        return ActivityManagerNative.getDefault().checkPermission(
+                permission, pid, uid);
+    } catch (RemoteException e) {
+        return PackageManager.PERMISSION_DENIED;
+    }
+}
+</code></pre>
+
+<p>This is call through the Binder to the ActivityManagerService where we will end up in:</p>
+
+<pre><code>/**
+ * As the only public entry point for permissions checking, this method
+ * can enforce the semantic that requesting a check on a null global
+ * permission is automatically denied.  (Internally a null permission
+ * string is used when calling {@link #checkComponentPermission} in cases
+ * when only uid-based security is needed.)
+ * 
+ * This can be called with or without the global lock held.
+ */
+public int checkPermission(String permission, int pid, int uid) {
+    if (permission == null) {
+        return PackageManager.PERMISSION_DENIED;
+    }
+    return checkComponentPermission(permission, pid, uid, -1, true);
+} 
+/**
+ * This can be called with or without the global lock held.
+ */
+int checkComponentPermission(String permission, int pid, int uid,
+        int owningUid, boolean exported) {
+    // We might be performing an operation on behalf of an indirect binder
+    // invocation, e.g. via {@link #openContentUri}.  Check and adjust the
+    // client identity accordingly before proceeding.
+    Identity tlsIdentity = sCallerIdentity.get();
+    if (tlsIdentity != null) {
+        Slog.d(TAG, "checkComponentPermission() adjusting {pid,uid} to {"
+                + tlsIdentity.pid + "," + tlsIdentity.uid + "}");
+        uid = tlsIdentity.uid;
+        pid = tlsIdentity.pid;
+    }
+
+    // Root, system server and our own process get to do everything.
+    if (uid == 0 || uid == Process.SYSTEM_UID || pid == MY_PID) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+    // If there is a uid that owns whatever is being accessed, it has
+    // blanket access to it regardless of the permissions it requires.
+    if (owningUid &gt;= 0 &amp;&amp; uid == owningUid) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+    // If the target is not exported, then nobody else can get to it.
+    if (!exported) {
+        Slog.w(TAG, "Permission denied: checkComponentPermission() owningUid=" + owningUid);
+        return PackageManager.PERMISSION_DENIED;
+    }
+    if (permission == null) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+    try {
+        return AppGlobals.getPackageManager()
+                .checkUidPermission(permission, uid);
+    } catch (RemoteException e) {
+        // Should never happen, but if it does... deny!
+        Slog.e(TAG, "PackageManager is dead?!?", e);
+    }
+    return PackageManager.PERMISSION_DENIED;
+}
+</code></pre>
+
+<p>The call to the package manager checkUidPermission is what will perform the lookup to match the uid with the tables of granted permissions. If you want to continue tracing the source then the relevant file is PackageManagerService.java.</p>
+
+<p>If you are just doing a study feel free to dive right in to the code in frameworks/base/ in the open source project. All the files mentioned above are in there. Follow the build instructions and you should be able to test your changes using the emulator. If you do not want to modify the core framework files themselves take a look at the sample in /device/sample on how to do framework extensions. That said most of the permission related APIs are available from the application level so you may be successful just having an application that provides a service and do your own permission checking on that.</p>

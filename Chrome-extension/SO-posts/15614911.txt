@@ -1,0 +1,526 @@
+<p>By default, ANTLR 4 generates listeners. But if you give <code>org.antlr.v4.Tool</code> the command line parameter <code>-visitor</code>, ANTLR generates visitor classes for you. These work much like listeners, but give you more control over which (sub) trees are walked/visited. This is particularly useful if you want to exclude certain (sub) trees (like else/if blocks, as in your case). While this <em>can</em> be done using listeners, it's much cleaner to do this with a visitor. Using listeners, you'll need to introduce global variables that keep track if a (sub) tree needs to be evaluated, and which do not.</p>
+
+<p>As it happens to be, I'm working on a small ANTLR 4 tutorial. It's not done yet, but I'll post a small working example that demonstrates the use of these visitor classes and an <code>if</code> statement construct.</p>
+
+<hr>
+
+<h1>1. Grammar</h1>
+
+<p>Here's a simple grammar supporting basic expressions, <code>if</code>-, <code>while</code>- and <code>log</code>-statements:</p>
+
+<h2>Mu.g4</h2>
+
+<pre class="lang-antlr prettyprint-override"><code>grammar Mu;
+
+parse
+ : block EOF
+ ;
+
+block
+ : stat*
+ ;
+
+stat
+ : assignment
+ | if_stat
+ | while_stat
+ | log
+ | OTHER {System.err.println("unknown char: " + $OTHER.text);}
+ ;
+
+assignment
+ : ID ASSIGN expr SCOL
+ ;
+
+if_stat
+ : IF condition_block (ELSE IF condition_block)* (ELSE stat_block)?
+ ;
+
+condition_block
+ : expr stat_block
+ ;
+
+stat_block
+ : OBRACE block CBRACE
+ | stat
+ ;
+
+while_stat
+ : WHILE expr stat_block
+ ;
+
+log
+ : LOG expr SCOL
+ ;
+
+expr
+ : expr POW&lt;assoc=right&gt; expr           #powExpr
+ | MINUS expr                           #unaryMinusExpr
+ | NOT expr                             #notExpr
+ | expr op=(MULT | DIV | MOD) expr      #multiplicationExpr
+ | expr op=(PLUS | MINUS) expr          #additiveExpr
+ | expr op=(LTEQ | GTEQ | LT | GT) expr #relationalExpr
+ | expr op=(EQ | NEQ) expr              #equalityExpr
+ | expr AND expr                        #andExpr
+ | expr OR expr                         #orExpr
+ | atom                                 #atomExpr
+ ;
+
+atom
+ : OPAR expr CPAR #parExpr
+ | (INT | FLOAT)  #numberAtom
+ | (TRUE | FALSE) #booleanAtom
+ | ID             #idAtom
+ | STRING         #stringAtom
+ | NIL            #nilAtom
+ ;
+
+OR : '||';
+AND : '&amp;&amp;';
+EQ : '==';
+NEQ : '!=';
+GT : '&gt;';
+LT : '&lt;';
+GTEQ : '&gt;=';
+LTEQ : '&lt;=';
+PLUS : '+';
+MINUS : '-';
+MULT : '*';
+DIV : '/';
+MOD : '%';
+POW : '^';
+NOT : '!';
+
+SCOL : ';';
+ASSIGN : '=';
+OPAR : '(';
+CPAR : ')';
+OBRACE : '{';
+CBRACE : '}';
+
+TRUE : 'true';
+FALSE : 'false';
+NIL : 'nil';
+IF : 'if';
+ELSE : 'else';
+WHILE : 'while';
+LOG : 'log';
+
+ID
+ : [a-zA-Z_] [a-zA-Z_0-9]*
+ ;
+
+INT
+ : [0-9]+
+ ;
+
+FLOAT
+ : [0-9]+ '.' [0-9]* 
+ | '.' [0-9]+
+ ;
+
+STRING
+ : '"' (~["\r\n] | '""')* '"'
+ ;
+
+COMMENT
+ : '#' ~[\r\n]* -&gt; skip
+ ;
+
+SPACE
+ : [ \t\r\n] -&gt; skip
+ ;
+
+OTHER
+ : . 
+ ;
+</code></pre>
+
+<p>Now let's say you would like to parse, and evaluate, input like this:</p>
+
+<h2>test.mu</h2>
+
+<pre class="lang-none prettyprint-override"><code>a = true;
+b = false;
+
+if a &amp;&amp; b {
+  log "1 :: a=" + a +", b=" + b;
+}
+else if a || b {
+  log "2 :: a=" + a +", b=" + b;
+}
+else {
+  log "3 :: a=" + a +", b=" + b;
+}
+
+log "Done!";
+</code></pre>
+
+<hr>
+
+<h1>2. Visitor I</h1>
+
+<p>Start by generating the parser and visitor classes:</p>
+
+<pre class="lang-none prettyprint-override"><code>java -cp antlr-4.0-complete.jar org.antlr.v4.Tool Mu.g4 -visitor
+</code></pre>
+
+<p>The command above would have generated, among others the file <code>MuBaseVisitor&lt;T&gt;</code>. This is the class we're going to extend with out own logic:</p>
+
+<h2>EvalVisitor.java</h2>
+
+<pre><code>public class EvalVisitor extends MuBaseVisitor&lt;Value&gt; {
+    // ...
+}
+</code></pre>
+
+<p>where <code>Value</code> is just a wrapper for any of our language's types (<code>String</code>, <code>Boolean</code>, <code>Double</code>):</p>
+
+<h2>Value.java</h2>
+
+<pre class="lang-java prettyprint-override"><code>public class Value {
+
+    public static Value VOID = new Value(new Object());
+
+    final Object value;
+
+    public Value(Object value) {
+        this.value = value;
+    }
+
+    public Boolean asBoolean() {
+        return (Boolean)value;
+    }
+
+    public Double asDouble() {
+        return (Double)value;
+    }
+
+    public String asString() {
+        return String.valueOf(value);
+    }
+
+    public boolean isDouble() {
+        return value instanceof Double;
+    }
+
+    @Override
+    public int hashCode() {
+
+        if(value == null) {
+            return 0;
+        }
+
+        return this.value.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+
+        if(value == o) {
+            return true;
+        }
+
+        if(value == null || o == null || o.getClass() != value.getClass()) {
+            return false;
+        }
+
+        Value that = (Value)o;
+
+        return this.value.equals(that.value);
+    }
+
+    @Override
+    public String toString() {
+        return String.valueOf(value);
+    }
+}
+</code></pre>
+
+<hr>
+
+<h1>3. Test I</h1>
+
+<p>To test the classes, use the following <code>Main</code> class:</p>
+
+<h2>Main.java</h2>
+
+<pre class="lang-java prettyprint-override"><code>import org.antlr.v4.runtime.ANTLRFileStream;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.tree.ParseTree;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        MuLexer lexer = new MuLexer(new ANTLRFileStream("test.mu"));
+        MuParser parser = new MuParser(new CommonTokenStream(lexer));
+        ParseTree tree = parser.parse();
+        EvalVisitor visitor = new EvalVisitor();
+        visitor.visit(tree);
+    }
+}
+</code></pre>
+
+<p>and compile and run the source files:</p>
+
+<pre class="lang-none prettyprint-override"><code>javac -cp antlr-4.0-complete.jar *.java
+java -cp .:antlr-4.0-complete.jar Main
+</code></pre>
+
+<p><em>(on Windows, the last command would be: <code>java -cp .;antlr-4.0-complete.jar Main</code>)</em></p>
+
+<p>After running <code>Main</code>, nothing happens (of course?). This is because we didn't implement any of the rules in our <code>EvalVisitor</code> class. To be able to evaluate the file <code>test.mu</code> properly, we need to provide a proper implementation for the following rules:</p>
+
+<ul>
+<li><code>if_stat</code></li>
+<li><code>andExpr</code></li>
+<li><code>orExpr</code></li>
+<li><code>plusExpr</code></li>
+<li><code>assignment</code></li>
+<li><code>idAtom</code></li>
+<li><code>booleanAtom</code></li>
+<li><code>stringAtom</code></li>
+<li><code>log</code></li>
+</ul>
+
+<hr>
+
+<h1>4. Visitor II &amp; Test II</h1>
+
+<p>Here's a implementation of these rules:</p>
+
+<pre class="lang-java prettyprint-override"><code>import org.antlr.v4.runtime.misc.NotNull;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class EvalVisitor extends MuBaseVisitor&lt;Value&gt; {
+
+    // used to compare floating point numbers
+    public static final double SMALL_VALUE = 0.00000000001;
+
+    // store variables (there's only one global scope!)
+    private Map&lt;String, Value&gt; memory = new HashMap&lt;String, Value&gt;();
+
+    // assignment/id overrides
+    @Override
+    public Value visitAssignment(MuParser.AssignmentContext ctx) {
+        String id = ctx.ID().getText();
+        Value value = this.visit(ctx.expr());
+        return memory.put(id, value);
+    }
+
+    @Override
+    public Value visitIdAtom(MuParser.IdAtomContext ctx) {
+        String id = ctx.getText();
+        Value value = memory.get(id);
+        if(value == null) {
+            throw new RuntimeException("no such variable: " + id);
+        }
+        return value;
+    }
+
+    // atom overrides
+    @Override
+    public Value visitStringAtom(MuParser.StringAtomContext ctx) {
+        String str = ctx.getText();
+        // strip quotes
+        str = str.substring(1, str.length() - 1).replace("\"\"", "\"");
+        return new Value(str);
+    }
+
+    @Override
+    public Value visitNumberAtom(MuParser.NumberAtomContext ctx) {
+        return new Value(Double.valueOf(ctx.getText()));
+    }
+
+    @Override
+    public Value visitBooleanAtom(MuParser.BooleanAtomContext ctx) {
+        return new Value(Boolean.valueOf(ctx.getText()));
+    }
+
+    @Override
+    public Value visitNilAtom(MuParser.NilAtomContext ctx) {
+        return new Value(null);
+    }
+
+    // expr overrides
+    @Override
+    public Value visitParExpr(MuParser.ParExprContext ctx) {
+        return this.visit(ctx.expr());
+    }
+
+    @Override
+    public Value visitPowExpr(MuParser.PowExprContext ctx) {
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+        return new Value(Math.pow(left.asDouble(), right.asDouble()));
+    }
+
+    @Override
+    public Value visitUnaryMinusExpr(MuParser.UnaryMinusExprContext ctx) {
+        Value value = this.visit(ctx.expr());
+        return new Value(-value.asDouble());
+    }
+
+    @Override
+    public Value visitNotExpr(MuParser.NotExprContext ctx) {
+        Value value = this.visit(ctx.expr());
+        return new Value(!value.asBoolean());
+    }
+
+    @Override
+    public Value visitMultiplicationExpr(@NotNull MuParser.MultiplicationExprContext ctx) {
+
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+
+        switch (ctx.op.getType()) {
+            case MuParser.MULT:
+                return new Value(left.asDouble() * right.asDouble());
+            case MuParser.DIV:
+                return new Value(left.asDouble() / right.asDouble());
+            case MuParser.MOD:
+                return new Value(left.asDouble() % right.asDouble());
+            default:
+                throw new RuntimeException("unknown operator: " + MuParser.tokenNames[ctx.op.getType()]);
+        }
+    }
+
+    @Override
+    public Value visitAdditiveExpr(@NotNull MuParser.AdditiveExprContext ctx) {
+
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+
+        switch (ctx.op.getType()) {
+            case MuParser.PLUS:
+                return left.isDouble() &amp;&amp; right.isDouble() ?
+                        new Value(left.asDouble() + right.asDouble()) :
+                        new Value(left.asString() + right.asString());
+            case MuParser.MINUS:
+                return new Value(left.asDouble() - right.asDouble());
+            default:
+                throw new RuntimeException("unknown operator: " + MuParser.tokenNames[ctx.op.getType()]);
+        }
+    }
+
+    @Override
+    public Value visitRelationalExpr(@NotNull MuParser.RelationalExprContext ctx) {
+
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+
+        switch (ctx.op.getType()) {
+            case MuParser.LT:
+                return new Value(left.asDouble() &lt; right.asDouble());
+            case MuParser.LTEQ:
+                return new Value(left.asDouble() &lt;= right.asDouble());
+            case MuParser.GT:
+                return new Value(left.asDouble() &gt; right.asDouble());
+            case MuParser.GTEQ:
+                return new Value(left.asDouble() &gt;= right.asDouble());
+            default:
+                throw new RuntimeException("unknown operator: " + MuParser.tokenNames[ctx.op.getType()]);
+        }
+    }
+
+    @Override
+    public Value visitEqualityExpr(@NotNull MuParser.EqualityExprContext ctx) {
+
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+
+        switch (ctx.op.getType()) {
+            case MuParser.EQ:
+                return left.isDouble() &amp;&amp; right.isDouble() ?
+                        new Value(Math.abs(left.asDouble() - right.asDouble()) &lt; SMALL_VALUE) :
+                        new Value(left.equals(right));
+            case MuParser.NEQ:
+                return left.isDouble() &amp;&amp; right.isDouble() ?
+                        new Value(Math.abs(left.asDouble() - right.asDouble()) &gt;= SMALL_VALUE) :
+                        new Value(!left.equals(right));
+            default:
+                throw new RuntimeException("unknown operator: " + MuParser.tokenNames[ctx.op.getType()]);
+        }
+    }
+
+    @Override
+    public Value visitAndExpr(MuParser.AndExprContext ctx) {
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+        return new Value(left.asBoolean() &amp;&amp; right.asBoolean());
+    }
+
+    @Override
+    public Value visitOrExpr(MuParser.OrExprContext ctx) {
+        Value left = this.visit(ctx.expr(0));
+        Value right = this.visit(ctx.expr(1));
+        return new Value(left.asBoolean() || right.asBoolean());
+    }
+
+    // log override
+    @Override
+    public Value visitLog(MuParser.LogContext ctx) {
+        Value value = this.visit(ctx.expr());
+        System.out.println(value);
+        return value;
+    }
+
+    // if override
+    @Override
+    public Value visitIf_stat(MuParser.If_statContext ctx) {
+
+        List&lt;MuParser.Condition_blockContext&gt; conditions =  ctx.condition_block();
+
+        boolean evaluatedBlock = false;
+
+        for(MuParser.Condition_blockContext condition : conditions) {
+
+            Value evaluated = this.visit(condition.expr());
+
+            if(evaluated.asBoolean()) {
+                evaluatedBlock = true;
+                // evaluate this block whose expr==true
+                this.visit(condition.stat_block());
+                break;
+            }
+        }
+
+        if(!evaluatedBlock &amp;&amp; ctx.stat_block() != null) {
+            // evaluate the else-stat_block (if present == not null)
+            this.visit(ctx.stat_block());
+        }
+
+        return Value.VOID;
+    }
+
+    // while override
+    @Override
+    public Value visitWhile_stat(MuParser.While_statContext ctx) {
+
+        Value value = this.visit(ctx.expr());
+
+        while(value.asBoolean()) {
+
+            // evaluate the code block
+            this.visit(ctx.stat_block());
+
+            // evaluate the expression
+            value = this.visit(ctx.expr());
+        }
+
+        return Value.VOID;
+    }
+}
+</code></pre>
+
+<p>When you re-compile and run <code>Main</code>, the following would be printed to your console:</p>
+
+<pre class="lang-none prettyprint-override"><code>2 :: a=true, b=false
+Done!
+</code></pre>
+
+<hr>
+
+<p>For an implementation of all other rules, see: <a href="https://github.com/bkiers/Mu">https://github.com/bkiers/Mu</a></p>

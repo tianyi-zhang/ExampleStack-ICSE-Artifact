@@ -1,0 +1,125 @@
+<p>This is my implementation (mainly copied from the android code):</p>
+
+<pre><code>private static void showMissedCallNotification(Context context, final Contact contact) {
+    notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+    // display the first line of the notification:
+    // 1 missed call: call name
+    // more than 1 missed call: &lt;number of calls&gt; + "missed calls"
+    int titleResId;
+    String expandedText;
+    numberMissedCalls++;
+    if (numberMissedCalls == 1) {
+        titleResId = R.string.notification_missedCallTitle;
+        expandedText = contact.getDisplayName();
+    } else {
+        titleResId = R.string.notification_missedCallsTitle;
+        expandedText = context.getString(R.string.notification_missedCallsMsg,
+                numberMissedCalls);
+    }
+    final PendingIntent callLogIntent = createCallLogIntent(context);
+    // make the notification
+    int id = android.R.drawable.stat_notify_missed_call;
+    String ticker = context.getString(R.string.notification_missedCallTicker, contact.getDisplayNumber());
+    long currentTime = Platform.timeProvider().getTime();
+    Notification note = new Notification(id, ticker, currentTime);
+    note.setLatestEventInfo(context, context.getText(titleResId), expandedText, callLogIntent);
+    note.flags |= Notification.FLAG_AUTO_CANCEL;
+    // This intent will be called when the notification is dismissed.
+    // It will take care of clearing the list of missed calls.
+    note.deleteIntent = createClearMissedCallsIntent(context);
+
+    //configureLedNotification(note);
+    notificationManager.notify(MISSED_CALL_NOTIFICATION, note);
+}
+
+/**
+ *  Returns an intent to be invoked when the missed call notification is clicked. 
+ * @param context 
+ */
+private static PendingIntent createCallLogIntent(Context context) {
+    Intent intent = new Intent(context, ClearMissedCallsService.class);
+    intent.setAction(ClearMissedCallsService.ACTION_OPEN_CALL_LOGS);
+    return PendingIntent.getService(context, 0, intent, 0);
+}
+
+/**
+ *  Returns an intent to be invoked when the missed call notification is cleared. 
+ * @param context 
+ */
+private static PendingIntent createClearMissedCallsIntent(Context context) {
+    Intent intent = new Intent(context, ClearMissedCallsService.class);
+    intent.setAction(ClearMissedCallsService.ACTION_CLEAR_MISSED_CALLS);
+    return PendingIntent.getService(context, 0, intent, 0);
+}
+
+/*package */ static void cancelMissedCallNotification() {
+    // reset the number of missed calls to 0.
+    numberMissedCalls = 0;
+    notificationManager.cancel(MISSED_CALL_NOTIFICATION);
+}   
+</code></pre>
+
+<p>and:</p>
+
+<pre><code>/**
+ * Handles the intent to clear the missed calls that is triggered when a notification is dismissed.
+ */
+public class ClearMissedCallsService extends IntentService {
+    /** This action is used to clear missed calls. */
+    public static final String ACTION_CLEAR_MISSED_CALLS = "com.android.phone.intent.CLEAR_MISSED_CALLS";
+    public static final String ACTION_OPEN_CALL_LOGS = "com.android.phone.intent.OPEN_CALL_LOGS";
+public ClearMissedCallsService() {
+        super(ClearMissedCallsService.class.getSimpleName());
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+    }
+
+    @Override
+    protected void onHandleIntent(Intent intent) {
+        // Clear the list of new missed calls.
+        ContentValues values = new ContentValues();
+        values.put(Calls.NEW, 0);
+        StringBuilder where = new StringBuilder();
+        where.append(Calls.NEW);
+        where.append(" = 1 AND ");
+        where.append(Calls.TYPE);
+        where.append(" = ?");
+        getContentResolver().update(Calls.CONTENT_URI, values, where.toString(),
+                new String[]{ Integer.toString(Calls.MISSED_TYPE) });
+        NativeCallLog.cancelMissedCallNotification();
+
+        if (ACTION_OPEN_CALL_LOGS.equals(intent.getAction()))   {
+            Intent intentOpenCallLogs = createOpenCallLogIntent();
+            startActivity(intentOpenCallLogs);
+        }
+
+    }
+
+    private static Intent createOpenCallLogIntent() {
+        Intent intent = new Intent(Intent.ACTION_VIEW, null);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.setType("vnd.android.cursor.dir/calls");
+        return intent;
+    }   
+
+}    
+</code></pre>
+
+<p>you also need to add this in the AndroidManifest</p>
+
+<blockquote>
+<pre><code>    &lt;service
+        android:exported="true"
+        android:name="yourpackage.ClearMissedCallsService" &gt;
+        &lt;intent-filter &gt;
+            &lt;action android:name="com.android.phone.intent.CLEAR_MISSED_CALLS" /&gt;
+        &lt;/intent-filter&gt;
+        &lt;intent-filter &gt;
+            &lt;action android:name="com.android.phone.intent.OPEN_CALL_LOGS" /&gt;
+        &lt;/intent-filter&gt;            
+    &lt;/service&gt;
+</code></pre>
+</blockquote>

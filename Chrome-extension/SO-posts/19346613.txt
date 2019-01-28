@@ -1,0 +1,136 @@
+<p>Ive finally found out exactly how to log into the google account, using the analytics scope. Here is the final code. </p>
+
+<p>When you making your project in the Google cloud console, make sure that the name of your registered app is the same as your Android project name, if its not, you will not get the right permisions.</p>
+
+<p>The full code is here:</p>
+
+<pre><code>    import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import android.accounts.AccountManager;
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.util.Log;
+import android.widget.Toast;
+
+import com.google.api.client.extensions.android.http.AndroidHttp;
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential;
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
+import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.analytics.Analytics;
+import com.google.api.services.analytics.AnalyticsScopes;
+import com.google.api.services.analytics.model.Accounts;
+import com.google.api.services.analytics.model.Profiles;
+import com.google.api.services.analytics.model.Webproperties;
+
+public class MainActivity extends Activity {
+      static final int REQUEST_ACCOUNT_PICKER = 1;
+      static final int REQUEST_AUTHORIZATION = 2;    
+
+      private static Analytics analytics_service;
+      private GoogleAccountCredential credential;
+
+      private String ProfileId;
+
+      @Override
+      public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        credential = GoogleAccountCredential.usingOAuth2(this,
+                Arrays.asList(AnalyticsScopes.ANALYTICS,AnalyticsScopes.ANALYTICS_MANAGE_USERS,AnalyticsScopes.ANALYTICS_READONLY));
+        startActivityForResult(credential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
+      }
+
+      @Override
+      protected void onActivityResult(final int requestCode, final int resultCode, final Intent data) {
+        switch (requestCode) {
+        case REQUEST_ACCOUNT_PICKER:
+          if (resultCode == RESULT_OK &amp;&amp; data != null &amp;&amp; data.getExtras() != null) {
+            String accountName = data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
+            if (accountName != null) {
+              credential.setSelectedAccountName(accountName);             
+              analytics_service = getAnalyticsService(credential);            
+              getAnalyticsAccounts();
+            }
+          }
+
+          break;
+        case REQUEST_AUTHORIZATION:
+          if (resultCode == Activity.RESULT_OK) {           
+            getAnalyticsAccounts();
+          } else {
+            startActivityForResult(credential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
+          }     
+        }
+      }
+
+      private void getAnalyticsAccounts() {
+            Thread t = new Thread(new Runnable() {
+              @Override
+              public void run() {
+
+                  Accounts accounts;
+                  int account_num;
+                  Profiles profiles;
+                  Webproperties webproperties;                
+                  String WebpropertyId;
+                  String Id;
+
+                  List&lt;String&gt; list_accounts = new ArrayList&lt;String&gt;();
+
+                  try {
+
+                  accounts = analytics_service.management().accounts().list().execute();              
+                  account_num = accounts.getItems().size();
+
+                  Id = accounts.getItems().get(0).getId();
+                  Log.d("Analytics_requests", "account_id: " + Id);
+
+                  webproperties = analytics_service.management().webproperties().list(Id).execute();
+                  WebpropertyId = webproperties.getItems().get(0).getId();
+                  Log.d("Analytics_requests", "property_id: " + WebpropertyId);
+
+                  profiles = analytics_service.management().profiles().list(Id, WebpropertyId).execute();
+                  String Profile_Id = profiles.getItems().get(0).getId();
+                  Log.d("Analytics_requests", "profile_id: " + Profile_Id);
+
+                  ProfileId = Profile_Id;
+
+                  for (int i = 0; i &lt; account_num; i++) {
+
+                      Log.d("Analytics_requests", "account_name: " + accounts.getItems().get(i).getName());
+                      list_accounts.add(accounts.getItems().get(i).getName());
+                  }
+
+                  if (list_accounts != null) {
+                    showToast("First Account found: " + list_accounts.get(0).toString());
+                    showToast("Id found: " + ProfileId);    
+                  }
+                } catch (UserRecoverableAuthIOException e) {
+                  startActivityForResult(e.getIntent(), REQUEST_AUTHORIZATION);
+                } catch (IOException e) {
+                  e.printStackTrace();
+                }
+              }
+            });
+            t.start();
+          }
+
+      private Analytics getAnalyticsService(GoogleAccountCredential credential) {
+          return new Analytics.Builder(AndroidHttp.newCompatibleTransport(), new GsonFactory(), credential).build();
+
+      }
+
+      public void showToast(final String toast) {
+        runOnUiThread(new Runnable() {
+          @Override
+          public void run() {
+            Toast.makeText(getApplicationContext(), toast, Toast.LENGTH_SHORT).show();
+          }
+        });
+      }
+    }
+</code></pre>

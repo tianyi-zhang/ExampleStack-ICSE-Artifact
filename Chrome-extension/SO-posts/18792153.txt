@@ -1,0 +1,458 @@
+<blockquote>
+  <p>do I load them using the Bitmap class?</p>
+</blockquote>
+
+<p>Yes, you can load bitmap and use it as <code>textImage2D</code>.</p>
+
+<p>Example:</p>
+
+<pre><code>public void loadTextures(GL10 gl, Context context) {
+    Log.e(LOG_TAG, "ExplosionSprite :: loadTextures");  
+
+    mFrame = 0;
+
+    InputStream is;
+    Bitmap bitmap;
+    is = context.getResources().openRawResource(DRAW_SOURCE);
+
+
+    bitmap = BitmapFactory.decodeStream(is);
+    try {
+        is.close();
+        is = null;
+    } catch (IOException e) {
+    }
+
+    gl.glGenTextures(TEXTURE_COUNT, textures, 0);
+
+    gl.glBindTexture(GL10.GL_TEXTURE_2D, textures[0]);
+    gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, GL10.GL_LINEAR);
+    gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_LINEAR);
+    GLUtils.texImage2D(GL10.GL_TEXTURE_2D, 0, bitmap, 0);
+
+    bitmap.recycle(); 
+}
+</code></pre>
+
+<p>Before 4 month I did the same, because of performance switched to OpenGL ES 2D.</p>
+
+<p>Its a bit complicated but after some time seems easy enough.</p>
+
+<p>I don't have right now  example for single image but have pretty good example for sprite sheet where I animate my Image. I'm sure you can remove not relevant data to make it for one static image. Google has enough resources "how to" so I'll point what I used for my purposes:</p>
+
+<p><a href="http://obviam.net/index.php/opengl-es-with-android-switching-from-canvas-to-opengl/" rel="nofollow">link 1</a></p>
+
+<p><a href="http://www.anddev.org/viewforum.php?f=2" rel="nofollow">link 2</a></p>
+
+<p><a href="http://www.jayway.com/2010/12/30/opengl-es-tutorial-for-android-part-vi-textures/" rel="nofollow">link 3</a></p>
+
+<p><strong>Cast_001_Sprite_.java</strong></p>
+
+<pre><code>import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+
+import javax.microedition.khronos.opengles.GL10;
+
+import net.obviam.droidz.R;
+import net.obviam.droidz.model.components.ESpriteDirection;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.opengl.GLUtils;
+import android.util.Log;
+
+public class Cast_001_Sprite_ {
+
+    private static final String LOG_TAG = Cast_001_Sprite.class.getSimpleName();
+
+    /** Sprite sheet definition */
+    private static final int SPRITE_WIDTH = 5;
+    private static final int SPRITE_HEIGHT = 4;
+    private int DRAW_SOURCE = R.drawable.a1;
+
+    private int mX = Location._1[0]; // 100;
+    private int mY = Location._1[1]; // 100;
+
+
+    private float mScreenWidth, mScreenHeight, wRatio, hRatio;
+    private int mFrame = 0;
+    private int mSwitcher = 0;
+    private final static int TEXTURE_COUNT = 1; // for sprite sheet we use 1 image all the time.
+    private int[] textures = new int[TEXTURE_COUNT]; // frame animation
+
+    protected FloatBuffer vertexBuffer;
+
+    private final static ESpriteDirection mDirection = ESpriteDirection.TOP_TO_DOWN_LEFT_TO_RIGHT;
+
+
+    public float x, y, initPos, finalPos, initSpeed, currentPos;
+
+    private ByteBuffer bb1;
+
+    private final static int TOTAL_IMAGE_COUNT_IN_SPRITE = SPRITE_WIDTH * SPRITE_HEIGHT;
+
+    private FloatBuffer[] floatBufferArray = new FloatBuffer[TOTAL_IMAGE_COUNT_IN_SPRITE];
+
+    private float xOffset = 1.0f/SPRITE_WIDTH;
+    private float yOffset = 1.0f/SPRITE_HEIGHT;
+
+
+    float[] vertices = new float[] {
+            -1.0f, -1.0f, 0.0f,
+            -1.0f, 1.0f, 0.0f,
+           1.0f,  -1.0f, 0.0f,
+            1.0f, 1.0f, 0.0f };
+
+
+    private float storage[][] = new float[TOTAL_IMAGE_COUNT_IN_SPRITE][];
+    private int[] sprite_X_Indexes = new int[SPRITE_WIDTH];//{1,2,3,4}; 
+    private int[] sprite_Y_Indexes = new int[SPRITE_HEIGHT];//{1,2,3,4};
+
+
+
+
+
+    public Cast_001_Sprite_(float screenWidth, float screenHeight){
+
+        generateSpriteIndexes();
+
+        updateScreenData(screenWidth, screenHeight);
+
+        int index = 0;
+
+        switch (mDirection) {
+        case TOP_TO_DOWN_LEFT_TO_RIGHT:
+
+            for(int row = 0; row&lt;SPRITE_HEIGHT; row++){
+                for(int column = 0; column&lt;SPRITE_WIDTH; column++){
+                    storage[index] = generateTextures(column, row);
+                    index++;
+                }
+            }
+            break;
+        case DOWN_TO_TOP_LEFT_TO_RIGHT:
+            //TODO
+            //          for(int row = spriteLength; row&gt;0; row--){
+            //              for(int column = 0; column&lt;spriteHeight; column++){
+            //                  storage[index] = generateTextures( row-1, column);
+            //                  index++;
+            //              }
+            //          }
+            break;
+
+        default:
+            break;
+        }       
+
+
+        // vertices buffer
+        bb1 = ByteBuffer.allocateDirect(vertices.length * 4);
+        bb1.order(ByteOrder.nativeOrder());
+        vertexBuffer = bb1.asFloatBuffer();
+        vertexBuffer.put(vertices);
+        vertexBuffer.position(0);
+
+        for(int i=0; i&lt;TOTAL_IMAGE_COUNT_IN_SPRITE; i++){
+            bb1 = ByteBuffer.allocateDirect(storage[i].length * 4);
+            bb1.order(ByteOrder.nativeOrder());
+            FloatBuffer textureBuffer = bb1.asFloatBuffer();
+            textureBuffer.put(storage[i]);
+            textureBuffer.position(0);
+
+            floatBufferArray[i] = textureBuffer;
+        }
+    }
+
+    private void generateSpriteIndexes() {      
+
+        for(int indexX = 0; indexX&lt;SPRITE_WIDTH; indexX++){
+            sprite_X_Indexes[indexX] = indexX+1;
+        }
+
+        for(int indexY = 0; indexY&lt;SPRITE_HEIGHT; indexY++){
+            sprite_Y_Indexes[indexY] = indexY+1;
+        }
+    }
+
+    public void updateScreenData(float screenWidth, float screenHeight){
+        // takes screen Height and Width
+        this.mScreenWidth = (screenWidth &gt; 0) ? screenWidth : 1f;
+        this.mScreenHeight = screenHeight;
+        wRatio = 10f/mScreenWidth;
+        hRatio = mScreenHeight/10f;
+        addExplosion(mX,mY);
+    }
+
+
+    public void addExplosion(float x, float y) {        
+        this.x = x;
+        this.y = y;
+        this.initPos = y;
+    }
+
+
+    /**
+     * Generates texture by location
+     * 
+     * @param texture - fill current texture
+     * @param placeX - image place in sprite scale X
+     * @param placeY - image place in sprite scale Y
+     * @return 
+     */
+    private float[] generateTextures(int placeX, int placeY) {
+
+        float texture[] = new float[8];
+
+        /*
+        V1 _____ V3 
+          |     |
+          |     |
+        V2|_____|V4 
+         */
+        //StringBuffer buff = new StringBuffer();
+
+        /** V1 */   
+        texture[0] = (placeX == 0)?0.0f : xOffset*sprite_X_Indexes[placeX-1];  
+        texture[1] = yOffset*sprite_Y_Indexes[placeY];
+
+        /** V2 */
+        texture[2] = (placeX == 0)?0.0f : xOffset*sprite_X_Indexes[placeX-1];
+        texture[3] = (placeY == 0)?0.0f : yOffset*sprite_Y_Indexes[placeY-1];
+
+        /** V3 */
+        texture[4] = xOffset*sprite_X_Indexes[placeX];
+        texture[5] = yOffset*sprite_Y_Indexes[placeY];
+
+        /** V4 */
+        texture[6] = xOffset*sprite_X_Indexes[placeX];
+        texture[7] = (placeY == 0)?0.0f : yOffset*sprite_Y_Indexes[placeY-1];
+
+
+        return texture;
+
+    }
+
+
+    private void update() {
+        if(mSwitcher == 1){
+            mFrame = ++mFrame % TOTAL_IMAGE_COUNT_IN_SPRITE;
+            mSwitcher = 0;
+            // Log.e(LOG_TAG, "DevQuestSpriteBase :: " + mFrame);   
+        }
+        else{
+            mSwitcher++; 
+        }   
+    }
+
+    public void reset(){
+        mFrame = 0;
+    }
+
+
+    public void loadTextures(GL10 gl, Context context) {
+        Log.e(LOG_TAG, "ExplosionSprite :: loadTextures");  
+
+        mFrame = 0;
+
+        InputStream is;
+        Bitmap bitmap;
+        is = context.getResources().openRawResource(DRAW_SOURCE);
+
+
+        bitmap = BitmapFactory.decodeStream(is);
+        try {
+            is.close();
+            is = null;
+        } catch (IOException e) {
+        }
+
+        gl.glGenTextures(TEXTURE_COUNT, textures, 0);
+
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, textures[0]);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, GL10.GL_LINEAR);
+        gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_LINEAR);
+        GLUtils.texImage2D(GL10.GL_TEXTURE_2D, 0, bitmap, 0);
+
+        bitmap.recycle(); 
+
+    }
+
+    public void draw(GL10 gl){
+//      if(mFrame == TOTAL_IMAGE_COUNT_IN_SPRITE - 1){
+//          return;
+//      }
+
+        gl.glPushMatrix();
+        try {
+            float transx =  + (wRatio * x);
+            float transy =  + (mScreenHeight*wRatio) - (wRatio * y) - 1/hRatio;
+
+            // Log.e(LOG_TAG, "transx: " + transx + "; transy: " + transy + "; sprite.x: "+  sprite.x + "; sprite.y: " + sprite.y);  
+
+            gl.glTranslatef(transx, transy, 0.0f);
+
+            //###########  draw ##############
+
+            gl.glBindTexture(GL10.GL_TEXTURE_2D, textures[0]);
+
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, GL10.GL_LINEAR);
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S, GL10.GL_CLAMP_TO_EDGE);
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T, GL10.GL_CLAMP_TO_EDGE);
+
+            gl.glTexCoordPointer(2, GL10.GL_FLOAT, 0, floatBufferArray[mFrame]);
+
+            update();
+
+            gl.glColor4f(1f, 1f, 1f, 0.2f);
+
+            gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);
+            gl.glEnableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+            gl.glVertexPointer(3, GL10.GL_FLOAT, 0, vertexBuffer);
+            gl.glDrawArrays(GL10.GL_TRIANGLE_STRIP, 0, vertices.length / 3);
+            gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);
+            gl.glDisableClientState(GL10.GL_TEXTURE_COORD_ARRAY);
+
+            //###############################
+
+        } catch (NullPointerException e) {
+        }
+        gl.glPopMatrix();           
+    }
+} 
+</code></pre>
+
+<p><strong>DevQuest1Activity.java</strong></p>
+
+<pre><code>public class DevQuest1Activity extends Activity {
+private DevQuestGLSurfaceView mGLView;
+
+@Override
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    requestWindowFeature(Window.FEATURE_NO_TITLE);
+    getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN);
+    mGLView = new DevQuestGLSurfaceView(this);
+    setContentView(mGLView);
+}
+
+@Override
+protected void onPause() {
+    super.onPause();
+    mGLView.onPause();
+}
+
+@Override
+protected void onResume() {
+    super.onResume();
+    mGLView.onResume();
+}
+}
+</code></pre>
+
+<p><strong>DevQuestGLRenderer.java</strong></p>
+
+<pre><code>public class DevQuestGLRenderer implements GLSurfaceView.Renderer {
+
+private static final String LOG_TAG = "Fess";//DevQuestGLRenderer.class.getSimpleName();
+
+private Context context;
+private float ratio;
+private int screenWidth, screenHeight;
+
+
+public Cast_001_Sprite Cast_001_Sprite;
+
+
+public DevQuestGLRenderer(Context context){
+    this.context = context;
+}
+
+@Override
+public void onSurfaceCreated(GL10 gl, EGLConfig confid) {
+    gl.glEnable(GL10.GL_TEXTURE_2D);
+    gl.glShadeModel(GL10.GL_SMOOTH);
+    gl.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    gl.glClearDepthf(1.0f);
+    gl.glHint(GL10.GL_PERSPECTIVE_CORRECTION_HINT, GL10.GL_NICEST);
+    gl.glEnable(GL10.GL_BLEND);
+    gl.glDisable(GL10.GL_DEPTH_TEST);
+    gl.glBlendFunc(GL10.GL_SRC_ALPHA, GL10.GL_ONE_MINUS_SRC_ALPHA);
+    gl.glTexEnvf(GL10.GL_TEXTURE_ENV, GL10.GL_TEXTURE_ENV_MODE, /*GL10.GL_REPLACE*/ GL10.GL_MODULATE);  
+
+
+}
+
+@Override
+public void onSurfaceChanged(GL10 gl, int width, int height) {
+
+    Log.e(LOG_TAG, "onSurfaceChanged"); 
+
+    // prevent 0 divise
+    if(height == 0) { height=1;}
+    screenWidth = width; screenHeight = height;
+    ratio = (float) width/height;
+    gl.glMatrixMode(GL10.GL_PROJECTION);
+    gl.glLoadIdentity();
+    gl.glOrthof(0, width, 0, height, -10f, 10f);
+    gl.glViewport(0, 0, screenWidth, screenHeight);
+
+    Cast_001_Sprite = new Cast_001_Sprite(width, height);
+
+    Cast_001_Sprite.loadTextures(gl, context);      
+}
+
+@Override
+public void onDrawFrame(GL10 gl) {
+
+    gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
+    gl.glMatrixMode(GL10.GL_MODELVIEW);
+    gl.glLoadIdentity();
+
+    gl.glPushMatrix();
+    gl.glScalef((screenWidth)/10, (screenHeight*ratio)/10, 1.0f);
+
+    Cast_001_Sprite.draw(gl);
+
+    gl.glPopMatrix();
+}   
+}
+</code></pre>
+
+<p><strong>DevQuestGLSurfaceView.java</strong></p>
+
+<pre><code> public class DevQuestGLSurfaceView extends GLSurfaceView {
+ private DevQuestGLRenderer mRenderer;
+
+  private int count = 0;
+
+  public DevQuestGLSurfaceView(Context context) {
+    super(context);
+    mRenderer = new DevQuestGLRenderer(context);
+    setRenderer(mRenderer);
+  }
+
+ @Override
+  public boolean onTouchEvent(MotionEvent event) {
+
+   return true;
+  }
+}
+</code></pre>
+
+<p><strong>ESpriteDirection.java</strong></p>
+
+<pre><code>public enum ESpriteDirection {
+ TOP_TO_DOWN_LEFT_TO_RIGHT,
+ DOWN_TO_TOP_LEFT_TO_RIGHT,
+ TOP_TO_DOWN_RIGHT_TO_LEFT,
+ DOWN_TO_TOP_RIGHT_TO_LEFT
+}
+</code></pre>
+
+<p>And this is an image I used:</p>
+
+<p><img src="http://i.stack.imgur.com/KU7K1.jpg" alt="enter image description here"> </p>

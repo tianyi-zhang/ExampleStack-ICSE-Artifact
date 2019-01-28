@@ -1,0 +1,221 @@
+<p>OK, my contribution to this. Ported to Java.</p>
+
+<ul>
+<li>I cannot win from 8-byte blocks without doing unsafe thing so I removed block calculation.</li>
+<li>I stay with ECMA polynom - ISO one looks too transparent as for me.</li>
+<li>Of course in final version I will move test code under JUnit.</li>
+</ul>
+
+<p>So here is code:</p>
+
+<pre><code>package com.test;
+
+import java.util.Arrays;
+
+/**
+ * CRC-64 implementation with ability to combine checksums calculated over different blocks of data.
+ **/
+public class CRC64 {
+
+    private final static long POLY = (long) 0xc96c5795d7870f42L; // ECMA-182
+
+    /* CRC64 calculation table. */
+    private final static long[] table;
+
+    /* Current CRC value. */
+    private long value;
+
+    static {
+        table = new long[256];
+
+        for (int n = 0; n &lt; 256; n++) {
+            long crc = n;
+            for (int k = 0; k &lt; 8; k++) {
+                if ((crc &amp; 1) == 1) {
+                    crc = (crc &gt;&gt;&gt; 1) ^ POLY;
+                } else {
+                    crc = (crc &gt;&gt;&gt; 1);
+                }
+            }
+            table[n] = crc;
+        }
+    }
+
+    public CRC64() {
+        this.value = 0;
+    }
+
+    public CRC64(long value) {
+        this.value = value;
+    }
+
+    public CRC64(byte [] b, int len) {
+        this.value = 0;
+        update(b, len);
+    }
+
+    /**
+     * Construct new CRC64 instance from byte array.
+     **/
+    public static CRC64 fromBytes(byte [] b) {
+        long l = 0;
+        for (int i = 0; i &lt; 4; i++) {
+            l &lt;&lt;= 8;
+            l ^= (long) b[i] &amp; 0xFF;
+        }
+        return new CRC64(l);
+    }
+
+    /**
+     * Get 8 byte representation of current CRC64 value.
+     **/
+    public byte[] getBytes() {
+        byte [] b = new byte[8];
+        for (int i = 0; i &lt; 8; i++) {
+            b[7 - i] = (byte) (this.value &gt;&gt;&gt; (i * 8));
+        }
+        return b;
+    }
+
+    /**
+     * Get long representation of current CRC64 value.
+     **/
+    public long getValue() {
+        return this.value;
+    }
+
+    /**
+     * Update CRC64 with new byte block.
+     **/
+    public void update(byte [] b, int len) {
+
+        int idx = 0;
+        this.value = ~this.value;
+        while (len &gt; 0) {
+            this.value = table[((int) (this.value ^ b[idx])) &amp; 0xff] ^ (this.value &gt;&gt;&gt; 8);
+            idx++;
+            len--;
+        }
+        this.value = ~this.value;
+    }
+
+    private static final int GF2_DIM = 64; /* dimension of GF(2) vectors (length of CRC) */
+
+    private static long gf2MatrixTimes(long [] mat, long vec)
+    {
+        long sum = 0;
+        int idx = 0;
+        while (vec != 0) {
+            if ((vec &amp; 1) == 1)
+                sum ^= mat[idx];
+            vec &gt;&gt;&gt;= 1;
+            idx++;
+        }
+        return sum;
+    }
+
+    private static void gf2MatrixSquare(long [] square, long [] mat)
+    {
+        for (int n = 0; n &lt; GF2_DIM; n++)
+            square[n] = gf2MatrixTimes(mat, mat[n]);
+    }
+
+    /*
+     * Return the CRC-64 of two sequential blocks, where summ1 is the CRC-64 of the
+     * first block, summ2 is the CRC-64 of the second block, and len2 is the length
+     * of the second block.
+     */
+    static public CRC64 combine(CRC64 summ1, CRC64 summ2, long len2)
+    {
+        // degenerate case.
+        if (len2 == 0)
+            return new CRC64(summ1.getValue());
+
+        int n;
+        long row;
+        long [] even = new long[GF2_DIM]; // even-power-of-two zeros operator
+        long [] odd  = new long[GF2_DIM];  // odd-power-of-two zeros operator
+
+        // put operator for one zero bit in odd
+        odd[0] = POLY;      // CRC-64 polynomial
+
+        row = 1;
+        for (n = 1; n &lt; GF2_DIM; n++) {
+            odd[n] = row;
+            row &lt;&lt;= 1;
+        }
+
+        // put operator for two zero bits in even
+        gf2MatrixSquare(even, odd);
+
+        // put operator for four zero bits in odd
+        gf2MatrixSquare(odd, even);
+
+        // apply len2 zeros to crc1 (first square will put the operator for one
+        // zero byte, eight zero bits, in even)
+        long crc1 = summ1.getValue();
+        long crc2 = summ2.getValue();
+        do {
+            // apply zeros operator for this bit of len2
+            gf2MatrixSquare(even, odd);
+            if ((len2 &amp; 1) == 1)
+                crc1 = gf2MatrixTimes(even, crc1);
+            len2 &gt;&gt;&gt;= 1;
+
+            // if no more bits set, then done
+            if (len2 == 0)
+                break;
+
+            // another iteration of the loop with odd and even swapped
+            gf2MatrixSquare(odd, even);
+            if ((len2 &amp; 1) == 1)
+                crc1 = gf2MatrixTimes(odd, crc1);
+            len2 &gt;&gt;&gt;= 1;
+
+            // if no more bits set, then done
+        } while (len2 != 0);
+
+        // return combined crc.
+        crc1 ^= crc2;
+        return new CRC64(crc1);
+    }
+
+    private static void test(byte [] b, int len, long crcValue) throws Exception {
+
+        /* Test CRC64 default calculation. */
+        CRC64 crc = new CRC64(b, len);
+        if (crc.getValue() != crcValue) {
+            throw new Exception("mismatch: " + String.format("%016x", crc.getValue())
+                + " should be " + String.format("%016x", crcValue));
+        }
+
+        /* test combine() */
+        CRC64 crc1 = new CRC64(b, (len + 1) &gt;&gt;&gt; 1);
+        CRC64 crc2 = new CRC64(Arrays.copyOfRange(b, (len + 1) &gt;&gt;&gt; 1, b.length), len &gt;&gt;&gt; 1);
+        crc = CRC64.combine(crc1, crc2, len &gt;&gt;&gt; 1);
+
+        if (crc.getValue() != crcValue) {
+            throw new Exception("mismatch: " + String.format("%016x", crc.getValue())
+                + " should be " + String.format("%016x", crcValue));
+        }
+    }
+
+    public static void main(String [] args) throws Exception {
+
+        final byte[] TEST1 = "123456789".getBytes();
+        final int    TESTLEN1 = 9;
+        final long   TESTCRC1 = 0x995dc9bbdf1939faL; // ECMA.
+        test(TEST1, TESTLEN1, TESTCRC1);
+
+        final byte[] TEST2 = "This is a test of the emergency broadcast system.".getBytes();
+        final int    TESTLEN2 = 49;
+        final long   TESTCRC2 = 0x27db187fc15bbc72L; // ECMA.
+        test(TEST2, TESTLEN2, TESTCRC2);
+
+        final byte[] TEST3 = "IHATEMATH".getBytes();
+        final int    TESTLEN3 = 9;
+        final long   TESTCRC3 = 0x3920e0f66b6ee0c8L; // ECMA.
+        test(TEST3, TESTLEN3, TESTCRC3);
+    }
+}
+</code></pre>

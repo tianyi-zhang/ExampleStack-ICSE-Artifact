@@ -1,0 +1,126 @@
+<p>You can achieve this using a third party jar scribe.jar.
+Call webview intent for authorization as follows.</p>
+
+<pre><code>OAuthService service = new ServiceBuilder()
+        .provider(LinkedInApi.class).apiKey(Constants.CONSUMER_KEY)
+        .apiSecret(Constants.CONSUMER_SECRET)
+        .callback(Constants.OAUTH_CALLBACK_URL).build();
+ Token liToken = oAuthService
+                .getRequestToken();
+
+        String url = oAuthService
+                .getAuthorizationUrl(PrepareRequestLinkedinTokenActivity.liToken);
+        Log.i(TAG, "Popping a browser with the authorize URL : " + url);
+        // Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(liToken
+        // .getAuthorizationUrl()));
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
+        context.startActivity(intent);
+</code></pre>
+
+<p>On authorizing, you will be redirected to your activity. Retrieve the access token in your activity as follows.</p>
+
+<pre><code>@Override
+public void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    SharedPreferences prefs = PreferenceManager
+            .getDefaultSharedPreferences(this);
+    final Uri uri = intent.getData();
+    if (uri != null
+            &amp;&amp; uri.getScheme().equals(Constants.OAUTH_CALLBACK_SCHEME)) {
+        Log.i(TAG, "Callback received : " + uri);
+        Log.i(TAG, "Retrieving Access Token");
+        new RetrieveAccessTokenTask(this, prefs).execute(uri);
+        finish();
+    }
+}
+
+public class RetrieveAccessTokenTask extends AsyncTask&lt;Uri, Void, Void&gt; {
+
+    private SharedPreferences prefs;
+
+    public RetrieveAccessTokenTask(Context context, SharedPreferences prefs) {
+
+        this.prefs = prefs;
+    }
+
+    /**
+     * Retrieve the oauth_verifier, and store the oauth and
+     * oauth_token_secret for future API calls.
+     */
+    @Override
+    protected Void doInBackground(Uri... params) {
+        final Uri uri = params[0];
+        final Verifier verifier = new Verifier(
+                uri.getQueryParameter("oauth_verifier"));
+
+        try {
+            accessToken = service.getAccessToken(liToken, verifier);
+
+            final Editor edit = prefs.edit();
+            edit.putString(Constants.LINKEDIN_TOKEN, accessToken.getToken());
+            edit.putString(Constants.LINKEDIN_TOKEN_SECRET,
+                    accessToken.getSecret());
+            edit.commit();
+
+            Log.i(TAG, "OAuth - Access Token Retrieved");
+
+        } catch (Exception e) {
+            Log.e(TAG, "OAuth - Access Token Retrieval Error", e);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected void onPostExecute(Void result) {
+
+        super.onPostExecute(result);
+        executeAfterAccessTokenRetrieval(accessToken);
+    }
+</code></pre>
+
+<p>Using the access token you can make network updates to linkedin as follows.</p>
+
+<pre><code>private void postToLinkedin(String comment) {
+
+    SharedPreferences prefs = PreferenceManager
+            .getDefaultSharedPreferences(LinkedinDialogActivity.this);
+    String token = prefs.getString(Constants.LINKEDIN_TOKEN, "");
+    String secret = prefs.getString(Constants.LINKEDIN_TOKEN_SECRET, "");
+
+    Token accessToken = new Token(token, secret);
+
+    OAuthService service = new ServiceBuilder().provider(LinkedInApi.class)
+            .apiKey(Constants.CONSUMER_KEY)
+            .apiSecret(Constants.CONSUMER_SECRET)
+            .callback(Constants.OAUTH_CALLBACK_URL).build();
+
+    String url = "http://api.linkedin.com/v1/people/~/shares";
+    OAuthRequest request = new OAuthRequest(Verb.POST, url);
+    String payLoad = "&lt;?xml version='1.0' encoding='UTF-8'?&gt;&lt;share&gt;&lt;comment&gt;Check out the Sep 13 Second share!&lt;/comment&gt;&lt;content&gt;&lt;title&gt;My new share with linked-in&lt;/title&gt;&lt;description&gt;Leverage the Share API to maximize engagement on user-generated content on LinkedIn&lt;/description&gt;&lt;submitted-url&gt;https://developer.linkedin.com/documents/share-api&lt;/submitted-url&gt;&lt;submitted-image-url&gt;http://m3.licdn.com/media/p/3/000/124/1a6/089a29a.png&lt;/submitted-image-url&gt;&lt;/content&gt;&lt;visibility&gt;&lt;code&gt;anyone&lt;/code&gt;&lt;/visibility&gt;&lt;/share&gt;";
+    request.addHeader("Content-Length", Integer.toString(payLoad.length()));
+    request.addHeader("Content-Type", "text/xml");
+    request.addPayload(payLoad);
+    service.signRequest(accessToken, request);
+    Response response = request.send();
+    System.out.println("response &gt;&gt;&gt;&gt; " + response.getBody());
+
+}
+</code></pre>
+
+<p>The activity should be declared in manifest file as follows.</p>
+
+<pre><code>&lt;activity android:name=".PrepareRequestLinkedinTokenActivity"
+        android:launchMode="singleTask" android:theme="@android:style/Theme.Translucent.NoTitleBar"&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.intent.action.VIEW" /&gt;
+
+            &lt;category android:name="android.intent.category.DEFAULT" /&gt;
+            &lt;category android:name="android.intent.category.BROWSABLE" /&gt;
+
+            &lt;data android:host="callback" android:scheme="x-oauthflow-linkedin" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/activity&gt;
+</code></pre>

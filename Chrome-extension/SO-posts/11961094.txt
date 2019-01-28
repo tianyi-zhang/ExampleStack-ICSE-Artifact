@@ -1,0 +1,89 @@
+<p>Looking for the same answer I came up with an idea to wrap ResponseBody object with a view. </p>
+
+<p>Piece of controller class:</p>
+
+<pre><code>@RequestMapping(value="/{id}", headers="Accept=application/json", method= RequestMethod.GET)
+     public  @ResponseBody ResponseBodyWrapper getCompany(HttpServletResponse response, @PathVariable Long id){
+        ResponseBodyWrapper responseBody =  new ResponseBodyWrapper(companyService.get(id),Views.Owner.class);
+        return responseBody;
+     }
+</code></pre>
+
+<hr>
+
+<pre><code>public class ResponseBodyWrapper {
+private Object object;
+private Class&lt;?&gt; view;
+
+public ResponseBodyWrapper(Object object, Class&lt;?&gt; view) {
+    this.object = object;
+    this.view = view;
+}
+
+public Object getObject() {
+    return object;
+}
+public void setObject(Object object) {
+    this.object = object;
+}
+@JsonIgnore
+public Class&lt;?&gt; getView() {
+    return view;
+}
+@JsonIgnore
+public void setView(Class&lt;?&gt; view) {
+    this.view = view;
+}
+</code></pre>
+
+<p>}</p>
+
+<hr>
+
+<p>Then I override <code>writeInternal</code> method form <code>MappingJackson2HttpMessageConverter</code> to check if object to serialize is instanceof wrapper, if so I serialize object with required view.</p>
+
+<pre><code>public class CustomMappingJackson2 extends MappingJackson2HttpMessageConverter {
+
+private ObjectMapper objectMapper = new ObjectMapper();
+private boolean prefixJson;
+
+@Override
+protected void writeInternal(Object object, HttpOutputMessage outputMessage)
+        throws IOException, HttpMessageNotWritableException {
+
+    JsonEncoding encoding = getJsonEncoding(outputMessage.getHeaders().getContentType());
+    JsonGenerator jsonGenerator =
+            this.objectMapper.getJsonFactory().createJsonGenerator(outputMessage.getBody(), encoding);
+    try {
+        if (this.prefixJson) {
+            jsonGenerator.writeRaw("{} &amp;&amp; ");
+        }
+        if(object instanceof ResponseBodyWrapper){
+            ResponseBodyWrapper responseBody = (ResponseBodyWrapper) object;
+            this.objectMapper.writerWithView(responseBody.getView()).writeValue(jsonGenerator, responseBody.getObject());
+        }else{
+            this.objectMapper.writeValue(jsonGenerator, object);
+        }
+    }
+    catch (IOException ex) {
+        throw new HttpMessageNotWritableException("Could not write JSON: " + ex.getMessage(), ex);
+    }
+}
+
+public void setObjectMapper(ObjectMapper objectMapper) {
+    Assert.notNull(objectMapper, "ObjectMapper must not be null");
+    this.objectMapper = objectMapper;
+    super.setObjectMapper(objectMapper);
+}
+
+public ObjectMapper getObjectMapper() {
+    return this.objectMapper;
+}
+
+public void setPrefixJson(boolean prefixJson) {
+    this.prefixJson = prefixJson;
+    super.setPrefixJson(prefixJson);
+}
+</code></pre>
+
+<p>}</p>

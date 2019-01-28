@@ -1,0 +1,162 @@
+<blockquote>
+  <p>listBox in class BasicComboBoxUI but how do I get there?</p>
+</blockquote>
+
+<p>The listBox(<code>JList</code>?) is possible to get from the <code>BasicComboPopup</code>:</p>
+
+<pre><code>Accessible a = getAccessibleContext().getAccessibleChild(0);
+if (a instanceof BasicComboPopup) {
+  BasicComboPopup pop = (BasicComboPopup) a;
+  int index = pop.getList().getSelectedIndex();
+  //...
+}
+</code></pre>
+
+<p>
+<strong>ComboCheckBoxTest.java</strong></p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import java.util.*;
+import java.util.List;
+import java.util.stream.Collectors;
+import javax.accessibility.*;
+import javax.swing.*;
+import javax.swing.plaf.basic.*;
+
+public class ComboCheckBoxTest {
+  public JComponent makeUI() {
+    CheckableItem[] m = {
+      new CheckableItem("bum",   false),
+      new CheckableItem("kabum", false),
+      new CheckableItem("dabum", false)
+    };
+    JPanel p = new JPanel();
+    p.add(new JComboCheckBox&lt;CheckableItem&gt;(m));
+    return p;
+  }
+  public static void main(String[] args) {
+    EventQueue.invokeLater(() -&gt; {
+      JFrame f = new JFrame("Type the name of frame");
+      f.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+      f.getContentPane().add(new ComboCheckBoxTest().makeUI());
+      f.setSize(320, 240);
+      f.setLocationRelativeTo(null);
+      f.setVisible(true);
+    });
+  }
+}
+
+class CheckableItem {
+  public final String text;
+  public boolean selected;
+  protected CheckableItem(String text, boolean selected) {
+    this.text = text;
+    this.selected = selected;
+  }
+  @Override public String toString() {
+    return text;
+  }
+}
+
+class CheckBoxCellRenderer&lt;E extends CheckableItem&gt; implements ListCellRenderer&lt;E&gt; {
+  private final JLabel label = new JLabel(" ");
+  private final JCheckBox check = new JCheckBox(" ");
+  @Override public Component getListCellRendererComponent(
+      JList list, CheckableItem value, int index,
+      boolean isSelected, boolean cellHasFocus) {
+    ListModel model = list.getModel();
+    if (index &lt; 0) {
+      label.setText(getDataStringRepresentation(model));
+      return label;
+    } else {
+      check.setText(Objects.toString(value, "null"));
+      check.setSelected(value.selected);
+      if (isSelected) {
+        check.setBackground(list.getSelectionBackground());
+        check.setForeground(list.getSelectionForeground());
+      } else {
+        check.setBackground(list.getBackground());
+        check.setForeground(list.getForeground());
+      }
+      return check;
+    }
+  }
+  private String getDataStringRepresentation(ListModel model) {
+    List&lt;String&gt; sl = new ArrayList&lt;&gt;();
+    for (int i = 0; i &lt; model.getSize(); i++) {
+      Object o = model.getElementAt(i);
+      if (o instanceof CheckableItem &amp;&amp; ((CheckableItem) o).selected) {
+        sl.add(o.toString());
+      }
+    }
+    return sl.stream().sorted().collect(Collectors.joining(", "));
+  }
+}
+
+class JComboCheckBox&lt;E extends CheckableItem&gt; extends JComboBox&lt;E&gt; {
+  private boolean shouldntClose;
+  private transient ActionListener listener;
+
+  public JComboCheckBox() {
+    super();
+  }
+
+  public JComboCheckBox(E[] m) {
+    super(m);
+  }
+
+  @Override public Dimension getPreferredSize() {
+    return new Dimension(200, 20);
+  }
+
+  @Override public void updateUI() {
+    setRenderer(null);
+    removeActionListener(listener);
+    super.updateUI();
+    listener = e -&gt; {
+      if (e.getModifiers() == InputEvent.BUTTON1_MASK) {
+        System.out.println("LPM MASK: " + getSelectedIndex());
+        updateItem(getSelectedIndex());
+        shouldntClose = true;
+      }
+    };
+    setRenderer(new CheckBoxCellRenderer&lt;CheckableItem&gt;());
+    addActionListener(listener);
+    getInputMap(JComponent.WHEN_FOCUSED).put(
+        KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "space-key-select");
+    getActionMap().put("space-key-select", new AbstractAction() {
+      @Override public void actionPerformed(ActionEvent e) {
+        System.out.println("JComboBox#getSelectedIndex()" + getSelectedIndex());
+        Accessible a = getAccessibleContext().getAccessibleChild(0);
+        if (a instanceof BasicComboPopup) {
+          BasicComboPopup pop = (BasicComboPopup) a;
+          int i = pop.getList().getSelectedIndex();
+          System.out.println("JList#getSelectedIndex() " + i);
+          updateItem(i);
+        }
+      }
+    });
+  }
+
+  private void updateItem(int index) {
+    if (isPopupVisible()) {
+      E item = getItemAt(index);
+      item.selected ^= true;
+      removeItemAt(index);
+      insertItemAt(item, index);
+      setSelectedItem(item);
+    }
+  }
+
+  @Override
+  public void setPopupVisible(boolean v) {
+    if (shouldntClose) {
+      shouldntClose = false;
+      return;
+    } else {
+      super.setPopupVisible(v);
+    }
+  }
+}
+</code></pre>

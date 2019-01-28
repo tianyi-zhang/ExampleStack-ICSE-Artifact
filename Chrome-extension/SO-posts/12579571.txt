@@ -1,0 +1,175 @@
+<p>Below is the code is use to show roads on a mapview, this might not work 100% for you as you might have to tweak to your own code, but feel free to ask questions.</p>
+
+<p>In your activity:</p>
+
+<pre><code>public class NavigationTask extends AsyncTask&lt;Void, Void, Void&gt; {
+    Road mRoad;
+    String startname = "", destname ="";
+    @Override
+    protected Void doInBackground(Void... params) {
+        String url = getUrl(Double.parseDouble(driveobj.get("startLocationLat")), Double.parseDouble(driveobj.get("startLocationLon")), Double.parseDouble(driveobj.get("endLocationLat")), Double.parseDouble(driveobj.get("endLocationLon")));
+        String json = Internet.request(url, null);
+        mRoad = RoadProvider.getRoute(json);
+
+
+
+        return null;
+    }
+
+    @Override
+    protected void onPostExecute(Void result) {
+        //from.setText(startname);
+        //to.setText(destname);
+
+        MapOverlay mapOverlay = new MapOverlay(mRoad, mapview);
+        List&lt;Overlay&gt; listOfOverlays = mapview.getOverlays();
+        listOfOverlays.add(mapOverlay);
+        mapview.invalidate();
+        super.onPostExecute(result);
+    }
+
+}
+
+public String getUrl(double fromLat, double fromLon, double toLat, double toLon) {
+    StringBuffer urlString = new StringBuffer();
+    urlString.append("http://maps.googleapis.com/maps/api/directions/json?origin=");
+    urlString.append(Double.toString(fromLat));
+    urlString.append(",");
+    urlString.append(Double.toString(fromLon));
+    urlString.append("&amp;destination=");// to
+    urlString.append(Double.toString(toLat));
+    urlString.append(",");
+    urlString.append(Double.toString(toLon));
+    urlString.append("&amp;sensor=true");
+    return urlString.toString();
+}
+</code></pre>
+
+<p>MapOverlay Class</p>
+
+<pre><code>class MapOverlay extends com.google.android.maps.Overlay {
+    Road mRoad;
+    ArrayList&lt;GeoPoint&gt; mPoints = new ArrayList&lt;GeoPoint&gt;();;
+
+    public MapOverlay(Road road, MapView mv) {
+        mRoad = road;
+        if (road.points.size() &gt; 0) {
+            mPoints.addAll(road.points);
+            showMarkers(mPoints);
+            int moveToLat = (mPoints.get(0).getLatitudeE6() + (mPoints.get(mPoints.size() - 1).getLatitudeE6() - mPoints.get(0).getLatitudeE6()) / 2);
+            int moveToLong = (mPoints.get(0).getLongitudeE6() + (mPoints.get(mPoints.size() - 1).getLongitudeE6() - mPoints.get(0).getLongitudeE6()) / 2);
+            GeoPoint moveTo = new GeoPoint(moveToLat, moveToLong);
+
+            int minLatitude = Integer.MAX_VALUE;
+            int maxLatitude = Integer.MIN_VALUE;
+            int minLongitude = Integer.MAX_VALUE;
+            int maxLongitude = Integer.MIN_VALUE;
+            for (GeoPoint p : mPoints) {
+                int lati = p.getLatitudeE6();
+                int lon = p.getLongitudeE6();
+
+                maxLatitude = Math.max(lati, maxLatitude);
+                minLatitude = Math.min(lati, minLatitude);
+                maxLongitude = Math.max(lon, maxLongitude);
+                minLongitude = Math.min(lon, minLongitude);
+            }
+
+            MapController mapController = mv.getController();
+            mapController.zoomToSpan(Math.abs(maxLatitude - minLatitude), Math.abs(maxLongitude - minLongitude));
+        }
+    }
+
+    @Override
+    public boolean draw(Canvas canvas, MapView mv, boolean shadow, long when) {
+        super.draw(canvas, mv, shadow);
+        drawPath(mv, canvas);
+        return true;
+    }
+
+    public void drawPath(MapView mv, Canvas canvas) {
+        int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+        Paint paint = new Paint();
+        paint.setColor(LO.titleBackgroundColor+0xDE000000);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3);
+        for (int i = 0; i &lt; mPoints.size(); i++) {
+            Point point = new Point();
+            mv.getProjection().toPixels(mPoints.get(i), point);
+            x2 = point.x;
+            y2 = point.y;
+            if (i &gt; 0) {
+                canvas.drawLine(x1, y1, x2, y2, paint);
+            }
+            x1 = x2;
+            y1 = y2;
+        }
+    }
+}
+</code></pre>
+
+<p>MarkerOverLay Class:</p>
+
+<pre><code>class MarkerOverlay extends ItemizedOverlay&lt;OverlayItem&gt; {
+    private ArrayList&lt;OverlayItem&gt; overlays = new ArrayList&lt;OverlayItem&gt;();
+
+    public MarkerOverlay(Drawable defaultMarker) {
+        super(boundCenterBottom(defaultMarker));
+    }
+
+    public void addOverlay(OverlayItem overlay) {
+        overlays.add(overlay);
+        populate();
+    }
+
+    @Override
+    protected OverlayItem createItem(int i) {
+        return overlays.get(i);
+    }
+
+    @Override
+    public int size() {
+        return overlays.size();
+    }
+
+}
+</code></pre>
+
+<p>RoadProvider class:</p>
+
+<pre><code>public class RoadProvider {
+
+public static Road getRoute(String json) {
+    Road road = new Road();
+    try {
+        JSONObject route = new JSONObject(json);
+        JSONArray routes = route.getJSONArray("routes");
+        JSONArray legs = routes.getJSONObject(0).getJSONArray("legs");
+        JSONArray steps = legs.getJSONObject(0).getJSONArray("steps");
+        for(int i = 0, len = steps.length(); i &lt; len; i++) {
+            JSONObject step = steps.getJSONObject(i);
+            if(i == 0) {
+                if(step.has("start_location")) {
+                    JSONObject start = step.getJSONObject("start_location");
+                    double lon = Double.parseDouble(start.getString("lng"));
+                    double lat = Double.parseDouble(start.getString("lat"));
+                    GeoPoint point = new GeoPoint((int)(lat * 1E6), (int)(lon * 1E6));
+                    road.add(point);
+                }
+            }
+            if(step.has("end_location")) {
+                JSONObject start = step.getJSONObject("end_location");
+                double lon = Double.parseDouble(start.getString("lng"));
+                double lat = Double.parseDouble(start.getString("lat"));
+                GeoPoint point = new GeoPoint((int)(lat * 1E6), (int)(lon * 1E6));
+                road.add(point);
+            }
+
+        }
+    } catch (Exception e) {
+        e.fillInStackTrace();
+        return null;
+    }
+    return road;
+}
+}
+</code></pre>

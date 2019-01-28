@@ -1,0 +1,74 @@
+<p><strong>Using inputStream.available()</strong></p>
+
+<blockquote>
+  <p><em>It is always acceptable for System.in.available() to return 0.</em></p>
+</blockquote>
+
+<p>I've found the opposite - it always returns the best value for the number of bytes available.  Javadoc for <code>InputStream.available()</code>:</p>
+
+<pre><code>Returns an estimate of the number of bytes that can be read (or skipped over) 
+from this input stream without blocking by the next invocation of a method for 
+this input stream.
+</code></pre>
+
+<p>An estimate is unavoidable due to timing/staleness.  The figure can be a one-off underestimate because new data are constantly arriving.  However it always "catches up" on the next call - it should account for all arrived data, bar that arriving just at the moment of the new call.  Permanently returning 0 when there are data fails the condition above.</p>
+
+<p><strong>First Caveat: Concrete subclasses of InputStream are responsible for available()</strong></p>
+
+<p><code>InputStream</code> is an abstract class.  It has no data source.  It's meaningless for it to have available data.  Hence, javadoc for <code>available()</code> also states:</p>
+
+<pre><code>The available method for class InputStream always returns 0.
+
+This method should be overridden by subclasses.
+</code></pre>
+
+<p>And indeed, the concrete input stream classes do override available(), providing meaningful values, not constant 0s.</p>
+
+<p><strong>Second Caveat: Ensure you use carriage-return when typing input in Windows.</strong></p>
+
+<p>If using <code>System.in</code>, your program only receives input when your command shell hands it over.  If you're using file redirection/pipes (e.g. somefile > java myJavaApp or somecommand | java myJavaApp ), then input data are usually handed over immediately.  However, if you manually type input, then data handover can be delayed.  E.g. With windows cmd.exe shell, the data are buffered within cmd.exe shell.  Data are only passed to the executing java program following carriage-return (control-m or <code>&lt;enter&gt;</code>).  That's a limitation of the execution environment.  Of course, InputStream.available() will return 0 for as long as the shell buffers the data - that's correct behaviour; there are no available data at that point.  As soon as the data are available from the shell, the method returns a value > 0.  NB: Cygwin uses cmd.exe too.</p>
+
+<h2>Simplest solution (no blocking, so no timeout required)</h2>
+
+<p>Just use this:</p>
+
+<pre><code>    byte[] inputData = new byte[1024];
+    int result = is.read(inputData, 0, is.available());  
+    // result will indicate number of bytes read; -1 for EOF with no data read.
+</code></pre>
+
+<p>OR equivalently,</p>
+
+<pre><code>    BufferedReader br = new BufferedReader(new InputStreamReader(System.in, Charset.forName("ISO-8859-1")),1024);
+    // ...
+         // inside some iteration / processing logic:
+         if (br.ready()) {
+             int readCount = br.read(inputData, bufferOffset, inputData.length-bufferOffset);
+         }
+</code></pre>
+
+<h2>Richer Solution (maximally fills buffer within timeout period)</h2>
+
+<p>Declare this:</p>
+
+<pre><code>public static int readInputStreamWithTimeout(InputStream is, byte[] b, int timeoutMillis)
+     throws IOException  {
+     int bufferOffset = 0;
+     long maxTimeMillis = System.currentTimeMillis() + timeoutMillis;
+     while (System.currentTimeMillis() &lt; maxTimeMillis &amp;&amp; bufferOffset &lt; b.length) {
+         int readLength = java.lang.Math.min(is.available(),b.length-bufferOffset);
+         // can alternatively use bufferedReader, guarded by isReady():
+         int readResult = is.read(b, bufferOffset, readLength);
+         if (readResult == -1) break;
+         bufferOffset += readResult;
+     }
+     return bufferOffset;
+ }
+</code></pre>
+
+<p>Then use this:</p>
+
+<pre><code>    byte[] inputData = new byte[1024];
+    int readCount = readInputStreamWithTimeout(System.in, inputData, 6000);  // 6 second timeout
+    // readCount will indicate number of bytes read; -1 for EOF with no data read.
+</code></pre>

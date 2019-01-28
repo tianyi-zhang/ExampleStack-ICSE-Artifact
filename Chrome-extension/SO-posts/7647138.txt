@@ -1,0 +1,266 @@
+<p>For such case i use my own implementation of Map interface:</p>
+
+<pre><code>/*
+* Providers easily work with maps of lists
+* */
+public interface ManyValuedMap&lt;K, V&gt; extends Cloneable, Map&lt;K, List&lt;V&gt;&gt;, Serializable{
+
+    public List&lt;V&gt; put(K key, V... values);
+    public void clear(K key);
+    public ManyValuedMap&lt;K, V&gt; clone();
+    public void sort(Comparator&lt;? super V&gt; c);
+    public List&lt;V&gt; getAllValues();
+    public Collection&lt;List&lt;V&gt;&gt; values(Comparator&lt;? super K&gt; c);
+    public void lock();
+    public Map&lt;K, List&lt;V&gt;&gt; toMap();
+
+}
+</code></pre>
+
+<p>And implementation:</p>
+
+<pre><code>/**
+ * in ManyValuedMap can be stored lists of elements identificated by some key
+ * */
+public class ManyValuedHashMap&lt;K, V&gt; implements ManyValuedMap&lt;K, V&gt;, Serializable {
+
+    //linked hash map guarantees right key order
+    private Map&lt;K, List&lt;V&gt;&gt; map = new LinkedHashMap&lt;K, List&lt;V&gt;&gt;();
+    private boolean isNeedToCheckUniqueness;
+    private boolean lock = false;
+
+    /**
+     * @param needToCheckUniqueness if true then every time when element added uniqueness will be checked
+     * */
+    public ManyValuedHashMap(boolean needToCheckUniqueness) {
+        isNeedToCheckUniqueness = needToCheckUniqueness;
+    }
+
+    public ManyValuedHashMap() {
+        this(false);
+    }
+
+    public ManyValuedHashMap&lt;K, V&gt; put2 (K key, List&lt;V&gt; newValues ) {
+        put(key, newValues);
+        return this;
+    }
+
+    public List&lt;V&gt; put ( K key, List&lt;V&gt; newValues ) {
+        if ( newValues == null ) {
+            return put(key, (V)null);
+        } else if ( newValues.isEmpty() ) {
+            return put(key, (V)null);
+        } else {
+            //noinspection unchecked
+            return put(key, (V[])newValues.toArray() );
+        }
+    }
+
+    public List&lt;V&gt; put(K key, V... newValues) {
+        checkLock();
+        List&lt;V&gt; curValues = null;
+        if (newValues != null &amp;&amp; key != null) {
+            curValues = this.map.get(key);
+
+            if (curValues == null) {
+                //new values  - add
+                curValues = new ArrayList&lt;V&gt;();
+                curValues.addAll(Arrays.asList(newValues));
+                this.map.put(key, curValues);
+            } else {
+                // for this key values were added
+                if (isNeedToCheckUniqueness) {
+                    //if is need to check uniqueness - check
+                    Integer index;
+                    for (V newValue : newValues) {
+                        index = null;
+                        for (int i = 0; i &lt; curValues.size(); i++) {
+                            if (curValues.get(i).equals(newValue)) {
+                                index = i;
+                                break;
+                            }
+                        }
+                        if (index == null) {
+                            curValues.add(newValue);
+                        } /*else {
+                            //no need to add
+                            //this value is already stored in map
+                        }*/
+                    }
+                } else {
+                    //otherwise add
+                    curValues.addAll(Arrays.asList(newValues));
+                }
+            }
+        } else if (key != null) {
+            curValues = this.map.get(key);
+
+            if (curValues == null) {
+                curValues = new ArrayList&lt;V&gt;();
+                this.map.put(key, curValues);
+            }
+        }
+
+        return curValues;
+    }
+
+    public boolean containsValue(Object value) {
+        boolean result = false;
+        for (List&lt;V&gt; values : this.map.values()) {
+            for (V v : values) {
+                if (v.equals(value)) {
+                    result = true;
+                    break;
+                }
+            }
+            if (result) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    public List&lt;V&gt; get(Object key) {
+        return this.map.get(key);
+    }
+
+    public boolean containsKey(Object key) {
+        return this.map.containsKey(key);
+    }
+
+    public boolean isEmpty() {
+        return this.map.isEmpty();
+    }
+
+    public int size() {
+        int size = 0;
+        for (List&lt;V&gt; vs : map.values()) {
+            size += vs.size();
+        }
+        return size;
+    }
+
+    public List&lt;V&gt; remove(Object key) {
+        checkLock();
+        return this.map.remove(key);
+    }
+
+    @Override
+    public void putAll(Map&lt;? extends K, ? extends List&lt;V&gt;&gt; m) {
+        checkLock();
+        this.map.putAll(m);
+    }
+
+    public void clear() {
+        checkLock();
+        this.map.clear();
+    }
+
+    @Override
+    public void clear(K key) {
+        checkLock();
+        List&lt;V&gt; curValues = this.map.get(key);
+        if ( curValues != null ) {
+            curValues.clear();
+        }
+    }
+
+    public Set&lt;K&gt; keySet() {
+        return this.map.keySet();
+    }
+
+    public Collection&lt;List&lt;V&gt;&gt; values() {
+        return this.map.values();
+    }
+
+    public Set&lt;Map.Entry&lt;K, List&lt;V&gt;&gt;&gt; entrySet() {
+        return this.map.entrySet();
+    }
+
+    public Map&lt;K, List&lt;V&gt;&gt; toMap() {
+        return new HashMap&lt;K, List&lt;V&gt;&gt;(map);
+    }
+
+    @Override
+    public ManyValuedHashMap&lt;K, V&gt; clone() {
+        ManyValuedHashMap&lt;K, V&gt; clone = null;
+        try {
+            //noinspection unchecked
+            clone = (ManyValuedHashMap&lt;K, V&gt;)super.clone();
+            //IMPORTANT: NOT DEEP CLONE
+            //noinspection unchecked
+            clone.map = new LinkedHashMap&lt;K, List&lt;V&gt;&gt;();
+            clone.map.putAll(this.map);
+        } catch (CloneNotSupportedException e) {
+            Logger.getLogger(this.getClass()).error(e.getMessage(), e);
+        }
+        return clone;
+    }
+
+    @Override
+    public void sort(Comparator&lt;? super V&gt; c) {
+        for (List&lt;V&gt; list : map.values()) {
+            Collections.sort(list, c);
+        }
+    }
+
+    @Override
+    public List&lt;V&gt; getAllValues() {
+        final List&lt;V&gt; result = new ArrayList&lt;V&gt;();
+        for (List&lt;V&gt; list : map.values()) {
+            result.addAll(list);
+        }
+        return result;
+    }
+
+    public Collection&lt;List&lt;V&gt;&gt; values(Comparator&lt;? super K&gt; c) {
+        List&lt;Map.Entry&lt;K, List&lt;V&gt;&gt;&gt; entries = new ArrayList&lt;Map.Entry&lt;K, List&lt;V&gt;&gt;&gt;(entrySet());
+
+        Collections.sort(entries, new EntryComparator(c));
+
+        Collection&lt;List&lt;V&gt;&gt; result = new ArrayList&lt;List&lt;V&gt;&gt;();
+
+        for (Map.Entry&lt;K, List&lt;V&gt;&gt; entry : entries) {
+            result.add(entry.getValue());
+        }
+
+        return result;
+    }
+
+    private class EntryComparator implements Comparator&lt;Map.Entry&lt;K, List&lt;V&gt;&gt;&gt;{
+
+        private Comparator&lt;? super K&gt; keyComparator = null;
+
+        private EntryComparator(Comparator&lt;? super K&gt; keyComparator) {
+            this.keyComparator = keyComparator;
+        }
+
+        @Override
+        public int compare(Map.Entry&lt;K, List&lt;V&gt;&gt; o1, Map.Entry&lt;K, List&lt;V&gt;&gt; o2) {
+            return keyComparator.compare(o1.getKey(), o2.getKey());
+        }
+    }
+
+    @Override
+    public void lock() {
+        this.lock = true;
+    }
+
+    private void checkLock () {
+        if ( this.lock ) {
+            throw new UnsupportedOperationException();
+        }
+    }
+}
+</code></pre>
+
+<p>The behavior is next:</p>
+
+<ol>
+<li>List item</li>
+<li>If you try to add value with key not presented in map then new List element will be created and stored in map with specified key (value will be added to the list of course)</li>
+<li>If key is already in map then: if isNeedToCheckUniqueness == false new value just will be added to the end of list otherwise ( isNeedToCheckUniqueness == true) value will be added to the list only in case if list doesn't already contain it.</li>
+</ol>
+
+<p>You can easily count number of elements by key (frequencies) by getting size of list.
+You can get either first or last element of list in order to get first or last added value with specified key.</p>

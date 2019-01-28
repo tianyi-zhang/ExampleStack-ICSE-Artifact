@@ -1,0 +1,322 @@
+<p>You can't/shouldn't change the size/position of any component which under the control of a layout manager, the next time the container is validated (laid out) those values will be rest by the layout manager...</p>
+
+<p>Now having said that, since you have access to the source code of the layout manager, you have the ability to effect how it makes it's decisions...</p>
+
+<p>By simply adding this into the <code>layoutContainer</code> method, right before <code>c.setBounds(x, y, d.width, d.height);</code></p>
+
+<pre><code>if (i == nComps - 1) {
+    d.width = parent.getWidth();
+    x = 0;
+}
+</code></pre>
+
+<p>I was able to achieve this...</p>
+
+<p><img src="http://i.stack.imgur.com/s1BUm.png" alt="enter image description here"></p>
+
+<p><strong>UPDATED after feedback</strong></p>
+
+<p>I've fudged the layout code a little to allow the layout to perform the way you image suggest...</p>
+
+<p><img src="http://i.stack.imgur.com/FfvlF.png" alt="enter image description here"></p>
+
+<pre><code>public class TestLayout14 {
+
+    public static void main(String[] args) {
+        new TestLayout14();
+    }
+
+    public TestLayout14() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException ex) {
+                } catch (InstantiationException ex) {
+                } catch (IllegalAccessException ex) {
+                } catch (UnsupportedLookAndFeelException ex) {
+                }
+
+                JPanel content = new JPanel(new BorderLayout());
+                LayoutPane layoutPane = new LayoutPane();
+                content.add(layoutPane);
+                content.add(new ControlPane(layoutPane), BorderLayout.SOUTH);
+
+                JFrame frame = new JFrame();
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(content);
+                frame.pack();
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public class LayoutPane extends JPanel {
+
+        public LayoutPane() {
+            setLayout(new DiagonalLayout());
+            add(new JLabel("Test 01"));
+            add(new JLabel("Test 02"));
+            add(new JLabel("Test 03"));
+            add(new JButton("Test 04"));
+        }
+    }
+
+    public class ControlPane extends JPanel {
+
+        private JTextField fieldGap;
+        private JCheckBox majorDiag;
+        private JCheckBox streatchLast;
+        private LayoutPane layoutPane;
+
+        public ControlPane(LayoutPane pane) {
+
+            layoutPane = pane;
+
+            setBorder(new CompoundBorder(new EmptyBorder(4, 0, 0, 0), new MatteBorder(1, 0, 0, 0, Color.GRAY)));
+
+            fieldGap = new JTextField(Integer.toString(((DiagonalLayout)layoutPane.getLayout()).getVgap()), 4);
+            majorDiag = new JCheckBox("Major Diagnal");
+            streatchLast = new JCheckBox("Last Component Stretched");
+
+            setLayout(new GridBagLayout());
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(4, 4, 4, 4);
+            gbc.anchor = GridBagConstraints.WEST;
+            gbc.gridx = 0;
+            gbc.gridy = 0;
+
+            add(new JLabel("Diagnal Gap: "), gbc);
+            gbc.gridx++;
+            add(fieldGap, gbc);
+            gbc.gridx = 0;
+            gbc.gridy++;
+            gbc.gridwidth = GridBagConstraints.REMAINDER;
+            add(majorDiag, gbc);
+            gbc.gridy++;
+            add(streatchLast, gbc);
+
+            fieldGap.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    try {
+                        ((DiagonalLayout) layoutPane.getLayout()).setVgap(Integer.parseInt(fieldGap.getText()));
+                        layoutPane.invalidate();
+                        layoutPane.revalidate();
+                    } catch (Exception exp) {
+                        exp.printStackTrace();
+                    }
+                }
+            });
+
+            streatchLast.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    ((DiagonalLayout) layoutPane.getLayout()).setStreatchLast(streatchLast.isSelected());
+                    layoutPane.invalidate();
+                    layoutPane.revalidate();
+                }
+            });
+
+        }
+    }
+
+    public class DiagonalLayout implements LayoutManager {
+
+        private int vgap;
+        private int minWidth = 0, minHeight = 0;
+        private int preferredWidth = 0, preferredHeight = 0;
+        private boolean sizeUnknown = true;
+        private boolean streatchLast = false;
+
+        public DiagonalLayout() {
+            this(5);
+        }
+
+        public DiagonalLayout(int v) {
+            vgap = v;
+        }
+
+        public void setVgap(int vgap) {
+            this.vgap = vgap;
+        }
+
+        public int getVgap() {
+            return vgap;
+        }
+
+        public void setStreatchLast(boolean streatchLast) {
+            this.streatchLast = streatchLast;
+        }
+
+        public boolean isStreatchLast() {
+            return streatchLast;
+        }
+
+        /* Required by LayoutManager. */
+        public void addLayoutComponent(String name, Component comp) {
+        }
+
+        /* Required by LayoutManager. */
+        public void removeLayoutComponent(Component comp) {
+        }
+
+        private void setSizes(Container parent) {
+            int nComps = parent.getComponentCount();
+            Dimension d = null;
+
+            //Reset preferred/minimum width and height.
+            preferredWidth = 0;
+            preferredHeight = 0;
+            minWidth = 0;
+            minHeight = 0;
+
+            for (int i = 0; i &lt; nComps; i++) {
+                Component c = parent.getComponent(i);
+                if (c.isVisible()) {
+                    d = c.getPreferredSize();
+
+                    if (i &gt; 0) {
+                        preferredWidth += d.width / 2;
+                        preferredHeight += vgap;
+                    } else {
+                        preferredWidth = d.width;
+                    }
+                    preferredHeight += d.height;
+
+                    minWidth = Math.max(c.getMinimumSize().width,
+                            minWidth);
+                    minHeight = preferredHeight;
+                }
+            }
+        }
+
+
+        /* Required by LayoutManager. */
+        public Dimension preferredLayoutSize(Container parent) {
+            Dimension dim = new Dimension(0, 0);
+            int nComps = parent.getComponentCount();
+
+            setSizes(parent);
+
+            //Always add the container's insets!
+            Insets insets = parent.getInsets();
+            dim.width = preferredWidth
+                    + insets.left + insets.right;
+            dim.height = preferredHeight
+                    + insets.top + insets.bottom;
+
+            sizeUnknown = false;
+
+            return dim;
+        }
+
+        /* Required by LayoutManager. */
+        public Dimension minimumLayoutSize(Container parent) {
+            Dimension dim = new Dimension(0, 0);
+            int nComps = parent.getComponentCount();
+
+            //Always add the container's insets!
+            Insets insets = parent.getInsets();
+            dim.width = minWidth
+                    + insets.left + insets.right;
+            dim.height = minHeight
+                    + insets.top + insets.bottom;
+
+            sizeUnknown = false;
+
+            return dim;
+        }
+
+        /* Required by LayoutManager. */
+        /*
+         * This is called when the panel is first displayed,
+         * and every time its size changes.
+         * Note: You CAN'T assume preferredLayoutSize or
+         * minimumLayoutSize will be called -- in the case
+         * of applets, at least, they probably won't be.
+         */
+        public void layoutContainer(Container parent) {
+            Insets insets = parent.getInsets();
+            int maxWidth = parent.getWidth()
+                    - (insets.left + insets.right);
+            int maxHeight = parent.getHeight()
+                    - (insets.top + insets.bottom);
+            int nComps = parent.getComponentCount();
+            int previousWidth = 0, previousHeight = 0;
+            int x = 0, y = insets.top;
+            int rowh = 0, start = 0;
+            int xFudge = 0, yFudge = 0;
+            boolean oneColumn = false;
+
+            // Go through the components' sizes, if neither
+            // preferredLayoutSize nor minimumLayoutSize has
+            // been called.
+            if (sizeUnknown) {
+                setSizes(parent);
+            }
+
+            if (maxWidth &lt;= minWidth) {
+                oneColumn = true;
+            }
+
+//            if (maxWidth != preferredWidth) {
+//                xFudge = (maxWidth - preferredWidth) / (nComps - 1);
+//            }
+//
+//            if (maxHeight &gt; preferredHeight) {
+//                yFudge = (maxHeight - preferredHeight) / (nComps - 1);
+//            }
+
+            for (int i = 0; i &lt; nComps; i++) {
+                Component c = parent.getComponent(i);
+                if (c.isVisible()) {
+                    Dimension d = c.getPreferredSize();
+
+                    // increase x and y, if appropriate
+                    if (i &gt; 0) {
+                        if (!oneColumn) {
+                            x += previousWidth / 2 + xFudge;
+                        }
+                        y += previousHeight + vgap + yFudge;
+                    }
+
+                    // If x is too large,
+                    if ((!oneColumn)
+                            &amp;&amp; (x + d.width)
+                            &gt; (parent.getWidth() - insets.right)) {
+                        // reduce x to a reasonable number.
+                        x = parent.getWidth()
+                                - insets.bottom - d.width;
+                    }
+
+                    // If y is too large,
+                    if ((y + d.height)
+                            &gt; (parent.getHeight() - insets.bottom)) {
+                        // do nothing.
+                        // Another choice would be to do what we do to x.
+                    }
+
+                    if (isStreatchLast() &amp;&amp; i == nComps - 1) {
+                        d.width = parent.getWidth() - x;
+                    }
+
+                    // Set the component's size and position.
+                    c.setBounds(x, y, d.width, d.height);
+
+                    previousWidth = d.width;
+                    previousHeight = d.height;
+                }
+            }
+        }
+
+        public String toString() {
+            String str = "";
+            return getClass().getName() + "[vgap=" + vgap + str + "]";
+        }
+    }
+}
+</code></pre>

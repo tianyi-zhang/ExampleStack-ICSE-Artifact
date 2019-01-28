@@ -1,0 +1,42 @@
+<p>This approach inspects the double's bits to prevent rounding error.</p>
+
+<p>In a double, first bit is the sign, the next 11 are the exponent, and the final 52 are the significand.</p>
+
+<p>Instead of checking the first bit, I found it easier to just compare the whole value to 0.</p>
+
+<p>Instead of getting the bits for the exponent and dealing with the exponent's sign (which is distinct from the value's sign), I use <code>Math.getExponent</code> to get its signed value. According to its <a href="http://docs.oracle.com/javase/7/docs/api/java/lang/Math.html#getExponent(double)" rel="nofollow">documentation</a>,</p>
+
+<blockquote>
+  <ul>
+  <li>If the argument is NaN or infinite, then the result is Double.MAX_EXPONENT + 1.</li>
+  <li>If the argument is zero or subnormal, then the result is Double.MIN_EXPONENT -1.</li>
+  </ul>
+</blockquote>
+
+<p>If the value isn't subnormal, then the significand has an implicit leading 1 before its 52 bits. The exponent assumes that the binary point (i.e. decimal point) is after the leading 1, so I subtract 52 from the exponent to shift the binary point to the end.</p>
+
+<pre class="lang-java prettyprint-override"><code>public static BigInteger[] convertToFraction(double value) {
+  int exponent = Math.getExponent(value);
+  if (exponent &gt; Double.MAX_EXPONENT) {
+    // The value is infinite or NaN.
+    throw new IllegalArgumentException("Illegal parameter 'value': " + value);
+  }
+  long positiveSignificand;
+  if (exponent &lt; Double.MIN_EXPONENT) {
+    // The value is subnormal.
+    exponent++;
+    positiveSignificand = Double.doubleToLongBits(value) &amp; 0x000fffffffffffffL;
+  } else {
+    positiveSignificand = (Double.doubleToLongBits(value) &amp; 0x000fffffffffffffL) | 0x0010000000000000L;
+  }
+  BigInteger significand = BigInteger.valueOf(value &lt; 0 ? -positiveSignificand : positiveSignificand);
+  exponent -= 52; // Adjust the exponent for an integral significand.
+  BigInteger coefficient = BigInteger.ONE.shiftLeft(Math.abs(exponent));
+  if (exponent &gt;= 0) {
+    return new BigInteger[] { significand.multiply(coefficient), BigInteger.ONE };
+  } else {
+    BigInteger gcd = significand.gcd(coefficient);
+    return new BigInteger[] { significand.divide(gcd), coefficient.divide(gcd) };
+  }
+}
+</code></pre>

@@ -1,0 +1,366 @@
+<p>There are many ways to download files. Following I will post most common ways; it is up to you to decide which method is better for your app.</p>
+
+<h1>1. Use <code>AsyncTask</code> and show the download progress in a dialog</h1>
+
+<p>This method will allow you to execute some background processes and update the UI at the same time (in this case, we'll update a progress bar).</p>
+
+<p>This is an example code:</p>
+
+<pre><code>// declare the dialog as a member field of your activity
+ProgressDialog mProgressDialog;
+
+// instantiate it within the onCreate method
+mProgressDialog = new ProgressDialog(YourActivity.this);
+mProgressDialog.setMessage("A message");
+mProgressDialog.setIndeterminate(true);
+mProgressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+mProgressDialog.setCancelable(true);
+
+// execute this when the downloader must be fired
+final DownloadTask downloadTask = new DownloadTask(YourActivity.this);
+downloadTask.execute("the url to the file you want to download");
+
+mProgressDialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+    @Override
+    public void onCancel(DialogInterface dialog) {
+        downloadTask.cancel(true);
+    }
+});
+</code></pre>
+
+<p>The <code>AsyncTask</code> will look like this:</p>
+
+<pre><code>// usually, subclasses of AsyncTask are declared inside the activity class.
+// that way, you can easily modify the UI thread from here
+private class DownloadTask extends AsyncTask&lt;String, Integer, String&gt; {
+
+    private Context context;
+    private PowerManager.WakeLock mWakeLock;
+
+    public DownloadTask(Context context) {
+        this.context = context;
+    }
+
+    @Override
+    protected String doInBackground(String... sUrl) {
+        InputStream input = null;
+        OutputStream output = null;
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(sUrl[0]);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.connect();
+
+            // expect HTTP 200 OK, so we don't mistakenly save error report
+            // instead of the file
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                return "Server returned HTTP " + connection.getResponseCode()
+                        + " " + connection.getResponseMessage();
+            }
+
+            // this will be useful to display download percentage
+            // might be -1: server did not report the length
+            int fileLength = connection.getContentLength();
+
+            // download the file
+            input = connection.getInputStream();
+            output = new FileOutputStream("/sdcard/file_name.extension");
+
+            byte data[] = new byte[4096];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                // allow canceling with back button
+                if (isCancelled()) {
+                    input.close();
+                    return null;
+                }
+                total += count;
+                // publishing the progress....
+                if (fileLength &gt; 0) // only if total length is known
+                    publishProgress((int) (total * 100 / fileLength));
+                output.write(data, 0, count);
+            }
+        } catch (Exception e) {
+            return e.toString();
+        } finally {
+            try {
+                if (output != null)
+                    output.close();
+                if (input != null)
+                    input.close();
+            } catch (IOException ignored) {
+            }
+
+            if (connection != null)
+                connection.disconnect();
+        }
+        return null;
+    }
+</code></pre>
+
+<p>The method above (<code>doInBackground</code>) runs always on a background thread. You shouldn't do any UI tasks there. On the other hand, the <code>onProgressUpdate</code> and <code>onPreExecute</code> run on the UI thread, so there you can change the progress bar:</p>
+
+<pre><code>    @Override
+    protected void onPreExecute() {
+        super.onPreExecute();
+        // take CPU lock to prevent CPU from going off if the user 
+        // presses the power button during download
+        PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+             getClass().getName());
+        mWakeLock.acquire();
+        mProgressDialog.show();
+    }
+
+    @Override
+    protected void onProgressUpdate(Integer... progress) {
+        super.onProgressUpdate(progress);
+        // if we get here, length is known, now set indeterminate to false
+        mProgressDialog.setIndeterminate(false);
+        mProgressDialog.setMax(100);
+        mProgressDialog.setProgress(progress[0]);
+    }
+
+    @Override
+    protected void onPostExecute(String result) {
+        mWakeLock.release();
+        mProgressDialog.dismiss();
+        if (result != null)
+            Toast.makeText(context,"Download error: "+result, Toast.LENGTH_LONG).show();
+        else
+            Toast.makeText(context,"File downloaded", Toast.LENGTH_SHORT).show();
+    }
+</code></pre>
+
+<p>For this to run, you need the WAKE_LOCK permission.</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.WAKE_LOCK" /&gt;
+</code></pre>
+
+<h1>2. Download from Service</h1>
+
+<p>The big question here is: <em>how do I update my activity from a service?</em>. In the next example we are going to use two classes you may not be aware of: <code>ResultReceiver</code> and <code>IntentService</code>. <code>ResultReceiver</code> is the one that will allow us to update our thread from a service; <code>IntentService</code> is a subclass of <code>Service</code> which spawns a thread to do background work from there (you should know that a <code>Service</code> runs actually in the same thread of your app; when you extends <code>Service</code>, you must manually spawn new threads to run CPU blocking operations).</p>
+
+<p>Download service can look like this:</p>
+
+<pre><code>public class DownloadService extends IntentService {
+    public static final int UPDATE_PROGRESS = 8344;
+    public DownloadService() {
+        super("DownloadService");
+    }
+    @Override
+    protected void onHandleIntent(Intent intent) {
+        String urlToDownload = intent.getStringExtra("url");
+        ResultReceiver receiver = (ResultReceiver) intent.getParcelableExtra("receiver");
+        try {
+            URL url = new URL(urlToDownload);
+            URLConnection connection = url.openConnection();
+            connection.connect();
+            // this will be useful so that you can show a typical 0-100% progress bar
+            int fileLength = connection.getContentLength();
+
+            // download the file
+            InputStream input = new BufferedInputStream(connection.getInputStream());
+            OutputStream output = new FileOutputStream("/sdcard/BarcodeScanner-debug.apk");
+
+            byte data[] = new byte[1024];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                total += count;
+                // publishing the progress....
+                Bundle resultData = new Bundle();
+                resultData.putInt("progress" ,(int) (total * 100 / fileLength));
+                receiver.send(UPDATE_PROGRESS, resultData);
+                output.write(data, 0, count);
+            }
+
+            output.flush();
+            output.close();
+            input.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        Bundle resultData = new Bundle();
+        resultData.putInt("progress" ,100);
+        receiver.send(UPDATE_PROGRESS, resultData);
+    }
+}
+</code></pre>
+
+<p>Add the service to your manifest:</p>
+
+<pre><code>&lt;service android:name=".DownloadService"/&gt;
+</code></pre>
+
+<p>And the activity will look like this:</p>
+
+<pre><code>// initialize the progress dialog like in the first example
+
+// this is how you fire the downloader
+mProgressDialog.show();
+Intent intent = new Intent(this, DownloadService.class);
+intent.putExtra("url", "url of the file to download");
+intent.putExtra("receiver", new DownloadReceiver(new Handler()));
+startService(intent);
+</code></pre>
+
+<p>Here is were <code>ResultReceiver</code> comes to play:</p>
+
+<pre><code>private class DownloadReceiver extends ResultReceiver{
+    public DownloadReceiver(Handler handler) {
+        super(handler);
+    }
+
+    @Override
+    protected void onReceiveResult(int resultCode, Bundle resultData) {
+        super.onReceiveResult(resultCode, resultData);
+        if (resultCode == DownloadService.UPDATE_PROGRESS) {
+            int progress = resultData.getInt("progress");
+            mProgressDialog.setProgress(progress);
+            if (progress == 100) {
+                mProgressDialog.dismiss();
+            }
+        }
+    }
+}
+</code></pre>
+
+<h2>2.1 Use Groundy library</h2>
+
+<p><a href="http://github.com/casidiablo/groundy"><strong>Groundy</strong></a> is a library that basically helps you run pieces of code in a background service, and it is based on the <code>ResultReceiver</code> concept shown above. This library is <strong>deprecated</strong> at the moment. This is how the <strong>whole</strong> code would look like:</p>
+
+<p>The activity where you are showing the dialog...</p>
+
+<pre><code>public class MainActivity extends Activity {
+
+    private ProgressDialog mProgressDialog;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+
+        findViewById(R.id.btn_download).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View view) {
+                String url = ((EditText) findViewById(R.id.edit_url)).getText().toString().trim();
+                Bundle extras = new Bundler().add(DownloadTask.PARAM_URL, url).build();
+                Groundy.create(DownloadExample.this, DownloadTask.class)
+                        .receiver(mReceiver)
+                        .params(extras)
+                        .queue();
+
+                mProgressDialog = new ProgressDialog(MainActivity.this);
+                mProgressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+                mProgressDialog.setCancelable(false);
+                mProgressDialog.show();
+            }
+        });
+    }
+
+    private ResultReceiver mReceiver = new ResultReceiver(new Handler()) {
+        @Override
+        protected void onReceiveResult(int resultCode, Bundle resultData) {
+            super.onReceiveResult(resultCode, resultData);
+            switch (resultCode) {
+                case Groundy.STATUS_PROGRESS:
+                    mProgressDialog.setProgress(resultData.getInt(Groundy.KEY_PROGRESS));
+                    break;
+                case Groundy.STATUS_FINISHED:
+                    Toast.makeText(DownloadExample.this, R.string.file_downloaded, Toast.LENGTH_LONG);
+                    mProgressDialog.dismiss();
+                    break;
+                case Groundy.STATUS_ERROR:
+                    Toast.makeText(DownloadExample.this, resultData.getString(Groundy.KEY_ERROR), Toast.LENGTH_LONG).show();
+                    mProgressDialog.dismiss();
+                    break;
+            }
+        }
+    };
+}
+</code></pre>
+
+<p>A <code>GroundyTask</code> implementation used by <strong>Groundy</strong> to download the file and show the progress:</p>
+
+<pre><code>public class DownloadTask extends GroundyTask {    
+    public static final String PARAM_URL = "com.groundy.sample.param.url";
+
+    @Override
+    protected boolean doInBackground() {
+        try {
+            String url = getParameters().getString(PARAM_URL);
+            File dest = new File(getContext().getFilesDir(), new File(url).getName());
+            DownloadUtils.downloadFile(getContext(), url, dest, DownloadUtils.getDownloadListenerForTask(this));
+            return true;
+        } catch (Exception pokemon) {
+            return false;
+        }
+    }
+}
+</code></pre>
+
+<p>And just add this to the manifest:</p>
+
+<pre><code>&lt;service android:name="com.codeslap.groundy.GroundyService"/&gt;
+</code></pre>
+
+<p>It couldn't be easier I think. Just grab the latest jar <a href="https://github.com/casidiablo/groundy/downloads">from Github</a> and you are ready to go. Keep in mind that <strong>Groundy</strong>'s main purpose is to make calls to external REST apis in a background service and post results to the UI with easily. If you are doing something like that in your app, it could be really useful.</p>
+
+<h2>2.2 Use <a href="https://github.com/koush/ion">https://github.com/koush/ion</a></h2>
+
+<h1>3. Use <code>DownloadManager</code> class (<code>GingerBread</code> and newer only)</h1>
+
+<p>GingerBread brought a new feature, <code>DownloadManager</code>, which allows you to download files easily and delegate the hard work of handling threads, streams, etc. to the system.</p>
+
+<p>First, let's see a utility method:</p>
+
+<pre><code>/**
+ * @param context used to check the device version and DownloadManager information
+ * @return true if the download manager is available
+ */
+public static boolean isDownloadManagerAvailable(Context context) {
+
+    if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.GINGERBREAD) {
+        return true;
+    }
+    return false;
+}
+</code></pre>
+
+<p>Method's name explains it all. Once you are sure <code>DownloadManager</code> is available, you can do something like this:</p>
+
+<pre><code>String url = "url you want to download";
+DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+request.setDescription("Some descrition");
+request.setTitle("Some title");
+// in order for this if to run, you must use the android 3.2 to compile your app
+if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB) {
+    request.allowScanningByMediaScanner();
+    request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+}
+request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "name-of-the-file.ext");
+
+// get download service and enqueue file
+DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+manager.enqueue(request);
+</code></pre>
+
+<p>Download progress will be showing in the notification bar.</p>
+
+<h1>Final thoughts</h1>
+
+<p>First and second methods are just the tip of the iceberg. There are lots of things you have to keep in mind if you want your app to be robust. Here is a brief list:</p>
+
+<ul>
+<li>You must check whether user has an internet connection available</li>
+<li>Make sure you have the right permissions (<code>INTERNET</code> and <code>WRITE_EXTERNAL_STORAGE</code>); also <code>ACCESS_NETWORK_STATE</code> if you want to check internet availability.</li>
+<li>Make sure the directory were you are going to download files exist and has write permissions.</li>
+<li>If download is too big you may want to implement a way to resume the download if previous attempts failed.</li>
+<li>Users will be grateful if you allow them to interrupt the download.</li>
+</ul>
+
+<p>Unless you need detailed control of the download process, then consider using <code>DownloadManager</code> (3) because it already handles most of the items listed above.</p>
+
+<p>But also consider that your needs may change. For example, <code>DownloadManager</code> <a href="http://stackoverflow.com/questions/35191718">does no response caching</a>. It will blindly download the same big file multiple times. There's no easy way to fix it after the fact. Where if you start with a basic <code>HttpURLConnection</code> (1, 2), then all you need is to add an <code>HttpResponseCache</code>. So the initial effort of learning the basic, standard tools can be a good investment.</p>

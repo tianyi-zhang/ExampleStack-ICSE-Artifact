@@ -1,0 +1,73 @@
+<p>I had the same issue with Entity template, as it is content Length was not measured for some instance. </p>
+
+<p>There are two possible workarounds for me:</p>
+
+<p>1) Overriding EntityTemplate</p>
+
+<pre><code>class EntityTemplateSpike extends EntityTemplate{
+
+    public EntityTemplateSpike(ContentProducer contentproducer) {
+        super(contentproducer);
+    }
+
+    @Override
+    public long getContentLength() {
+        return // Paste here your ContentLength value
+    }
+
+}
+postEntity = new EntityTemplateSpike(contentProducer);
+</code></pre>
+
+<p>2) Error is caused by standart Request interceptor RequestContent. You can override it</p>
+
+<pre><code>    // This class is a copy of standart RequestContent class except for Exception
+        // is not being thrown if ContentLegth is already set.
+        private class RequestContentSpike implements HttpRequestInterceptor{
+                     public RequestContentSpike() {
+                         super();
+                     }
+
+                     public void  process(final HttpRequest request, final HttpContext context)  throws HttpException, IOException {
+                         if (request == null) {
+                             throw new IllegalArgumentException("HTTP request may not be null");
+                         }
+
+                         if (request instanceof HttpEntityEnclosingRequest) {
+
+                             if (request.containsHeader(HTTP.TRANSFER_ENCODING)) {
+                                 throw new ProtocolException("Transfer-encoding header already present");
+                             }
+
+                             ProtocolVersion ver = request.getRequestLine().getProtocolVersion();
+                             HttpEntity entity = ((HttpEntityEnclosingRequest)request).getEntity();
+
+                             if (entity == null) {
+                                 request.addHeader(HTTP.CONTENT_LEN, "0");
+                                 return;
+                             }
+
+                             if (entity.isChunked() || entity.getContentLength() &lt; 0) {
+                                 if (ver.lessEquals(HttpVersion.HTTP_1_0)) {
+                                     throw new ProtocolException( "Chunked transfer encoding not allowed for " + ver);
+                                 }
+                                 request.addHeader(HTTP.TRANSFER_ENCODING, HTTP.CHUNK_CODING);
+                             } else {
+                                 request.addHeader(HTTP.CONTENT_LEN, Long.toString(entity.getContentLength()));
+                             }
+
+
+                             if (entity.getContentType() != null &amp;&amp; !request.containsHeader(HTTP.CONTENT_TYPE )) {
+                                 request.addHeader(entity.getContentType()); 
+                             }
+
+
+                             if (entity.getContentEncoding() != null &amp;&amp; !request.containsHeader(HTTP.CONTENT_ENCODING)) {
+                                request.addHeader(entity.getContentEncoding()); 
+                            }
+                        }
+                    }
+        }
+    ((CustomHttpsClient)mClient).removeRequestInterceptorByClass(RequestContent.class);
+  ((CustomHttpsClient)mClient).addRequestInterceptor(new RequestContentSpike());
+</code></pre>

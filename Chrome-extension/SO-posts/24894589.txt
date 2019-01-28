@@ -1,0 +1,382 @@
+<p>I have tried to write a service which will upload image from shared pref one by one :
+Note : i hv hardcoded some of things here like image are from sdcard so path is hardcoded, images names are hardcoded, so plz change it appropriately and try out below code , i hv tested and worked for me </p>
+
+<p>Below code contains <strong>Service</strong>, <strong>Activity</strong>[upload button, listview], <strong>xmlLayout</strong>, <strong>php service</strong> which will upload image on ftp.</p>
+
+<p><strong>Activity</strong> :</p>
+
+<pre><code> public class MainActivity extends Activity {
+
+        SharedPreferences sharedPref;
+        SharedPreferences.Editor editor;
+        ListView listview;
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.activity_main);
+            sharedPref = getSharedPreferences("myfiles", MODE_PRIVATE);
+            editor = sharedPref.edit();
+            editor.putString("0", "monika_pin.png");
+            editor.putString("1", "monika_pin1.png");
+            editor.putString("2", "monika_pin2.png");
+            editor.commit();
+
+            String[] arr = new String[] { "/mnt/sdcard/monika_pin.png",
+                    "/mnt/sdcard/monika_pin1.png", "/mnt/sdcard/monika_pin2.png" };
+
+            List&lt;String&gt; list = Arrays.asList(arr);
+
+            MyAdapter adapter = new MyAdapter(this, R.layout.listitem_imv, list);
+            listview = (ListView) findViewById(R.id.listView1);
+            listview.setAdapter(adapter);
+
+        }
+
+        class MyAdapter extends ArrayAdapter&lt;String&gt; {
+
+            List&lt;String&gt; mList;
+            LayoutInflater mInflater;
+            int mResource;
+
+            public MyAdapter(Context context, int resource, List&lt;String&gt; objects) {
+                super(context, resource, objects);
+
+                mResource = resource;
+                mInflater = getLayoutInflater();
+                mList = objects;
+            }
+
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                View view;
+
+                if (convertView == null) {
+                    view = mInflater.inflate(mResource, null);
+                } else {
+                    view = convertView;
+                }
+
+                ImageView imageView = (ImageView) view
+                        .findViewById(R.id.imageView1);
+                TextView textView = (TextView) view.findViewById(R.id.textView1);
+
+                imageView.setTag(mList.get(position));// tag of imageView == path to
+                                                        // image
+                new LoadImage(imageView).execute();
+                textView.setText(mList.get(position).toString());
+
+                return view;
+            }
+        }
+
+        class LoadImage extends AsyncTask&lt;Object, Void, Bitmap&gt; {
+
+            private ImageView imv;
+            private String path;
+
+            public LoadImage(ImageView imv) {
+                this.imv = imv;
+                this.path = imv.getTag().toString();
+            }
+
+            @Override
+            protected Bitmap doInBackground(Object... params) {
+                Bitmap bitmap = null;
+                // File file = new File(
+                // Environment.getExternalStorageDirectory().getAbsolutePath() +
+                // path);
+                File file = new File(path);
+                if (file.exists()) {
+                    bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
+                }
+
+                return bitmap;
+            }
+
+            @Override
+            protected void onPostExecute(Bitmap result) {
+                if (!imv.getTag().toString().equals(path)) {
+                    /*
+                     * The path is not same. This means that this image view is
+                     * handled by some other async task. We don't do anything and
+                     * return.
+                     */
+                    return;
+                }
+
+                if (result != null &amp;&amp; imv != null) {
+                    imv.setVisibility(View.VISIBLE);
+                    imv.setImageBitmap(result);
+                } else {
+                    imv.setVisibility(View.GONE);
+                }
+            }
+
+        }
+
+        public void buttonClick(View view) {
+            Intent intent = new Intent(this, MyService.class);
+            startService(intent);
+        }
+    }
+</code></pre>
+
+<p><strong>Service</strong> :</p>
+
+<pre><code>public class MyService extends Service {
+    SharedPreferences sharedPref;
+    SharedPreferences.Editor editor;
+    int serverResponseCode = 0;
+    String upLoadServerUri = null;
+
+    private static final String TAG = "com.example.ServiceExample";
+
+    @Override
+    public void onCreate() {
+        Log.i(TAG, "Service onCreate");
+        sharedPref = getSharedPreferences("myfiles", MODE_PRIVATE);
+        /************* Php script path ****************/
+        upLoadServerUri = "http://myserver/uploadimage.php";
+
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+
+        Log.i(TAG, "Service onStartCommand " + startId);
+
+        final int currentId = startId;
+
+        Runnable r = new Runnable() {
+            public void run() {
+
+                for (int i = 0; i &lt; 3; i++) {
+                    // long endTime = System.currentTimeMillis() + 10*1000;
+
+                    // while (System.currentTimeMillis() &lt; endTime) {
+                    synchronized (this) {
+                        try {
+
+                            uploadFile(sharedPref.getString(i + "", ""));
+
+                        } catch (Exception e) {
+                        }
+
+                    }
+                    // }
+                    Log.i(TAG, "Service running " + currentId);
+                }
+                stopSelf();
+            }
+        };
+
+        Thread t = new Thread(r);
+        t.start();
+        return Service.START_STICKY;
+    }
+
+    @Override
+    public IBinder onBind(Intent arg0) {
+        // TODO Auto-generated method stub
+        Log.i(TAG, "Service onBind");
+        return null;
+    }
+
+    @Override
+    public void onDestroy() {
+        Log.i(TAG, "Service onDestroy");
+    }
+
+    public int uploadFile(String sourceFileUri) {
+
+        String fileName = sourceFileUri;
+
+        HttpURLConnection conn = null;
+        DataOutputStream dos = null;
+        String lineEnd = "\r\n";
+        String twoHyphens = "--";
+        String boundary = "*****";
+        int bytesRead, bytesAvailable, bufferSize;
+        byte[] buffer;
+        int maxBufferSize = 1 * 1024 * 1024;
+        // File sourceFile = new
+        // File(Environment.getExternalStorageDirectory(),sourceFileUri);
+        File sourceFile = new File(Environment.getExternalStorageDirectory()
+                .getAbsolutePath() + "/" + fileName);
+        if (!sourceFile.isFile()) {
+
+            return 0;
+
+        } else {
+            try {
+
+                // open a URL connection to the Servlet
+                FileInputStream fileInputStream = new FileInputStream(
+                        sourceFile);
+                URL url = new URL(upLoadServerUri);
+
+                // Open a HTTP connection to the URL
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setDoInput(true); // Allow Inputs
+                conn.setDoOutput(true); // Allow Outputs
+                conn.setUseCaches(false); // Don't use a Cached Copy
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Connection", "Keep-Alive");
+                conn.setRequestProperty("ENCTYPE", "multipart/form-data");
+                conn.setRequestProperty("Content-Type",
+                        "multipart/form-data;boundary=" + boundary);
+                conn.setRequestProperty("uploaded_file", fileName);
+
+                dos = new DataOutputStream(conn.getOutputStream());
+
+                dos.writeBytes(twoHyphens + boundary + lineEnd);
+                // dos.writeBytes("Content-Disposition: form-data; name="uploaded_file";filename=""+ fileName + """
+                // + lineEnd);
+                dos.writeBytes("Content-Disposition: form-data; name=\"uploaded_file\";filename=\""
+                        + fileName + "\"" + lineEnd);
+                dos.writeBytes(lineEnd);
+
+                // create a buffer of maximum size
+                bytesAvailable = fileInputStream.available();
+
+                bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                buffer = new byte[bufferSize];
+
+                // read file and write it into form...
+                bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+
+                while (bytesRead &gt; 0) {
+
+                    dos.write(buffer, 0, bufferSize);
+                    bytesAvailable = fileInputStream.available();
+                    bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                    bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+
+                }
+
+                // send multipart form data necesssary after file data...
+                dos.writeBytes(lineEnd);
+                dos.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd);
+
+                // Responses from the server (code and message)
+                serverResponseCode = conn.getResponseCode();
+                String serverResponseMessage = conn.getResponseMessage();
+
+                Log.i("uploadFile", "HTTP Response is : "
+                        + serverResponseMessage + ": " + serverResponseCode);
+
+                if (serverResponseCode == 200) {
+
+                }
+
+                // close the streams //
+                fileInputStream.close();
+                dos.flush();
+                dos.close();
+
+            } catch (MalformedURLException ex) {
+
+                ex.printStackTrace();
+
+                Log.e("Upload file to server", "error: " + ex.getMessage(), ex);
+            } catch (Exception e) {
+
+                e.printStackTrace();
+
+                Log.e("Upload file to server Exception",
+                        "Exception : " + e.getMessage(), e);
+            }
+
+            return serverResponseCode;
+
+        } // End else block
+    }
+
+}
+</code></pre>
+
+<p><strong>XmlLayout</strong> :</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:paddingBottom="@dimen/activity_vertical_margin"
+    android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    tools:context="com.example.service.MainActivity" &gt;
+
+    &lt;Button
+        android:id="@+id/button1"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:layout_centerHorizontal="true"
+        android:onClick="buttonClick"
+        android:text="Button" /&gt;
+
+    &lt;ListView
+        android:id="@+id/listView1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/button1"
+        android:layout_centerHorizontal="true" &gt;
+    &lt;/ListView&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p><strong>AndroidManifest</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.service"
+    android:versionCode="1"
+    android:versionName="1.0" &gt;
+
+    &lt;uses-sdk
+        android:minSdkVersion="8"
+        android:targetSdkVersion="21" /&gt;
+          &lt;uses-permission android:name="android.permission.INTERNET"/&gt;
+          &lt;uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/&gt;
+
+    &lt;application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        &gt;
+        &lt;activity  
+            android:name=".MainActivity"
+            android:label="@string/app_name" &gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+        &lt;service android:name=".MyService" /&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;
+</code></pre>
+
+<p><strong>PhP Script</strong> :</p>
+
+<pre><code>&lt;?php
+
+    $file_path = "uploads/";
+
+    $file_path = $file_path . basename( $_FILES['uploaded_file']['name']);
+    if(move_uploaded_file($_FILES['uploaded_file']['tmp_name'], $file_path)) {
+        echo "success";
+    } else{
+        echo "fail";
+    }
+ ?&gt;
+</code></pre>
+
+<p><strong>Note : Above sure where u create this php file on ftp, create a folder also called upload where all files will be uploaded</strong></p>
+
+<p>If u wish to download complete Source code --> <a href="http://1drv.ms/1p7f2NM">Source Code</a></p>

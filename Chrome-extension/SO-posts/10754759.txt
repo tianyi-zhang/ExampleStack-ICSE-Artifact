@@ -1,0 +1,51 @@
+<p>The complexity of the size() method in the ConcurrentHashMap is essentially an O(N) operation (varying mainly with the number of segments) as you can see in the source.  HashMap is an O(1) operation.</p>
+
+<pre><code>/**
+ * Returns the number of key-value mappings in this map.  If the
+ * map contains more than &lt;tt&gt;Integer.MAX_VALUE&lt;/tt&gt; elements, returns
+ * &lt;tt&gt;Integer.MAX_VALUE&lt;/tt&gt;.
+ *
+ * @return the number of key-value mappings in this map
+ */
+public int size() {
+    final Segment&lt;K,V&gt;[] segments = this.segments;
+    long sum = 0;
+    long check = 0;
+    int[] mc = new int[segments.length];
+    // Try a few times to get accurate count. On failure due to
+    // continuous async changes in table, resort to locking.
+    for (int k = 0; k &lt; RETRIES_BEFORE_LOCK; ++k) {
+        check = 0;
+        sum = 0;
+        int mcsum = 0;
+        for (int i = 0; i &lt; segments.length; ++i) {
+            sum += segments[i].count;
+            mcsum += mc[i] = segments[i].modCount;
+        }
+        if (mcsum != 0) {
+            for (int i = 0; i &lt; segments.length; ++i) {
+                check += segments[i].count;
+                if (mc[i] != segments[i].modCount) {
+                    check = -1; // force retry
+                    break;
+                }
+            }
+        }
+        if (check == sum)
+            break;
+    }
+    if (check != sum) { // Resort to locking all segments
+        sum = 0;
+        for (int i = 0; i &lt; segments.length; ++i)
+            segments[i].lock();
+        for (int i = 0; i &lt; segments.length; ++i)
+            sum += segments[i].count;
+        for (int i = 0; i &lt; segments.length; ++i)
+            segments[i].unlock();
+    }
+    if (sum &gt; Integer.MAX_VALUE)
+        return Integer.MAX_VALUE;
+    else
+        return (int)sum;
+}
+</code></pre>

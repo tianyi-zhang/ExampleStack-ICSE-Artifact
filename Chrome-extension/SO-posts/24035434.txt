@@ -1,0 +1,234 @@
+<p>I suppose the device are already paired and that the android device performs the discovery.
+Why do you think it is a matter of timeout? The exception tells that the communication socket is already closed. Maybe you succeed in create a <a href="http://developer.android.com/reference/android/bluetooth/BluetoothSocket.html" rel="nofollow"><code>BluetoothSocket</code></a> and close it "accidentally" (maybe, after flushing, you close the output or input stream related to the socket).</p>
+
+<p>Since you are following the Android BluetoothChat example you should:</p>
+
+<p>1) perform the discovery and listen for available devices:</p>
+
+<pre><code>private final BroadcastReceiver deviceFoundBroadcastReceiver = new BroadcastReceiver() {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        if (BluetoothDevice.ACTION_FOUND.equals(action) &amp;&amp; mState==STATE_DISCOVERING) {
+            // Get the BluetoothDevice object from the Intent
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            new ConnectThread(device).start();
+        }
+    }
+};
+</code></pre>
+
+<p>2) connect to the device:</p>
+
+<pre><code>private class ConnectThread extends Thread {
+    private BluetoothSocket mmSocket;
+    private BluetoothDevice mmDevice;
+
+    public ConnectThread(BluetoothDevice device) {
+        BluetoothSocket tmp = null;
+        mmDevice = device;
+        try {
+            tmp = InsecureBluetooth.createRfcommSocketToServiceRecord(mmDevice, YOUR_UUID, false);
+        } 
+        catch (IOException e) { }
+        mmSocket = tmp;
+    }
+
+    @Override
+    public void run() {
+        try {
+            btAdapter.cancelDiscovery(); // be sure discovery is cancelled
+            mmSocket.connect(); // blocking call, returns only on a successful connection or an exception
+            connected(mmSocket, mmSocket.getRemoteDevice()); 
+            new ConnectedThread(mmSocket, mmDevice.getAddress()).start(); // start connected thread
+        } 
+        catch (IOException e) {}
+    }
+
+    public void cancel() {}
+}
+</code></pre>
+
+<p>3) Retrieve the input and output stream for communicating with the paired device (do not close the streams while communication is needed):</p>
+
+<pre><code>private class ConnectedThread extends Thread {
+    private BluetoothSocket mmSocket;
+    private String macAddress;
+
+    public ConnectedThread(BluetoothSocket socket, String macAddress) {
+        this.macAddress = macAddress;
+        this.mmSocket = socket;
+        InputStream tmpIn = null;
+        OutputStream tmpOut = null;
+        try { 
+            mmInStream = mmSocket.getInputStream(); 
+            mmOutStream = mmSocket.getOutputStream();
+        } 
+        catch (IOException e) {}
+    }
+
+    @Override
+    public void run() {
+        // perform communication
+    }
+}
+</code></pre>
+
+<p>The class InsecureBluetooth is used to "avoid" the pairing phase and is based on <a href="http://stanford.edu/~tpurtell/InsecureBluetooth.java" rel="nofollow">this Stanford peace of code</a>:</p>
+
+<pre><code>@TargetApi(10)
+public class InsecureBluetooth {
+    static private class InUse extends RuntimeException { }
+
+    public static BluetoothServerSocket listenUsingRfcommWithServiceRecord(BluetoothAdapter adapter, String name, UUID uuid, boolean encrypt) throws IOException {
+        if(Build.VERSION.SDK_INT&lt;10) {
+
+            try {
+                Class c_rfcomm_channel_picker = null;
+                Class[] children = BluetoothAdapter.class.getDeclaredClasses();
+                for(Class c : children) {
+                    Log.e("TO", "class " + c.getCanonicalName());
+                    if(c.getCanonicalName().equals(BluetoothAdapter.class.getName() + ".RfcommChannelPicker")) {
+                        c_rfcomm_channel_picker = c;
+                        break;
+                    }
+                }
+                if(c_rfcomm_channel_picker == null)
+                    throw new RuntimeException("can't find the rfcomm channel picker class");
+
+                Constructor constructor = c_rfcomm_channel_picker.getDeclaredConstructor(UUID.class);
+                if(constructor == null)
+                    throw new RuntimeException("can't find the constructor for rfcomm channel picker");
+                Object rfcomm_channel_picker = constructor.newInstance(new Object[] {uuid});
+                Method m_next_channel = c_rfcomm_channel_picker.getDeclaredMethod("nextChannel", new Class[] {});
+                m_next_channel.setAccessible(true);
+
+                BluetoothServerSocket socket = null;
+
+                int channel;
+                int errno;
+                while (true) {
+                    channel = (Integer)m_next_channel.invoke(rfcomm_channel_picker, new Object[] {});
+
+                    if (channel == -1) {
+                        throw new IOException("No available channels");
+                    }
+
+                    try {
+                        socket = listenUsingRfcomm(channel, encrypt);
+                        break;
+                    } catch(InUse e) {
+                        continue;
+                    }
+                }
+
+                Field f_internal_service = adapter.getClass().getDeclaredField("mService");
+                f_internal_service.setAccessible(true);
+                Object internal_service = f_internal_service.get(adapter);
+
+                Method m_add_rfcomm_service_record = internal_service.getClass().getDeclaredMethod("addRfcommServiceRecord", new Class[] {String.class, ParcelUuid.class, int.class, IBinder.class});
+                m_add_rfcomm_service_record.setAccessible(true);
+
+                int handle = (Integer)m_add_rfcomm_service_record.invoke(internal_service, new Object[] { name, new ParcelUuid(uuid), channel, new Binder() } );
+
+                if (handle == -1) {
+                    try {
+                        socket.close();
+                    } catch (IOException e) {}
+                    throw new IOException("Not able to register SDP record for " + name);
+                }
+                Field f_internal_handler = null;
+                try {
+                    f_internal_handler = adapter.getClass().getDeclaredField("mServiceRecordHandler");
+                } catch(Exception e) {
+                    f_internal_handler = adapter.getClass().getDeclaredField("mHandler");
+                }
+                f_internal_handler.setAccessible(true);
+                Object internal_handler = f_internal_handler.get(adapter);
+
+                Method m_set_close_handler = socket.getClass().getDeclaredMethod("setCloseHandler", new Class[] {Handler.class, int.class});
+                m_set_close_handler.setAccessible(true);
+
+                m_set_close_handler.invoke(socket, new Object[] { internal_handler, handle});
+                return socket;
+            } catch (Exception e) {}
+        }
+        else {
+            return adapter.listenUsingInsecureRfcommWithServiceRecord(name, uuid);
+        }
+
+    }
+
+    private static BluetoothServerSocket listenUsingRfcomm(int port, boolean encrypt, boolean reuse) throws IOException, InUse {
+        BluetoothServerSocket socket = null;
+        try {
+            Constructor&lt;BluetoothServerSocket&gt; constructor = BluetoothServerSocket.class.getDeclaredConstructor(int.class, boolean.class, boolean.class, int.class);
+            if(constructor == null)
+                throw new RuntimeException("can't find the constructor");
+            constructor.setAccessible(true);
+            Field f_rfcomm_type = BluetoothSocket.class.getDeclaredField("TYPE_RFCOMM");
+            f_rfcomm_type.setAccessible(true);
+            int rfcomm_type = (Integer)f_rfcomm_type.get(null);
+
+            Field f_e_addr_in_use = BluetoothSocket.class.getDeclaredField("EADDRINUSE");
+            f_e_addr_in_use.setAccessible(true);
+            int e_addr_in_use = (Integer)f_e_addr_in_use.get(null);
+
+            socket = constructor.newInstance(new Object[] { rfcomm_type, false, encrypt, port } );
+
+            Field f_internal_socket = socket.getClass().getDeclaredField("mSocket");
+            f_internal_socket.setAccessible(true);
+            Object internal_socket = f_internal_socket.get(socket);
+            Method m_bind_listen = internal_socket.getClass().getDeclaredMethod("bindListen", new Class[] {});
+            m_bind_listen.setAccessible(true);
+            Object result = m_bind_listen.invoke(internal_socket, new Object[] {});
+
+            int errno = (Integer)result;
+            if(reuse &amp;&amp; errno == e_addr_in_use) {
+                throw new InUse();
+            } else if (errno != 0) {
+                try {
+                    socket.close();
+                } catch (IOException e) {}
+                internal_socket.getClass().getMethod("throwErrnoNative", new Class[] {int.class}).invoke(internal_socket, new Object[] { errno });
+            }
+            return socket;
+        } catch (Exception e) {}
+    }
+
+    public static BluetoothServerSocket listenUsingRfcomm(int port, boolean encrypt) throws IOException {
+        return listenUsingRfcomm(port, encrypt, false);
+    }
+
+    private static BluetoothSocket createRfcommSocketToServiceRecord(BluetoothDevice device, int port, UUID uuid, boolean encrypt) throws IOException {
+
+        try {
+            BluetoothSocket socket = null;
+            Constructor&lt;BluetoothSocket&gt; constructor = BluetoothSocket.class.getDeclaredConstructor(
+                    int.class, int.class, boolean.class, boolean.class, BluetoothDevice.class, int.class, ParcelUuid.class);
+            if(constructor == null)
+                throw new RuntimeException("can't find the constructor for socket");
+
+            constructor.setAccessible(true);
+            Field f_rfcomm_type = BluetoothSocket.class.getDeclaredField("TYPE_RFCOMM");
+            f_rfcomm_type.setAccessible(true);
+            int rfcomm_type = (Integer)f_rfcomm_type.get(null);
+            socket = constructor.newInstance(new Object[] { rfcomm_type, -1, false, true, device, port, uuid != null ? new ParcelUuid(uuid) : null} );
+            return socket;
+        } catch (Exception e) {}
+    }
+
+    public static BluetoothSocket createRfcommSocketToServiceRecord(BluetoothDevice device, UUID uuid, boolean encrypt) throws IOException{
+        if(Build.VERSION.SDK_INT&lt;10) {
+            return createRfcommSocketToServiceRecord(device, -1, uuid, encrypt);
+        }
+        else {
+            return device.createInsecureRfcommSocketToServiceRecord(uuid);
+        }
+    }
+
+    public static BluetoothSocket createRfcommSocket(BluetoothDevice device, int port, boolean encrypt) throws IOException {
+        return createRfcommSocketToServiceRecord(device, port, null, encrypt);
+    }
+}
+</code></pre>

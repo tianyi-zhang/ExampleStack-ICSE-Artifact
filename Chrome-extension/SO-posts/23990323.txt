@@ -1,0 +1,97 @@
+<p>I finally <a href="http://javaevangelist.blogspot.de/2013/12/jsf-2x-tip-of-day-determining-jsf.html" rel="nofollow">found a solution</a>. Every class has a package object which has properties for getting the specification version, implementation name and implementation version. Of course the data quality in these properties depends on the implementation, but it worked ok enough with the implementations I used so far (the spec version is wrong and a copy of the implementation version but I can live with that).</p>
+
+<pre><code>/**
+ * This method provides a convenient means of determining the JSF
+ * Specification version.
+ *
+ * @return JSF Specification version, e.g. 2.1
+ * @since 1.5
+ */
+public static String getSpecificationVersion() {
+    return FacesContext.getCurrentInstance().getClass().getPackage().getSpecificationVersion();
+}
+
+/**
+ * This method provides a convenient means of determining the JSF
+ * Implementation version.
+ *
+ * @return JSF Implementation version, e.g. 2.1.26
+ * @since 1.5
+ */
+public static String getImplementationVersion() {
+    return FacesContext.getCurrentInstance().getClass().getPackage().getImplementationVersion();
+}
+
+/**
+ * This method provides a convenient means of determining the JSF
+ * Implementation Title.
+ *
+ * @return JSF implementation title, e.g. Mojarra.
+ * @since 1.5
+ */
+public static String getImplementationTitle() {
+    return FacesContext.getCurrentInstance().getClass().getPackage().getImplementationTitle();
+}
+</code></pre>
+
+<p>Since I need this information inside a normal servlet I also have to make sure there exists a FacesContext. Fortunatly <a href="http://balusc.blogspot.de/2006/06/communication-in-jsf.html#AccessingTheFacesContextInsideHttpServletOrFilter" rel="nofollow">@BalusC has described how to do this</a>. You just use this class which creates a new JSF LifeCycle if none is present.</p>
+
+<pre><code>public class FacesUtil {
+
+    // Getters -----------------------------------------------------------------------------------
+
+    public static FacesContext getFacesContext(
+        HttpServletRequest request, HttpServletResponse response)
+    {
+        // Get current FacesContext.
+        FacesContext facesContext = FacesContext.getCurrentInstance();
+
+        // Check current FacesContext.
+        if (facesContext == null) {
+
+            // Create new Lifecycle.
+            LifecycleFactory lifecycleFactory = (LifecycleFactory)
+                FactoryFinder.getFactory(FactoryFinder.LIFECYCLE_FACTORY); 
+            Lifecycle lifecycle = lifecycleFactory.getLifecycle(LifecycleFactory.DEFAULT_LIFECYCLE);
+
+            // Create new FacesContext.
+            FacesContextFactory contextFactory  = (FacesContextFactory)
+                FactoryFinder.getFactory(FactoryFinder.FACES_CONTEXT_FACTORY);
+            facesContext = contextFactory.getFacesContext(
+                request.getSession().getServletContext(), request, response, lifecycle);
+
+            // Create new View.
+            UIViewRoot view = facesContext.getApplication().getViewHandler().createView(
+                facesContext, "");
+            facesContext.setViewRoot(view);                
+
+            // Set current FacesContext.
+            FacesContextWrapper.setCurrentInstance(facesContext);
+        }
+
+        return facesContext;
+    }
+
+    // Helpers -----------------------------------------------------------------------------------
+
+    // Wrap the protected FacesContext.setCurrentInstance() in a inner class.
+    private static abstract class FacesContextWrapper extends FacesContext {
+        protected static void setCurrentInstance(FacesContext facesContext) {
+            FacesContext.setCurrentInstance(facesContext);
+        }
+    }     
+
+}
+</code></pre>
+
+<p>Finally since we are using Primefaces we get a wrapped Faces Context, which in turn produces version information of Primefaces and not of Myfaces/Mojarra. So instead of the FacesContet.getCurrentInstance we have to check if it is a PrimeFacesContext and if so unwrap it:</p>
+
+<pre><code>private static Object facesContext() {
+    FacesContext context = FacesContext.getCurrentInstance();
+    if (context == null)
+        return "No Jsf Context";
+    if (context instanceof PrimeFacesContext)
+        return ((PrimeFacesContext) context).getWrapped();
+    return context;
+}
+</code></pre>

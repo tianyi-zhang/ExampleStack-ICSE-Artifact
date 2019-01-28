@@ -1,0 +1,668 @@
+<p>Try to use this source code for you VideoView.</p>
+
+<pre><code>public class CustomMediaController extends FrameLayout {
+
+    /**
+     * Public interface to handle FullScreenRequest. User can implement this
+     * interface to make the VideoPlayer Change to FullScreen. The user must
+     * handle show/hide of views. If the user do not add a Handler the
+     * FullScreen control button will be hided.
+     *
+     * @author Anis
+     *
+     */
+    public interface FullScreenMediaPlayer {
+        /**
+         * Event callback when the MediaPlayer request the FullScreen.
+         */
+        public void onFullScreenRequest();
+
+        /**
+         * Event callback when the MediaPlayer request the go back to normal
+         * size.
+         */
+        public void onStreatchScreenRequest();
+
+        /**
+         * CallBackEvent when the MediaPlayer is Playing
+         */
+        public void onPlaying();
+
+    }
+
+    private MediaPlayerControl    mPlayer;
+    private final Context         mContext;
+    private View                  mAnchor;
+    private View                  mRoot;
+    private View                  mDecor;
+    private ProgressBar           mProgress;
+    private TextView              mEndTime, mCurrentTime;
+    private boolean               mShowing;
+    private boolean               mDragging;
+    private static final int      sDefaultTimeout = 3000;
+    private static final int      FADE_OUT        = 1;
+    private static final int      SHOW_PROGRESS   = 2;
+    private final boolean         mUseFastForward;
+    private boolean               mFromXml;
+    private boolean               mListenersSet;
+    private View.OnClickListener  mNextListener, mPrevListener;
+    StringBuilder                 mFormatBuilder;
+    Formatter                     mFormatter;
+    private ImageButton           mPauseButton;
+    private ImageButton           mFfwdButton;
+    private ImageButton           mRewButton;
+    private ImageButton           mNextButton;
+    private ImageButton           mPrevButton;
+
+    // Add Streach colomn
+    private ImageButton           mFullScreenButton;
+    private boolean               isFullSreen;
+    private FullScreenMediaPlayer fullScreenListener;
+
+    public CustomMediaController(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        mRoot = this;
+        mContext = context;
+        mUseFastForward = true;
+        mFromXml = true;
+        isFullSreen = false;
+
+    }
+
+    @Override
+    public void onFinishInflate() {
+        if (mRoot != null)
+            initControllerView(mRoot);
+    }
+
+    public CustomMediaController(Context context, boolean useFastForward) {
+        super(context);
+        mContext = context;
+        mUseFastForward = useFastForward;
+        initFloatingWindow();
+    }
+
+    public CustomMediaController(Context context) {
+        super(context);
+        mContext = context;
+        mUseFastForward = true;
+        initFloatingWindow();
+    }
+
+    private void initFloatingWindow() {
+
+        mDecor = this;
+        mDecor.setOnTouchListener(mTouchListener);
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        requestFocus();
+    }
+
+    private final OnTouchListener mTouchListener = new OnTouchListener() {
+                                                     @Override
+                                                     public boolean onTouch(View v, MotionEvent event) {
+                                                         if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                                                             if (mShowing) {
+                                                                 hide();
+                                                             }
+                                                         }
+                                                         return false;
+                                                     }
+                                                 };
+
+    public void setMediaPlayer(MediaPlayerControl player) {
+        mPlayer = player;
+        updatePausePlay();
+    }
+
+    /**
+     * Set the view that acts as the anchor for the control view. This can for
+     * example be a VideoView, or your Activity's main view.
+     *
+     * @param view
+     *            The view to which to anchor the controller when it is visible.
+     */
+    public void setAnchorView(View view) {
+        mAnchor = view;
+
+        FrameLayout.LayoutParams frameParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.FILL_PARENT,
+                ViewGroup.LayoutParams.FILL_PARENT);
+
+        removeAllViews();
+        View v = makeControllerView();
+        addView(v, frameParams);
+    }
+
+    /**
+     * Create the view that holds the widgets that control playback. Derived
+     * classes can override this to create their own.
+     *
+     * @return The controller view.
+     * @hide This doesn't work as advertised
+     */
+    protected View makeControllerView() {
+        LayoutInflater inflate = (LayoutInflater) mContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        mRoot = inflate.inflate(R.layout.media_controller, null);
+        initControllerView(mRoot);
+
+        return mRoot;
+    }
+
+    private void initControllerView(View v) {
+        mPauseButton = (ImageButton) v.findViewById(R.id.pause);
+        if (mPauseButton != null) {
+            mPauseButton.requestFocus();
+            mPauseButton.setOnClickListener(mPauseListener);
+        }
+
+        mFfwdButton = (ImageButton) v.findViewById(R.id.ffwd);
+        if (mFfwdButton != null) {
+            mFfwdButton.setOnClickListener(mFfwdListener);
+            if (!mFromXml) {
+                mFfwdButton.setVisibility(mUseFastForward ? View.VISIBLE : View.GONE);
+            }
+        }
+
+        mRewButton = (ImageButton) v.findViewById(R.id.rew);
+        if (mRewButton != null) {
+            mRewButton.setOnClickListener(mRewListener);
+            if (!mFromXml) {
+                mRewButton.setVisibility(mUseFastForward ? View.VISIBLE : View.GONE);
+            }
+        }
+
+        // By default these are hidden. They will be enabled when
+        // setPrevNextListeners() is called
+        mNextButton = (ImageButton) v.findViewById(R.id.next);
+        if (mNextButton != null &amp;&amp; !mFromXml &amp;&amp; !mListenersSet) {
+            mNextButton.setVisibility(View.GONE);
+        }
+        mPrevButton = (ImageButton) v.findViewById(R.id.prev);
+        if (mPrevButton != null &amp;&amp; !mFromXml &amp;&amp; !mListenersSet) {
+            mPrevButton.setVisibility(View.GONE);
+        }
+
+        mProgress = (ProgressBar) v.findViewById(R.id.mediacontroller_progress);
+        if (mProgress != null) {
+            if (mProgress instanceof SeekBar) {
+                SeekBar seeker = (SeekBar) mProgress;
+                seeker.setOnSeekBarChangeListener(mSeekListener);
+            }
+            mProgress.setMax(1000);
+        }
+
+        mEndTime = (TextView) v.findViewById(R.id.time);
+        mCurrentTime = (TextView) v.findViewById(R.id.time_current);
+        mFormatBuilder = new StringBuilder();
+        mFormatter = new Formatter(mFormatBuilder, Locale.getDefault());
+
+        mFullScreenButton = (ImageButton) v.findViewById(R.id.video_fullscreen);
+        installFullScreenListener();
+        installPrevNextListeners();
+    }
+
+    /**
+     * Show the controller on screen. It will go away automatically after 3
+     * seconds of inactivity.
+     */
+    public void show() {
+        show(sDefaultTimeout);
+    }
+
+    /**
+     * Show the controller on screen. It will go away automatically after
+     * 'timeout' milliseconds of inactivity.
+     *
+     * @param timeout
+     *            The timeout in milliseconds. Use 0 to show the controller
+     *            until hide() is called.
+     */
+    public void show(int timeout) {
+
+        if (!mShowing &amp;&amp; mAnchor != null) {
+            setProgress();
+
+            addToFrameAncherLayout();
+            mShowing = true;
+
+        }
+        updatePausePlay();
+
+        // cause the progress bar to be updated even if mShowing
+        // was already true. This happens, for example, if we're
+        // paused with the progress bar showing the user hits play.
+        mHandler.sendEmptyMessage(SHOW_PROGRESS);
+
+        Message msg = mHandler.obtainMessage(FADE_OUT);
+        if (timeout != 0) {
+            mHandler.removeMessages(FADE_OUT);
+            mHandler.sendMessageDelayed(msg, timeout);
+        }
+    }
+
+    private void addToFrameAncherLayout() {
+
+        if ((mDecor != null) &amp;&amp; (mDecor.getParent() == null)) {
+
+            if (mAnchor instanceof FrameLayout) {
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.FILL_PARENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT);
+                params.gravity = Gravity.BOTTOM;
+                ((FrameLayout) mAnchor).addView(mDecor, params);
+                mDecor.setVisibility(View.VISIBLE);
+            } else {
+                // int[] anchorpos = new int[2];
+                // mAnchor.getLocationOnScreen(anchorpos);
+                //
+                // WindowManager.LayoutParams p = new
+                // WindowManager.LayoutParams();
+                // p.gravity = Gravity.TOP;
+                // p.width = mAnchor.getWidth();
+                // p.height = LayoutParams.WRAP_CONTENT;
+                // p.x = anchorpos[0];
+                // p.y = anchorpos[1] + mAnchor.getHeight() -
+                // mDecor.getHeight();
+                // p.format = PixelFormat.TRANSLUCENT;
+                // p.type = WindowManager.LayoutParams.TYPE_APPLICATION_PANEL;
+                // p.flags |= WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
+                // p.token = null;
+                // p.windowAnimations = 0; //
+                // android.R.style.DropDownAnimationDown;
+                // mWindowManager.addView(mDecor, p);
+                // Logger.e("Ancher is not a Frame Layout usinf a Blocking Window");
+            }
+        }
+        mDecor.setVisibility(View.VISIBLE);
+    }
+
+    public boolean isShowing() {
+        return mShowing;
+    }
+
+    /**
+     * Remove the controller from the screen.
+     */
+    public void hide() {
+        if (mAnchor == null)
+            return;
+
+        if (mShowing) {
+            try {
+                mHandler.removeMessages(SHOW_PROGRESS);
+                // TODO must be a New View
+                if (mDecor != null) {
+
+                    if (mAnchor instanceof FrameLayout) {
+
+                        // ((FrameLayout) mAnchor).removeView(mDecor);
+                        mDecor.setVisibility(View.GONE);
+                    } else {
+                        // mWindowManager.removeView(mRoot);
+                    }
+                }
+
+            } catch (IllegalArgumentException ex) {
+                Log.w("MediaController", "already removed");
+            }
+            mShowing = false;
+        }
+    }
+
+    static class ProgressHandler extends Handler {
+        WeakReference&lt;CustomMediaController&gt; mediaControllerReference;
+
+        ProgressHandler(CustomMediaController mediaController) {
+            mediaControllerReference = new WeakReference&lt;CustomMediaController&gt;(mediaController);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            CustomMediaController mediaController = mediaControllerReference.get();
+            if (mediaController != null) {
+
+                int pos;
+                switch (msg.what) {
+                    case FADE_OUT:
+                        mediaController.hide();
+                        break;
+                    case SHOW_PROGRESS:
+                        pos = mediaController.setProgress();
+                        if (!mediaController.mDragging &amp;&amp; mediaController.mShowing
+                            &amp;&amp; mediaController.mPlayer.isPlaying()) {
+                            msg = obtainMessage(SHOW_PROGRESS);
+                            sendMessageDelayed(msg, 1000 - (pos % 1000));
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    private final Handler mHandler = new ProgressHandler(this);
+
+    private String stringForTime(int timeMs) {
+        int totalSeconds = timeMs / 1000;
+
+        int seconds = totalSeconds % 60;
+        int minutes = (totalSeconds / 60) % 60;
+        int hours = totalSeconds / 3600;
+
+        mFormatBuilder.setLength(0);
+        if (hours &gt; 0) {
+            return mFormatter.format("%d:%02d:%02d", hours, minutes, seconds).toString();
+        } else {
+            return mFormatter.format("%02d:%02d", minutes, seconds).toString();
+        }
+    }
+
+    private int setProgress() {
+        if (mPlayer == null || mDragging) {
+            return 0;
+        }
+        int position = mPlayer.getCurrentPosition();
+        int duration = mPlayer.getDuration();
+        if (mProgress != null) {
+            if (duration &gt; 0) {
+                // use long to avoid overflow
+                long pos = 1000L * position / duration;
+                mProgress.setProgress((int) pos);
+            }
+            int percent = mPlayer.getBufferPercentage();
+            mProgress.setSecondaryProgress(percent * 10);
+        }
+
+        if (mEndTime != null)
+            mEndTime.setText(stringForTime(duration));
+        if (mCurrentTime != null)
+            mCurrentTime.setText(stringForTime(position));
+
+        return position;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        show(sDefaultTimeout);
+        return true;
+    }
+
+    @Override
+    public boolean onTrackballEvent(MotionEvent ev) {
+        show(sDefaultTimeout);
+        return false;
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        if (event.getRepeatCount() == 0
+            &amp;&amp; (keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_SPACE)) {
+            doPauseResume();
+            show(sDefaultTimeout);
+            return true;
+        } else if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP) {
+            if (mPlayer.isPlaying()) {
+                mPlayer.pause();
+                updatePausePlay();
+            }
+            return true;
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            // don't show the controls for volume adjustment
+            return super.dispatchKeyEvent(event);
+        } else if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) {
+            hide();
+
+            return true;
+        } else {
+            show(sDefaultTimeout);
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    private final View.OnClickListener mPauseListener = new View.OnClickListener() {
+                                                          @Override
+                                                          public void onClick(View v) {
+                                                              doPauseResume();
+                                                              show(sDefaultTimeout);
+                                                          }
+                                                      };
+
+    private void updatePausePlay() {
+        if (mRoot == null)
+            return;
+
+        ImageButton button = (ImageButton) mRoot.findViewById(R.id.pause);
+        if (button == null)
+            return;
+
+        if (mPlayer.isPlaying()) {
+            button.setImageResource(R.drawable.ic_media_pause);
+        } else {
+            button.setImageResource(R.drawable.ic_media_play);
+        }
+    }
+
+    private void doPauseResume() {
+        if (mPlayer.isPlaying()) {
+            mPlayer.pause();
+        } else {
+            mPlayer.start();
+        }
+        updatePausePlay();
+    }
+
+    private final OnSeekBarChangeListener mSeekListener = new OnSeekBarChangeListener() {
+                                                            long duration;
+
+                                                            @Override
+                                                            public void onStartTrackingTouch(SeekBar bar) {
+                                                                show(3600000);
+                                                                duration = mPlayer.getDuration();
+                                                            }
+
+                                                            @Override
+                                                            public void onProgressChanged(SeekBar bar, int progress,
+                                                                                          boolean fromtouch) {
+                                                                if (fromtouch) {
+                                                                    mDragging = true;
+                                                                    duration = mPlayer.getDuration();
+                                                                    long newposition = (duration * progress) / 1000L;
+                                                                    mPlayer.seekTo((int) newposition);
+                                                                    if (mCurrentTime != null)
+                                                                        mCurrentTime
+                                                                                .setText(stringForTime((int) newposition));
+                                                                } else {
+                                                                    if ((fullScreenListener != null) &amp;&amp; (progress &gt; 0)) {
+                                                                        fullScreenListener.onPlaying();
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            @Override
+                                                            public void onStopTrackingTouch(SeekBar bar) {
+                                                                mDragging = false;
+                                                                setProgress();
+                                                                updatePausePlay();
+                                                                show(sDefaultTimeout);
+                                                            }
+                                                        };
+
+    @Override
+    public void setEnabled(boolean enabled) {
+        if (mPauseButton != null) {
+            mPauseButton.setEnabled(enabled);
+        }
+        if (mFfwdButton != null) {
+            mFfwdButton.setEnabled(enabled);
+        }
+        if (mRewButton != null) {
+            mRewButton.setEnabled(enabled);
+        }
+        if (mNextButton != null) {
+            mNextButton.setEnabled(enabled &amp;&amp; mNextListener != null);
+        }
+        if (mPrevButton != null) {
+            mPrevButton.setEnabled(enabled &amp;&amp; mPrevListener != null);
+        }
+        if (mProgress != null) {
+            mProgress.setEnabled(enabled);
+        }
+
+        super.setEnabled(enabled);
+    }
+
+    private final View.OnClickListener mRewListener  = new View.OnClickListener() {
+                                                         @Override
+                                                         public void onClick(View v) {
+                                                             int pos = mPlayer.getCurrentPosition();
+                                                             pos -= 5000; // milliseconds
+                                                             mPlayer.seekTo(pos);
+                                                             setProgress();
+
+                                                             show(sDefaultTimeout);
+                                                         }
+                                                     };
+
+    private final View.OnClickListener mFfwdListener = new View.OnClickListener() {
+                                                         @Override
+                                                         public void onClick(View v) {
+                                                             int pos = mPlayer.getCurrentPosition();
+                                                             pos += 15000; // milliseconds
+                                                             mPlayer.seekTo(pos);
+                                                             setProgress();
+
+                                                             show(sDefaultTimeout);
+                                                         }
+                                                     };
+
+    private void installPrevNextListeners() {
+        if (mNextButton != null) {
+            mNextButton.setOnClickListener(mNextListener);
+            mNextButton.setEnabled(mNextListener != null);
+        }
+
+        if (mPrevButton != null) {
+            mPrevButton.setOnClickListener(mPrevListener);
+            mPrevButton.setEnabled(mPrevListener != null);
+        }
+    }
+
+    private void installFullScreenListener() {
+        if (mFullScreenButton != null) {
+            mFullScreenButton.setOnClickListener(new OnClickListener() {
+
+                @Override
+                public void onClick(View aView) {
+                    Preconditions.checkNotNull(fullScreenListener,
+                            "IllegalStateExeption, FullScreen Button pressed with a nullable Listener");
+
+                    if (isFullSreen) {
+                        // send the request to handle normal size;
+                        fullScreenListener.onStreatchScreenRequest();
+                        isFullSreen = false;
+                        updateFullScreenButton();
+                    } else {
+                        // Send request to go FullScreen
+                        fullScreenListener.onFullScreenRequest();
+                        isFullSreen = true;
+                        updateFullScreenButton();
+
+                    }
+
+                }
+            });
+
+            if (fullScreenListener == null) {
+
+                mFullScreenButton.setVisibility(View.GONE);
+
+            } else {
+
+                mFullScreenButton.setVisibility(View.VISIBLE);
+            }
+
+        }
+    }
+
+    /**
+     * Toggle the Full Screen Buttons
+     */
+    private void updateFullScreenButton() {
+
+        if (isFullSreen) {
+            mFullScreenButton.setImageResource(R.drawable.windowmin);
+        } else {
+            mFullScreenButton.setImageResource(R.drawable.windowmax);
+        }
+
+    }
+
+    public void setPrevNextListeners(View.OnClickListener next, View.OnClickListener prev) {
+        mNextListener = next;
+        mPrevListener = prev;
+        mListenersSet = true;
+
+        if (mRoot != null) {
+            installPrevNextListeners();
+
+            if (mNextButton != null &amp;&amp; !mFromXml) {
+                mNextButton.setVisibility(View.VISIBLE);
+            }
+            if (mPrevButton != null &amp;&amp; !mFromXml) {
+                mPrevButton.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    public MediaPlayerControl getmPlayer() {
+        return mPlayer;
+    }
+
+    public void setmPlayer(MediaPlayerControl mPlayer) {
+        this.mPlayer = mPlayer;
+    }
+
+    @Override
+    public void dispatchWindowVisibilityChanged(int visibility) {
+
+        hide();
+    }
+
+    /**
+     * @return the fullScreenListener or null if any Listener is registred.
+     */
+    public FullScreenMediaPlayer getFullScreenListener() {
+
+        return fullScreenListener;
+    }
+
+    /**
+     * @param aFullScreenListener
+     *            the fullScreenListener.
+     */
+    public void registerFullScreenListener(FullScreenMediaPlayer aFullScreenListener) {
+        Preconditions.checkNotNull(aFullScreenListener, "FullScreenListener cannot be null ");
+
+        fullScreenListener = aFullScreenListener;
+        installFullScreenListener();
+
+    }
+
+    public void removeFullScreenListerer() {
+        fullScreenListener = null;
+        installFullScreenListener();
+    }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see android.view.View#onDetachedFromWindow()
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+
+        super.onDetachedFromWindow();
+        hide();
+    }
+}
+</code></pre>

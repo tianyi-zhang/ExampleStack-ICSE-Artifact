@@ -1,0 +1,56 @@
+<p>Having access to the current <code>Activity</code> is very handy. Wouldn’t it be nice to have a static <code>getActivity</code> method returning the current Activity with no unnecessary questions?</p>
+
+<p>The <code>Activity</code> class is very useful. It gives access to the application’s UI thread, views, resources, and many more. Numerous methods require a <code>Context</code>, but how to get the pointer? Here are some ways:</p>
+
+<ul>
+<li>Tracking the application’s state using overridden lifecycle methods.
+You have to store the current Activity in a static variable and you
+need access to the code of all Activities.</li>
+<li>Tracking the application’s state using Instrumentation. Declare
+Instrumentation in the manifest, implement it and use its methods to
+track Activity changes. Passing an Activity pointer to methods  and
+classes used in your Activities. Injecting the pointer using one of
+the code injection libraries. <strong>All of these approaches are rather
+inconvenient</strong>; <strong>fortunately, there is a much easier way to get the
+current Activity.</strong></li>
+<li>Seems like the system needs access to all Activities without the
+issues mentioned above. So, most likely there is a way to get
+Activities using only static calls. I spent a lot of time digging
+through the Android sources on grepcode.com, and I found what I was
+looking for. There is a class called <code>ActivityThread</code>. This class has
+access to all Activities and, what’s even better, has a static method
+for getting the current <code>ActivityThread</code>. There is only one little
+problem – the Activity list has package access. </li>
+</ul>
+
+<p>Easy to solve using reflection:</p>
+
+<pre><code>public static Activity getActivity() {
+    Class activityThreadClass = Class.forName("android.app.ActivityThread");
+    Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
+    Field activitiesField = activityThreadClass.getDeclaredField("mActivities");
+    activitiesField.setAccessible(true);
+
+    Map&lt;Object, Object&gt; activities = (Map&lt;Object, Object&gt;) activitiesField.get(activityThread);
+    if(activities == null)
+            return null;
+
+    for (Object activityRecord : activities.values()) {
+        Class activityRecordClass = activityRecord.getClass();
+        Field pausedField = activityRecordClass.getDeclaredField("paused");
+        pausedField.setAccessible(true);
+        if (!pausedField.getBoolean(activityRecord)) {
+            Field activityField = activityRecordClass.getDeclaredField("activity");
+            activityField.setAccessible(true);
+            Activity activity = (Activity) activityField.get(activityRecord);
+            return activity;
+        }
+    }
+}
+</code></pre>
+
+<p>Such a method can be used anywhere in the app and it’s much more convenient than all of the mentioned approaches. Moreover, it seems like it’s not as unsafe as it looks. It doesn’t introduce any new potential leaks or null pointers.</p>
+
+<p>The above code snippet lacks exception handling and naively assumes that the first running Activity is the one we’re looking for. You might want to add some additional checks.</p>
+
+<p><a href="https://androidreclib.wordpress.com/2014/11/22/getting-the-current-activity/" rel="nofollow">Blog Post</a></p>

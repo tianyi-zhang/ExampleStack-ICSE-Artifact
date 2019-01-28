@@ -1,0 +1,263 @@
+<p>It is possible to do in Jetty but I don't think you can do it conditionally within jetty.xml.  </p>
+
+<p>I know you can do it by embedding Jetty in your application and programmatically configuring and instantiating your Jetty server.  I don't know how this fits into your deployment scenario but here's an example of an embedded Jetty server that enforces CONFIDENTIAL on all connections.  You could modify it to conditionally apply the ConstraintSecurityHandler (built in call to buildConstraintSecurityHandler) depending on how your custom configuration is set.</p>
+
+<pre><code>package com.example.webapp;
+
+import com.example.webapp.guice.ProdModule;
+import com.google.inject.Guice;
+import com.google.inject.Injector;
+import org.apache.commons.codec.binary.Base64;
+import org.eclipse.jetty.security.ConstraintMapping;
+import org.eclipse.jetty.security.ConstraintSecurityHandler;
+import org.eclipse.jetty.server.*;
+import org.eclipse.jetty.server.handler.ContextHandler;
+import org.eclipse.jetty.server.handler.HandlerList;
+import org.eclipse.jetty.server.handler.ResourceHandler;
+import org.eclipse.jetty.servlet.FilterHolder;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.util.security.Constraint;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
+import org.glassfish.jersey.servlet.ServletContainer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.*;
+import java.security.*;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Collections;
+import java.util.Properties;
+
+public class EmbeddedServer {
+    static Server server = null;
+    private final static String componentUUID = "f2dsfb1d-9e7a-4c9f-984e-ee5sdfa68d60";
+    private static String getHandlerPackages() {
+        return "com.example";
+    }
+    private static Properties properties;
+    final static Logger log = LoggerFactory.getLogger(EmbeddedServer.class);
+
+    static PrivateKey createPrivateKey(String keyFileName) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+
+        // see https://www.openssl.org/docs/HOWTO/certificates.txt
+        PrivateKey privateKey;
+
+        FileInputStream fis = new FileInputStream(keyFileName);
+        InputStreamReader isr = new InputStreamReader(fis);
+        BufferedReader br = new BufferedReader(isr);
+
+        // TODO Handle DER format private keys
+
+        String line;
+        StringBuilder sb = new StringBuilder();
+        while ((line = br.readLine()) != null) {
+            sb.append(line);
+        }
+
+        String pemString = sb.toString();
+
+        pemString = pemString.replace("-----BEGIN PRIVATE KEY-----", "");
+        pemString = pemString.replace("-----END PRIVATE KEY-----", "");
+
+
+        Base64 decoder = new Base64();
+
+        byte[] encoded = decoder.decode(pemString);
+
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(encoded);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        privateKey = kf.generatePrivate(keySpec);
+
+        return privateKey;
+    }
+
+    private static KeyStore createJavaKeyStore(String certFileName, String keyFileName) throws IOException, CertificateException, KeyStoreException, NoSuchAlgorithmException, InvalidKeySpecException {
+        // see https://www.openssl.org/docs/HOWTO/keys.txt
+        KeyStore ks = KeyStore.getInstance("JKS");
+        FileInputStream fis = new FileInputStream(certFileName);
+        BufferedInputStream bis = new BufferedInputStream(fis);
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        Certificate cert = null;
+
+        // load the x.509 certificate
+        while (bis.available() &gt; 0) {
+            cert = cf.generateCertificate(bis);
+        }
+
+        bis.close();
+        fis.close();
+
+        ks.load(null, null);
+
+        ks.setKeyEntry("keyentry,", createPrivateKey(keyFileName), componentUUID.toCharArray(), new Certificate[]{cert});
+
+        return ks;
+    }
+
+
+    public static Server createServerWithConnectors() throws IOException, InvalidKeySpecException, CertificateException, NoSuchAlgorithmException, KeyStoreException {
+        Server server = new Server();
+        SslContextFactory sslContextFactory;
+
+        KeyStore ks = createJavaKeyStore("ssl/cacertpemkey.pem", "ssl/privkey.pem");
+
+        sslContextFactory = new SslContextFactory();
+        sslContextFactory.setKeyStore(ks);
+        sslContextFactory.setKeyStorePassword(componentUUID);
+
+        // HTTP Configuration
+        // HttpConfiguration is a collection of configuration information appropriate for http and https. The default
+        // scheme for http is &lt;code&gt;http&lt;/code&gt; of course, as the default for secured http is &lt;code&gt;https&lt;/code&gt; but
+        // we show setting the scheme to show it can be done.  The port for secured communication is also set here.
+        HttpConfiguration http_config = new HttpConfiguration();
+        http_config.setSecureScheme("https");
+        http_config.setSecurePort(getPort(true));
+        http_config.setOutputBufferSize(32768);
+
+        // HTTP connector
+        // The first server connector we create is the one for http, passing in the http configuration we configured
+        // above so it can get things like the output buffer size, etc. We also set the port (8080) and configure an
+        // idle timeout.
+        ServerConnector http = new ServerConnector(server, new HttpConnectionFactory(http_config));
+        http.setPort(getPort(false));
+        http.setIdleTimeout(30000);
+
+        // HTTPS Configuration
+        // A new HttpConfiguration object is needed for the next connector and you can pass the old one as an
+        // argument to effectively clone the contents. On this HttpConfiguration object we add a
+        // SecureRequestCustomizer which is how a new connector is able to resolve the https connection before
+        // handing control over to the Jetty Server.
+        HttpConfiguration https_config = new HttpConfiguration(http_config);
+        https_config.addCustomizer(new SecureRequestCustomizer());
+
+        // HTTPS connector
+        // We create a second ServerConnector, passing in the http configuration we just made along with the
+        // previously created ssl context factory. Next we set the port and a longer idle timeout.
+        ServerConnector https = new ServerConnector(server,
+                new SslConnectionFactory(sslContextFactory, "http/1.1"),
+                new HttpConnectionFactory(https_config));
+        https.setPort(getPort(true));
+        https.setIdleTimeout(500000);
+
+        // Here you see the server having multiple connectors registered with it, now requests can flow into the server
+        // from both http and https urls to their respective ports and be processed accordingly by jetty. A simple
+        // handler is also registered with the server so the example has something to pass requests off to.
+
+        // Set the connectors
+        server.setConnectors(new Connector[]{http, https});
+
+        return server;
+    }
+
+    public static int getPort(boolean secure)  {
+        String s;
+        if (secure)
+            s = properties.getProperty("secure.port", "8443");
+        else
+            s = properties.getProperty("port", "8080");
+
+        return Integer.parseInt(s);
+    }
+
+    public static void stopServer()
+    {
+        if (server != null)  {
+            try {
+                server.stop();
+            } catch (Exception e) {
+                log.info("Exception in stopServer", e);
+            }
+        }
+    }
+
+    public static Server startServerIfNeeded()
+    {
+        if (server == null) {
+            try {
+                server = createServerWithConnectors();
+                HandlerList handlers = buildServerHandlers();
+                server.setHandler(handlers);
+                server.start();
+                server.join();
+            } catch (Exception e) {
+                log.info("Exception in startServerIfNeeded", e);
+            }
+        }
+
+        return server;
+    }
+
+
+    public static void main(String [] args)
+    {
+        log.info("Embedded server startup");
+        properties = Util.getProperties("embeddedserver.properties");
+        startServerIfNeeded();
+    }
+
+    private static HandlerList buildServerHandlers() {
+        HandlerList handlers = new HandlerList();
+
+        ConstraintSecurityHandler securityHandler = buildConstraintSecurityHandler();
+        ServletContextHandler servletContexttHandler = buildJerseyServletHandler();
+        securityHandler.setHandler(servletContexttHandler);
+        handlers.addHandler(securityHandler);
+
+        securityHandler = buildConstraintSecurityHandler();
+        ContextHandler ch  = buildStaticResourceHandler();
+        securityHandler.setHandler(ch);
+        handlers.addHandler(securityHandler);
+
+        return handlers;
+    }
+
+    private static ServletContextHandler buildJerseyServletHandler() {
+        ServletContextHandler servletContextHandler = new ServletContextHandler(
+                ServletContextHandler.SESSIONS);
+
+        servletContextHandler.setContextPath("/api");
+        servletContextHandler.setErrorHandler(new MyServletContextErrorHandler());
+        servletContextHandler.addEventListener(new MyServletContextListener());
+        servletContextHandler.setAttribute(Injector.class.getName(), Guice.createInjector(new ProdModule()));
+        servletContextHandler.addFilter(new FilterHolder(new LoggingFilter()),"/*",null);
+
+        ServletHolder servletHolder = new ServletHolder(new ServletContainer());
+
+        String packageList = getHandlerPackages();
+        servletHolder.setInitParameter(
+                "jersey.config.server.provider.packages", packageList);
+        servletContextHandler.addServlet(servletHolder, "/*");
+
+        return servletContextHandler;
+    }
+
+    private static ContextHandler buildStaticResourceHandler() {
+        // if you want the static content to serve off a url like
+        // localhost:8080/files/.... then put 'files' in the constructor
+        // to the ContextHandler
+        ContextHandler ch = new ContextHandler("/");
+        ResourceHandler rh = new ResourceHandler();
+        rh.setWelcomeFiles(new String[]{"index.html"});
+        rh.setResourceBase(properties.getProperty("static.resource.base"));
+        ch.setHandler(rh);
+        return ch;
+    }
+
+    private static ConstraintSecurityHandler buildConstraintSecurityHandler() {
+        // this configures jetty to require HTTPS for all requests
+        Constraint constraint = new Constraint();
+        constraint.setDataConstraint(Constraint.DC_CONFIDENTIAL);
+        ConstraintMapping mapping = new ConstraintMapping();
+        mapping.setPathSpec("/*");
+        mapping.setConstraint(constraint);
+        ConstraintSecurityHandler security = new ConstraintSecurityHandler();
+        security.setConstraintMappings(Collections.singletonList(mapping));
+        return security;
+    }
+}
+</code></pre>

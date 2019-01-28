@@ -1,0 +1,129 @@
+<p>Ok guys, I found the solution :) I updated my tab to Android 3.1, that gave me the real error, OutOfMemoryError. I was allocating my background on a button click. So I now make a </p>
+
+<pre><code>WeakReference&lt;BitmapDrawable&gt;
+</code></pre>
+
+<p>instead of
+    BitmapDrawable
+and disable my button until the background is well set (in order to avoid two big BitmapDrawable creation at the same time).</p>
+
+<p>Hoping it will help you, poor 3.0 developpers ^^</p>
+
+<p>Edit: Here is a class I created to manage cache:</p>
+
+<pre><code>import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.lang.ref.WeakReference;
+import java.util.WeakHashMap;
+
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapFactory.Options;
+import android.graphics.drawable.BitmapDrawable;
+
+public class BitmapDrawableCache {
+
+    private static BitmapDrawableCache                 instance = null;
+    WeakHashMap&lt;String, WeakReference&lt;BitmapDrawable&gt;&gt; cache;
+
+    private BitmapDrawableCache() {
+        cache = new WeakHashMap&lt;String, WeakReference&lt;BitmapDrawable&gt;&gt;();
+    }
+
+    public synchronized static BitmapDrawable get(String drawablePath) {
+        if (instance == null) {
+            instance = new BitmapDrawableCache();
+        }
+
+        BitmapDrawable bmd = null;
+        WeakReference&lt;BitmapDrawable&gt; wr0 = instance.cache.get(drawablePath);
+        if (instance.cache.get(drawablePath) != null) bmd = wr0.get();
+
+        if (bmd == null) {
+            WeakReference&lt;BitmapDrawable&gt; wr = new WeakReference&lt;BitmapDrawable&gt;(new BitmapDrawable(drawablePath));
+            instance.cache.put(drawablePath, wr);
+            bmd = wr.get();
+        }
+
+        return bmd;
+
+    }
+
+    public synchronized static BitmapDrawable get(Bitmap bitmap) {
+
+        String drawableName = "_bitmap_" + bitmap.hashCode();
+
+        if (instance == null) {
+            instance = new BitmapDrawableCache();
+        }
+
+        BitmapDrawable bmd = null;
+        WeakReference&lt;BitmapDrawable&gt; wr0 = instance.cache.get(drawableName);
+        if (instance.cache.get(drawableName) != null) bmd = wr0.get();
+
+        if (bmd == null) {
+            WeakReference&lt;BitmapDrawable&gt; wr = new WeakReference&lt;BitmapDrawable&gt;(new BitmapDrawable(bitmap));
+            instance.cache.put(drawableName, wr);
+            bmd = wr.get();
+        }
+
+        return bmd;
+
+    }
+
+
+    //Get BitmapDrawable in cache with options to reduce its size
+    public synchronized static BitmapDrawable get(String drawableName, Options options) {
+        if (instance == null) {
+            instance = new BitmapDrawableCache();
+        }
+
+        BitmapDrawable bmd = null;
+        WeakReference&lt;BitmapDrawable&gt; wr0 = instance.cache.get(drawableName);
+        if (instance.cache.get(drawableName) != null) bmd = wr0.get();
+
+        if (bmd == null) {
+            File f = new File(drawableName);
+            WeakReference&lt;BitmapDrawable&gt; wr = new WeakReference&lt;BitmapDrawable&gt;(new BitmapDrawable(instance.decodeFile(f, options)));
+            instance.cache.put(drawableName, wr);
+            bmd = wr.get();
+        }
+
+        return bmd;
+
+    }  
+
+
+  //decodes image and scales it to reduce memory consumption
+    private Bitmap decodeFile(File f, Options o2){
+        try {
+            //Decode image size
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(new FileInputStream(f),null,o);
+
+            int scale=1;
+            //The new size we want to scale to
+            final int REQUIRED_SIZE=70;
+
+            //Find the correct scale value. It should be the power of 2.
+            int width_tmp=o.outWidth, height_tmp=o.outHeight;
+            while(true){
+                if(width_tmp/2&lt;REQUIRED_SIZE || height_tmp/2&lt;REQUIRED_SIZE)
+                    break;
+                width_tmp/=2;
+                height_tmp/=2;
+                scale*=2;
+            }
+
+            //Decode with inSampleSize
+           // BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize=scale;
+            return BitmapFactory.decodeStream(new FileInputStream(f), null, o2);
+        } catch (FileNotFoundException e) {}
+        return null;
+    }
+
+}
+</code></pre>

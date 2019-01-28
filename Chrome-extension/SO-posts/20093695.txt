@@ -1,0 +1,73 @@
+<p>When you get the GATT_INSUFFICIENT_AUTHENTICATION error, the system starts the bonding process for you. In the example below I'm trying to enable notifications and indications on glucose monitor. First I'm enabling the notifications on Glucose Measurement characteristic which can cause the error to appear.</p>
+
+<pre><code>@Override
+    public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+            if (GM_CHARACTERISTIC.equals(descriptor.getCharacteristic().getUuid())) {
+                mCallbacks.onGlucoseMeasurementNotificationEnabled();
+
+                if (mGlucoseMeasurementContextCharacteristic != null) {
+                    enableGlucoseMeasurementContextNotification(gatt);
+                } else {
+                    enableRecordAccessControlPointIndication(gatt);
+                }
+            }
+
+            if (GM_CONTEXT_CHARACTERISTIC.equals(descriptor.getCharacteristic().getUuid())) {
+                mCallbacks.onGlucoseMeasurementContextNotificationEnabled();
+                enableRecordAccessControlPointIndication(gatt);
+            }
+
+            if (RACP_CHARACTERISTIC.equals(descriptor.getCharacteristic().getUuid())) {
+                mCallbacks.onRecordAccessControlPointIndicationsEnabled();
+            }
+        } else if (status == BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION) {
+            // this is where the tricky part comes
+
+            if (gatt.getDevice().getBondState() == BluetoothDevice.BOND_NONE) {
+                mCallbacks.onBondingRequired();
+
+                // I'm starting the Broadcast Receiver that will listen for bonding process changes
+
+                final IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+                mContext.registerReceiver(mBondingBroadcastReceiver, filter);
+            } else {
+                // this situation happens when you try to connect for the second time to already bonded device
+                // it should never happen, in my opinion
+                Logger.e(TAG, "The phone is trying to read from paired device without encryption. Android Bug?");
+                // I don't know what to do here
+                // This error was found on Nexus 7 with KRT16S build of Andorid 4.4. It does not appear on Samsung S4 with Andorid 4.3.
+            }
+        } else {
+            mCallbacks.onError(ERROR_WRITE_DESCRIPTOR, status);
+        }
+    };
+</code></pre>
+
+<p>Where the mBondingBroadcastReceiver is:</p>
+
+<pre><code>private BroadcastReceiver mBondingBroadcastReceiver = new BroadcastReceiver() {
+    @Override
+    public void onReceive(final Context context, final Intent intent) {
+        final BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+        final int bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1);
+        final int previousBondState = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1);
+
+        Logger.d(TAG, "Bond state changed for: " + device.getAddress() + " new state: " + bondState + " previous: " + previousBondState);
+
+        // skip other devices
+        if (!device.getAddress().equals(mBluetoothGatt.getDevice().getAddress()))
+            return;
+
+        if (bondState == BluetoothDevice.BOND_BONDED) {
+            // Continue to do what you've started before
+            enableGlucoseMeasurementNotification(mBluetoothGatt);
+
+            mContext.unregisterReceiver(this);
+            mCallbacks.onBonded();
+        }
+    }
+};
+</code></pre>
+
+<p>Remember to unregister the broadcast receiver when exiting the activity. It may have not been unregistered by the receicver itself.</p>

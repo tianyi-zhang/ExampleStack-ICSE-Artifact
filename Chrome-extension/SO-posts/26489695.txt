@@ -1,0 +1,275 @@
+<p>I think I may have found a solution to this problem. I was having a similar problem except for my error was saying that I had invalid tables instead of URI's. I followed Jackomels example above for his set tables queries and was able to get my edit to work. His Uri's are set up differently than mine which I am thinking is what the error is about. He uses the same BASE_PATH for both tables but I think that each table needs to have a different "base path". </p>
+
+<p>I have   private static final String BASE_PATH = "todos"  &amp;  private static final String DEVICE_PATH = "devices";</p>
+
+<p>I am pasting my code below in case it helps someone else.</p>
+
+<p><div class="snippet" data-lang="js" data-hide="false">
+<div class="snippet-code">
+<pre class="snippet-code-html lang-html prettyprint-override"><code>package com.cossioinsurance.rentalsafety.contentprovider2;
+import java.util.Arrays;
+import java.util.HashSet;
+
+import com.cossioinsurance.rentalsafety.database.TodoDatabaseHelper;
+import com.cossioinsurance.rentalsafety.database.NoteTable;
+import com.cossioinsurance.rentalsafety.database.DeviceTable;
+
+import android.content.ContentProvider;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.UriMatcher;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteQueryBuilder;
+import android.net.Uri;
+import android.text.TextUtils;
+
+public class MyNoteContentProvider extends ContentProvider{
+
+   // database
+   private TodoDatabaseHelper database;
+
+   // used for the UriMacher
+   private static final int TODOS = 10;
+   private static final int TODO_ID = 20;
+   private static final int DEVICES = 30;
+   private static final int DEVICE_ID = 40;
+
+   private static final String AUTHORITY = "com.cossioinsurance.rentalsafety.contentprovider2";
+
+   private static final String BASE_PATH = "todos";
+   private static final String DEVICE_PATH = "devices";
+   
+   public static final Uri CONTENT_URI_TODOS = Uri.parse("content://" + AUTHORITY
+       + "/" + BASE_PATH);
+   public static final Uri CONTENT_URI_DEVICES = Uri.parse("content://" + AUTHORITY
+        + "/" + DEVICE_PATH);
+
+   public static final String CONTENT_TYPE_TODOS = ContentResolver.CURSOR_DIR_BASE_TYPE
+       + "/todos";
+   public static final String CONTENT_TYPE_DEVICES = ContentResolver.CURSOR_DIR_BASE_TYPE
+        + "/devices";
+   
+   public static final String CONTENT_ITEM_TYPE = ContentResolver.CURSOR_ITEM_BASE_TYPE
+       + "/todo";
+   
+   public static final String CONTENT_ITEM_TYPE2 = ContentResolver.CURSOR_ITEM_BASE_TYPE
+        + "/device";
+
+   private static final UriMatcher sURIMatcher = new UriMatcher(UriMatcher.NO_MATCH);
+   static {
+     sURIMatcher.addURI(AUTHORITY, BASE_PATH, TODOS);
+     sURIMatcher.addURI(AUTHORITY, BASE_PATH + "/#", TODO_ID);
+     sURIMatcher.addURI(AUTHORITY, DEVICE_PATH, DEVICES);
+     sURIMatcher.addURI(AUTHORITY, DEVICE_PATH + "/#", DEVICE_ID);
+   }
+
+   @Override
+   public boolean onCreate() {
+     database = new TodoDatabaseHelper(getContext());
+     return false;
+   }
+
+   @Override
+   public Cursor query(Uri uri, String[] projection, String selection,
+       String[] selectionArgs, String sortOrder) {
+
+     // Uisng SQLiteQueryBuilder instead of query() method
+     SQLiteQueryBuilder queryBuilder = new SQLiteQueryBuilder();
+
+     // check if the caller has requested a column which does not exists
+     checkColumns(projection);
+
+     // Set the table
+     
+
+     int uriType = sURIMatcher.match(uri);
+     switch (uriType) {
+     case TODOS:
+      queryBuilder.setTables(NoteTable.TABLE_TODO);
+       break;
+     case TODO_ID:
+      queryBuilder.setTables(NoteTable.TABLE_TODO);
+       // adding the ID to the original query
+       queryBuilder.appendWhere(NoteTable.COLUMN_ID + "="
+           + uri.getLastPathSegment());
+       break;
+     case DEVICES:
+      queryBuilder.setTables(DeviceTable.TABLE_DEVICE);
+       break;
+     case DEVICE_ID:
+      queryBuilder.setTables(DeviceTable.TABLE_DEVICE);
+       // adding the ID to the original query
+       queryBuilder.appendWhere(DeviceTable.COLUMN_ID + "="
+           + uri.getLastPathSegment());
+       break;
+     default:
+       throw new IllegalArgumentException("Unknown URI: " + uri);
+     }
+
+     SQLiteDatabase db = database.getWritableDatabase();
+     Cursor cursor = queryBuilder.query(db, projection, selection,
+         selectionArgs, null, null, sortOrder);
+     // make sure that potential listeners are getting notified
+     cursor.setNotificationUri(getContext().getContentResolver(), uri);
+
+     return cursor;
+   }
+
+   @Override
+   public String getType(Uri uri) {
+     return null;
+   }
+
+   @Override
+   public Uri insert(Uri uri, ContentValues values) {
+     int uriType = sURIMatcher.match(uri);
+     SQLiteDatabase sqlDB = database.getWritableDatabase();
+     int rowsDeleted = 0;
+     long id = 0;
+     switch (uriType) {
+     case TODOS:
+       id = sqlDB.insert(NoteTable.TABLE_TODO, null, values);
+       break;
+     case DEVICES:
+    id = sqlDB.insert(DeviceTable.TABLE_DEVICE, null, values);
+    break;
+     default:
+       throw new IllegalArgumentException("Unknown URI: " + uri);
+     }
+     getContext().getContentResolver().notifyChange(uri, null);
+     return Uri.parse(BASE_PATH + "/" + id);
+     
+ 
+   }
+
+   //Deleted Rows
+   
+   @Override
+   public int delete(Uri uri, String selection, String[] selectionArgs) {
+     int uriType = sURIMatcher.match(uri);
+     SQLiteDatabase sqlDB = database.getWritableDatabase();
+     int rowsDeleted = 0;  
+     String id = uri.getLastPathSegment();
+     switch (uriType) {
+     case TODOS:
+       rowsDeleted = sqlDB.delete(NoteTable.TABLE_TODO, selection,
+           selectionArgs);
+       break;
+     case TODO_ID:
+      
+       if (TextUtils.isEmpty(selection)) {
+         rowsDeleted = sqlDB.delete(NoteTable.TABLE_TODO,
+             NoteTable.COLUMN_ID + "=" + id, 
+             null);
+       } else {
+         rowsDeleted = sqlDB.delete(NoteTable.TABLE_TODO,
+             NoteTable.COLUMN_ID + "=" + id 
+             + " and " + selection,
+             selectionArgs);
+       }
+       break;
+     case DEVICES:
+        rowsDeleted = sqlDB.delete(DeviceTable.TABLE_DEVICE, selection,
+            selectionArgs);
+        break;
+      case DEVICE_ID:
+       
+        if (TextUtils.isEmpty(selection)) {
+          rowsDeleted = sqlDB.delete(DeviceTable.TABLE_DEVICE,
+              DeviceTable.COLUMN_ID + "=" + id, 
+              null);
+        } else {
+          rowsDeleted = sqlDB.delete(NoteTable.TABLE_TODO,
+              DeviceTable.COLUMN_ID + "=" + id 
+              + " and " + selection,
+              selectionArgs);
+        }
+        break;
+     default:
+       throw new IllegalArgumentException("Unknown URI: " + uri);
+     }
+     getContext().getContentResolver().notifyChange(uri, null);
+     return rowsDeleted;
+   }
+
+   
+   //Update Rows
+   @Override
+   public int update(Uri uri, ContentValues values, String selection,
+       String[] selectionArgs) {
+
+     int uriType = sURIMatcher.match(uri);
+     SQLiteDatabase sqlDB = database.getWritableDatabase();
+     int rowsUpdated = 0;
+     
+     switch (uriType) {
+     case TODOS:
+       rowsUpdated = sqlDB.update(NoteTable.TABLE_TODO, 
+           values, 
+           selection,
+           selectionArgs);
+       break;
+     case TODO_ID:
+      String id = uri.getLastPathSegment();
+       if (TextUtils.isEmpty(selection)) {
+         rowsUpdated = sqlDB.update(NoteTable.TABLE_TODO, 
+             values,
+             NoteTable.COLUMN_ID + "=" + id, 
+             null);
+       } else {
+         rowsUpdated = sqlDB.update(NoteTable.TABLE_TODO, 
+             values,
+             NoteTable.COLUMN_ID + "=" + id 
+             + " and " 
+             + selection,
+             selectionArgs);
+       }
+       break;
+     case DEVICES:
+        rowsUpdated = sqlDB.update(DeviceTable.TABLE_DEVICE, 
+            values, 
+            selection,
+            selectionArgs);
+        break;
+      case DEVICE_ID:
+       id = uri.getLastPathSegment();
+        if (TextUtils.isEmpty(selection)) {
+          rowsUpdated = sqlDB.update(DeviceTable.TABLE_DEVICE, 
+              values,
+              DeviceTable.COLUMN_ID + "=" + id, 
+              null);
+        } else {
+          rowsUpdated = sqlDB.update(DeviceTable.TABLE_DEVICE, 
+              values,
+              DeviceTable.COLUMN_ID + "=" + id 
+              + " and " 
+              + selection,
+              selectionArgs);
+        }
+        break;
+     default:
+       throw new IllegalArgumentException("Unknown URI: " + uri);
+     }
+     getContext().getContentResolver().notifyChange(uri, null);
+     return rowsUpdated;
+   }
+
+   private void checkColumns(String[] projection) {
+     String[] available = { NoteTable.COLUMN_CATEGORY,
+         NoteTable.COLUMN_SUMMARY, NoteTable.COLUMN_DESCRIPTION, NoteTable.COLUMN_EMAIL, NoteTable.COLUMN_RENTALDATES, 
+         NoteTable.COLUMN_ENDDATES, NoteTable.COLUMN_TIME, NoteTable.COLUMN_LOCATION, NoteTable.COLUMN_NOTES,
+         NoteTable.COLUMN_ID, DeviceTable.COLUMN_ID, DeviceTable.COLUMN_CATEGORY, DeviceTable.COLUMN_NAME, DeviceTable.COLUMN_TYPE };
+     if (projection != null) {
+       HashSet&lt;String&gt; requestedColumns = new HashSet&lt;String&gt;(Arrays.asList(projection));
+       HashSet&lt;String&gt; availableColumns = new HashSet&lt;String&gt;(Arrays.asList(available));
+       // check if all columns which are requested are available
+       if (!availableColumns.containsAll(requestedColumns)) {
+         throw new IllegalArgumentException("Unknown columns in projection");
+       }
+     }
+   }
+}</code></pre>
+</div>
+</div>
+</p>

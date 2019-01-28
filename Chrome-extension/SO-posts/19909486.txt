@@ -1,0 +1,188 @@
+<p>That solution does not work, cause <strong>scale</strong> is relative value, but MIN_ZOOM and MAX_ZOOM are absolute.
+I've solved this problem like this: </p>
+
+<pre><code>public class GestureImageView extends ImageView {
+private static final float MIN_DISTANCE_FOR_ZOOM = 5f;
+private static final float MAX_SCALE_RATIO = 5f;
+private static final int SCALE_X_INDEX = 0;
+private static final int MATRIX_SIZE = 9;
+private static final int NONE = 0;
+private static final int DRAG = 1;
+private static final int ZOOM = 2;
+private int mode = NONE;
+private GestureDetector gestureDetector;
+private Matrix fitScreenMatrix = new Matrix();
+private Matrix defaultMatrix = new Matrix();
+private Matrix matrix = new Matrix();
+private Matrix savedMatrix = new Matrix();
+private PointF start = new PointF(0, 0);
+private PointF mid = new PointF(0, 0);
+private float oldDist = 1f;
+private float minScale;
+private float maxScale;
+
+
+public GestureImageView(Context context) {
+    super(context);
+
+    gestureDetector = new GestureDetector(context, new DoubleTapListener());
+    setOnTouchListener(new ZoomDragListener());
+    setScaleType(AsyncGestureImageView.ScaleType.MATRIX);
+}
+
+private void calculateDefaultValues(Drawable drawable) {
+    float imgWidth    = drawable.getIntrinsicWidth();
+    float imgHeight   = drawable.getIntrinsicHeight();
+    float width = getWidth();
+    float height = getHeight();
+
+    float widthRatio  = width / imgWidth;
+    float heightRatio = height / imgHeight;
+
+    float values[] = new float[MATRIX_SIZE];
+    float ratio;
+    PointF fitScreenPosition;
+    PointF defaultPosition = new PointF((width - imgWidth)/2f, (height - imgHeight)/2f);
+
+    if ( widthRatio &lt; heightRatio ) {
+        ratio = widthRatio;
+        fitScreenPosition = new PointF(0f, (height/ratio-imgHeight)/2f);
+    } else {
+        ratio = heightRatio;
+        fitScreenPosition = new PointF((width/ratio - imgWidth)/2f, 0f);
+    }
+
+    fitScreenMatrix.postTranslate(fitScreenPosition.x, fitScreenPosition.y);
+    fitScreenMatrix.postScale(ratio, ratio, 0, 0);
+    fitScreenMatrix.getValues(values);
+    defaultMatrix.postTranslate(defaultPosition.x, defaultPosition.y);
+
+    maxScale = values[SCALE_X_INDEX] * MAX_SCALE_RATIO;
+    minScale = values[SCALE_X_INDEX];
+}
+
+private void fitScreen() {
+    matrix.set(fitScreenMatrix);
+    setImageMatrix(matrix);
+}
+
+private void defaultScreen() {
+    matrix.set(defaultMatrix);
+    setImageMatrix(matrix);
+}
+
+private class DoubleTapListener extends GestureDetector.SimpleOnGestureListener {
+    @Override
+    public boolean onDoubleTap(MotionEvent e) {
+        if ( isFitScreen() ) {
+            defaultScreen();
+            return true;
+        }
+        fitScreen();
+        return true;
+    }
+}
+
+public boolean isFitScreen() {
+    return matrix.equals(fitScreenMatrix);
+}
+
+private class ZoomDragListener implements OnTouchListener {
+    @Override
+    public boolean onTouch(View v, MotionEvent event) {
+        gestureDetector.onTouchEvent(event);
+        AsyncGestureImageView i = (AsyncGestureImageView) v;
+        dragAndZoom(i, event);
+
+        return true;
+    }
+
+    private void dragAndZoom(View v, MotionEvent event) {
+        AsyncGestureImageView view = (AsyncGestureImageView) v;
+
+        switch (event.getAction() &amp; MotionEvent.ACTION_MASK) {
+            case MotionEvent.ACTION_DOWN:
+                savedMatrix.set(matrix);
+                start.x = event.getX();
+                start.y = event.getY();
+                if (isFitScreen()) {
+                    return;
+                }
+                mode = DRAG;
+                break;
+
+            case MotionEvent.ACTION_UP:
+
+            case MotionEvent.ACTION_POINTER_UP:
+                mode = NONE;
+                break;
+
+            case MotionEvent.ACTION_POINTER_DOWN:
+                oldDist = gestureDistance(event);
+                if (oldDist &gt; MIN_DISTANCE_FOR_ZOOM) {
+                    savedMatrix.set(matrix);
+                    midPoint(mid, event);
+                    mode = ZOOM;
+
+                }
+                break;
+
+            case MotionEvent.ACTION_MOVE:
+                if (mode == DRAG){
+                    matrix.set(savedMatrix);
+                    matrix.postTranslate((event.getX() - start.x), (event.getY() - start.y));
+
+                } else if (mode == ZOOM) {
+                    float newDist = gestureDistance(event);
+
+                    if (newDist &gt; MIN_DISTANCE_FOR_ZOOM) {
+                        matrix.set(savedMatrix);
+
+                        float scale = newDist / oldDist;
+                        float values[] = new float[MATRIX_SIZE];
+                        matrix.getValues(values);
+                        float currentScale = values[SCALE_X_INDEX];
+                        float newScale = currentScale * scale;
+
+                        if ( newScale &gt; maxScale ) {
+                            scale = maxScale / currentScale;
+                        }
+                        if ( newScale &lt; minScale ) {
+                            scale = minScale / currentScale;
+                        }
+
+                        matrix.postScale(scale, scale, mid.x, mid.y);
+                    }
+                }
+                break;
+        }
+
+        view.setImageMatrix(matrix);
+
+    }
+
+    private float gestureDistance(MotionEvent event) {
+        if ( event.getPointerCount() != 2 ) {
+            return 0;
+        }
+        float x = event.getX(0) - event.getX(1);
+        float y = event.getY(0) - event.getY(1);
+
+        return FloatMath.sqrt(x * x + y * y);
+    }
+
+    private void midPoint(PointF point, MotionEvent event) {
+        point.x = event.getX(0) / 2 + event.getX(1) / 2;
+        point.y = event.getY(0) / 2 + event.getY(1) / 2;
+    }
+}
+
+@Override
+public void setImageDrawable(Drawable drawable) {
+    if ( drawable != null ) {
+        calculateDefaultValues(drawable);
+        fitScreen();
+    }
+    super.setImageDrawable(drawable);
+}
+</code></pre>

@@ -1,0 +1,117 @@
+<p>This is a bit late but I had to do exactly the same thing today. So, based on my research and when using gson-2.0 you really don't want to use the <strong>registerTypeHierarchyAdapter</strong> method, but rather the more mundane <strong>registerTypeAdapter</strong>. And you certainly don't need to do <strong>instanceofs</strong> or write adapters for the derived classes: just one adapter for the base class or interface, provided of course that you are happy with the default serialization of the derived classes. Anyway, here's the code (package and imports removed) (also available in <a href="https://github.com/mperdikeas/json-polymorphism">github</a>):</p>
+
+<p>The base class (interface in my case):</p>
+
+<pre><code>public interface IAnimal {public String sound();}
+</code></pre>
+
+<p>The two derived classes, Cat:</p>
+
+<pre><code>public class Cat implements IAnimal {
+   public String name;
+   public Cat(String name) {
+      super();
+     this.name = name;
+   }
+   @Override
+   public String sound() {
+     return name+" : \"meaow\"";
+   };
+}
+</code></pre>
+
+<p>And Dog:</p>
+
+<pre><code>public class Dog implements IAnimal {
+
+public String name;
+public int ferocity;
+
+
+public Dog(String name, int ferocity) {
+        super();
+    this.name = name;
+    this.ferocity = ferocity;
+}
+
+@Override
+public String sound() {
+    return name+" : \"bark\" (ferocity level:"+ferocity + ")";
+
+}
+</code></pre>
+
+<p>}</p>
+
+<p>The IAnimalAdapter:</p>
+
+<pre><code>public class IAnimalAdapter implements JsonSerializer&lt;IAnimal&gt;, JsonDeserializer&lt;IAnimal&gt;{
+
+private static final String CLASSNAME = "CLASSNAME";
+private static final String INSTANCE  = "INSTANCE";
+
+@Override
+public JsonElement serialize(IAnimal src, Type typeOfSrc,
+        JsonSerializationContext context) {
+
+    JsonObject retValue = new JsonObject();
+    String className = src.getClass().getName();
+    retValue.addProperty(CLASSNAME, className);
+    JsonElement elem = context.serialize(src); 
+    retValue.add(INSTANCE, elem);
+    return retValue;
+}
+
+@Override
+public IAnimal deserialize(JsonElement json, Type typeOfT,
+        JsonDeserializationContext context) throws JsonParseException  {
+    JsonObject jsonObject =  json.getAsJsonObject();
+    JsonPrimitive prim = (JsonPrimitive) jsonObject.get(CLASSNAME);
+    String className = prim.getAsString();
+
+    Class&lt;?&gt; klass = null;
+    try {
+        klass = Class.forName(className);
+    } catch (ClassNotFoundException e) {
+        e.printStackTrace();
+        throw new JsonParseException(e.getMessage());
+    }
+    return context.deserialize(jsonObject.get(INSTANCE), klass);
+}
+ }
+</code></pre>
+
+<p>And the Test class:</p>
+
+<pre><code>public class Test {
+
+public static void main(String[] args) {
+    IAnimal animals[] = new IAnimal[]{new Cat("Kitty"), new Dog("Brutus", 5)};
+    Gson gsonExt = null;
+    {
+        GsonBuilder builder = new GsonBuilder();
+        builder.registerTypeAdapter(IAnimal.class   , new IAnimalAdapter());
+        gsonExt = builder.create();
+    }
+    for (IAnimal animal : animals) {
+        String animalJson = gsonExt.toJson(animal, IAnimal.class);
+        System.out.println("serialized with the custom serializer:"  +animalJson);
+        IAnimal animal2 = gsonExt.fromJson(animalJson, IAnimal.class);
+        System.out.println(animal2.sound());
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>When you run the Test::main you get the following output:</p>
+
+<pre><code>serialized with the custom serializer:
+{"CLASSNAME":"com.synelixis.caches.viz.json.playground.plainAdapter.Cat","INSTANCE":{"name":"Kitty"}}
+Kitty : "meaow"
+serialized with the custom serializer:
+{"CLASSNAME":"com.synelixis.caches.viz.json.playground.plainAdapter.Dog","INSTANCE":{"name":"Brutus","ferocity":5}}
+Brutus : "bark" (ferocity level:5)
+</code></pre>
+
+<p>I've actually done the above using the <strong>registerTypeHierarchyAdapter</strong> method too, but that seemed to require implementing custom DogAdapter and CatAdapter serializer/deserializer classes which are a pain to maintain any time you want to add another field to Dog or to Cat.</p>

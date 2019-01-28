@@ -1,0 +1,117 @@
+<p>After looking at the code of <code>ComparableTimSort</code> I am not quite sure. Let's analyze it. Here is the only method that throws it (there is a similar method that does the same only with exchanged roles, so analyzing one of them is enough).</p>
+
+<pre><code>private void mergeLo(int base1, int len1, int base2, int len2) {
+        assert len1 &gt; 0 &amp;&amp; len2 &gt; 0 &amp;&amp; base1 + len1 == base2;
+
+        // Copy first run into temp array
+        Object[] a = this.a; // For performance
+        Object[] tmp = ensureCapacity(len1);
+
+        int cursor1 = tmpBase; // Indexes into tmp array
+        int cursor2 = base2;   // Indexes int a
+        int dest = base1;      // Indexes int a
+        System.arraycopy(a, base1, tmp, cursor1, len1);
+
+        // Move first element of second run and deal with degenerate cases
+        a[dest++] = a[cursor2++];
+        if (--len2 == 0) {
+            System.arraycopy(tmp, cursor1, a, dest, len1);
+            return;
+        }
+        if (len1 == 1) {
+            System.arraycopy(a, cursor2, a, dest, len2);
+            a[dest + len2] = tmp[cursor1]; // Last elt of run 1 to end of merge
+            return;
+        }
+
+        int minGallop = this.minGallop;  // Use local variable for performance
+    outer:
+        while (true) {
+            int count1 = 0; // Number of times in a row that first run won
+            int count2 = 0; // Number of times in a row that second run won
+
+            /*
+             * Do the straightforward thing until (if ever) one run starts
+             * winning consistently.
+             */
+// ------------------ USUAL MERGE
+            do {
+                assert len1 &gt; 1 &amp;&amp; len2 &gt; 0;
+                if (((Comparable) a[cursor2]).compareTo(tmp[cursor1]) &lt; 0) {
+                    a[dest++] = a[cursor2++];
+                    count2++;
+                    count1 = 0;
+                    if (--len2 == 0)
+                        break outer;
+                } else {
+                    a[dest++] = tmp[cursor1++];
+                    count1++;
+                    count2 = 0;
+                    if (--len1 == 1)
+                        break outer;
+                }
+            } while ((count1 | count2) &lt; minGallop);
+
+// ------------------ GALLOP
+            /*
+             * One run is winning so consistently that galloping may be a
+             * huge win. So try that, and continue galloping until (if ever)
+             * neither run appears to be winning consistently anymore.
+             */
+            do {
+                assert len1 &gt; 1 &amp;&amp; len2 &gt; 0;
+                count1 = gallopRight((Comparable) a[cursor2], tmp, cursor1, len1, 0);
+                if (count1 != 0) {
+                    System.arraycopy(tmp, cursor1, a, dest, count1);
+                    dest += count1;
+                    cursor1 += count1;
+                    len1 -= count1;
+// --&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; HERE IS WHERE GALLOPPING TOO FAR WILL TRIGGER THE EXCEPTION
+                    if (len1 &lt;= 1)  // len1 == 1 || len1 == 0
+                        break outer;
+                }
+                a[dest++] = a[cursor2++];
+                if (--len2 == 0)
+                    break outer;
+
+                count2 = gallopLeft((Comparable) tmp[cursor1], a, cursor2, len2, 0);
+                if (count2 != 0) {
+                    System.arraycopy(a, cursor2, a, dest, count2);
+                    dest += count2;
+                    cursor2 += count2;
+                    len2 -= count2;
+                    if (len2 == 0)
+                        break outer;
+                }
+                a[dest++] = tmp[cursor1++];
+                if (--len1 == 1)
+                    break outer;
+                minGallop--;
+            } while (count1 &gt;= MIN_GALLOP | count2 &gt;= MIN_GALLOP);
+            if (minGallop &lt; 0)
+                minGallop = 0;
+            minGallop += 2;  // Penalize for leaving gallop mode
+        }  // End of "outer" loop
+        this.minGallop = minGallop &lt; 1 ? 1 : minGallop;  // Write back to field
+
+        if (len1 == 1) {
+            assert len2 &gt; 0;
+            System.arraycopy(a, cursor2, a, dest, len2);
+            a[dest + len2] = tmp[cursor1]; //  Last elt of run 1 to end of merge
+        } else if (len1 == 0) {
+            throw new IllegalArgumentException(
+                "Comparison method violates its general contract!");
+        } else {
+            assert len2 == 0;
+            assert len1 &gt; 1;
+            System.arraycopy(tmp, cursor1, a, dest, len1);
+        }
+    }
+</code></pre>
+
+<p>The method performs a merging of two sorted runs. It does a usual merge but starts "gallopping" once it encounters that one side starts "winning" (I.e., being always less than the other) all the time. Gallopping tries to make things faster by looking ahead more elements instead of comparing one element at a time. Since the runs <em>should be sorted</em>, looking ahead is fine.</p>
+
+<p>You see that the exception is only throw when <code>len1</code> is <code>0</code> at the end.
+The first observation is the following: During the usual merge, the exception can <em>never</em> be thrown since the loop aborts directly once <code>len</code> this <code>1</code>. <em>Thus, the exception can only be thrown as result of a gallop</em>.</p>
+
+<p>This already gives a strong hint that the exception behaviour is unreliable: As long as you have small data sets (so small that a generated run may never gallop, as <code>MIN_GALLOP</code> is <code>7</code>) or the generated runs always <em>coincidentally</em> generate a merge that never gallops, you will never receive the exception. Thus, without further reviewing the <code>gallopRight</code> method, we can come to the conclusion that you cannot rely on the exception: It may never be thrown <strong>no matter how wrong your comparator is</strong>.</p>

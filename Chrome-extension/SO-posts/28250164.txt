@@ -1,0 +1,125 @@
+<p>To send mail in background first you need to get the Oauth code.</p>
+
+<p>Setup the Google developer console, instructions below:</p>
+
+<blockquote>
+  <p>Obtain OAuth 2.0 credentials</p>
+  
+  <p>You need OAuth 2.0 credentials, including a client ID and client
+  secret, to authenticate users and gain access to Google's APIs.</p>
+  
+  <p>To find your project's client ID and client secret, do the following:</p>
+  
+  <p>Go to the Google Developers Console. Select a project, or create a new
+  one. In the sidebar on the left, expand APIs &amp; auth. Next, click APIs.
+  In the list of APIs, make sure all of the APIs you are using show a
+  status of ON. In the sidebar on the left, select Credentials. If you
+  haven't done so already, create your project's OAuth 2.0 credentials
+  by clicking Create new Client ID, and providing the information needed
+  to create the credentials. Look for the Client ID and Client secret in
+  the table associated with each of your credentials. Note that not all
+  types of credentials use both a client ID and client secret and won't
+  be listed in the table if they are not used.</p>
+</blockquote>
+
+<p>Refer to the tutorial here for retrieving Oauth token and use in app:</p>
+
+<p><a href="http://blog.tomtasche.at/2013/05/google-oauth-on-android-using.html" rel="nofollow">http://blog.tomtasche.at/2013/05/google-oauth-on-android-using.html</a></p>
+
+<p>In the scope update with these for sending mail:</p>
+
+<pre><code>private final String SCOPE = GmailScopes.GMAIL_COMPOSE + " " + GmailScopes.GMAIL_MODIFY + " " + GmailScopes.MAIL_GOOGLE_COM;
+</code></pre>
+
+<p>After you retrieve the Oauth use the below code to send mail:</p>
+
+<pre><code>import android.util.Log;
+
+import com.sun.mail.smtp.SMTPTransport;
+import com.sun.mail.util.BASE64EncoderStream;
+
+import java.util.Properties;
+
+import javax.activation.DataHandler;
+import javax.mail.Message;
+import javax.mail.Session;
+import javax.mail.URLName;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
+import javax.mail.util.ByteArrayDataSource;
+
+public class GMailSender {
+    private Session session;
+
+
+    public SMTPTransport connectToSmtp(String host, int port, String userEmail,
+                                       String oauthToken, boolean debug) throws Exception {
+        Log.v("ranjapp", "came to connecttosmtp");
+
+        Properties props = new Properties();
+        props.put("mail.smtp.starttls.enable", "true");
+        props.put("mail.smtp.starttls.required", "true");
+        props.put("mail.smtp.sasl.enable", "false");
+        //props.put("mail.imaps.sasl.mechanisms.oauth2.oauthToken", oauthToken);
+        session = Session.getInstance(props);
+        session.setDebug(debug);
+
+        final URLName unusedUrlName = null;
+        SMTPTransport transport = new SMTPTransport(session, unusedUrlName);
+        // If the password is non-null, SMTP tries to do AUTH LOGIN.
+        final String emptyPassword = null;
+        transport.connect(host, port, userEmail, emptyPassword);
+        Log.v("ranjapp", "came before gen response");
+        byte[] response = String.format("user=%s\1auth=Bearer %s\1\1", userEmail, oauthToken).getBytes();
+        response = BASE64EncoderStream.encode(response);
+
+        Log.v("ranjapp", "came to call issuecommand " + transport.isConnected());
+        Log.v("ranjapp", new String(response));
+
+        transport.issueCommand("AUTH XOAUTH2 " + new String(response), 235);
+
+        Log.v("ranjapp", "came after issue command");
+        return transport;
+    }
+
+
+    public synchronized void sendMail(String subject, String body, String user,
+                                      String oauthToken, String recipients) {
+        try {
+            SMTPTransport smtpTransport = connectToSmtp("smtp.gmail.com", 587, user, oauthToken, true);
+
+            MimeMessage message = new MimeMessage(session);
+            DataHandler handler = new DataHandler(new ByteArrayDataSource(body.getBytes(), "text/plain"));
+            message.setSender(new InternetAddress(user));
+            message.setSubject(subject);
+            message.setDataHandler(handler);
+
+            message.setRecipient(Message.RecipientType.TO, new InternetAddress(recipients));
+
+            smtpTransport.sendMessage(message, message.getAllRecipients());
+
+        } catch (Exception e) {
+            Log.v("ranjith", e.toString());
+        }
+
+    }
+}
+</code></pre>
+
+<p>Use the below code to send mail(uses above class):</p>
+
+<pre><code>private class senmailAsync extends AsyncTask&lt;Void, Void, Void&gt; {
+        @Override
+        protected Void doInBackground(Void... params) {
+            GMailSender gMailSender = new GMailSender();
+            gMailSender.sendMail("hi", "hi", authPreferences.getUser(), authPreferences.getToken(), whomtosendgmailid);
+            Log.v("ranjapp", "sent mail " + authPreferences.getUser() + "  " + authPreferences.getToken());
+            return null;
+        }
+    }
+</code></pre>
+
+<p>Call it using:</p>
+
+<pre><code>new senmailAsync().execute();
+</code></pre>

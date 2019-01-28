@@ -1,0 +1,111 @@
+<p>I was finally able to find a solution, recursing into super classes and interfaces, replacing type variables with the type arguments passed until reaching the desired base class:</p>
+
+<pre><code> /**
+ * Resolves the actual generic type arguments for a base class, as viewed from a subclass or implementation.
+ * 
+ * @param &lt;T&gt; base type
+ * @param offspring class or interface subclassing or extending the base type
+ * @param base base class
+ * @param actualArgs the actual type arguments passed to the offspring class
+ * @return actual generic type arguments, must match the type parameters of the offspring class. If omitted, the
+ * type parameters will be used instead.
+ */
+public static &lt;T&gt; Type[] resolveActualTypeArgs (Class&lt;? extends T&gt; offspring, Class&lt;T&gt; base, Type... actualArgs) {
+
+    assert offspring != null;
+    assert base != null;
+    assert actualArgs.length == 0 || actualArgs.length == offspring.getTypeParameters().length;
+
+    //  If actual types are omitted, the type parameters will be used instead.
+    if (actualArgs.length == 0) {
+        actualArgs = offspring.getTypeParameters();
+    }
+    // map type parameters into the actual types
+    Map&lt;String, Type&gt; typeVariables = new HashMap&lt;String, Type&gt;();
+    for (int i = 0; i &lt; actualArgs.length; i++) {
+        TypeVariable&lt;?&gt; typeVariable = (TypeVariable&lt;?&gt;) offspring.getTypeParameters()[i];
+        typeVariables.put(typeVariable.getName(), actualArgs[i]);
+    }
+
+    // Find direct ancestors (superclass, interfaces)
+    List&lt;Type&gt; ancestors = new LinkedList&lt;Type&gt;();
+    if (offspring.getGenericSuperclass() != null) {
+        ancestors.add(offspring.getGenericSuperclass());
+    }
+    for (Type t : offspring.getGenericInterfaces()) {
+        ancestors.add(t);
+    }
+
+    // Recurse into ancestors (superclass, interfaces)
+    for (Type type : ancestors) {
+        if (type instanceof Class&lt;?&gt;) {
+            // ancestor is non-parameterized. Recurse only if it matches the base class.
+            Class&lt;?&gt; ancestorClass = (Class&lt;?&gt;) type;
+            if (base.isAssignableFrom(ancestorClass)) {
+                Type[] result = resolveActualTypeArgs((Class&lt;? extends T&gt;) ancestorClass, base);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        if (type instanceof ParameterizedType) {
+            // ancestor is parameterized. Recurse only if the raw type matches the base class.
+            ParameterizedType parameterizedType = (ParameterizedType) type;
+            Type rawType = parameterizedType.getRawType();
+            if (rawType instanceof Class&lt;?&gt;) {
+                Class&lt;?&gt; rawTypeClass = (Class&lt;?&gt;) rawType;
+                if (base.isAssignableFrom(rawTypeClass)) {
+
+                    // loop through all type arguments and replace type variables with the actually known types
+                    List&lt;Type&gt; resolvedTypes = new LinkedList&lt;Type&gt;();
+                    for (Type t : parameterizedType.getActualTypeArguments()) {
+                        if (t instanceof TypeVariable&lt;?&gt;) {
+                            Type resolvedType = typeVariables.get(((TypeVariable&lt;?&gt;) t).getName());
+                            resolvedTypes.add(resolvedType != null ? resolvedType : t);
+                        } else {
+                            resolvedTypes.add(t);
+                        }
+                    }
+
+                    Type[] result = resolveActualTypeArgs((Class&lt;? extends T&gt;) rawTypeClass, base, resolvedTypes.toArray(new Type[] {}));
+                    if (result != null) {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // we have a result if we reached the base class.
+    return offspring.equals(base) ? actualArgs : null;
+}
+</code></pre>
+
+<p>Works like a charm:</p>
+
+<pre><code>resolveActualTypeArgs(PersonDAOExtension.class, DAO.class)
+</code></pre>
+
+<p>results in <code>Integer</code>, <code>Person</code></p>
+
+<pre><code>resolveActualTypeArgs(AbstractDAO.class, DAO.class)
+</code></pre>
+
+<p>results in <code>Integer</code>, <code>T</code></p>
+
+<pre><code>resolveActualTypeArgs(LinkedList.class, Iterable.class, String.class)
+</code></pre>
+
+<p>results in <code>String</code></p>
+
+<p>I can now use this to find out which of a given set of DAO implementations can read Persons:</p>
+
+<pre><code>List&lt;DAO&lt;?, ?&gt;&gt; knownDAOs = ...
+
+for (DAO&lt;?, ?&gt; daoImpl : knownDAOs) {
+    Type[] types = resolveActualTypeArgs(daoImpl.getClass(), DAO.class);
+    boolean canReadPerson = types[1] instanceof Class&lt;?&gt; &amp;&amp; Person.class.isAssignableFrom((Class&lt;?&gt;) types[1]);
+}
+</code></pre>
+
+<p>And this works regardless of whether I pass a <code>new PersonDAOExtension()</code>, a <code>new PersonDAO()</code> or a <code>new AbstractDAO&lt;Person&gt;{}</code>.</p>

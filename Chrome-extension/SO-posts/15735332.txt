@@ -1,0 +1,235 @@
+<p>Below are <strong>OpenSSLPBEInputStream</strong> and <strong>OpenSSLPBEOutputStream</strong> which can be used to encrypt/decrypt arbitrary streams of bytes in a way that is compatible with OpenSSL.</p>
+
+<p>Example usage:</p>
+
+<pre><code>    // The original clear text bytes
+    byte[] originalBytes = ...
+
+    // Encrypt these bytes
+    char[] pwd = "thePassword".toCharArray();
+    ByteArrayOutputStream byteOS = new ByteArrayOutputStream();
+    OpenSSLPBEOutputStream encOS = new OpenSSLPBEOutputStream(byteOS, ALGORITHM, 1, pwd);
+    encOS.write(originalBytes);
+    encOS.flush();
+    byte[] encryptedBytes = byteOS.toByteArray();
+
+    // Decrypt the bytes
+    ByteArrayInputStream byteIS = new ByteArrayInputStream(encryptedBytes);
+    OpenSSLPBEInputStream encIS = new OpenSSLPBEInputStream(byteIS, ALGORITHM, 1, pwd);
+</code></pre>
+
+<p>Where ALGORITHM (using just JDK classes) can be: "PBEWithMD5AndDES", "PBEWithMD5AndTripleDES", "PBEWithSHA1AndDESede", "PBEWithSHA1AndRC2_40".  </p>
+
+<p>To handle "openssl aes-256-cbc -a -salt -in password.txt -out password.txt.enc" of the original poster, add bouncey castle to the classpath, and use algorthm= "PBEWITHMD5AND256BITAES-CBC-OPENSSL".</p>
+
+<pre><code>/* Add BC provider, and fail fast if BC provider is not in classpath for some reason */
+Security.addProvider(new BouncyCastleProvider());
+</code></pre>
+
+<p>The dependency:</p>
+
+<pre><code>    &lt;dependency&gt;
+        &lt;groupId&gt;org.bouncycastle&lt;/groupId&gt;
+        &lt;artifactId&gt;bcprov-jdk16&lt;/artifactId&gt;
+        &lt;version&gt;1.44&lt;/version&gt;
+    &lt;/dependency&gt;
+</code></pre>
+
+<p>The input stream:</p>
+
+<pre><code>import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+
+public class OpenSSLPBEInputStream extends InputStream {
+
+    private final static int READ_BLOCK_SIZE = 64 * 1024;
+
+    private final Cipher cipher;
+    private final InputStream inStream;
+    private final byte[] bufferCipher = new byte[READ_BLOCK_SIZE];
+
+    private byte[] bufferClear = null;
+
+    private int index = Integer.MAX_VALUE;
+    private int maxIndex = 0;
+
+    public OpenSSLPBEInputStream(final InputStream streamIn, String algIn, int iterationCount, char[] password)
+            throws IOException {
+        this.inStream = streamIn;
+        try {
+            byte[] salt = readSalt();
+            cipher = OpenSSLPBECommon.initializeCipher(password, salt, Cipher.DECRYPT_MODE, algIn, iterationCount);
+        } catch (InvalidKeySpecException | NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException | InvalidAlgorithmParameterException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public int available() throws IOException {
+        return inStream.available();
+    }
+
+    @Override
+    public int read() throws IOException {
+
+        if (index &gt; maxIndex) {
+            index = 0;
+            int read = inStream.read(bufferCipher);
+            if (read != -1) {
+                bufferClear = cipher.update(bufferCipher, 0, read);
+            }
+            if (read == -1 || bufferClear == null || bufferClear.length == 0) {
+                try {
+                    bufferClear = cipher.doFinal();
+                } catch (IllegalBlockSizeException | BadPaddingException e) {
+                    bufferClear = null;
+                }
+            }
+            if (bufferClear == null || bufferClear.length == 0) {
+                return -1;
+            }
+            maxIndex = bufferClear.length - 1;
+        }
+        return bufferClear[index++] &amp; 0xff;
+
+    }
+
+    private byte[] readSalt() throws IOException {
+
+        byte[] headerBytes = new byte[OpenSSLPBECommon.OPENSSL_HEADER_STRING.length()];
+        inStream.read(headerBytes);
+        String headerString = new String(headerBytes, OpenSSLPBECommon.OPENSSL_HEADER_ENCODE);
+
+        if (!OpenSSLPBECommon.OPENSSL_HEADER_STRING.equals(headerString)) {
+            throw new IOException("unexpected file header " + headerString);
+        }
+
+        byte[] salt = new byte[OpenSSLPBECommon.SALT_SIZE_BYTES];
+        inStream.read(salt);
+
+        return salt;
+    }
+
+}
+</code></pre>
+
+<p>The output stream:</p>
+
+<pre><code>import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.InvalidKeySpecException;
+
+public class OpenSSLPBEOutputStream extends OutputStream {
+
+private static final int BUFFER_SIZE = 5 * 1024 * 1024;
+
+private final Cipher cipher;
+private final OutputStream outStream;
+private final byte[] buffer = new byte[BUFFER_SIZE];
+private int bufferIndex = 0;
+
+public OpenSSLPBEOutputStream(final OutputStream outputStream, String algIn, int iterationCount,
+                              char[] password) throws IOException {
+    outStream = outputStream;
+    try {
+        /* Create and use a random SALT for each instance of this output stream. */
+        byte[] salt = new byte[PBECommon.SALT_SIZE_BYTES];
+        new SecureRandom().nextBytes(salt);
+        cipher = OpenSSLPBECommon.initializeCipher(password, salt, Cipher.ENCRYPT_MODE, algIn, iterationCount);
+        /* Write header */
+        writeHeader(salt);
+    } catch (InvalidKeySpecException | NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        throw new IOException(e);
+    }
+}
+
+@Override
+public void write(int b) throws IOException {
+    buffer[bufferIndex] = (byte) b;
+    bufferIndex++;
+    if (bufferIndex == BUFFER_SIZE) {
+        byte[] result = cipher.update(buffer, 0, bufferIndex);
+        outStream.write(result);
+        bufferIndex = 0;
+    }
+}
+
+@Override
+public void flush() throws IOException {
+    if (bufferIndex &gt; 0) {
+        byte[] result;
+        try {
+            result = cipher.doFinal(buffer, 0, bufferIndex);
+            outStream.write(result);
+        } catch (IllegalBlockSizeException | BadPaddingException e) {
+            throw new IOException(e);
+        }
+        bufferIndex = 0;
+    }
+}
+
+@Override
+public void close() throws IOException {
+    flush();
+    outStream.close();
+}
+
+private void writeHeader(byte[] salt) throws IOException {
+    outStream.write(OpenSSLPBECommon.OPENSSL_HEADER_STRING.getBytes(OpenSSLPBECommon.OPENSSL_HEADER_ENCODE));
+    outStream.write(salt);
+}
+
+}
+</code></pre>
+
+<p>Small common class:</p>
+
+<pre><code>import javax.crypto.Cipher;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.PBEParameterSpec;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+
+class OpenSSLPBECommon {
+
+protected static final int SALT_SIZE_BYTES = 8;
+protected static final String OPENSSL_HEADER_STRING = "Salted__";
+protected static final String OPENSSL_HEADER_ENCODE = "ASCII";
+
+protected static Cipher initializeCipher(char[] password, byte[] salt, int cipherMode,
+                                         final String algorithm, int iterationCount) throws NoSuchAlgorithmException, InvalidKeySpecException,
+        InvalidKeyException, NoSuchPaddingException, InvalidAlgorithmParameterException {
+
+    PBEKeySpec keySpec = new PBEKeySpec(password);
+    SecretKeyFactory factory = SecretKeyFactory.getInstance(algorithm);
+    SecretKey key = factory.generateSecret(keySpec);
+
+    Cipher cipher = Cipher.getInstance(algorithm);
+    cipher.init(cipherMode, key, new PBEParameterSpec(salt, iterationCount));
+
+    return cipher;
+}
+
+}
+</code></pre>

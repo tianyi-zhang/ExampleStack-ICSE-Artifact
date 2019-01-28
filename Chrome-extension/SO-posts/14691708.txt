@@ -1,0 +1,164 @@
+<p>Did you remeber to change your package name in OAuth2Provider? I forgot it when I was doing tests with that code.</p>
+
+<pre><code>public static final class OAuth2Provider extends Provider {
+private static final long serialVersionUID = 1L;
+
+public OAuth2Provider() {
+  super("Google OAuth2 Provider", 1.0,
+        "Provides the XOAUTH2 SASL Mechanism");
+  put("SaslClientFactory.XOAUTH2",
+      "com.example.testjavamail.OAuth2SaslClientFactory");
+}
+</code></pre>
+
+<p>}</p>
+
+<p>As I said in another answer, I only tested the connection, but it's working for me.</p>
+
+<p><strong>UPDATE</strong></p>
+
+<p>Here's the code I used, it's basically the example code, what really changed the porting of SASL support in Java Mail.</p>
+
+<pre><code>public class OAuth2Authenticator {
+private static final Logger logger = Logger
+        .getLogger(OAuth2Authenticator.class.getName());
+private static Session mSession;
+
+public static final class OAuth2Provider extends Provider {
+    private static final long serialVersionUID = 1L;
+
+    public OAuth2Provider() {
+        super("Google OAuth2 Provider", 1.0,
+                "Provides the XOAUTH2 SASL Mechanism");
+        put("SaslClientFactory.XOAUTH2",
+                "com.example.testjavamail.OAuth2SaslClientFactory");
+    }
+}
+
+public static void initialize() {
+    Security.addProvider(new OAuth2Provider());
+}
+
+public static IMAPStore connectToImap(String host, int port,
+        String userEmail, String oauthToken, boolean debug)
+        throws Exception {
+    Properties props = new Properties();
+    props.put("mail.imaps.sasl.enable", "true");
+    props.put("mail.imaps.sasl.mechanisms", "XOAUTH2");
+    props.put(OAuth2SaslClientFactory.OAUTH_TOKEN_PROP, oauthToken);
+    Session session = Session.getInstance(props);
+    session.setDebug(debug);
+
+    final URLName unusedUrlName = null;
+    IMAPSSLStore store = new IMAPSSLStore(session, unusedUrlName);
+    final String emptyPassword = "";
+    store.connect(host, port, userEmail, emptyPassword);
+    return store;
+}
+
+public static SMTPTransport connectToSmtp(String host, int port,
+        String userEmail, String oauthToken, boolean debug)
+        throws Exception {
+    Properties props = new Properties();
+    props.put("mail.smtp.starttls.enable", "true");
+    props.put("mail.smtp.starttls.required", "true");
+    props.put("mail.smtp.sasl.enable", "true");
+    props.put("mail.smtp.sasl.mechanisms", "XOAUTH2");
+    props.put(OAuth2SaslClientFactory.OAUTH_TOKEN_PROP, oauthToken);
+    mSession = Session.getInstance(props);
+    mSession.setDebug(debug);
+
+    final URLName unusedUrlName = null;
+    SMTPTransport transport = new SMTPTransport(mSession, unusedUrlName);
+    // If the password is non-null, SMTP tries to do AUTH LOGIN.
+    final String emptyPassword = null;
+    transport.connect(host, port, userEmail, emptyPassword);
+
+    return transport;
+}
+
+public synchronized void testImap(String user, String oauthToken) {
+    try {
+
+        initialize();
+
+
+        IMAPStore imapStore = connectToImap("imap.gmail.com", 993, user,
+                oauthToken, true);
+
+    } catch (Exception e) {
+        Log.d("test", e.toString());
+    }
+
+}
+
+public class ByteArrayDataSource implements DataSource {
+    private byte[] data;
+    private String type;
+
+    public ByteArrayDataSource(byte[] data, String type) {
+        super();
+        this.data = data;
+        this.type = type;
+    }
+
+    public ByteArrayDataSource(byte[] data) {
+        super();
+        this.data = data;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public String getContentType() {
+        if (type == null)
+            return "application/octet-stream";
+        else
+            return type;
+    }
+
+    public InputStream getInputStream() throws IOException {
+        return new ByteArrayInputStream(data);
+    }
+
+    public String getName() {
+        return "ByteArrayDataSource";
+    }
+
+    public OutputStream getOutputStream() throws IOException {
+        throw new IOException("Not Supported");
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p>And here's the debug from Java Mail. Btw, post your debug log, it should help in undertanding what's going wrong</p>
+
+<pre><code>02-06 10:18:11.805: I/System.out(7434): DEBUG: setDebug: JavaMail version 1.4.1
+02-06 10:18:11.905: I/System.out(7434): DEBUG: mail.imap.fetchsize: 16384
+02-06 10:18:12.025: I/System.out(7434): DEBUG: enable SASL
+02-06 10:18:12.040: I/System.out(7434): DEBUG: SASL mechanisms allowed: XOAUTH2
+02-06 10:18:12.600: I/System.out(7434): * OK Gimap ready for requests from 2.233.xxx.xxx  2if1471965eej.3
+02-06 10:18:12.605: I/System.out(7434): A0 CAPABILITY
+02-06 10:18:12.635: I/System.out(7434): * CAPABILITY IMAP4rev1 UNSELECT IDLE NAMESPACE QUOTA ID XLIST CHILDREN X-GM-EXT-1 XYZZY SASL-IR AUTH=XOAUTH AUTH=XOAUTH2
+02-06 10:18:12.635: I/System.out(7434): A0 OK Thats all she wrote! 2if1471965eej.3
+02-06 10:18:12.645: I/System.out(7434): IMAP DEBUG: AUTH: XOAUTH
+02-06 10:18:12.645: I/System.out(7434): IMAP DEBUG: AUTH: XOAUTH2
+02-06 10:18:12.645: I/System.out(7434): DEBUG: protocolConnect login, host=imap.gmail.com, user=xxx@gmail.com, password=&lt;non-null&gt;
+02-06 10:18:12.650: I/System.out(7434): IMAP SASL DEBUG: Mechanisms: XOAUTH2
+02-06 10:18:12.695: I/System.out(7434): IMAP SASL DEBUG: SASL client XOAUTH2
+02-06 10:18:12.695: I/System.out(7434): A1 AUTHENTICATE XOAUTH2
+02-06 10:18:12.720: I/System.out(7434): + 
+02-06 10:18:12.720: I/System.out(7434): IMAP SASL DEBUG: challenge:  :
+02-06 10:18:12.730: I/System.out(7434): IMAP SASL DEBUG: callback length: 1
+02-06 10:18:12.730: I/System.out(7434): IMAP SASL DEBUG: callback 0: myjavax.security.auth.callback.NameCallback@41760f78
+02-06 10:18:12.730: I/System.out(7434): IMAP SASL DEBUG: response: user=xxx@gmail.comauth=Bearer ya29.... :
+02-06 10:18:12.735: I/System.out(7434): dXNlcj1hbGVhbGVtYXp6b3R0aUBnbWFpbC5jb20BYXV0aD1CZWFyZXIgeWEyOS5BSEVTNlpRYklPeU8xU09sR01WSEo3X2tqVzlVdzNYY1RvODBtQ0hyWFVacjRsYlhIdwEB
+02-06 10:18:12.870: I/System.out(7434): * CAPABILITY IMAP4rev1 UNSELECT IDLE NAMESPACE QUOTA ID XLIST CHILDREN X-GM-EXT-1 UIDPLUS COMPRESS=DEFLATE
+02-06 10:18:12.870: I/System.out(7434): A1 OK xxx@gmail.com My NAME authenticated (Success)
+02-06 10:18:12.870: I/System.out(7434): A2 CAPABILITY
+02-06 10:18:13.160: I/System.out(7434): * CAPABILITY IMAP4rev1 UNSELECT IDLE NAMESPACE QUOTA ID XLIST CHILDREN X-GM-EXT-1 UIDPLUS COMPRESS=DEFLATE
+02-06 10:18:13.160: I/System.out(7434): A2 OK Success
+</code></pre>

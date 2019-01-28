@@ -1,0 +1,259 @@
+<h2>Update Feb. 21, 2014</h2>
+
+<p>My answer posted below does not apply to web archive files saved under Android 4.4 KitKat and newer. The saveWebArchive() method of WebView under Android 4.4 "KitKat" (and probably newer versions too) does not save the web archive in XML code that this reader code posted below. Instead it saves pages in MHT (MHTML) format. It is easy to read back the .mht files - just use:</p>
+
+<pre><code>webView.loadUrl("file:///my_dir/mySavedWebPage.mht");
+</code></pre>
+
+<p>That's all, much easier than the previous method, and compatible with other platforms.</p>
+
+<h2>Previously posted</h2>
+
+<p>I needed it myself, and everywhere I searched, there were unanswered questions like this. So I had to work it out myself. Below is my little WebArchiveReader class and sample code on how to use it. Please note that despite the Android docs declaring that shouldInterceptRequest() was added to WebViewClient in API11 (Honeycomb), this code works and was tested successfully in Android emulators down to API8 (Froyo). Below is all the code that's needed, I also uploaded the full project to GitHub repository at <a href="https://github.com/gregko/WebArchiveReader">https://github.com/gregko/WebArchiveReader</a></p>
+
+<p>File WebArchiveReader.java:</p>
+
+<pre><code>package com.hyperionics.war_test;
+
+import android.util.Base64;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import org.w3c.dom.*;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+
+public abstract class WebArchiveReader {
+    private Document myDoc = null;
+    private static boolean myLoadingArchive = false;
+    private WebView myWebView = null;
+    private ArrayList&lt;String&gt; urlList = new ArrayList&lt;String&gt;();
+    private ArrayList&lt;Element&gt; urlNodes = new ArrayList&lt;Element&gt;();
+
+    abstract void onFinished(WebView webView);
+
+    public boolean readWebArchive(InputStream is) {
+        DocumentBuilderFactory builderFactory =
+                DocumentBuilderFactory.newInstance();
+        DocumentBuilder builder = null;
+        myDoc = null;
+        try {
+            builder = builderFactory.newDocumentBuilder();
+        } catch (ParserConfigurationException e) {
+            e.printStackTrace();
+        }
+        try {
+            myDoc = builder.parse(is);
+            NodeList nl = myDoc.getElementsByTagName("url");
+            for (int i = 0; i &lt; nl.getLength(); i++) {
+                Node nd = nl.item(i);
+                if(nd instanceof Element) {
+                    Element el = (Element) nd;
+                    // siblings of el (url) are: mimeType, textEncoding, frameName, data
+                    NodeList nodes = el.getChildNodes();
+                    for (int j = 0; j &lt; nodes.getLength(); j++) {
+                        Node node = nodes.item(j);
+                        if (node instanceof Text) {
+                            String dt = ((Text)node).getData();
+                            byte[] b = Base64.decode(dt, Base64.DEFAULT);
+                            dt = new String(b);
+                            urlList.add(dt);
+                            urlNodes.add((Element) el.getParentNode());
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            myDoc = null;
+        }
+        return myDoc != null;
+    }
+
+    private byte [] getElBytes(Element el, String childName) {
+        try {
+            Node kid = el.getFirstChild();
+            while (kid != null) {
+                if (childName.equals(kid.getNodeName())) {
+                    Node nn = kid.getFirstChild();
+                    if (nn instanceof Text) {
+                        String dt = ((Text)nn).getData();
+                        return Base64.decode(dt, Base64.DEFAULT);
+                    }
+                }
+                kid = kid.getNextSibling();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public boolean loadToWebView(WebView v) {
+        myWebView = v;
+        v.setWebViewClient(new WebClient());
+        WebSettings webSettings = v.getSettings();
+        webSettings.setDefaultTextEncodingName("UTF-8");
+
+        myLoadingArchive = true;
+        try {
+            // Find the first ArchiveResource in myDoc, should be &lt;ArchiveResource&gt;
+            Element ar = (Element) myDoc.getDocumentElement().getFirstChild().getFirstChild();
+            byte b[] = getElBytes(ar, "data");
+
+            // Find out the web page charset encoding
+            String charset = null;
+            String topHtml = new String(b).toLowerCase();
+            int n1 = topHtml.indexOf("&lt;meta http-equiv=\"content-type\"");
+            if (n1 &gt; -1) {
+                int n2 = topHtml.indexOf('&gt;', n1);
+                if (n2 &gt; -1) {
+                    String tag = topHtml.substring(n1, n2);
+                    n1 = tag.indexOf("charset");
+                    if (n1 &gt; -1) {
+                        tag = tag.substring(n1);
+                        n1 = tag.indexOf('=');
+                        if (n1 &gt; -1) {
+                            tag = tag.substring(n1+1);
+                            tag = tag.trim();
+                            n1 = tag.indexOf('\"');
+                            if (n1 &lt; 0)
+                                n1 = tag.indexOf('\'');
+                            if (n1 &gt; -1) {
+                                charset = tag.substring(0, n1).trim();
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (charset != null)
+                topHtml = new String(b, charset);
+            else
+                topHtml = new String(b);
+            String baseUrl = new String(getElBytes(ar, "url"));
+            v.loadDataWithBaseURL(baseUrl, topHtml, "text/html", "UTF-8", null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+        return true;
+    }
+
+    private class WebClient extends WebViewClient {
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+            if (!myLoadingArchive)
+                return null;
+            int n = urlList.indexOf(url);
+            if (n &lt; 0)
+                return null;
+            Element parentEl = urlNodes.get(n);
+            byte [] b = getElBytes(parentEl, "mimeType");
+            String mimeType = b == null ? "text/html" : new String(b);
+            b = getElBytes(parentEl, "textEncoding");
+            String encoding = b == null ? "UTF-8" : new String(b);
+            b = getElBytes(parentEl, "data");
+            return new WebResourceResponse(mimeType, encoding, new ByteArrayInputStream(b));
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url)
+        {
+            // our WebClient is no longer needed in view
+            view.setWebViewClient(null);
+            myLoadingArchive = false;
+            onFinished(myWebView);
+        }
+    }
+}
+</code></pre>
+
+<p>Here is how to use this class, sample MyActivity.java class:</p>
+
+<pre><code>package com.hyperionics.war_test;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import java.io.IOException;
+import java.io.InputStream;
+
+public class MyActivity extends Activity {
+
+    // Sample WebViewClient in case it was needed...
+    // See continueWhenLoaded() sample function for the best place to set it on our webView
+    private class MyWebClient extends WebViewClient {
+        @Override
+        public void onPageFinished(WebView view, String url)
+        {
+            Lt.d("Web page loaded: " + url);
+        }
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        WebView webView = (WebView) findViewById(R.id.webView);
+        try {
+            InputStream is = getAssets().open("TestHtmlArchive.xml");
+            WebArchiveReader wr = new WebArchiveReader() {
+                void onFinished(WebView v) {
+                    // we are notified here when the page is fully loaded.
+                    continueWhenLoaded(v);
+                }
+            };
+            // To read from a file instead of an asset, use:
+            // FileInputStream is = new FileInputStream(fileName);
+            if (wr.readWebArchive(is)) {
+                wr.loadToWebView(webView);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    void continueWhenLoaded(WebView webView) {
+        Lt.d("Page from WebArchive fully loaded.");
+        // If you need to set your own WebViewClient, do it here,
+        // after the WebArchive was fully loaded:
+        webView.setWebViewClient(new MyWebClient());
+        // Any other code we need to execute after loading a page from a WebArchive...
+    }
+}
+</code></pre>
+
+<p>To make things complete, here is my little Lt.java class for debug output:</p>
+
+<pre><code>package com.hyperionics.war_test;
+
+import android.util.Log;
+
+public class Lt {
+    private static String myTag = "war_test";
+    private Lt() {}
+    static void setTag(String tag) { myTag = tag; }
+    public static void d(String msg) {
+        // Uncomment line below to turn on debug output
+        Log.d(myTag, msg == null ? "(null)" : msg);
+    }
+    public static void df(String msg) {
+        // Forced output, do not comment out - for exceptions etc.
+        Log.d(myTag, msg == null ? "(null)" : msg);
+    }
+}
+</code></pre>
+
+<p>Hope this is helpful.</p>
+
+<h2>Update July 19, 2013</h2>
+
+<p>Some web pages don't have meta tag specifying text encoding, and then the code we show above does not display the characters correctly. In the GitHub version of this code I now added charset detection algorithm, which guesses the encoding in such cases. Again, see <a href="https://github.com/gregko/WebArchiveReader">https://github.com/gregko/WebArchiveReader</a></p>
+
+<p>Greg</p>

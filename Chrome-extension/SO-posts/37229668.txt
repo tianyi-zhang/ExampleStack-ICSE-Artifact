@@ -1,0 +1,214 @@
+<p>Okay, I think I managed to put together a decent framework (is this the right word?) for this task. If anybody could chime in to let me know if my approach is any good, I'd really appreciate it. </p>
+
+<p>While my code seems to work fine for my use cases so far, I have a few questions:</p>
+
+<ol>
+<li>In the interface definition of <code>public interface CloneableTestInput&lt;T extends CloneableTestInput&lt;T&gt;&gt;</code>, how is the type template <code>&lt;T extends CloneableTestInput&lt;T&gt;</code> not a circular definition? I'm not sure I fully understand what that type template is saying.</li>
+<li>Is there a way to make a generic <code>CloneableList</code> class that implements <code>CloneableTestInput&lt;List&gt;</code>? Currently, I need to make a separate implementation for each Collection type (e.g. ArrayList, LinkedList, ...). Similarly, is it possible to make a generic <code>CloneableSet</code> class that implements <code>CloneableTestInput&lt;Set&gt;</code>?</li>
+</ol>
+
+<p>Thanks in advance :)</p>
+
+<h1>Testing Framework</h1>
+
+<h3>Part I - An interface for test inputs</h3>
+
+<p>This allows <code>TimeTests.java</code> to work for generic input types.</p>
+
+<pre><code>public interface CloneableTestInput&lt;T extends CloneableTestInput&lt;T&gt;&gt; extends Cloneable {
+  T clone();
+}
+
+public class CloneableString implements CloneableTestInput&lt;CloneableString&gt; {
+  public String data;
+  public CloneableString() {}
+  public CloneableString(String input) { data = input; }
+
+  public CloneableString clone() { return new CloneableString(String.valueOf(data)); }
+}
+
+public class CloneableArrayList extends ArrayList implements CloneableTestInput&lt;CloneableArrayList&gt; {
+  public CloneableArrayList(ArrayList input) {
+    this.addAll(input);
+  }
+
+  @Override
+  public CloneableArrayList clone() {
+    return new CloneableArrayList(this);
+  }
+}
+</code></pre>
+
+<h3>Part II - An interface for timing tests</h3>
+
+<pre><code>@FunctionalInterface
+public interface TimeTestsInterface&lt;outputType&gt; {
+  void test(Callable&lt;CloneableTestInput&gt; formInput
+          , Function&lt;CloneableTestInput, outputType&gt; runAlgorithm
+          , Function&lt;CloneableTestInput, outputType&gt; getKnownOutput
+          , BiFunction&lt;outputType, outputType, Boolean&gt; checkResults
+          , final int NUM_TESTS, String testName);
+}
+
+public class TimeTests&lt;outputType&gt; implements TimeTestsInterface&lt;outputType&gt; {
+  public void test(Callable&lt;CloneableTestInput&gt; formInput
+          , Function&lt;CloneableTestInput, outputType&gt; runAlgorithm
+          , Function&lt;CloneableTestInput, outputType&gt; getKnownOutput
+          , BiFunction&lt;outputType, outputType, Boolean&gt; checkResults
+          , final int NUM_TESTS, String testName) {
+    try {
+      DecimalFormat df = new DecimalFormat("#.####");
+      long total = 0, start;
+      for (int i=0; i &lt; NUM_TESTS; ++i) {
+        CloneableTestInput input = formInput.call();
+
+        CloneableTestInput orig_input = input.clone();
+        start = System.nanoTime();
+        outputType algorithmResult = runAlgorithm.apply(input);
+        total += System.nanoTime() - start;
+        outputType expectedResult = getKnownOutput.apply(orig_input);
+        assert(checkResults.apply(algorithmResult, expectedResult));
+      }
+      System.out.println("DEBUG: " + testName + " took "
+              + df.format(total * 1.0 / NUM_TESTS)
+              + " nanoseconds on average for " + NUM_TESTS + " tests");
+    } catch (Exception|AssertionError e) {
+      System.out.println(e.toString() + " - " + e.getMessage() + " - ");
+      e.printStackTrace();
+    }
+
+  }
+}
+</code></pre>
+
+<hr>
+
+<h1>Example Usages</h1>
+
+<h3>Increment a BigInteger (uses CloneableArrayList)</h3>
+
+<pre><code>/**
+ * Problem 6.2 from EPI
+ * Given an array A of digits encodiing a decimal number D,
+ * with MSD at A[0]. Update A to hold D + 1.
+ */
+public class PlusOne {
+  private static final int NUM_TESTS = (int) Math.pow(10, 5);
+  private static final int ARR_LENGTH = (int) Math.pow(10, 2);
+
+  private static ArrayList&lt;Integer&gt; plusOne(ArrayList&lt;Integer&gt; A) {
+    int n = A.size() - 1;
+    A.set(n, A.get(n) + 1);
+    for (int i = n; i &gt; 0 &amp;&amp; A.get(i) == 10; --i) {
+      A.set(i, 0);
+      A.set(i-1, A.get(i-1) + 1);
+    }
+    if (A.get(0) == 10) {
+      // Need additional digit up front as MSD
+      A.set(0,0);
+      A.add(0,1);
+    }
+    return A;
+  }
+
+  private static ArrayList&lt;Integer&gt; randArray(int len) {
+    ArrayList&lt;Integer&gt; A = new ArrayList&lt;&gt;();
+    if (len == 0) return A;
+    Random rgen = new Random();
+    A.add(rgen.nextInt(9) + 1);
+    --len;
+    while (len != 0) {
+      A.add(rgen.nextInt(10));
+      --len;
+    }
+    return A;
+  }
+
+  public static void main(String[] args) {
+    Callable&lt;CloneableTestInput&gt; formInput = () -&gt; new CloneableArrayList(randArray(ARR_LENGTH));
+    Function&lt;CloneableTestInput, ArrayList&lt;Integer&gt;&gt; runAlgorithm =
+        (input) -&gt; plusOne((ArrayList&lt;Integer&gt;) input);
+    Function&lt;CloneableTestInput, ArrayList&lt;Integer&gt;&gt; getKnownOutput = 
+        (orig_input) -&gt; {
+      BigInteger B = new BigInteger(Joiner.on("").join((ArrayList&lt;Integer&gt;) orig_input));
+      B = B.add(BigInteger.valueOf(1));
+      ArrayList&lt;Integer&gt; expectedOutput = new ArrayList&lt;&gt;();
+      while (B.compareTo(BigInteger.valueOf(0)) &gt; 0) {
+        expectedOutput.add(0, B.mod(BigInteger.valueOf(10)).intValue());
+        B = B.divide(BigInteger.valueOf(10));
+      }
+      return expectedOutput;
+    };
+    BiFunction&lt;ArrayList&lt;Integer&gt;, ArrayList&lt;Integer&gt;, Boolean&gt; checkResults = List::equals;
+    TimeTests&lt;ArrayList&lt;Integer&gt;&gt; algTimer = new TimeTests&lt;&gt;();
+    algTimer.test(formInput, runAlgorithm, getKnownOutput, checkResults, NUM_TESTS, "PlusOne");
+  }
+}
+</code></pre>
+
+<h3>Can String be rearranged as a palindrome? (uses CloneableString)</h3>
+
+<pre><code>public class CanStringBePalindrome {
+  private static final int INPUT_STRING_LENGTH = (int) Math.pow(10, 2);
+  private static final int NUM_TESTS = (int) Math.pow(10, 6);
+
+  private static boolean canFormPalindromeHash(final String s) {
+    Map&lt;Character, Integer&gt; charFreqs = new HashMap&lt;&gt;();
+    for (int i = 0; i &lt; s.length(); ++i) {
+      char c = s.charAt(i);
+      if (!charFreqs.containsKey(c))
+        charFreqs.put(c, 1);
+      else
+        charFreqs.put(c, charFreqs.get(c) + 1);
+    }
+
+    int oddFreqCount = 0;
+    for (Map.Entry&lt;Character, Integer&gt; entry : charFreqs.entrySet()) {
+      if ((entry.getValue() % 2) != 0 &amp;&amp; (++oddFreqCount &gt; 1))
+        return false;
+    }
+    return true;
+  }
+
+
+  private static boolean canFormPalindromeSorting(final String s) {
+    // TODO : find faster/simpler way of getting frequency counts
+    char[] a = s.toCharArray();
+    Arrays.sort(a);
+    int oddFreqCount = 0;
+    int numCurrChar =1;
+
+    for (int i = 1; i &lt; a.length &amp;&amp; oddFreqCount &lt;= 1; ++i) {
+      if(a[i] != a[i-1]) {
+        if ((numCurrChar &amp; 1) != 0)
+          ++oddFreqCount;
+        numCurrChar = 1;
+      } else
+        ++numCurrChar;
+    }
+    if ((numCurrChar &amp; 1) != 0)
+      ++oddFreqCount;
+    return oddFreqCount &lt;= 1;
+  }
+
+  private static String randString(int len) {
+    StringBuilder sb = new StringBuilder();
+    Random rgen = new Random();
+    while (len-- &gt; 0)
+      sb.append((char)(rgen.nextInt(26) + 'A'));
+    return sb.toString();
+  }
+
+  public static void main(String[] args) {
+    Callable&lt;CloneableTestInput&gt; formInput = () -&gt; new CloneableString(randString(INPUT_STRING_LENGTH));
+    Function&lt;CloneableTestInput, Boolean &gt; runAlgorithm =
+            (input) -&gt; canFormPalindromeHash(((CloneableString)input).data);
+    Function&lt;CloneableTestInput, Boolean&gt; getKnownOutput =
+            (orig_input) -&gt; canFormPalindromeSorting(((CloneableString)orig_input).data);
+    BiFunction&lt;Boolean, Boolean, Boolean&gt; checkResults = Boolean::equals;
+    TimeTests&lt;Boolean&gt; algTimer = new TimeTests&lt;&gt;();
+    algTimer.test(formInput, runAlgorithm, getKnownOutput, checkResults
+            , NUM_TESTS, "CanStringBePalindrome");
+  }
+}
+</code></pre>

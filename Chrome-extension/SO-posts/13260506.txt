@@ -1,0 +1,121 @@
+<p>Since now I have a better stronghold on Hadoop and Mapreduce, here is what I had expected:</p>
+
+<p>To start a cluster, the code will remain more or less same as in the question but we can add config parameters:</p>
+
+<pre><code>ruby elastic-mapreduce --create --alive --plain-output --master-instance-type m1.xlarge --slave-instance-type m1.xlarge --num-instances 11  --name "Java Pipeline" --bootstrap-action s3://elasticmapreduce/bootstrap-actions/install-ganglia --bootstrap-action s3://elasticmapreduce/bootstrap-actions/configure-hadoop --args "--mapred-config-file, s3://com.versata.emr/conf/mapred-site-tuned.xml"
+</code></pre>
+
+<p>To add Job Steps:</p>
+
+<p>Step 1:</p>
+
+<p><code>ruby elastic-mapreduce --jobflow &lt;jobflo_id&gt; --jar s3://somepath/job-one.jar --arg s3://somepath/input-one --arg s3://somepath/output-one --args -m,mapred.min.split.size=52880 -m,mapred.task.timeout=0</code> </p>
+
+<p>Step2:</p>
+
+<p><code>ruby elastic-mapreduce --jobflow &lt;jobflo_id&gt; --jar s3://somepath/job-two.jar --arg s3://somepath/output-one --arg s3://somepath/output-two --args -m,mapred.min.split.size=52880 -m,mapred.task.timeout=0</code></p>
+
+<p>Now as for the Java code, There will be one Main class which would contain one implementation each of the following classes:</p>
+
+<ul>
+<li>org.apache.hadoop.mapreduce.Mapper;</li>
+<li>org.apache.hadoop.mapreduce.Reducer;</li>
+</ul>
+
+<p>Each of these have to override methods map() and reduce() to do the desired job.</p>
+
+<p>The Java class for problem in question would look like following:</p>
+
+<pre><code>public class SomeJob extends Configured implements Tool {
+
+    private static final String JOB_NAME = "My Job";
+
+    /**
+     * This is Mapper.
+     */
+    public static class MapJob extends Mapper&lt;LongWritable, Text, Text, Text&gt; {
+
+        private Text outputKey = new Text();
+        private Text outputValue = new Text();
+
+        @Override
+        protected void setup(Context context) throws IOException, InterruptedException {
+
+            // Get the cached file
+            Path file = DistributedCache.getLocalCacheFiles(context.getConfiguration())[0];
+
+            File fileObject = new File (file.toString());
+            // Do whatever required with file data
+        }
+
+        @Override
+        public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+            outputKey.set("Some key calculated or derived");
+            outputVey.set("Some Value calculated or derived");
+            context.write(outputKey, outputValue);
+        }
+        }
+
+    /**
+     * This is Reducer.
+     */
+    public static class ReduceJob extends Reducer&lt;Text, Text, Text, Text&gt; {
+
+    private Text outputKey = new Text();
+    private Text outputValue = new Text();
+
+        @Override
+        protected void reduce(Text key, Iterable&lt;Text&gt; values, Context context) throws IOException,
+                InterruptedException {
+            outputKey.set("Some key calculated or derived");
+            outputVey.set("Some Value calculated or derived");
+            context.write(outputKey, outputValue);
+        }
+    }
+
+    @Override
+    public int run(String[] args) throws Exception {
+
+        try {
+            Configuration conf = getConf();
+            DistributedCache.addCacheFile(new URI(args[2]), conf);
+            Job job = new Job(conf);
+
+            job.setJarByClass(TaxonomyOverviewReportingStepOne.class);
+            job.setJobName(JOB_NAME);
+
+            job.setMapperClass(MapJob.class);
+            job.setReducerClass(ReduceJob.class);
+            job.setOutputKeyClass(Text.class);
+            job.setOutputValueClass(Text.class);
+
+            job.setInputFormatClass(TextInputFormat.class);
+            job.setOutputFormatClass(TextOutputFormat.class);
+            job.setMapOutputKeyClass(Text.class);
+            job.setMapOutputValueClass(Text.class);
+            FileInputFormat.setInputPaths(job, args[0]);
+            FileOutputFormat.setOutputPath(job, new Path(args[1]));
+
+            boolean success = job.waitForCompletion(true);
+            return success ? 0 : 1;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
+
+    }
+
+    public static void main(String[] args) throws Exception {
+
+        if (args.length &lt; 3) {
+            System.out
+                    .println("Usage: SomeJob &lt;comma sparated list of input directories&gt; &lt;output dir&gt; &lt;cache file&gt;");
+            System.exit(-1);
+        }
+
+        int result = ToolRunner.run(new TaxonomyOverviewReportingStepOne(), args);
+        System.exit(result);
+    }
+
+}
+</code></pre>

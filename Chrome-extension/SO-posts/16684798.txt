@@ -1,0 +1,78 @@
+<p>Here's what I found in JCodec ( <a href="http://jcodec.org" rel="nofollow">http://jcodec.org</a> ) samples:  </p>
+
+<pre><code>public class AVCMP4Mux {
+    private static AvcCBox avcC;
+
+    public static void main(String[] args) throws Exception {
+        if (args.length &lt; 2) {
+            System.out.println("Syntax: &lt;in.264&gt; &lt;out.mp4&gt;\n" + "\tWhere:\n"
+                    + "\t-q\tLook for stream parameters only in the beginning of stream");
+            return;
+        }
+
+        File in = new File(args[0]);
+        File out = new File(args[1]);
+
+        SeekableByteChannel file = writableFileChannel(out);
+        MP4Muxer muxer = new MP4Muxer(file);
+        CompressedTrack track = muxer.addTrackForCompressed(TrackType.VIDEO, 25);
+
+        mux(track, in);
+
+        muxer.writeHeader();
+
+        file.close();
+    }
+
+    private static void mux(CompressedTrack track, File f) throws IOException {
+        MappedH264ES es = new MappedH264ES(NIOUtils.map(f));
+
+        ArrayList&lt;ByteBuffer&gt; spsList = new ArrayList&lt;ByteBuffer&gt;();
+        ArrayList&lt;ByteBuffer&gt; ppsList = new ArrayList&lt;ByteBuffer&gt;();
+        Packet frame = null;
+        while ((frame = es.nextFrame()) != null) {
+            ByteBuffer wrap = frame.getData().duplicate();
+            H264Utils.encodeMOVPacket(wrap, spsList, ppsList);
+            MP4Packet pkt = new MP4Packet(new Packet(frame, wrap), frame.getPts(), 0);
+            System.out.println(pkt.getFrameNo());
+            track.addFrame(pkt);
+        }
+        addSampleEntry(track, es.getSps(), es.getPps());
+    }
+
+    private static void addSampleEntry(CompressedTrack track, SeqParameterSet[] spss, PictureParameterSet[] ppss) {
+        SeqParameterSet sps = spss[0];
+        Size size = new Size((sps.pic_width_in_mbs_minus1 + 1) &lt;&lt; 4, getPicHeightInMbs(sps) &lt;&lt; 4);
+
+        SampleEntry se = MP4Muxer.videoSampleEntry("avc1", size, "JCodec");
+
+        avcC = new AvcCBox(sps.profile_idc, 0, sps.level_idc, write(spss), write(ppss));
+        se.add(avcC);
+        track.addSampleEntry(se);
+    }
+
+    private static List&lt;ByteBuffer&gt; write(PictureParameterSet[] ppss) {
+        List&lt;ByteBuffer&gt; result = new ArrayList&lt;ByteBuffer&gt;();
+        for (PictureParameterSet pps : ppss) {
+            ByteBuffer buf = ByteBuffer.allocate(1024);
+            pps.write(buf);
+            buf.flip();
+            result.add(buf);
+        }
+        return result;
+    }
+
+    private static List&lt;ByteBuffer&gt; write(SeqParameterSet[] spss) {
+        List&lt;ByteBuffer&gt; result = new ArrayList&lt;ByteBuffer&gt;();
+        for (SeqParameterSet sps : spss) {
+            ByteBuffer buf = ByteBuffer.allocate(1024);
+            sps.write(buf);
+            buf.flip();
+            result.add(buf);
+        }
+        return result;
+    }
+}
+</code></pre>
+
+<p>I took it from here: <a href="https://github.com/jcodec/jcodec/blob/master/samples/main/java/org/jcodec/samples/mux/AVCMP4Mux.java" rel="nofollow">https://github.com/jcodec/jcodec/blob/master/samples/main/java/org/jcodec/samples/mux/AVCMP4Mux.java</a></p>

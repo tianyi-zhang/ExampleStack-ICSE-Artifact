@@ -1,0 +1,174 @@
+<p>Try this:</p>
+
+<pre><code>**
+ * An AsyncTask that maintains a connected client.
+ */
+public abstract class ApiClientAsyncTask&lt;Params, Progress, Result&gt;
+        extends AsyncTask&lt;Params, Progress, Result&gt; {
+
+    private GoogleApiClient mClient;
+
+    public ApiClientAsyncTask(Context context) {
+        GoogleApiClient.Builder builder = new GoogleApiClient.Builder(context)
+                .addApi(Drive.API)
+                .addScope(Drive.SCOPE_FILE);
+        mClient = builder.build();
+    }
+
+    @Override
+    protected final Result doInBackground(Params... params) {
+        Log.d("TAG", "in background");
+        final CountDownLatch latch = new CountDownLatch(1);
+        mClient.registerConnectionCallbacks(new ConnectionCallbacks() {
+            @Override
+            public void onConnectionSuspended(int cause) {
+            }
+
+            @Override
+            public void onConnected(Bundle arg0) {
+                latch.countDown();
+            }
+        });
+        mClient.registerConnectionFailedListener(new OnConnectionFailedListener() {
+            @Override
+            public void onConnectionFailed(ConnectionResult arg0) {
+                latch.countDown();
+            }
+        });
+        mClient.connect();
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            return null;
+        }
+        if (!mClient.isConnected()) {
+            return null;
+        }
+        try {
+            return doInBackgroundConnected(params);
+        } finally {
+            mClient.disconnect();
+        }
+    }
+
+    /**
+     * Override this method to perform a computation on a background thread, while the client is
+     * connected.
+     */
+    protected abstract Result doInBackgroundConnected(Params... params);
+
+    /**
+     * Gets the GoogleApliClient owned by this async task.
+     */
+    protected GoogleApiClient getGoogleApiClient() {
+        return mClient;
+    }
+    }
+</code></pre>
+
+<p><strong>Class to save file:</strong></p>
+
+<pre><code> /**
+     * An async task that creates a new text file by creating new contents and
+     * metadata entities on user's root folder. A number of blocking tasks are
+     * performed serially in a thread. Each time, await() is called on the
+     * result which blocks until the request has been completed.
+     */
+public class CreateFileAsyncTask extends ApiClientAsyncTask&lt;String, Void, Metadata&gt;
+{
+
+    public CreateFileAsyncTask(Context context)
+    {
+        super(context);
+    }
+
+    @Override
+    protected Metadata doInBackgroundConnected(String... arg0)
+    {
+        // First we start by creating a new contents, and blocking on the
+        // result by calling await().
+        DriveApi.ContentsResult contentsResult = Drive.DriveApi.newContents(getGoogleApiClient()).await();
+
+        if (!contentsResult.getStatus().isSuccess()) {
+            // We failed, stop the task and return.
+            return null;
+        }
+
+        //file to save in drive
+        String pathFile = arg0[0];
+        File file = new File(pathFile);
+
+        // Read the contents and open its output stream for writing, then
+        // write a short message.
+        Contents originalContents = contentsResult.getContents();
+        OutputStream os = originalContents.getOutputStream();
+
+        try
+        {
+            InputStream dbInputStream = new FileInputStream(file);
+
+            byte[] buffer = new byte[1024];
+            int length;
+            int counter = 0;
+            while((length = dbInputStream.read(buffer)) &gt; 0)
+            {
+                ++counter;
+                os.write(buffer, 0, length);
+            }
+
+            dbInputStream.close();
+            os.flush();
+            os.close();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
+
+        // Create the metadata for the new file including title and MIME
+        // type.
+        MetadataChangeSet originalMetadata = new MetadataChangeSet.Builder()
+        .setTitle(file.getName())
+        .setMimeType("application/x-sqlite3").build();
+
+        // Create the file in the root folder, again calling await() to
+        // block until the request finishes.
+        DriveFolder rootFolder = Drive.DriveApi.getRootFolder(getGoogleApiClient());
+        DriveFolder.DriveFileResult fileResult = rootFolder.createFile(
+        getGoogleApiClient(), originalMetadata, originalContents).await();
+
+        if (!fileResult.getStatus().isSuccess()) {
+            // We failed, stop the task and return.
+            return null;
+        }
+
+        // Finally, fetch the metadata for the newly created file, again
+        // calling await to block until the request finishes.
+        DriveResource.MetadataResult metadataResult = fileResult.getDriveFile()
+        .getMetadata(getGoogleApiClient())
+        .await();
+
+        if (!metadataResult.getStatus().isSuccess()) {
+            // We failed, stop the task and return.
+            return null;
+        }
+        // We succeeded, return the newly created metadata.
+        return metadataResult.getMetadata();
+    }
+
+    @Override
+    protected void onPostExecute(Metadata result)
+    {
+        super.onPostExecute(result);
+
+        if (result == null)
+        {
+            // The creation failed somehow, so show a message.
+            App.showAppMsg(getActivity(),"Error while creating the file.",Style.ALERT);
+            return;
+        }
+        // The creation succeeded, show a message.
+        App.showAppMsg(getActivity(),"File created: " + result.getDriveId(),Style.CONFIRM);
+    }
+}
+</code></pre>

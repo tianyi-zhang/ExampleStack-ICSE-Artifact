@@ -1,0 +1,137 @@
+<p>So how i fixed it:</p>
+
+<p>I basically followed the hint from Charles Goodwin, but i changed the AePlayWave class to implement runnable and use it with a thread pool (to avoid overhead from starting new Threads all the time). Also, i use URLs and not Files to use resources from within the packed JAR file. The AePlayWave Object is created when setup is done (the files are chosen) or settings change. There is an instance for every sound I want the application to play. The listener methods for the events then trigger the pool to run the specific AePlayWave instance for that events sound. The rest is basically the same. </p>
+
+<p>There are only two inconvenient issues: </p>
+
+<p>1.) on weak machines, the ending of a WAV is not always played. When sounds are very short (like 100ms beeps), this might lead to no sound being played at all! Thats why i added 500 ms of silence to the end of each sound i'd like to play. It's a workaround, but it helps and for now it seems to be the best and most stable approach.</p>
+
+<p>2.) If more than one sound is played (because of very quick repetition) the sounds overlap and you hear a change in tune and volume. This is ok in my case but might be annoying for other uses.</p>
+
+<p>It is already running on the productive system. If any errors are reported to me, i will edit this post to keep you up to date.</p>
+
+<p>Now here is the (basically reduced) sourcecode:</p>
+
+<pre><code>import java.io.IOException;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;    
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.DataLine;
+import javax.sound.sampled.LineUnavailableException;
+import javax.sound.sampled.SourceDataLine;
+import javax.sound.sampled.UnsupportedAudioFileException;
+
+public class AudibleListener implements SomeListener {
+
+private Runnable successRunner;
+private Runnable failRunner;
+
+ExecutorService pool = Executors.newCachedThreadPool();
+
+/**
+ * Call this after initialization and after every change in your config at runtime.
+ */
+public void reloadSettings() {
+    // put your configuration here
+    this.successRunner = new WavePlayer(this.getClass().getResource("success.wav"));
+    this.failRunner = new WavePlayer(this.getClass().getResource("fail.wav"));
+}
+
+/**
+ * Call this to savely shutdown the thread pool.
+ */
+public void shutdown() {
+    this.pool.shutdown();
+}
+
+/**
+ * Listener method called on success. 
+ */
+public void eventSuccess() {
+    this.pool.execute(this.successRunner);
+}
+
+/**
+ * Listener method called on fail. 
+ */
+public void eventFailed() {
+    this.pool.execute(this.failRunner);
+}
+
+private class WavePlayer implements Runnable {
+
+    private final int EXTERNAL_BUFFER_SIZE = 524288; // 128Kb 
+
+    private URL soundFile;
+
+    public WavePlayer(URL soundFile) {
+        this.soundFile = soundFile;
+    }
+
+    @Override
+    public void run() {
+
+        try {
+            // check if the URL is still accessible!
+            this.soundFile.openConnection().connect();
+            this.soundFile.openStream().close();
+        } catch (Exception e) {
+            return;
+        }
+
+        AudioInputStream audioInputStream = null;
+        try {
+            audioInputStream = AudioSystem
+                    .getAudioInputStream(this.soundFile);
+        } catch (UnsupportedAudioFileException e) {
+            return;
+        } catch (IOException e) {
+            return;
+        }
+
+        AudioFormat format = audioInputStream.getFormat();
+        SourceDataLine auline = null;
+        DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
+
+        try {
+            auline = (SourceDataLine) AudioSystem.getLine(info);
+            auline.open(format);
+        } catch (LineUnavailableException e) {
+            return;
+        } catch (Exception e) {
+            return;
+        }
+
+        auline.start();
+        int nBytesRead = 0;
+        byte[] abData = new byte[this.EXTERNAL_BUFFER_SIZE];
+
+        try {
+            while (nBytesRead != -1) {
+                nBytesRead = audioInputStream
+                        .read(abData, 0, abData.length);
+                if (nBytesRead &gt;= 0) {
+                    auline.write(abData, 0, nBytesRead);
+                }
+            }
+        } catch (IOException e) {
+            return;
+        } finally {
+            auline.drain();
+            auline.close();
+        }
+    }
+}
+}
+</code></pre>
+
+<p>Cheers and thanks so far for all the help!</p>
+
+<p>P.</p>
+
+<p>Update:</p>
+
+<p>This is now running for the last 72 hours without any errors! Looks like we made it!</p>

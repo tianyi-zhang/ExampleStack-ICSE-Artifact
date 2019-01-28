@@ -1,0 +1,310 @@
+<p>Try this...
+Create 2 packages(activity, util), only for organization
+In activity create the class MainActivity.java in util create the class AndroidWebServer.java</p>
+
+<pre><code>package awserverfatepi.com.activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.net.wifi.WifiManager;
+import android.support.design.widget.CoordinatorLayout;
+import android.support.design.widget.FloatingActionButton;
+import android.support.design.widget.Snackbar;
+import android.support.v4.content.ContextCompat;
+import android.support.v7.app.AlertDialog;
+import android.support.v7.app.AppCompatActivity;
+import android.os.Bundle;
+import android.view.KeyEvent;
+import android.view.View;
+import android.widget.EditText;
+import android.widget.TextView;
+
+import awserverfatepi.com.R;
+import awserverfatepi.com.util.AndroidWebServer;
+
+public class MainActivity extends AppCompatActivity {
+
+    private static final int DEFAULT_PORT = 8080;
+
+    private AndroidWebServer androidWebServer;
+    private BroadcastReceiver broadcastReceiverNetworkState;
+    private static boolean isStarted = false;
+
+    private CoordinatorLayout coordinatorLayout;
+    private EditText editTextPort;
+    private FloatingActionButton floatingActionButtonOnOff;
+    private View textViewMessage;
+    private TextView textViewIpAccess;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        initGui();
+        setIpAccess();
+        floatingActionButtonOnOff = (FloatingActionButton) findViewById(R.id.floatingActionButtonOnOff);
+        floatingActionButtonOnOff.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (isConnectedInWifi()) {
+                    if (!isStarted &amp;&amp; startAndroidWebServer()) {
+                        isStarted = true;
+                        textViewMessage.setVisibility(View.VISIBLE);
+                        floatingActionButtonOnOff.setBackgroundTintList(ContextCompat.getColorStateList(MainActivity.this,
+                                R.color.colorGreen));
+                        editTextPort.setEnabled(false);
+                    } else if (stopAndroidWebServer()) {
+                        isStarted = false;
+                        textViewMessage.setVisibility(View.INVISIBLE);
+                        floatingActionButtonOnOff.setBackgroundTintList(ContextCompat.getColorStateList(MainActivity.this,
+                                R.color.colorRed));
+                        editTextPort.setEnabled(true);
+                    }
+                } else {
+                    Snackbar.make(coordinatorLayout, getString(R.string.wifi_message), Snackbar.LENGTH_LONG).show();
+                }
+            }
+        });
+
+        initBroadcastReceiverNetworkStateChanged();
+    }
+
+    private void initGui() {
+        coordinatorLayout = (CoordinatorLayout) findViewById(R.id.coordinatorLayout);
+        editTextPort = (EditText) findViewById(R.id.editTextPort);
+        textViewMessage = findViewById(R.id.textViewMessage);
+        textViewIpAccess = (TextView) findViewById(R.id.textViewIpAccess);
+    }
+
+    private boolean startAndroidWebServer() {
+        if (!isStarted) {
+            int port = getPortFromEditText();
+            try {
+                if (port == 0) {
+                    throw new Exception();
+                }
+                androidWebServer = new AndroidWebServer(port);
+                androidWebServer.start();
+                return true;
+            } catch (Exception e) {
+                e.printStackTrace();
+                Snackbar.make(coordinatorLayout, "A porta " + port + " não está funcionando, por favor altere para outra no intervalo" +
+                        " entre 1000 e 9999.", Snackbar.LENGTH_LONG).show();
+            }
+        }
+        return false;
+    }
+
+    private boolean stopAndroidWebServer() {
+        if (isStarted &amp;&amp; androidWebServer != null) {
+            androidWebServer.stop();
+            return true;
+        }
+        return false;
+    }
+
+    private void setIpAccess() {
+        textViewIpAccess.setText(getIpAccess());
+    }
+
+    private void initBroadcastReceiverNetworkStateChanged() {
+        final IntentFilter filters = new IntentFilter();
+        filters.addAction("android.net.wifi.WIFI_STATE_CHANGED");
+        filters.addAction("android.net.wifi.STATE_CHANGE");
+        broadcastReceiverNetworkState = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                setIpAccess();
+            }
+        };
+        super.registerReceiver(broadcastReceiverNetworkState, filters);
+    }
+
+    private String getIpAccess() {
+        WifiManager wifiManager = (WifiManager) getSystemService(WIFI_SERVICE);
+        int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
+        final String formatedIpAddress = String.format("%d.%d.%d.%d", (ipAddress &amp; 0xff), (ipAddress &gt;&gt; 8 &amp; 0xff),
+                (ipAddress &gt;&gt; 16 &amp; 0xff), (ipAddress &gt;&gt; 24 &amp; 0xff));
+        return "http://" + formatedIpAddress + ":";
+    }
+
+    private int getPortFromEditText() {
+        String valueEditText = editTextPort.getText().toString();
+        return (valueEditText.length() &gt; 0) ? Integer.parseInt(valueEditText) : DEFAULT_PORT;
+    }
+
+    public boolean isConnectedInWifi() {
+        WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+        NetworkInfo networkInfo = ((ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE)).getActiveNetworkInfo();
+        if (networkInfo != null &amp;&amp; networkInfo.isAvailable() &amp;&amp; networkInfo.isConnected()
+                &amp;&amp; wifiManager.isWifiEnabled() &amp;&amp; networkInfo.getTypeName().equals("WIFI")) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean onKeyDown(int keyCode, KeyEvent evt) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (isStarted) {
+                new AlertDialog.Builder(this)
+                        .setTitle(R.string.warning)
+                        .setMessage(R.string.dialog_exit_message)
+                        .setPositiveButton(getResources().getString(android.R.string.ok), new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int id) {
+                                finish();
+                            }
+                        })
+                        .setNegativeButton(getResources().getString(android.R.string.cancel), null)
+                        .show();
+            } else {
+                finish();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopAndroidWebServer();
+        isStarted = false;
+        if (broadcastReceiverNetworkState != null) {
+            unregisterReceiver(broadcastReceiverNetworkState);
+        }
+    }
+
+}
+</code></pre>
+
+<p>In the AndroidWebserver.java</p>
+
+<pre><code>package awserverfatepi.com.util;
+import java.util.Map;
+import fi.iki.elonen.NanoHTTPD;
+
+public class AndroidWebServer extends NanoHTTPD {
+
+    public AndroidWebServer(int port) {
+        super(port);
+    }
+
+    public AndroidWebServer(String hostname, int port) {
+        super(hostname, port);
+    }
+
+    @Override
+    public Response serve(IHTTPSession session) {
+        String msg = "&lt;html&gt;&lt;body&gt;&lt;h1&gt;Hello World&lt;/h1&gt;\n";
+        Map&lt;String, String&gt; parms = session.getParms();
+        if (parms.get("username") == null) {
+            msg += "&lt;form action='?' method='get'&gt;\n  &lt;p&gt;Seu nome: &lt;input type='text' name='username'&gt;&lt;/p&gt;\n" + "&lt;/form&gt;\n";
+        } else {
+            msg += "&lt;p&gt;Hello, " + parms.get("username") + "!&lt;/p&gt;";
+        }
+        return newFixedLengthResponse( msg + "&lt;/body&gt;&lt;/html&gt;\n" );
+    }
+}
+</code></pre>
+
+<p>Don't forget Manifest.xml</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+&lt;uses-permission android:name="android.permission.ACCESS_WIFI_STATE" /&gt;
+&lt;uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /&gt;
+&lt;uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /&gt;
+</code></pre>
+
+<p>And last</p>
+
+<p>activity_main.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;android.support.design.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/coordinatorLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"&gt;
+
+    &lt;LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"&gt;
+
+        &lt;ImageView
+            android:layout_width="match_parent"
+            android:layout_height="150dp"
+            android:scaleType="centerCrop"
+            android:src="@drawable/header" /&gt;
+
+        &lt;LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="@color/colorPrimaryLight"
+            android:gravity="center"
+            android:orientation="vertical"&gt;
+
+            &lt;LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"&gt;
+
+                &lt;TextView
+                    android:id="@+id/textViewIpAccess"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="http://000.000.000.000:"
+                    android:textColor="@android:color/white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" /&gt;
+
+                &lt;EditText
+                    android:id="@+id/editTextPort"
+                    android:layout_width="60dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:hint="8080"
+                    android:inputType="numberDecimal"
+                    android:maxLength="4"
+                    android:text="8080"
+                    android:textColor="@android:color/white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" /&gt;
+
+            &lt;/LinearLayout&gt;
+
+            &lt;TextView
+                android:id="@+id/textViewMessage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="50dp"
+                android:layout_marginRight="50dp"
+                android:layout_marginTop="50dp"
+                android:gravity="center"
+                android:text="@string/message"
+                android:textColor="@android:color/white"
+                android:textSize="18sp"
+                android:visibility="invisible" /&gt;
+
+        &lt;/LinearLayout&gt;
+
+    &lt;/LinearLayout&gt;
+
+    &lt;android.support.design.widget.FloatingActionButton
+        android:id="@+id/floatingActionButtonOnOff"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|bottom"
+        android:layout_margin="16dp"
+        android:elevation="4dp"
+        android:src="@drawable/on_btn"
+        app:backgroundTint="@color/colorRed" /&gt;
+
+&lt;/android.support.design.widget.CoordinatorLayout&gt;
+</code></pre>

@@ -1,0 +1,180 @@
+<p>All the <code>javax.sound.sampled</code> package does is read the raw bytes from the file and write them to the output. So there's an 'in between' step that you have to do which is converting the samples yourself.</p>
+
+<p>The following shows how to do this (with comments) for PCM, taken from my code example <a href="https://github.com/Radiodef/WaveformDemo/blob/master/waveformdemo/WaveformDemo.java" rel="nofollow">WaveformDemo</a>:</p>
+
+<pre><code>public static float[] unpack(
+    byte[] bytes,
+    long[] transfer,
+    float[] samples,
+    int bvalid,
+    AudioFormat fmt
+) {
+    if(fmt.getEncoding() != AudioFormat.Encoding.PCM_SIGNED
+            &amp;&amp; fmt.getEncoding() != AudioFormat.Encoding.PCM_UNSIGNED) {
+
+        return samples;
+    }
+
+    final int bitsPerSample = fmt.getSampleSizeInBits();
+    final int bytesPerSample = bitsPerSample / 8;
+    final int normalBytes = normalBytesFromBits(bitsPerSample);
+
+    /*
+     * not the most DRY way to do this but it's a bit more efficient.
+     * otherwise there would either have to be 4 separate methods for
+     * each combination of endianness/signedness or do it all in one
+     * loop and check the format for each sample.
+     * 
+     * a helper array (transfer) allows the logic to be split up
+     * but without being too repetetive.
+     * 
+     * here there are two loops converting bytes to raw long samples.
+     * integral primitives in Java get sign extended when they are
+     * promoted to a larger type so the &amp; 0xffL mask keeps them intact.
+     * 
+     */
+
+    if(fmt.isBigEndian()) {
+        for(int i = 0, k = 0, b; i &lt; bvalid; i += normalBytes, k++) {
+            transfer[k] = 0L;
+
+            int least = i + normalBytes - 1;
+            for(b = 0; b &lt; normalBytes; b++) {
+                transfer[k] |= (bytes[least - b] &amp; 0xffL) &lt;&lt; (8 * b);
+            }
+        }
+    } else {
+        for(int i = 0, k = 0, b; i &lt; bvalid; i += normalBytes, k++) {
+            transfer[k] = 0L;
+
+            for(b = 0; b &lt; normalBytes; b++) {
+                transfer[k] |= (bytes[i + b] &amp; 0xffL) &lt;&lt; (8 * b);
+            }
+        }
+    }
+
+    final long fullScale = (long)Math.pow(2.0, bitsPerSample - 1);
+
+    /*
+     * the OR is not quite enough to convert,
+     * the signage needs to be corrected.
+     * 
+     */
+
+    if(fmt.getEncoding() == AudioFormat.Encoding.PCM_SIGNED) {
+
+        /*
+         * if the samples were signed, they must be
+         * extended to the 64-bit long.
+         * 
+         * so first check if the sign bit was set
+         * and if so, extend it.
+         * 
+         * as an example, imagining these were 4-bit samples originally
+         * and the destination is 8-bit, a mask can be constructed
+         * with -1 (all bits 1) and a left shift:
+         * 
+         *     11111111
+         *  &lt;&lt;  (4 - 1)
+         *  ===========
+         *     11111000
+         * 
+         * (except the destination is 64-bit and the original
+         * bit depth from the file could be anything.)
+         * 
+         * then supposing we have a hypothetical sample -5
+         * that ought to be negative, an AND can be used to check it:
+         * 
+         *    00001011
+         *  &amp; 11111000
+         *  ==========
+         *    00001000
+         * 
+         * and an OR can be used to extend it:
+         * 
+         *    00001011
+         *  | 11111000
+         *  ==========
+         *    11111011
+         * 
+         */
+
+        final long signMask = -1L &lt;&lt; bitsPerSample - 1L;
+
+        for(int i = 0; i &lt; transfer.length; i++) {
+            if((transfer[i] &amp; signMask) != 0L) {
+                transfer[i] |= signMask;
+            }
+        }
+    } else {
+
+        /*
+         * unsigned samples are easier since they
+         * will be read correctly in to the long.
+         * 
+         * so just sign them:
+         * subtract 2^(bits - 1) so the center is 0.
+         * 
+         */
+
+        for(int i = 0; i &lt; transfer.length; i++) {
+            transfer[i] -= fullScale;
+        }
+    }
+
+    /* finally normalize to range of -1.0f to 1.0f */
+
+    for(int i = 0; i &lt; transfer.length; i++) {
+        samples[i] = (float)transfer[i] / (float)fullScale;
+    }
+
+    return samples;
+}
+
+public static int normalBytesFromBits(int bitsPerSample) {
+
+    /*
+     * some formats allow for bit depths in non-multiples of 8.
+     * they will, however, typically pad so the samples are stored
+     * that way. AIFF is one of these formats.
+     * 
+     * so the expression:
+     * 
+     *  bitsPerSample + 7 &gt;&gt; 3
+     * 
+     * computes a division of 8 rounding up (for positive numbers).
+     * 
+     * this is basically equivalent to:
+     * 
+     *  (int)Math.ceil(bitsPerSample / 8.0)
+     * 
+     */
+
+    return bitsPerSample + 7 &gt;&gt; 3;
+}
+</code></pre>
+
+<p>That piece of code assumes <code>float[]</code> and your FFT wants a <code>double[]</code> but that's a fairly simple change. <code>transfer</code> and <code>samples</code> are arrays of length equal to <code>bytes.length * normalBytes</code> and <code>bvalid</code> is the return value from <code>read</code>. My code example assumes AudioInputStream but the same conversion should be applicable to a TargetDataLine. I am not sure you can literally copy and paste it but it's an example.</p>
+
+<p>Regarding your two questions:</p>
+
+<ol>
+<li>You can take a very long FFT on the entire recording or average the FFTs from each buffer.</li>
+<li>The FFT you linked to computes in place. So the real part is the audio samples and the imaginary part is an empty array (filled with zeros) of length equal to the real part.</li>
+</ol>
+
+<p>But when the FFT is done there's still a couple things you have to do that I don't see the linked class doing:</p>
+
+<ul>
+<li>Convert to polar coordinates.</li>
+<li>Typically discard the negative frequencies (the entire upper half of the spectrum which is a mirror image of the lower half).</li>
+<li>Potentially scale the resulting magnitudes (the real part) by dividing them by the length of the transform.</li>
+</ul>
+
+<hr>
+
+<p>Edit, related:</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/26824663/how-do-i-use-audio-sample-data-from-java-sound">How do I use audio sample data from Java Sound?</a></li>
+</ul>

@@ -1,0 +1,319 @@
+<p>Here is a XJC plugin that I have used to solve this problem myself (in my case I needed annotations to do validation independant of XML schema, as I also have JMS endpoints):</p>
+
+<p>What it does:</p>
+
+<p>-It generates @valid annotation for objects that are not in the xs default schema (so annotations are cascaded)</p>
+
+<p>-It generates @NotNull annotation for objects that has a MinOccur value >= 1 or for attributes with required use</p>
+
+<p>-It generates @Size for lists that have minOccurs > 1</p>
+
+<p>-It generates @Size if there is a maxLength or minLength restriction</p>
+
+<p>-@DecimalMax for maxInclusive restriction</p>
+
+<p>-@DecimalMin for minInclusive restriction</p>
+
+<p>-@Digits if there is a totalDigits or fractionDigits restriction.</p>
+
+<p>-@Pattern if there is a Pattern restriction</p>
+
+<p>Please note that minExclusive and maxExclusive restrictions are excluded.</p>
+
+<p>To use it, you have to package the class file along a META-INF/services/com.sun.tools.xjc.Plugin file with the content "com.sun.tools.xjc.addon.jaxb.JaxbValidationsPlugins" (that is, the fully qualified name of the class) and call XJC with the -XValidate switch.</p>
+
+<p>It's not really difficult to implement, but I hope it will be useful for someone. The source code is attached as a TXT file. Enjoy!</p>
+
+<pre><code>package com.sun.tools.xjc.addon.jaxb;
+
+import java.lang.reflect.Field;
+import java.math.BigInteger;
+import java.util.Collections;
+import java.util.List;
+
+import javax.validation.Valid;
+import javax.validation.constraints.DecimalMax;
+import javax.validation.constraints.DecimalMin;
+import javax.validation.constraints.Digits;
+import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Pattern;
+import javax.validation.constraints.Size;
+
+import org.xml.sax.ErrorHandler;
+
+import com.sun.codemodel.JAnnotationUse;
+import com.sun.codemodel.JFieldVar;
+import com.sun.tools.xjc.Options;
+import com.sun.tools.xjc.Plugin;
+import com.sun.tools.xjc.model.CAttributePropertyInfo;
+import com.sun.tools.xjc.model.CElementPropertyInfo;
+import com.sun.tools.xjc.model.CPropertyInfo;
+import com.sun.tools.xjc.outline.ClassOutline;
+import com.sun.tools.xjc.outline.FieldOutline;
+import com.sun.tools.xjc.outline.Outline;
+import com.sun.xml.xsom.XSComponent;
+import com.sun.xml.xsom.XSSimpleType;
+import com.sun.xml.xsom.impl.AttributeUseImpl;
+import com.sun.xml.xsom.impl.ElementDecl;
+import com.sun.xml.xsom.impl.ParticleImpl;
+
+public class JaxbValidationsPlugins extends Plugin {
+    public String getOptionName() {
+        return "Xvalidate";
+    }
+
+    public List&lt;String&gt; getCustomizationURIs() {
+        return Collections.singletonList(namespace);
+    }
+
+    private String namespace = "http://jaxb.dev.java.net/plugin/code-injector";
+
+    public boolean isCustomizationTagName(String nsUri, String localName) {
+        return nsUri.equals(namespace) &amp;&amp; localName.equals("code");
+    }
+
+    public String getUsage() {
+        return "  -Xvalidate      :  inject Bean validation annotations (JSR 303)";
+    }
+
+    public boolean run(Outline model, Options opt, ErrorHandler errorHandler) {
+
+        try {
+
+            for (ClassOutline co : model.getClasses()) {
+
+                for (CPropertyInfo property : co.target.getProperties()) {
+                    if (property instanceof CElementPropertyInfo) {
+                        recorrePropiedad((CElementPropertyInfo) property, co, model);
+                    } else if (property instanceof CAttributePropertyInfo) {
+                        recorrePropiedad((CAttributePropertyInfo) property, co, model);
+                    }
+                }
+            }
+
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    static int i = 0;
+
+    /**
+     * XS:Element
+     * 
+     * @param property
+     * @param clase
+     * @param model
+     */
+    public void recorrePropiedad(CElementPropertyInfo property, ClassOutline clase, Outline model) {
+        FieldOutline field = model.getField(property);
+        XSComponent definicion = property.getSchemaComponent();
+        ParticleImpl particle = (ParticleImpl) definicion;
+        int maxOccurs = ((BigInteger) getField("maxOccurs", particle)).intValue();
+        int minOccurs = ((BigInteger) getField("minOccurs", particle)).intValue();
+        JFieldVar var = (JFieldVar) clase.implClass.fields().get(getField("privateName", property));
+        if (minOccurs &lt; 0 || minOccurs &gt;= 1) {
+            if (!hasAnnotation(var, NotNull.class)) {
+                System.out.println("@NotNull: " + property.getName() + " de la clase " + clase.implClass.name());
+                var.annotate(NotNull.class);
+            }
+        }
+        if(maxOccurs&gt;1){
+            if (!hasAnnotation(var, Size.class)) {
+                System.out.println("@Size ("+minOccurs+","+maxOccurs+") " + property.getName() + " de la clase " + clase.implClass.name());
+                var.annotate(Size.class).param("min", minOccurs).param("max", maxOccurs);
+            }           
+        }
+
+        ElementDecl declaracion = (ElementDecl) getField("term", particle);
+        if (declaracion.getType().getTargetNamespace().startsWith("http://hotelbeds.com")) {
+            if (!hasAnnotation(var, Valid.class)) {
+                System.out.println("@Valid: " + property.getName() + " de la clase " + clase.implClass.name());
+                var.annotate(Valid.class);
+            }
+        }
+        if (declaracion.getType() instanceof XSSimpleType) {
+            procesaType((XSSimpleType) declaracion.getType(), var, property.getName(), clase.implClass.name());
+        } else if (declaracion.getType().getBaseType() instanceof XSSimpleType) {
+            procesaType((XSSimpleType) declaracion.getType().getBaseType(), var, property.getName(), clase.implClass.name());
+        } 
+
+        // if(declaracion.getType() instanceof
+        // if(declaracion.getType().ge)
+        // procesaType(declaracion.getType().getBaseType(),var);
+    }
+
+    /**
+     * XS:Attribute
+     * 
+     * @param property
+     * @param clase
+     * @param model
+     */
+    public void recorrePropiedad(CAttributePropertyInfo property, ClassOutline clase, Outline model) {
+        FieldOutline field = model.getField(property);
+        System.out.println("Tratando attributo " + property.getName() + " de la clase " + clase.implClass.name());
+        XSComponent definicion = property.getSchemaComponent();
+        AttributeUseImpl particle = (AttributeUseImpl) definicion;
+        JFieldVar var = (JFieldVar) clase.implClass.fields().get(getField("privateName", property));
+        if (particle.isRequired()) {
+            if (!hasAnnotation(var, NotNull.class)) {
+                System.out.println("@NotNull: " + property.getName() + " de la clase " + clase.implClass.name());
+                var.annotate(NotNull.class);
+            }
+        }
+        if (particle.getDecl().getType().getTargetNamespace().startsWith("http://hotelbeds.com")) {
+            if (!hasAnnotation(var, Valid.class)) {
+                System.out.println("@Valid: " + property.getName() + " de la clase " + clase.implClass.name());
+                var.annotate(Valid.class);
+            }
+        }
+        procesaType(particle.getDecl().getType(), var, property.getName(), clase.implClass.name());
+    }
+
+    public void procesaType(XSSimpleType tipo, JFieldVar field, String campo, String clase) {
+        if (tipo.getFacet("maxLength") != null || tipo.getFacet("minLength") != null) {
+            Integer maxLength = tipo.getFacet("maxLength") == null ? null : parseInt(tipo.getFacet("maxLength").getValue().value);
+            Integer minLength = tipo.getFacet("minLength") == null ? null : parseInt(tipo.getFacet("minLength").getValue().value);
+            if (!hasAnnotation(field, Size.class)) {
+                System.out.println("@Size(" + minLength + "," + maxLength + "): " + campo + " de la clase " + clase);
+                field.annotate(Size.class).param("min", minLength).param("max", maxLength);
+            }
+        }
+        /*
+         * &lt;bindings multiple="true" node=
+         * "//xs:complexType/.//xs:element[contains(@type,'IntPercentRestriction')]"
+         * &gt; &lt;annox:annotate&gt; &lt;annox:annotate
+         * annox:class="javax.validation.constraints.Digits" integer="3"
+         * fraction="2" /&gt; &lt;annox:annotate
+         * annox:class="javax.validation.constraints.Min" value="-100" /&gt;
+         * value="100" /&gt; &lt;/annox:annotate&gt; &lt;/bindings&gt;
+         *//*
+             * &lt;xs:restriction base="xs:decimal"&gt; &lt;xs:fractionDigits value="2"/&gt;
+             * &lt;xs:maxInclusive value="100.00"/&gt; &lt;xs:minInclusive
+             * value="-100.00"/&gt; &lt;xs:totalDigits value="5"/&gt; &lt;/xs:restriction&gt;
+             */
+        if (tipo.getFacet("maxInclusive") != null &amp;&amp; tipo.getFacet("maxInclusive").getValue().value != null &amp;&amp; !hasAnnotation(field,DecimalMax.class)){
+            System.out.println("@DecimalMax(" + tipo.getFacet("maxInclusive").getValue().value + "): " + campo + " de la clase " + clase);
+            field.annotate(DecimalMax.class).param("value", tipo.getFacet("maxInclusive").getValue().value);
+        }
+        if (tipo.getFacet("minInclusive") != null &amp;&amp; tipo.getFacet("minInclusive").getValue().value != null &amp;&amp; !hasAnnotation(field,DecimalMin.class)){
+            System.out.println("@DecimalMin(" + tipo.getFacet("minInclusive").getValue().value + "): " + campo + " de la clase " + clase);
+            field.annotate(DecimalMin.class).param("value", tipo.getFacet("minInclusive").getValue().value);
+        }
+        if (tipo.getFacet("totalDigits") != null) {
+            Integer totalDigits = tipo.getFacet("totalDigits") == null ? null : parseInt(tipo.getFacet("totalDigits").getValue().value);
+            int fractionDigits = tipo.getFacet("fractionDigits") == null ? 0 : parseInt(tipo.getFacet("fractionDigits").getValue().value);
+            if (!hasAnnotation(field, Digits.class)) {
+                System.out.println("@Digits(" + totalDigits + "," + fractionDigits + "): " + campo + " de la clase " + clase);
+                JAnnotationUse annox = field.annotate(Digits.class).param("integer", (totalDigits - fractionDigits));
+                if (tipo.getFacet("fractionDigits") != null) {
+                    annox.param("fraction", fractionDigits);
+                }
+            }
+        }
+        /**
+         *  &lt;annox:annotate annox:class="javax.validation.constraints.Pattern"
+                    message="Name can only contain capital letters, numbers and the simbols '-', '_', '/', ' '"
+                    regexp="^[A-Z0-9_\s//-]*" /&gt;
+         */
+        if(tipo.getFacet("pattern")!=null){
+            System.out.println("@Pattern(" +tipo.getFacet("pattern").getValue().value+ "): " + campo + " de la clase " + clase);
+            if (!hasAnnotation(field, Pattern.class)) {
+                field.annotate(Pattern.class).param("regexp", tipo.getFacet("pattern").getValue().value);
+            }
+
+        }
+
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public boolean hasAnnotation(JFieldVar var, Class anotacion) {
+        List&lt;JAnnotationUse&gt; lista = (List&lt;JAnnotationUse&gt;) getField("annotations", var);
+        if (lista != null) {
+            for (JAnnotationUse uso : lista) {
+                if (((Class) getField("clazz._class", uso)).getCanonicalName().equals(anotacion.getCanonicalName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+
+    private Integer parseInt(String valor) {
+        try {
+
+            Integer i = Integer.parseInt(valor);
+            if (i &lt; 2147483647 &amp;&amp; i &gt; -2147483648) {
+                return i;
+            }
+        } catch (Exception e) {
+            try{
+                return (int)Math.round(Double.parseDouble(valor));
+
+            }catch(Exception ex){
+                ;
+            }
+
+}
+        return null;
+
+    }
+
+    /*
+    private Long parseLong(String valor) {
+        try {
+            Long i = Long.parseLong(valor);
+            if (i &lt; 2147483647 &amp;&amp; i &gt; -2147483648) {
+                return i;
+            }
+        } catch (Exception e) {
+            return Math.round(Double.parseDouble(valor));
+        }
+        return null;
+
+    }   
+    */
+    private Object getField(String path, Object oo) {
+        try {
+            if (path.contains(".")) {
+                String field = path.substring(0, path.indexOf("."));
+                Field campo = oo.getClass().getDeclaredField(field);
+                campo.setAccessible(true);
+                Object result = campo.get(oo);
+                return getField(path.substring(path.indexOf(".") + 1), result);
+            } else {
+                Field campo = getSimpleField(path, oo.getClass());
+                campo.setAccessible(true);
+                return campo.get(oo);
+            }
+        } catch (Exception e) {
+            System.out.println("Field " + path + " not found on " + oo.getClass().getName());
+        }
+        return null;
+    }
+
+    private static Field getSimpleField(String fieldName, Class&lt;?&gt; clazz) {
+        Class&lt;?&gt; tmpClass = clazz;
+        try {
+            do {
+                for (Field field : tmpClass.getDeclaredFields()) {
+                    String candidateName = field.getName();
+                    if (!candidateName.equals(fieldName)) {
+                        continue;
+                    }
+                    field.setAccessible(true);
+                    return field;
+                }
+                tmpClass = tmpClass.getSuperclass();
+            } while (clazz != null);
+        } catch (Exception e) {
+            System.out.println("Field '" + fieldName + "' not found on class " + clazz);
+        }
+        return null;
+    }
+}
+</code></pre>

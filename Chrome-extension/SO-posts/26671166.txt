@@ -1,0 +1,623 @@
+<p>Hi Guys I have implemented PushNotifications by this Code..
+You have to add 3 additional classes in your project
+Step:1 Create class Controller.java</p>
+
+<pre><code>public class Controller extends Application{
+    private  final int MAX_ATTEMPTS = 5;
+    private  final int BACKOFF_MILLI_SECONDS = 2000;
+    private  final Random random = new Random();
+
+
+     // Register this account with the server.
+    void register(final Context context, String name, String email, final String regId) {
+
+        Log.i(Config.TAG, "registering device (regId = " + regId + ")");
+
+        String serverUrl = Config.YOUR_SERVER_URL;
+
+        Map&lt;String, String&gt; params = new HashMap&lt;String, String&gt;();
+        params.put("regId", regId);
+        params.put("name", name);
+        params.put("email", email);
+
+        long backoff = BACKOFF_MILLI_SECONDS + random.nextInt(1000);
+
+        // Once GCM returns a registration id, we need to register on our server
+        // As the server might be down, we will retry it a couple
+        // times.
+        for (int i = 1; i &lt;= MAX_ATTEMPTS; i++) {
+
+            Log.d(Config.TAG, "Attempt #" + i + " to register");
+
+            try {
+                //Send Broadcast to Show message on screen
+                displayMessageOnScreen(context, context.getString(
+                        R.string.server_registered, i, MAX_ATTEMPTS));
+
+                // Post registration values to web server
+                post(serverUrl, params);
+
+                GCMRegistrar.setRegisteredOnServer(context, true);
+
+                //Send Broadcast to Show message on screen
+                String message = context.getString(R.string.server_registered);
+                displayMessageOnScreen(context, message);
+
+                return;
+            } catch (IOException e) {
+
+                // Here we are simplifying and retrying on any error; in a real
+                // application, it should retry only on unrecoverable errors
+                // (like HTTP error code 503).
+
+                Log.e(Config.TAG, "Failed to register on attempt " + i + ":" + e);
+
+                if (i == MAX_ATTEMPTS) {
+                    break;
+                }
+                try {
+
+                    Log.d(Config.TAG, "Sleeping for " + backoff + " ms before retry");
+                    Thread.sleep(backoff);
+
+                } catch (InterruptedException e1) {
+                    // Activity finished before we complete - exit.
+                    Log.d(Config.TAG, "Thread interrupted: abort remaining retries!");
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                // increase backoff exponentially
+                backoff *= 2;
+            }
+        }
+
+        String message = context.getString(R.string.server_register_error,
+                MAX_ATTEMPTS);
+
+        //Send Broadcast to Show message on screen
+        displayMessageOnScreen(context, message);
+    }
+
+     // Unregister this account/device pair within the server.
+     void unregister(final Context context, final String regId) {
+
+        Log.i(Config.TAG, "unregistering device (regId = " + regId + ")");
+
+        String serverUrl = Config.YOUR_SERVER_URL + "/unregister";
+        Map&lt;String, String&gt; params = new HashMap&lt;String, String&gt;();
+        params.put("regId", regId);
+
+        try {
+            post(serverUrl, params);
+            GCMRegistrar.setRegisteredOnServer(context, false);
+            String message = context.getString(R.string.server_unregistered);
+            displayMessageOnScreen(context, message);
+        } catch (IOException e) {
+
+            // At this point the device is unregistered from GCM, but still
+            // registered in the our server.
+            // We could try to unregister again, but it is not necessary:
+            // if the server tries to send a message to the device, it will get
+            // a "NotRegistered" error message and should unregister the device.
+
+            String message = context.getString(R.string.server_unregister_error,
+                    e.getMessage());
+            displayMessageOnScreen(context, message);
+        }
+    }
+
+    // Issue a POST request to the server.
+    private static void post(String endpoint, Map&lt;String, String&gt; params)
+            throws IOException {    
+
+        URL url;
+        try {
+
+            url = new URL(endpoint);
+
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("invalid url: " + endpoint);
+        }
+
+        StringBuilder bodyBuilder = new StringBuilder();
+        Iterator&lt;Entry&lt;String, String&gt;&gt; iterator = params.entrySet().iterator();
+
+        // constructs the POST body using the parameters
+        while (iterator.hasNext()) {
+            Entry&lt;String, String&gt; param = iterator.next();
+            bodyBuilder.append(param.getKey()).append('=')
+                    .append(param.getValue());
+            if (iterator.hasNext()) {
+                bodyBuilder.append('&amp;');
+            }
+        }
+
+        String body = bodyBuilder.toString();
+
+        Log.v(Config.TAG, "Posting '" + body + "' to " + url);
+
+        byte[] bytes = body.getBytes();
+
+        HttpURLConnection conn = null;
+        try {
+
+            Log.e("URL", "&gt; " + url);
+
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setDoOutput(true);
+            conn.setUseCaches(false);
+            conn.setFixedLengthStreamingMode(bytes.length);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type",
+                    "application/x-www-form-urlencoded;charset=UTF-8");
+            // post the request
+            OutputStream out = conn.getOutputStream();
+            out.write(bytes);
+            out.close();
+
+            // handle the response
+            int status = conn.getResponseCode();
+
+            // If response is not success
+            if (status != 200) {
+
+              throw new IOException("Post failed with error code " + status);
+            }
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+      }
+
+    // Checking for all possible internet providers
+    public boolean isConnectingToInternet(){
+
+        ConnectivityManager connectivity = 
+                             (ConnectivityManager) getSystemService(
+                              Context.CONNECTIVITY_SERVICE);
+          if (connectivity != null)
+          {
+              NetworkInfo[] info = connectivity.getAllNetworkInfo();
+              if (info != null)
+                  for (int i = 0; i &lt; info.length; i++)
+                      if (info[i].getState() == NetworkInfo.State.CONNECTED)
+                      {
+                          return true;
+                      }
+          }
+          return false;
+    }
+
+   // Notifies UI to display a message.
+   void displayMessageOnScreen(Context context, String message) {
+
+        Intent intent = new Intent(Config.DISPLAY_MESSAGE_ACTION);
+        intent.putExtra(Config.EXTRA_MESSAGE, message);
+ // Send Broadcast to Broadcast receiver with message
+        context.sendBroadcast(intent);
+
+    }
+
+   //Function to display simple Alert Dialog
+   public void showAlertDialog(Context context, String title, String message,
+            Boolean status) {
+        AlertDialog alertDialog = new AlertDialog.Builder(context).create();
+
+        // Set Dialog Title
+        alertDialog.setTitle(title);
+
+        // Set Dialog Message
+        alertDialog.setMessage(message);
+
+        if(status != null)
+            // Set alert dialog icon
+            alertDialog.setIcon((status) ? R.drawable.ic_launcher : R.id.search_mag_icon);
+
+        // Set OK Button
+        alertDialog.setButton("OK", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+
+            }
+        });
+
+        // Show Alert Message
+        alertDialog.show();
+    }
+
+    private PowerManager.WakeLock wakeLock;
+
+    public  void acquireWakeLock(Context context) {
+        if (wakeLock != null) wakeLock.release();
+
+        PowerManager pm = (PowerManager) 
+                          context.getSystemService(Context.POWER_SERVICE);
+
+        wakeLock = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK |
+                PowerManager.ACQUIRE_CAUSES_WAKEUP |
+                PowerManager.ON_AFTER_RELEASE, "WakeLock");
+
+        wakeLock.acquire();
+    }
+
+    public  void releaseWakeLock() {
+        if (wakeLock != null) wakeLock.release(); wakeLock = null;
+    }
+}
+</code></pre>
+
+<p>Step:2 Create class GCMIntentService.java</p>
+
+<pre><code>import com.google.android.gcm.GCMBaseIntentService;
+
+public class GCMIntentService extends GCMBaseIntentService{
+    private static final String TAG = "GCMIntentService";
+
+    private Controller aController = null;
+
+    public GCMIntentService() {
+        // Call extended class Constructor GCMBaseIntentService
+        super(Config.GOOGLE_SENDER_ID);
+    }
+
+    @Override
+    protected void onError(Context arg0, String arg1) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    protected void onMessage(Context context, Intent intent) {
+        // TODO Auto-generated method stub
+        if(aController == null)
+            aController = (Controller) getApplicationContext();
+
+        String message = intent.getExtras().getString("message");
+        Log.i(TAG, "Received message");
+        aController.displayMessageOnScreen(context, message);
+        // notifies user
+        generateNotification(context, message);
+    }
+
+    @Override
+    protected void onRegistered(Context context, String registrationId) {
+        // TODO Auto-generated method stub
+        //Get Global Controller Class object (see application tag in AndroidManifest.xml)
+        if(aController == null)
+           aController = (Controller) getApplicationContext();
+
+        Log.i(TAG, "Device registered: regId = " + registrationId);
+        System.out.println(registrationId);
+        aController.displayMessageOnScreen(context, 
+                                           "Your device registred with GCM");
+        Log.d("NAME", MainActivity.name);
+        aController.register(context, MainActivity.name, 
+                               MainActivity.email, registrationId);
+    }
+
+    @Override
+    protected void onUnregistered(Context arg0, String arg1) {
+        // TODO Auto-generated method stub
+        if(aController == null)
+            aController = (Controller) getApplicationContext();
+        Log.i(TAG, "Device unregistered");
+        aController.displayMessageOnScreen(arg0, 
+                                            getString(R.string.gcm_unregistered));
+        aController.unregister(arg0, arg1);
+    }
+
+    /**
+     * Create a notification to inform the user that server has sent a message.
+     */
+    private static void generateNotification(Context context, String message) {
+
+        int icon = R.drawable.ic_launcher;
+        long when = System.currentTimeMillis();
+
+        NotificationManager notificationManager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        Notification notifi = new Notification(icon, message, when);
+
+        String title = context.getString(R.string.app_name);
+
+        Intent notificationIntent = new Intent(context, MainActivity.class);
+        // set intent so it does not start a new activity
+        notificationIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent intent =
+                PendingIntent.getActivity(context, 0, notificationIntent, 0);
+        notifi.setLatestEventInfo(context, title, message, intent);
+        notifi.flags |= Notification.FLAG_AUTO_CANCEL;
+
+        // Play default notification sound
+        notifi.defaults |= Notification.DEFAULT_SOUND;
+
+        // Vibrate if vibrate is enabled
+        notifi.defaults |= Notification.DEFAULT_VIBRATE;
+        notificationManager.notify(0, notifi);      
+    }
+}
+</code></pre>
+
+<p>Step:3 Create interface Config.java</p>
+
+<pre><code>public interface Config {
+    // CONSTANTS
+    static final String YOUR_SERVER_URL =  
+                          "https://yourserveraddress/gcm/register.php";
+
+    // Google project id
+    static final String GOOGLE_SENDER_ID = "123456789101"; //Your Project Number
+
+    /**
+     * Tag used on log messages.
+     */
+    static final String TAG = "GCM Android Example";
+
+    static final String DISPLAY_MESSAGE_ACTION =
+            "com.yourpackagename.DISPLAY_MESSAGE";
+
+    static final String EXTRA_MESSAGE = "message";
+}
+
+These are two activity
+RegisterActivity.java
+public class RegisterActivty extends Activity {
+    EditText txtName; 
+    EditText txtEmail;
+
+    // Register button
+    Button btnRegister;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_register);
+
+        //Get Global Controller Class object (see application tag in AndroidManifest.xml)
+        final Controller aController = (Controller) getApplicationContext();
+
+        // Check if Internet Connection present
+        if (!aController.isConnectingToInternet()) {
+
+            // Internet Connection is not present
+            aController.showAlertDialog(RegisterActivty.this,
+                    "Internet Connection Error",
+                    "Please connect to working Internet connection", false);
+
+            // stop executing code by return
+            return;
+        }
+
+        // Check if GCM configuration is set
+        if (Config.YOUR_SERVER_URL == null
+            || Config.GOOGLE_SENDER_ID == null
+            || Config.YOUR_SERVER_URL.length() == 0
+            || Config.GOOGLE_SENDER_ID.length() == 0) {
+
+            // GCM sernder id / server url is missing
+            aController.showAlertDialog(RegisterActivty.this, "Configuration Error!",
+                    "Please set your Server URL and GCM Sender ID", false);
+            // stop executing code by return
+             return;
+        }
+        txtName = (EditText) findViewById(R.id.txtName);
+        txtEmail = (EditText) findViewById(R.id.txtEmail);
+        btnRegister = (Button) findViewById(R.id.btnRegister);
+
+        // Click event on Register button
+        btnRegister.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View arg0) {  
+                // Get data from EditText 
+                String name = txtName.getText().toString(); 
+                String email = txtEmail.getText().toString();
+
+                // Check if user filled the form
+                if(name.trim().length() &gt; 0 &amp;&amp; email.trim().length() &gt; 0){
+
+                    // Launch Main Activity
+                    Intent i = new Intent(getApplicationContext(), MainActivity.class);
+
+                    // Registering user on our server                   
+                    // Sending registraiton details to MainActivity
+                    i.putExtra("name", name);
+                    i.putExtra("email", email);
+                    startActivity(i);
+                    finish();
+                }
+            }
+        });
+    }
+}
+
+
+MainActivity.java
+
+import com.google.android.gcm.GCMRegistrar;
+public class MainActivity extends ActionBarActivity {
+
+    TextView lblMessage;
+    Controller aController;
+
+    // Asyntask
+    AsyncTask&lt;Void, Void, Void&gt; mRegisterTask;
+
+    public static String name;
+    public static String email;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+      //Get Global Controller Class object (see application tag in AndroidManifest.xml)
+        aController = (Controller) getApplicationContext();
+
+        // Check if Internet present
+        if (!aController.isConnectingToInternet()) {
+
+            // Internet Connection is not present
+            aController.showAlertDialog(MainActivity.this,
+                    "Internet Connection Error",
+                    "Please connect to Internet connection", false);
+            // stop executing code by return
+            return;
+        }
+
+        // Getting name, email from intent
+        Intent i = getIntent();
+
+        name = i.getStringExtra("name");
+        email = i.getStringExtra("email");      
+
+        // Make sure the device has the proper dependencies.
+        GCMRegistrar.checkDevice(this);
+
+        // Make sure the manifest permissions was properly set 
+        GCMRegistrar.checkManifest(this);
+
+        lblMessage = (TextView) findViewById(R.id.lblMessage);
+
+        // Register custom Broadcast receiver to show messages on activity
+        registerReceiver(mHandleMessageReceiver, new IntentFilter(
+                Config.DISPLAY_MESSAGE_ACTION));
+
+        // Get GCM registration id
+        final String regId = GCMRegistrar.getRegistrationId(this);
+
+        // Check if regid already presents
+        if (regId.equals("")) {
+
+            // Register with GCM            
+            GCMRegistrar.register(this, Config.GOOGLE_SENDER_ID);
+
+        } else {
+
+            // Device is already registered on GCM Server
+            if (GCMRegistrar.isRegisteredOnServer(this)) {
+
+                // Skips registration.              
+                Toast.makeText(getApplicationContext(), 
+                              "Already registered with GCM Server", 
+                              Toast.LENGTH_LONG).
+                              show();
+
+            } else {
+
+                // Try to register again, but not in the UI thread.
+                // It's also necessary to cancel the thread onDestroy(),
+                // hence the use of AsyncTask instead of a raw thread.
+
+                final Context context = this;
+                mRegisterTask = new AsyncTask&lt;Void, Void, Void&gt;() {
+
+                    @Override
+                    protected Void doInBackground(Void... params) {
+
+                        // Register on our server
+                        // On server creates a new user
+                        aController.register(context, name, email, regId);
+
+                        return null;
+                    }
+
+                    @Override
+                    protected void onPostExecute(Void result) {
+                        mRegisterTask = null;
+                    }
+                };
+                // execute AsyncTask
+                mRegisterTask.execute(null, null, null);
+            }
+        }
+    }
+
+ // Create a broadcast receiver to get message and show on screen 
+    private final BroadcastReceiver mHandleMessageReceiver = new BroadcastReceiver() {
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+
+            String newMessage = intent.getExtras().getString(Config.EXTRA_MESSAGE);
+
+            // Waking up mobile if it is sleeping
+            aController.acquireWakeLock(getApplicationContext());
+
+            // Display message on the screen
+            lblMessage.append(newMessage + "");         
+
+            Toast.makeText(getApplicationContext(), 
+                           "Got Message: " + newMessage, 
+                           Toast.LENGTH_LONG).show();
+
+            // Releasing wake lock
+            aController.releaseWakeLock();
+        }
+    };
+  }
+
+AndroidManifest.xml
+
+&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.yourpackagename"
+    android:versionCode="1"
+    android:versionName="1.0" &gt;
+
+    &lt;uses-sdk
+        android:minSdkVersion="8"
+        android:targetSdkVersion="19" /&gt;
+    &lt;uses-permission android:name="android.permission.INTERNET"/&gt;
+    &lt;uses-permission android:name="android.permission.WAKE_LOCK"/&gt;
+    &lt;uses-permission android:name="android.permission.GET_ACCOUNTS"/&gt;
+    &lt;permission
+        android:name="com.example.yourpackagename.permission.C2D_MESSAGE"
+        android:protectionLevel="signature" /&gt;
+    &lt;uses-permission android:name="com.example.yourpackagename.permission.C2D_MESSAGE" /&gt;
+
+    &lt;!-- This app has permission to register and receive data message. --&gt;
+    &lt;uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" /&gt;
+    &lt;uses-permission android:name="android.permission.VIBRATE"/&gt;
+    &lt;uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/&gt;
+
+    &lt;application
+        android:name="com.example.yourpackagename.Controller"
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme" &gt;
+        &lt;activity
+            android:name=".MainActivity"
+            android:label="@string/app_name" &gt;
+
+        &lt;/activity&gt;
+        &lt;activity android:name="RegisterActivty"&gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+
+        &lt;receiver
+            android:name="com.google.android.gcm.GCMBroadcastReceiver"
+            android:permission="com.google.android.c2dm.permission.SEND" &gt;
+            &lt;intent-filter&gt;
+
+                &lt;!-- Receives the actual messages. --&gt;
+                &lt;action android:name="com.google.android.c2dm.intent.RECEIVE" /&gt;
+                &lt;!-- Receives the registration id. --&gt;
+                &lt;action android:name="com.google.android.c2dm.intent.REGISTRATION" /&gt;
+
+                &lt;category android:name="com.example.yourpackagename" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/receiver&gt;
+
+        &lt;service android:name="com.yourpackagename.GCMIntentService" /&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;
+</code></pre>

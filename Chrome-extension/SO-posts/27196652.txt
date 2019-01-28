@@ -1,0 +1,242 @@
+<blockquote>
+  <p>I know that to get the formatting correct, I have to subclass DefaultTableCellRenderer however I am not really sure of exactly what I need in the getTableCellRendererComponent() method.</p>
+</blockquote>
+
+<p>See <a href="http://tips4java.wordpress.com/2008/10/11/table-format-renderers/" rel="nofollow">Table Format Rendering</a> for the easy way to do this. This approach simply overrides the <code>setValue(...)</code> method of the renderer.</p>
+
+<blockquote>
+  <p>I am pretty sure I will have to subclass DefaultCellEditor to get the editing and error checking to work properly.</p>
+</blockquote>
+
+<p>Here is some old code I found on a forum somewhere that creates a custom IntegerEditor. The first column uses the default Integer editor and the second column uses the custom editor.</p>
+
+<pre><code>import java.awt.*;
+import java.util.EventObject;
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.table.*;
+import javax.swing.text.*;
+import java.text.*;
+import java.awt.event.*;
+public class TableIntegerEditor
+{
+    static class IntegerEditor extends DefaultCellEditor
+    {
+        JFormattedTextField ftf;
+        NumberFormat integerFormat;
+        private Integer minimum, maximum;
+        private boolean DEBUG = false;
+
+        public IntegerEditor(int min, int max)
+        {
+            super(new JFormattedTextField());
+
+            setClickCountToStart(2);
+
+            ftf = (JFormattedTextField)getComponent();
+            ftf.setBorder(new LineBorder(Color.BLACK));
+            minimum = new Integer(min);
+            maximum = new Integer(max);
+
+            //Set up the editor for the integer cells.
+            integerFormat = NumberFormat.getIntegerInstance();
+            NumberFormatter intFormatter = new NumberFormatter(integerFormat);
+            intFormatter.setFormat(integerFormat);
+            intFormatter.setMinimum(minimum);
+            intFormatter.setMaximum(maximum);
+
+            ftf.setFormatterFactory(new DefaultFormatterFactory(intFormatter));
+            ftf.setValue(minimum);
+            ftf.setHorizontalAlignment(JTextField.TRAILING);
+            ftf.setFocusLostBehavior(JFormattedTextField.PERSIST);
+
+            //React when the user presses Enter while the editor is
+            //active.  (Tab is handled as specified by
+            //JFormattedTextField's focusLostBehavior property.)
+            ftf.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "check");
+
+            ftf.getActionMap().put("check", new AbstractAction()
+            {
+                public void actionPerformed(ActionEvent e)
+                {
+                    if (!ftf.isEditValid())  //The text is invalid.
+                    {
+                        if (userSaysRevert())
+                        {
+                            ftf.postActionEvent(); //inform the editor
+                        }
+                    }
+                    else
+                        try
+                        {
+                            ftf.commitEdit();     //so use it.
+                            ftf.postActionEvent(); //stop editing
+                        }
+                        catch (java.text.ParseException exc) { }
+                }
+            });
+        }
+
+        @Override
+        public boolean isCellEditable(EventObject event)
+        {
+            JTable table = (JTable)event.getSource();
+            return true;
+        }
+
+        //Override to invoke setValue on the formatted text field.
+        public Component getTableCellEditorComponent(
+            JTable table, Object value, boolean isSelected, int row, int column)
+        {
+             JFormattedTextField ftf = (JFormattedTextField)super.getTableCellEditorComponent(
+                table, value, isSelected, row, column);
+             ftf.setValue(value);
+
+             return ftf;
+        }
+
+        //Override to ensure that the value remains an Integer.
+        public Object getCellEditorValue()
+        {
+            JFormattedTextField ftf = (JFormattedTextField)getComponent();
+            Object o = ftf.getValue();
+            if (o instanceof Integer)
+            {
+                return o;
+            }
+            else if (o instanceof Number)
+            {
+                return new Integer(((Number)o).intValue());
+            }
+            else
+            {
+                try
+                {
+                    return integerFormat.parseObject(o.toString());
+                }
+                catch (ParseException exc)
+                {
+                    System.err.println("getCellEditorValue: can't parse o: " + o);
+                    return null;
+                }
+            }
+        }
+
+        //Override to check whether the edit is valid,
+        //setting the value if it is and complaining if
+        //it isn't.  If it's OK for the editor to go
+        //away, we need to invoke the superclass's version
+        //of this method so that everything gets cleaned up.
+        public boolean stopCellEditing()
+        {
+            JFormattedTextField ftf = (JFormattedTextField)getComponent();
+
+            if (ftf.isEditValid())
+            {
+                try
+                {
+                    ftf.commitEdit();
+                }
+                catch (java.text.ParseException exc) { }
+
+            }
+            else
+            {
+                if (!userSaysRevert())  //user wants to edit
+                {
+                    return false; //don't let the editor go away
+                }
+             }
+
+             return super.stopCellEditing();
+        }
+
+        /**
+         * Lets the user know that the text they entered is
+         * bad. Returns true if the user elects to revert to
+         * the last good value.  Otherwise, returns false,
+         * indicating that the user wants to continue editing.
+         */
+        protected boolean userSaysRevert() {
+             Toolkit.getDefaultToolkit().beep();
+             ftf.selectAll();
+             Object[] options = {"Edit",
+                                        "Revert"};
+             int answer = JOptionPane.showOptionDialog(
+                  SwingUtilities.getWindowAncestor(ftf),
+                  "The value must be an integer between "
+                  + minimum + " and "
+                  + maximum + ".\n"
+                  + "You can either continue editing "
+                  + "or revert to the last valid value.",
+                  "Invalid Text Entered",
+                  JOptionPane.YES_NO_OPTION,
+                  JOptionPane.ERROR_MESSAGE,
+                  null,
+                  options,
+                  options[1]);
+
+             if (answer == 1) { //Revert!
+                  ftf.setValue(ftf.getValue());
+             return true;
+             }
+        return false;
+        }
+
+
+    }
+
+    private static void createAndShowGUI()
+    {
+        String[] columnNames = {"String", "Integer", "Integer2"};
+        Object[][] data =
+        {
+            {"a", new Integer(1), new Integer(10)},
+            {"b", new Integer(2), new Integer(20)},
+            {"c", new Integer(3), new Integer(30)}
+        };
+
+        JTable table = new JTable(data, columnNames)
+        {
+            public Class getColumnClass(int column)
+            {
+                if (column == 0)
+                    return String.class;
+                else
+                    return Integer.class;
+            }
+
+        };
+        table.setPreferredScrollableViewportSize(table.getPreferredSize());
+        JScrollPane scrollPane = new JScrollPane( table );
+
+        table.getColumnModel().getColumn(2).setCellEditor( new IntegerEditor(0, 200) );
+
+        DefaultCellEditor editor = (DefaultCellEditor)table.getDefaultEditor(Integer.class);
+        JComponent border = (JComponent)editor.getComponent();
+        border.setBorder( BorderFactory.createLineBorder( Color.RED ) );
+
+        JFrame frame = new JFrame("Integer Editor");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.add( scrollPane );
+        frame.setLocationByPlatform( true );
+        frame.pack();
+        frame.setVisible( true );
+    }
+
+    public static void main(String[] args)
+    {
+        EventQueue.invokeLater(new Runnable()
+        {
+            public void run()
+            {
+                createAndShowGUI();
+            }
+        });
+    }
+
+
+}
+</code></pre>
+
+<p>If you just want to use the default Double editor, then you just need to change the column class to be Double.class for your column. If you need special editing then you will need to customize the IntegerEditor for your double requirements.</p>

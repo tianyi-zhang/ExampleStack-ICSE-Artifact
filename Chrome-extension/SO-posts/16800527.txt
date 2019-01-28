@@ -1,0 +1,60 @@
+<p>I had this problem recently and this is how I solved it. Firstly to access the PreferenceScreen I use the exact same method you mentioned above.</p>
+
+<pre><code>@Override
+public boolean onPreferenceTreeClick(PreferenceScreen preferenceScreen, Preference preference) {
+    super.onPreferenceTreeClick(preferenceScreen, preference);
+
+    // If the user has clicked on a preference screen, set up the action bar
+    if (preference instanceof PreferenceScreen) {
+        initializeActionBar((PreferenceScreen) preference);
+    }
+
+    return false;
+}
+</code></pre>
+
+<p>From here I looked into what a <a href="https://github.com/android/platform_frameworks_base/blob/master/core/java/android/preference/PreferenceScreen.java" rel="nofollow">PreferenceScreen</a> is, and I was saddened to find out it is just wrapper of a Dialog. Moving forward, I then set the actionbar display options and attempt find the home button area. This unfortunately wasn't too easy to get, but with the help of the hierarchy viewer I managed to gain access by finding the home icon and then its parent views. Once we have access to the containing LinearLayout, we can attach an onClickListener where we dismiss the PreferenceScreen's dialog, which calls <a href="https://github.com/android/platform_frameworks_base/blob/master/core/java/android/preference/PreferenceScreen.java#L192" rel="nofollow">PreferenceScreen's onDismissListener</a> and returns us to the previous screen.</p>
+
+<pre><code>/** Sets up the action bar for an {@link PreferenceScreen} */
+public static void initializeActionBar(PreferenceScreen preferenceScreen) {
+    final Dialog dialog = preferenceScreen.getDialog();
+
+    if (dialog != null) {
+        // Inialize the action bar
+        dialog.getActionBar().setDisplayHomeAsUpEnabled(true);
+
+        // Apply custom home button area click listener to close the PreferenceScreen because PreferenceScreens are dialogs which swallow
+        // events instead of passing to the activity
+        // Related Issue: https://code.google.com/p/android/issues/detail?id=4611
+        View homeBtn = dialog.findViewById(android.R.id.home);
+
+        if (homeBtn != null) {
+            OnClickListener dismissDialogClickListener = new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dialog.dismiss();
+                }
+            };
+
+            // Prepare yourselves for some hacky programming
+            ViewParent homeBtnContainer = homeBtn.getParent();
+
+            // The home button is an ImageView inside a FrameLayout
+            if (homeBtnContainer instanceof FrameLayout) {
+                ViewGroup containerParent = (ViewGroup) homeBtnContainer.getParent();
+
+                if (containerParent instanceof LinearLayout) {
+                    // This view also contains the title text, set the whole view as clickable
+                    ((LinearLayout) containerParent).setOnClickListener(dismissDialogClickListener);
+                } else {
+                    // Just set it on the home button
+                    ((FrameLayout) homeBtnContainer).setOnClickListener(dismissDialogClickListener);
+                }
+            } else {
+                // The 'If all else fails' default case
+                homeBtn.setOnClickListener(dismissDialogClickListener);
+            }
+        }    
+    }
+}
+</code></pre>

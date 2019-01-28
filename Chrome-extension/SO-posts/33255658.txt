@@ -1,0 +1,100 @@
+<p><a href="http://mindtherobot.com/blog/624/android-audio-play-an-mp3-file-on-an-audiotrack/" rel="nofollow">This guy</a> used the JLayer library in a project quite similar to yours. He also gives you a guide on how to integrate that library in your android application directly recompiling the jar.</p>
+
+<p>Paraphrasing his code it is very easy to accomplish your task:</p>
+
+<pre><code>public static byte[] decode(String path, int startMs, int maxMs) 
+  throws IOException, com.mindtherobot.libs.mpg.DecoderException {
+  ByteArrayOutputStream outStream = new ByteArrayOutputStream(1024);
+
+  float totalMs = 0;
+  boolean seeking = true;
+
+  File file = new File(path);
+  InputStream inputStream = new BufferedInputStream(new FileInputStream(file), 8 * 1024);
+  try {
+    Bitstream bitstream = new Bitstream(inputStream);
+    Decoder decoder = new Decoder();
+
+    boolean done = false;
+    while (! done) {
+      Header frameHeader = bitstream.readFrame();
+      if (frameHeader == null) {
+        done = true;
+      } else {
+        totalMs += frameHeader.ms_per_frame();
+
+        if (totalMs &gt;= startMs) {
+          seeking = false;
+        }
+
+        if (! seeking) {
+          SampleBuffer output = (SampleBuffer) decoder.decodeFrame(frameHeader, bitstream);
+
+          if (output.getSampleFrequency() != 44100
+              || output.getChannelCount() != 2) {
+            throw new com.mindtherobot.libs.mpg.DecoderException("mono or non-44100 MP3 not supported");
+          }
+
+          short[] pcm = output.getBuffer();
+          for (short s : pcm) {
+            outStream.write(s &amp; 0xff);
+            outStream.write((s &gt;&gt; 8 ) &amp; 0xff);
+          }
+        }
+
+        if (totalMs &gt;= (startMs + maxMs)) {
+          done = true;
+        }
+      }
+      bitstream.closeFrame();
+    }
+
+    return outStream.toByteArray();
+  } catch (BitstreamException e) {
+    throw new IOException("Bitstream error: " + e);
+  } catch (DecoderException e) {
+    Log.w(TAG, "Decoder error", e);
+    throw new com.mindtherobot.libs.mpg.DecoderException(e);
+  } finally {
+    IOUtils.safeClose(inputStream);     
+  }
+}
+
+public static byte[] mix(String path1, String path2) {
+    byte[] pcm1 = decode(path1, 0, 60000); 
+    byte[] pcm2 = decode(path2, 0, 60000);
+    int len1=pcm1.length; 
+    int len2=pcm2.length;
+    byte[] pcmL; 
+    byte[] pcmS;
+    int lenL; // length of the longest
+    int lenS; // length of the shortest
+    if (len2&gt;len1) {
+        lenL = len1;
+        pcmL = pcm1;
+        lenS = len2;                
+        pcmS = pcm2;
+    } else {
+        lenL = len2;
+        pcmL = pcm2;
+        lenS = len1;                
+        pcmS = pcm1;
+    } 
+    for (int idx = 0; idx &lt; lenL; idx++) {
+        int sample;
+        if (idx &gt;= lenS) {
+            sample = pcmL[idx];
+        } else {
+            sample = pcmL[idx] + pcmS[idx];
+        }
+        sample=(int)(sample*.71);
+        if (sample&gt;127) sample=127;
+        if (sample&lt;-128) sample=-128;
+        pcmL[idx] = (byte) sample;
+    }
+    return pcmL;
+}
+</code></pre>
+
+<p>Note that I added attenuation and clipping in the last rows: you always have to do both when mixing two waveforms. 
+If you don't have memory/time requirements you can make an int[] of the sum of the samples and evaluate what is the best attenuation to avoid clipping.</p>

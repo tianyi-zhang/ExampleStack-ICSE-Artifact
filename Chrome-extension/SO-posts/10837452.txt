@@ -1,0 +1,194 @@
+<p>I have a solution that works with some prerequisites:</p>
+
+<ul>
+<li>the items in the container need to be of type ImageView</li>
+<li>All images need to be of the same size in order to zoom equally</li>
+</ul>
+
+<p>The items in the container can be zoomed and panned (but not at the same time). The code is also able to figure out if a user has clicked instead of moving or zooming.
+The ImageViews are stored in an ArrayList in a FrameLayout and are scaled and moved together. Some parts of this code are taken from a very nice article on ZDNet by Ed Burnette (<a href="http://www.zdnet.com/blog/burnette/how-to-use-multi-touch-in-android-2/1747" rel="nofollow">Link</a>), which is taken from the really good Android book "<a href="http://pragprog.com/book/eband3/hello-android" rel="nofollow">Hello, Android</a>".</p>
+
+<p>Check out this code. You can use this class as layout in any activity. You should even be able to use it in the XML. For now there is a method initializeViews() that is called in the constructor where you can hard code the imageviews that should be loaded when the layout is created. You should add some bitmaps in this method after the line "ArrayList sampleBitmaps = new ArrayList();"
+For real use it's probably better to implement a method addImageView(ImageView item) where you can add views dynamically.</p>
+
+<pre><code>import java.util.ArrayList;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Bitmap.Config;
+import android.graphics.Matrix;
+import android.graphics.PointF;
+import android.util.AttributeSet;
+import android.util.FloatMath;
+import android.util.Log;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.OnTouchListener;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.ImageView.ScaleType;
+
+
+public class TouchContainer extends FrameLayout implements OnTouchListener {
+
+    // constants
+    private static final Config DEFAULT_COLOR_DEPTH = Bitmap.Config.ARGB_4444;
+    private static final String TAG = "TouchContainer";
+
+    // fields
+    private ArrayList&lt;ImageView&gt; items;
+
+    public TouchContainer(Context ctx) {
+        this(ctx, null);
+    }
+
+    public TouchContainer(Context ctx, AttributeSet attrs) {
+        super(ctx, attrs);
+
+        initializeViews();  // initialize some sample Bitmaps
+    }
+
+    /**
+     * This method is just to make an example 
+     */
+    protected void initializeViews() {
+        ScaleType scaleType = ScaleType.MATRIX;
+
+        // array needs to be created here if used in XML
+        items = new ArrayList&lt;ImageView&gt;();
+
+
+        ArrayList&lt;Bitmap&gt; sampleBitmaps = new ArrayList&lt;Bitmap&gt;();
+        // here you should add some bitmaps to the Array that will then be displayed in the container
+        // e.g. sampleBitmaps.add(blabla I'm a bitmap) :-)
+
+        ImageView iv = null;
+        boolean firstLoop = true;
+
+        for (Bitmap bitmap : sampleBitmaps) {
+            // Load the bitmaps into imageviews
+            iv = new ImageView(getContext());
+            iv.setImageBitmap(bitmap);
+            iv.setScaleType(scaleType);
+            if (firstLoop) {
+                // add the touch listener to the first image view that is stored in the ArrayList
+                iv.setOnTouchListener(this);
+                firstLoop = false;
+            }
+
+            // add view to the FrameLayout
+            this.addView(iv);
+
+            // add the imageview to the array
+            items.add(iv);
+        }
+
+    }
+
+
+
+    protected void transformImages(Matrix matrix) {
+        for (ImageView image : items) {
+            image.setImageMatrix(matrix);
+        }
+
+    }
+
+
+
+
+    Matrix matrix = new Matrix();
+    Matrix savedMatrix = new Matrix();
+
+    // states
+    static final int NONE = 0;
+    static final int DRAG = 1;
+    static final int ZOOM = 2;
+    int mode = NONE;
+    static final int CLICK = 3;
+
+
+    PointF start = new PointF();
+    PointF mid = new PointF();
+    float oldDist = 1f;
+
+    public boolean onTouch(View v, MotionEvent event) {
+
+
+      switch (event.getAction() &amp; MotionEvent.ACTION_MASK) {
+      case MotionEvent.ACTION_DOWN:
+         savedMatrix.set(matrix);
+         start.set(event.getX(), event.getY());
+         Log.d(TAG, "mode=DRAG");
+         mode = DRAG;
+         break;
+      case MotionEvent.ACTION_POINTER_DOWN:
+         oldDist = spacing(event);
+         Log.d(TAG, "oldDist=" + oldDist);
+         if (oldDist &gt; 10f) {
+            savedMatrix.set(matrix);
+            midPoint(mid, event);
+            mode = ZOOM;
+            Log.d(TAG, "mode=ZOOM");
+         }
+         break;
+      case MotionEvent.ACTION_UP:
+          // figure out if user clicked
+          mode = NONE;
+          int xDiff = (int) Math.abs(event.getX() - start.x);
+          int yDiff = (int) Math.abs(event.getY() - start.y);
+          if (xDiff &lt; CLICK &amp;&amp; yDiff &lt; CLICK)
+              performClick(); 
+          break;
+      case MotionEvent.ACTION_POINTER_UP:
+         mode = NONE;
+         Log.d(TAG, "mode=NONE");
+         break;
+      case MotionEvent.ACTION_MOVE:
+         if (mode == DRAG) {
+
+            matrix.set(savedMatrix);
+            matrix.postTranslate(event.getX() - start.x,
+                  event.getY() - start.y);
+         }
+         else if (mode == ZOOM) {
+            float newDist = spacing(event);
+            Log.d(TAG, "newDist=" + newDist);
+            if (newDist &gt; 10f) {
+               matrix.set(savedMatrix);
+               float scale = newDist / oldDist;
+               matrix.postScale(scale, scale, mid.x, mid.y);
+            }
+         }
+         break;
+      }
+
+
+      transformImages(matrix);
+
+
+      return true;
+   }
+
+
+
+
+       private float spacing(MotionEvent event) {
+          float x = event.getX(0) - event.getX(1);
+          float y = event.getY(0) - event.getY(1);
+          return FloatMath.sqrt(x * x + y * y);
+       }
+
+
+       private void midPoint(PointF point, MotionEvent event) {
+          float x = event.getX(0) + event.getX(1);
+          float y = event.getY(0) + event.getY(1);
+          point.set(x / 2, y / 2);
+       }
+
+
+
+
+
+}
+</code></pre>

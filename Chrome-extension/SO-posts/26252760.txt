@@ -1,0 +1,73 @@
+<p>The cause of this exception is when <code>ParsePushBroadcastReceiver</code> wants to open the empty uri in your push message in this code :</p>
+
+<pre><code>String uriString = null;
+    try
+    {
+      JSONObject pushData = new JSONObject(intent.getStringExtra("com.parse.Data"));
+      uriString = pushData.optString("uri");
+    }
+    catch (JSONException e)
+    {
+      Parse.logE("com.parse.ParsePushReceiver", "Unexpected JSONException when receiving push data: ", e);
+    }
+    if (uriString != null) {
+          activityIntent = new Intent("android.intent.action.VIEW", Uri.parse(uriString));
+        } else {
+          activityIntent = new Intent(context, cls);
+        }
+</code></pre>
+
+<p>If you just push a message, the <code>uriString</code> will be empty not null, So <code>context.startActivity(activityIntent);</code> will open an empty uri and exception occurs.</p>
+
+<p>To solve this issue you can subclass <code>ParsePushBroadcastReceiver</code> (thanks to @Ahmad Raza) and override onPushopen like this :</p>
+
+<pre><code>public class Receiver extends ParsePushBroadcastReceiver {
+
+    @Override
+    protected void onPushOpen(Context context, Intent intent) {
+
+        ParseAnalytics.trackAppOpenedInBackground(intent);
+
+        String uriString = null;
+        try {
+            JSONObject pushData = new JSONObject(intent.getStringExtra("com.parse.Data"));
+            uriString = pushData.optString("uri");
+        } catch (JSONException e) {
+            Log.v("com.parse.ParsePushReceiver", "Unexpected JSONException when receiving push data: ", e);
+        }
+        Class&lt;? extends Activity&gt; cls = getActivity(context, intent);
+        Intent activityIntent;
+        if (uriString != null &amp;&amp; !uriString.isEmpty()) {
+            activityIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriString));
+        } else {
+            activityIntent = new Intent(context, MainActivity.class);
+        }
+        activityIntent.putExtras(intent.getExtras());
+        if (Build.VERSION.SDK_INT &gt;= 16) {
+            TaskStackBuilder stackBuilder = TaskStackBuilder.create(context);
+            stackBuilder.addParentStack(cls);
+            stackBuilder.addNextIntent(activityIntent);
+            stackBuilder.startActivities();
+        } else {
+            activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activityIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            context.startActivity(activityIntent);
+        }
+    }
+} 
+</code></pre>
+
+<p>and update Manifest like this :</p>
+
+<pre><code>&lt;receiver
+            android:name="your.package.name.Receiver"
+            android:exported="false" &gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="com.parse.push.intent.RECEIVE" /&gt;
+                &lt;action android:name="com.parse.push.intent.DELETE" /&gt;
+                &lt;action android:name="com.parse.push.intent.OPEN" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/receiver&gt;
+</code></pre>
+
+<p>I hope they solve the problem in their next update.</p>

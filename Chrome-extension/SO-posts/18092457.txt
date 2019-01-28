@@ -1,0 +1,162 @@
+<h1>Problem solved !</h1>
+
+<p>From the <a href="http://struts.apache.org/release/2.3.x/docs/file-upload.html#FileUpload-AlternateLibraries">updated documentation</a>, now the problem can be solved by using the new <strong>JakartaStreamMultiPartRequest</strong> :</p>
+
+<blockquote>
+  <p>As from Struts version <strong>2.3.18</strong> a new implementation of MultiPartRequest
+  was added - JakartaStreamMultiPartRequest. It can be used to handle
+  large files, see <a href="https://issues.apache.org/jira/browse/WW-3025">WW-3025</a> for more details, but you can simple set</p>
+  
+  <pre class="lang-xml prettyprint-override"><code>&lt;constant name="struts.multipart.parser" value="jakarta-stream" /&gt;
+</code></pre>
+  
+  <p>in struts.xml to start using it.</p>
+</blockquote>
+
+<p>From the linked JIRA body : </p>
+
+<blockquote>
+  <p>When any size limits exceed, immediately a
+  FileUploadBase.SizeLimitExceededException or
+  FileUploadBase.FileSizeLimitExceededException is thrown and parsing of
+  the multipart request terminates without providing request parameters
+  for further processing.</p>
+  
+  <p>This basically makes it impossible for any web application to handle
+  size limit exceeded cases gracefully.</p>
+  
+  <p>My proposal is that request parsing should always complete to deliver
+  the request parameters. Size limit exceeded cases/exceptions might be
+  collected for later retrieval, FileSizeLimitExeededException should be
+  mapped to the FileItem to allow some validation on the FileItem on
+  application level. This would allow to mark upload input fields as
+  erronous if the uploaded file was too big.</p>
+  
+  <p>Actually I made a patch for that (see attachment). With this patch,
+  commons-fileupload always completes request parsing in case of size
+  limit exceedings and only after complete parsing will throw an
+  exception if one was detected.</p>
+</blockquote>
+
+<p>and Chris Cranford's comment: </p>
+
+<blockquote>
+  <p>I am working on a new multipart parser for Struts2 I am calling
+  JakartaStreamMultiPartRequest.</p>
+  
+  <p>This multi-part parser behaves identical to the existing Jakarta
+  multi-part parser except that it uses the Commons FileUpload Streaming
+  API and rather than delegating maximum request size check to the File
+  Upload API, it's done internally to avoid the existing problem of the
+  Upload API breaking the loop iteration and parameters being lost.</p>
+</blockquote>
+
+<p>Awesome, thanks guys :)</p>
+
+<hr>
+
+<p><strong>Old answer</strong></p>
+
+<p>I guess it is due to the different behavior of </p>
+
+<ul>
+<li>a single file (or more files) that is exceeding its maximum defined size, and then can be redirected back at the end of a normal process with the INPUT result, and</li>
+<li>the violation of the maximum size of the entire Request, that will (probably?) break any other element parsing, because it is a security mechanism, not a feature like the file size check;</li>
+</ul>
+
+<p>When the files are parsed first (<a href="http://stackoverflow.com/questions/7449861/multipart-upload-form-is-order-guaranteed">it <em>should</em> depend on their order in the page</a>), if a file breaks the limit of the multipart request size, the other fields (the form fields) won't be read and hence not returned back with the INPUT result.</p>
+
+<p><a href="http://struts.apache.org/release/2.3.x/docs/handling-file-uploads.html">Struts2 uses the Jakarta implementation</a> for the MultiPartRequestWrapper:</p>
+
+<blockquote>
+  <p><strong><code>struts.multipart.parser</code></strong> - This property should be set to a class that extends MultiPartRequest. Currently, the framework ships with the Jakarta FileUpload implementation.</p>
+</blockquote>
+
+<p>You can find the source code on Struts2 official site <a href="http://grepcode.com/file/repo1.maven.org/maven2/org.apache.struts/struts2-core/2.3.15/org/apache/struts2/dispatcher/multipart/JakartaMultiPartRequest.java#JakartaMultiPartRequest">or here</a> (faster to google); this is what is called when posting a multipart form:</p>
+
+<pre><code> public void parse(HttpServletRequest request, String saveDir) throws IOException {
+        try {
+            setLocale(request);
+            processUpload(request, saveDir);
+        } catch (FileUploadBase.SizeLimitExceededException e) {
+            if (LOG.isWarnEnabled()) {
+                LOG.warn("Request exceeded size limit!", e);
+            }
+            String errorMessage = buildErrorMessage(e, new Object[]{e.getPermittedSize(), e.getActualSize()});
+            if (!errors.contains(errorMessage)) {
+                errors.add(errorMessage);
+            }
+        } catch (Exception e) {
+            if (LOG.isWarnEnabled()) {
+                LOG.warn("Unable to parse request", e);
+            }
+            String errorMessage = buildErrorMessage(e, new Object[]{});
+            if (!errors.contains(errorMessage)) {
+                errors.add(errorMessage);
+            }
+        }
+    }
+</code></pre>
+
+<p>then, this is where it cycles the multipart Items, both files and form fields:</p>
+
+<pre><code>   private void processUpload(HttpServletRequest request, String saveDir) throws FileUploadException, UnsupportedEncodingException {
+        for (FileItem item : parseRequest(request, saveDir)) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Found item " + item.getFieldName());
+            }
+            if (item.isFormField()) {
+                processNormalFormField(item, request.getCharacterEncoding());
+            } else {
+                processFileField(item);
+            }
+        }
+    }
+</code></pre>
+
+<p>that will end, in the <a href="http://grepcode.com/file/repo1.maven.org/maven2/commons-fileupload/commons-fileupload/1.3/org/apache/commons/fileupload/FileUploadBase.java#FileUploadBase.parseRequest%28org.apache.commons.fileupload.RequestContext%29">FileUploadBase</a>, in this implementation for each item:</p>
+
+<pre><code> FileItemStreamImpl(String pName, String pFieldName,
+                    String pContentType, boolean pFormField,
+                    long pContentLength) throws IOException {
+                name = pName;
+                fieldName = pFieldName;
+                contentType = pContentType;
+                formField = pFormField;
+                final ItemInputStream itemStream = multi.newInputStream();
+                InputStream istream = itemStream;
+                if (fileSizeMax != -1) {
+                    if (pContentLength != -1
+                            &amp;&amp;  pContentLength &gt; fileSizeMax) {
+                        FileSizeLimitExceededException e =
+                            new FileSizeLimitExceededException(
+                                format("The field %s exceeds its maximum permitted size of %s bytes.",
+                                       fieldName, fileSizeMax),
+                                pContentLength, fileSizeMax);
+                        e.setFileName(pName);
+                        e.setFieldName(pFieldName);
+                        throw new FileUploadIOException(e);
+                    }
+                    istream = new LimitedInputStream(istream, fileSizeMax) {
+                        @Override
+                        protected void raiseError(long pSizeMax, long pCount)
+                                throws IOException {
+                            itemStream.close(true);
+                            FileSizeLimitExceededException e =
+                                new FileSizeLimitExceededException(
+                                    format("The field %s exceeds its maximum permitted size of %s bytes.",
+                                           fieldName, pSizeMax),
+                                    pCount, pSizeMax);
+                            e.setFieldName(fieldName);
+                            e.setFileName(name);
+                            throw new FileUploadIOException(e);
+                        }
+                    };
+                }
+                stream = istream;
+            }
+</code></pre>
+
+<p>as you can see, it handles pretty differently the file size cap and the request size cap;</p>
+
+<p>I've looked at the source for fun but you could really confirm (or correct) this assumptions, trying to debug the MultiPartRequestWrapper to see if what happens inside is what I think is going on... good luck and have fun.</p>

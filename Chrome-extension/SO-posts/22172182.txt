@@ -1,0 +1,78 @@
+<p>It's difficult to provide an exact solution without knowing how your files are organized.</p>
+
+<p>You could use the main method of a Java file.</p>
+
+<pre><code>public static void main(String[] args) throws Exception {
+    JobConf conf = new JobConf(calcAll.class);
+    conf.setJobName("name");
+
+    conf.setOutputKeyClass(Text.class);
+    conf.setOutputValueClass(DoubleWritable.class); //or ObjectWritable, or whatever
+
+    conf.setMapperClass(mapper.class);
+    conf.setCombinerClass(reducer.class); //if your combiner is just a local reducer
+    conf.setReducerClass(reducer.class);
+
+    conf.setInputFormat(TextInputFormat.class); //assuming you are feeding it text
+    conf.setOutputFormat(TextOutputFormat.class);
+
+    FileInputFormat.setInputPaths(conf, new Path(args[0]));
+
+    Path out1 = new Path(args[1]);
+    FileOutputFormat.setOutputPath(conf, out1);
+
+    JobClient.runJob(conf); // blocking call
+}
+</code></pre>
+
+<p>Then you can run the thing with a sh file, like this (remove out2 if you only do one job/pass)</p>
+
+<pre><code>#!/usr/bin/env bash
+
+# Export environment variable
+export HADOOP_HOME=/yourPathHere
+
+# Remove old cruft
+rm ClassWithMain.jar
+rm -rf MyProject_classes
+
+# Compile the task (check your Hadoop version and Apache lib path)
+javac -classpath $HADOOP_HOME/share/hadoop/common/hadoop-common-2.2.0.jar:$HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-client-core-2.2.0.jar:$HADOOP_HOME/share/hadoop/common/lib/commons-cli-1.2.jar -d MyProject_classes ClassWithMain.java
+jar -cvf ClassWithMain.jar -C MyProject_classes/ .
+
+# Abort if compilation failed
+exitValue=$? 
+if [ $exitValue != 0 ]; then
+    exit $exitValue
+fi
+
+# File names
+out1=out1-`date +%Y%m%d%H%M%S`
+out2=out2-`date +%Y%m%d%H%M%S`
+
+# Create an empty file
+hadoop fs -touchz ./$out2
+
+# Submit the 1st job
+hadoop jar ClassWithMain.jar org.myorg.ClassWithMain /data ./$out1 ./$out1/merged ./$out2
+
+# Display the results
+hadoop fs -cat ./$out1/merged
+hadoop fs -cat ./$out2
+
+# Cleanup
+hadoop fs -rm -r ./out*
+</code></pre>
+
+<p>If you need to do more operations after you run the job, you can add these lines to the main</p>
+
+<pre><code>// the output is a set of files, merge them before continuing
+Path out1Merged = new Path(args[2]);
+Configuration config = new Configuration();
+try {
+    FileSystem hdfs = FileSystem.get(config);
+    FileUtil.copyMerge(hdfs, out1, hdfs, out1Merged, false, config, null);
+} catch (IOException e) {
+    e.printStackTrace();
+}
+</code></pre>

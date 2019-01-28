@@ -1,0 +1,251 @@
+<p>You are doing wrong by creating your sqlite database files manually and also by trying to specify the path for the Database. You should leave this to be handled by the SQLite helper class.It is also not advisable to query your database the way you are doing using raw sql query,please use the sqlitedatabase.query() method instead.In case you run into trouble you can consult me.Please have a look at this class example:</p>
+
+<pre><code>public class DatabaseHandler extends SQLiteOpenHelper {
+private static final int DATABASE_VERSION = 2;
+
+// Database name
+private static final String DATABASE_NAME = "stocktrader.db";
+
+// Database tables
+private static final String TABLE_SHARES = "Shares";
+private static final String TABLE_ALERTS = "Alerts";
+private static final String TABLE_TASKS = "Tasks";
+private static final String TABLE_MESSAGES = "Messages";
+
+// Shares table columns
+private static final String KEY_NAME = "share_name";
+private static final String KEY_PRICE = "share_price";
+private static final String KEY_YESTERDAY = "share_yesterday_price";
+private static final String KEY_CASH_CHANGE = "share_cash_change";
+private static final String KEY_PERCENTAGE_CHANGE = "share_percentage_change";
+
+// alerts table columns
+private static final String KEY_SHARE_NAME = "share_name";
+private static final String KEY_MIN_PRICE = "min_price";
+private static final String KEY_MAX_PRICE = "max_price";
+private static final String KEY_ACTION = "action";
+private static final String KEY_USER = "user";
+
+// tasks table columns
+private static final String KEY_SHARENAME = "share_name";
+private static final String KEY_TASK = "task";
+private static final String KEY_MESSAGE = "message";
+private static final String KEY_STATUS = "status";
+
+// Messages table columns
+private static final String KEY_HEADER = "title";
+private static final String KEY_BODY = "message";
+// private static final String KEY_DATE = "date";
+private static final String KEY_ID = "message_id";
+private static final String KEY_USER_ID = "user";
+
+public DatabaseHandler(Context context) {
+    super(context, DATABASE_NAME, null, DATABASE_VERSION);
+}
+
+String CREATE_TABLE_SHARES = "CREATE TABLE " + TABLE_SHARES + "("
+        + KEY_NAME + " text primary key not null, " + KEY_PRICE
+        + " double not null, " + KEY_YESTERDAY + " double, "
+        + KEY_CASH_CHANGE + " double, " + KEY_PERCENTAGE_CHANGE
+        + " double);";
+
+String CREATE_TABLE_ALERTS = "CREATE TABLE " + TABLE_ALERTS + "("
+        + KEY_SHARE_NAME + " text primary key not null," + KEY_MIN_PRICE
+        + " double default null," + KEY_MAX_PRICE + " double default null,"
+        + KEY_USER + " text not null," + KEY_ACTION + " int not null);";
+
+String CREATE_TABLE_TASKS = "CREATE TABLE " + TABLE_TASKS + "("
+        + KEY_SHARENAME + " text primary key not null," + KEY_TASK
+        + " int not null," + KEY_MESSAGE + " text null," + KEY_STATUS
+        + " int not null);";
+
+String CREATE_TABLE_MESSAGES = "CREATE TABLE " + TABLE_MESSAGES + "("
+        + KEY_ID + " integer primary key autoincrement," + KEY_HEADER
+        + " text not null," + KEY_BODY + " text not null," + KEY_USER_ID
+        + " text not null);";
+
+// Creating tables
+@Override
+public void onCreate(SQLiteDatabase db) {
+    try {
+        db.execSQL(CREATE_TABLE_SHARES);
+        db.execSQL(CREATE_TABLE_ALERTS);
+        db.execSQL(CREATE_TABLE_TASKS);
+        db.execSQL(CREATE_TABLE_MESSAGES);
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+@Override
+public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+    Log.w(DatabaseHandler.class.getName(), "Upgrading from " + oldVersion
+            + " to " + newVersion + ". All data will be lost.");
+
+    db.execSQL("DROP TABLE IF EXISTS " + TABLE_SHARES);
+    db.execSQL("DROP TABLE IF EXISTS " + TABLE_ALERTS);
+    db.execSQL("DROP TABLE IF EXISTS " + TABLE_MESSAGES);
+    db.execSQL("DROP TABLE IF EXISTS " + TABLE_TASKS);
+
+    // create tables again
+    onCreate(db);
+}
+
+public void addShares(ArrayList&lt;SharePrices&gt; shares) {
+    SQLiteDatabase database = this.getWritableDatabase();
+    ContentValues values = new ContentValues();
+    String share_name;
+    double share_price;
+    double yesterday_price;
+    for (int i = 0; i &lt; shares.size(); i++) {
+        try {
+            Cursor cursor = null;
+            share_name = shares.get(i).getName();
+            share_price = Double.parseDouble(shares.get(i).getPrice());
+            yesterday_price = Double.parseDouble(shares.get(i)
+                    .getYesterdays());
+            values.put(KEY_NAME, share_name);
+            values.put(KEY_PRICE, share_price);
+            values.put(KEY_YESTERDAY, yesterday_price);
+            values.put(
+                    KEY_CASH_CHANGE,
+                    Math.round((share_price - yesterday_price) * 100.0) / 100.0);
+            if (yesterday_price == 0) {
+                values.put(KEY_PERCENTAGE_CHANGE, "100");
+            } else {
+                values.put(
+                        KEY_PERCENTAGE_CHANGE,
+                        Math.round((((share_price - yesterday_price) / yesterday_price) * 100) * 100.0) / 100.0);
+            }
+            cursor = database.query(TABLE_SHARES,
+                    new String[] { KEY_NAME }, KEY_NAME + "=?",
+                    new String[] { share_name }, null, null, null, null);
+
+            if (cursor.getCount() == 1) {
+                database.update(TABLE_SHARES, values, KEY_NAME + "=?",
+                        new String[] { share_name });
+
+                Log.i("db", "updated");
+            } else {
+                database.insert(TABLE_SHARES, null, values);
+
+                Log.i("db", "inserted");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    database.close();
+}
+
+public void addToWatchList(String share_name, double max_price,
+        double min_price, int action, String user) {
+    SQLiteDatabase database = this.getWritableDatabase();
+    ContentValues values = new ContentValues();
+    Cursor cursor = null;
+    try {
+        cursor = database.query(TABLE_ALERTS,
+                new String[] { KEY_SHARE_NAME }, KEY_SHARE_NAME + "=? AND "
+                        + KEY_USER + "=?",
+                new String[] { share_name, user }, null, null, null, null);
+
+        if (cursor.getCount() == 1) {
+            if (max_price == 0.0) {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MIN_PRICE, min_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.update(TABLE_ALERTS, values, KEY_SHARE_NAME
+                        + "=? AND " + KEY_USER + "=?", new String[] {
+                        share_name, user });
+            } else if (min_price == 0.0) {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MAX_PRICE, max_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.update(TABLE_ALERTS, values, KEY_SHARE_NAME
+                        + "=? AND " + KEY_USER + "=?", new String[] {
+                        share_name, user });
+            }
+
+            else {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MAX_PRICE, max_price);
+                values.put(KEY_MIN_PRICE, min_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.insert(TABLE_ALERTS, null, values);
+                database.update(TABLE_ALERTS, values, KEY_SHARE_NAME
+                        + "=? AND " + KEY_USER + "=?", new String[] {
+                        share_name, user });
+            }
+        } else {
+            if (max_price == 0.0) {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MIN_PRICE, min_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.insert(TABLE_ALERTS, null, values);
+            } else if (min_price == 0.0) {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MAX_PRICE, max_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.insert(TABLE_ALERTS, null, values);
+            }
+
+            else {
+                values.put(KEY_SHARE_NAME, share_name);
+                values.put(KEY_MAX_PRICE, max_price);
+                values.put(KEY_MIN_PRICE, min_price);
+                values.put(KEY_ACTION, action);
+                values.put(KEY_USER, user);
+                database.insert(TABLE_ALERTS, null, values);
+            }
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    database.close();
+}
+
+public void addMessage(String message, String header, String user) {
+    SQLiteDatabase database = this.getWritableDatabase();
+    ContentValues values = new ContentValues();
+    values.put(KEY_HEADER, header);
+    values.put(KEY_BODY, message);
+    values.put(KEY_USER_ID, user);
+    try {
+        database.insert(TABLE_MESSAGES, null, values);
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    database.close();
+}
+
+public Cursor getMessageHeaders(String user) {
+    SQLiteDatabase database = this.getReadableDatabase();
+    Cursor cursor = null;
+    try {
+        cursor = database.query(TABLE_MESSAGES, null, KEY_USER_ID + "=?",
+                new String[] { user }, null, null, null, null);
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    return cursor;
+}
+
+
+public void deleteMessage(String message_id) {
+    SQLiteDatabase database = this.getWritableDatabase();
+    try {
+        database.delete(TABLE_MESSAGES, KEY_ID + "=?",
+                new String[] { message_id });
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    database.close();
+}
+</code></pre>
+
+<p>}</p>

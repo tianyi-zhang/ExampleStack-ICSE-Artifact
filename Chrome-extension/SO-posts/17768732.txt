@@ -1,0 +1,111 @@
+<p>First, I would like to point out the example provided by apache poi - <a href="http://svn.apache.org/repos/asf/poi/trunk/src/examples/src/org/apache/poi/xwpf/usermodel/SimpleImages.java">Link</a>, i.e. the correct way to do it would be </p>
+
+<pre><code>doc.createParagraph().createRun().addPicture(new FileInputStream(imgFile), format, imgFile, Units.toEMU(200), Units.toEMU(200));
+</code></pre>
+
+<p>However, there is still an existing bug which renders the .docx file unreadable after executing the above statement. It might be resolved soon, in which case the above-mentioned statement will do the work. For the meantime, there is a work-around.</p>
+
+<p>First, generate the docx file without any pictures. Then add this class <code>CustomXWPFDocument</code> to your package.</p>
+
+<pre><code>import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.xmlbeans.XmlException;
+import org.apache.xmlbeans.XmlToken;
+import org.openxmlformats.schemas.drawingml.x2006.main.CTNonVisualDrawingProps;
+import org.openxmlformats.schemas.drawingml.x2006.main.CTPositiveSize2D;
+import org.openxmlformats.schemas.drawingml.x2006.wordprocessingDrawing.CTInline;
+
+import java.io.IOException;
+import java.io.InputStream;
+
+public class CustomXWPFDocument extends XWPFDocument
+{
+    public CustomXWPFDocument(InputStream in) throws IOException
+    {
+        super(in);
+    }
+
+    public void createPicture(String blipId,int id, int width, int height)
+    {
+        final int EMU = 9525;
+        width *= EMU;
+        height *= EMU;
+        //String blipId = getAllPictures().get(id).getPackageRelationship().getId();
+
+
+        CTInline inline = createParagraph().createRun().getCTR().addNewDrawing().addNewInline();
+
+        String picXml = "" +
+                "&lt;a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"&gt;" +
+                "   &lt;a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"&gt;" +
+                "      &lt;pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"&gt;" +
+                "         &lt;pic:nvPicPr&gt;" +
+                "            &lt;pic:cNvPr id=\"" + id + "\" name=\"Generated\"/&gt;" +
+                "            &lt;pic:cNvPicPr/&gt;" +
+                "         &lt;/pic:nvPicPr&gt;" +
+                "         &lt;pic:blipFill&gt;" +
+                "            &lt;a:blip r:embed=\"" + blipId + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/&gt;" +
+                "            &lt;a:stretch&gt;" +
+                "               &lt;a:fillRect/&gt;" +
+                "            &lt;/a:stretch&gt;" +
+                "         &lt;/pic:blipFill&gt;" +
+                "         &lt;pic:spPr&gt;" +
+                "            &lt;a:xfrm&gt;" +
+                "               &lt;a:off x=\"0\" y=\"0\"/&gt;" +
+                "               &lt;a:ext cx=\"" + width + "\" cy=\"" + height + "\"/&gt;" +
+                "            &lt;/a:xfrm&gt;" +
+                "            &lt;a:prstGeom prst=\"rect\"&gt;" +
+                "               &lt;a:avLst/&gt;" +
+                "            &lt;/a:prstGeom&gt;" +
+                "         &lt;/pic:spPr&gt;" +
+                "      &lt;/pic:pic&gt;" +
+                "   &lt;/a:graphicData&gt;" +
+                "&lt;/a:graphic&gt;";
+
+        //CTGraphicalObjectData graphicData = inline.addNewGraphic().addNewGraphicData();
+        XmlToken xmlToken = null;
+        try
+        {
+            xmlToken = XmlToken.Factory.parse(picXml);
+        }
+        catch(XmlException xe)
+        {
+            xe.printStackTrace();
+        }
+        inline.set(xmlToken);
+        //graphicData.set(xmlToken);
+
+        inline.setDistT(0);
+        inline.setDistB(0);
+        inline.setDistL(0);
+        inline.setDistR(0);
+
+        CTPositiveSize2D extent = inline.addNewExtent();
+        extent.setCx(width);
+        extent.setCy(height);
+
+        CTNonVisualDrawingProps docPr = inline.addNewDocPr();
+        docPr.setId(id);
+        docPr.setName("Picture " + id);
+        docPr.setDescr("Generated");
+    }
+}
+</code></pre>
+
+<p>Then, create the updated document by adding your pictures like this :-</p>
+
+<pre><code>CustomXWPFDocument document = new CustomXWPFDocument(new FileInputStream(new File("C:\\Users\\Avarice\\Desktop\\doc1.docx")));
+        FileOutputStream fos = new FileOutputStream(new File("C:\\Users\\Avarice\\Desktop\\doc2.docx"));
+        String id = document.addPictureData(new FileInputStream(new File("C:\\Users\\Avarice\\Desktop\\thumbnail.jpg")), Document.PICTURE_TYPE_JPEG);
+        document.createPicture(id,document.getNextPicNameNumber(Document.PICTURE_TYPE_JPEG), 64, 64);
+        document.write(fos);
+        fos.flush();
+        fos.close();
+</code></pre>
+
+<p>You should also have the following jars in your build path:-</p>
+
+<p>poi-ooxml-schemas</p>
+
+<p><a href="http://mvnrepository.com/artifact/org.apache.xmlbeans/xmlbeans">xmlbeans</a></p>
+
+<p><a href="http://mvnrepository.com/artifact/dom4j/dom4j">dom4j</a></p>

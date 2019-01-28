@@ -1,0 +1,64 @@
+<p>It should be useful. To retry on a SNI error in Apache HttpClient 4.4 - the easiest way we came up with (see <a href="https://issues.apache.org/jira/browse/HTTPCLIENT-1522" rel="nofollow">HTTPCLIENT-1522</a>):</p>
+
+<pre><code>public class SniHttpClientConnectionOperator extends DefaultHttpClientConnectionOperator {
+
+    public SniHttpClientConnectionOperator(Lookup&lt;ConnectionSocketFactory&gt; socketFactoryRegistry) {
+        super(socketFactoryRegistry, null, null);
+    }
+
+    @Override
+    public void connect(
+            final ManagedHttpClientConnection conn,
+            final HttpHost host,
+            final InetSocketAddress localAddress,
+            final int connectTimeout,
+            final SocketConfig socketConfig,
+            final HttpContext context) throws IOException {
+        try {
+            super.connect(conn, host, localAddress, connectTimeout, socketConfig, context);
+        } catch (SSLProtocolException e) {
+            Boolean enableSniValue = (Boolean) context.getAttribute(SniSSLSocketFactory.ENABLE_SNI);
+            boolean enableSni = enableSniValue == null || enableSniValue;
+            if (enableSni &amp;&amp; e.getMessage() != null &amp;&amp; e.getMessage().equals("handshake alert:  unrecognized_name")) {
+                TimesLoggers.httpworker.warn("Server received saw wrong SNI host, retrying without SNI");
+                context.setAttribute(SniSSLSocketFactory.ENABLE_SNI, false);
+                super.connect(conn, host, localAddress, connectTimeout, socketConfig, context);
+            } else {
+                throw e;
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>public class SniSSLSocketFactory extends SSLConnectionSocketFactory {
+
+    public static final String ENABLE_SNI = "__enable_sni__";
+
+    /*
+     * Implement any constructor you need for your particular application -
+     * SSLConnectionSocketFactory has many variants
+     */
+    public SniSSLSocketFactory(final SSLContext sslContext, final HostnameVerifier verifier) {
+        super(sslContext, verifier);
+    }
+
+    @Override
+    public Socket createLayeredSocket(
+            final Socket socket,
+            final String target,
+            final int port,
+            final HttpContext context) throws IOException {
+        Boolean enableSniValue = (Boolean) context.getAttribute(ENABLE_SNI);
+        boolean enableSni = enableSniValue == null || enableSniValue;
+        return super.createLayeredSocket(socket, enableSni ? target : "", port, context);
+    }
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>cm = new PoolingHttpClientConnectionManager(new SniHttpClientConnectionOperator(socketFactoryRegistry), null, -1, TimeUnit.MILLISECONDS);
+</code></pre>

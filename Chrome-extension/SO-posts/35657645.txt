@@ -1,0 +1,57 @@
+<blockquote>
+  <p>Is there a reason for this? Are Accessibility events not
+  dependendable..?</p>
+</blockquote>
+
+<p>I find it more likely that you are misunderstanding when a <code>TYPE_WINDOW_CONTENT_CHANGED</code> event is fired, than that it is not fired or caught consistently.  For example, this particular event does not fire on screen refreshes, only on new window content.  An app developer may choose, instead of launching a new Activity, to re-draw content over their activity.  In this case, from the users point of view the window content has changed, however, on the backend of the application all that his happened is new views have been drawn.  </p>
+
+<blockquote>
+  <p>A thread.sleep does not help - as it appears the AccessibilityEventNodeInfo is more of a snapshot than live access to the UI? Any way around this?</p>
+</blockquote>
+
+<p>This is also the explanation for why elements are missing from the event source.  You are getting the event before dynamic elements are drawn.  So, a new Activity is launched, and initialized with new content, however, the application probably goes into a waiting pattern for some type of network/REST resources.  Before these resources come in the event is fired, then shortly thereafter new content is drawn.  So, it appears to your eyes that your getting incomplete content, but what's really happening is you're getting the complete content as of the time the event was triggered.  You're thread.sleep method works just fine.  However, after you sleep, you can't inspect the value of event.getSource(), sleeping won't change what was passed to this function.  Instead, you want to sleep, and then crawl through the entire view heirarchy to find the info you want.  Sleep and then use</p>
+
+<pre><code>getRootInActiveWindow();
+</code></pre>
+
+<p>in place of </p>
+
+<pre><code>event.getSource();
+</code></pre>
+
+<blockquote>
+  <p>Is there any clues to help me determine the scroll position from the AccessibilityEventNodeInfo instance I am presented with?</p>
+</blockquote>
+
+<p>Yes and no.  No, there is no way from an accessibility service to detect the location of the scroll bar.  However, you can detect the approximate position of the scroll event by doing the following:</p>
+
+<pre><code>private float getScrollPosition(AccessibilityEvent event) {
+    final AccessibilityRecordCompat record = new AccessibilityRecordCompat(event);
+    final int itemCount = event.getItemCount();
+    final int fromIndex = event.getFromIndex();
+
+    // First, attempt to use (fromIndex / itemCount).
+    if ((fromIndex &gt;= 0) &amp;&amp; (itemCount &gt; 0)) {
+        return (fromIndex / (float) itemCount);
+    }
+
+    final int scrollY = record.getScrollY();
+    final int maxScrollY = record.getMaxScrollY();
+
+    // Next, attempt to use (scrollY / maxScrollY). This will fail if the
+    // getMaxScrollX() method is not available.
+    if ((scrollY &gt;= 0) &amp;&amp; (maxScrollY &gt; 0)) {
+        return (scrollY / (float) maxScrollY);
+    }
+
+    // Finally, attempt to use (scrollY / itemCount).
+    // TODO(alanv): Hack from previous versions -- is it still needed?
+    if ((scrollY &gt;= 0) &amp;&amp; (itemCount &gt; 0) &amp;&amp; (scrollY &lt;= itemCount)) {
+        return (scrollY / (float) itemCount);
+    }
+
+    return 0.5f;
+}
+</code></pre>
+
+<p>This is direct from Google's TalkBack code.  You can find it in ScrollFormatter.java in the EyesFree project.  It's not an ideal solution.  If the event happens to come from a large layout (as happens frequently with web pages in chrome), you can end up with the same result for a large portion of scrolling.  However, the APIs don't support anything more precise than this, so this is a necessary hack if you want to know you approximate scroll location.  I think significant improvements could be made to this method, even with available APIs, though it would take some work.</p>

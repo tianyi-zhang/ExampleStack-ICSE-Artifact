@@ -1,0 +1,275 @@
+<p>I have done a possible solution Based on BufferedWriter and BufferedReader, i used ISO-8859-1 that is correct ASCII extended character encoding. </p>
+
+<hr>
+
+<pre><code>OutputStream os = socketChannel.socket().getOutputStream();
+OutputStreamWriter osw = new OutputStreamWriter(os, "ISO-8859-1");
+TBufferedWriter bw = new TBufferedWriter (osw);
+bw.writeTMessageFlushing( dataArea.getText() );
+
+
+InputStream is = socketChannel.socket().getInputStream();
+InputStreamReader isr= new InputStreamReader(is, "ISO-8859-1") ;
+TBufferedReader br= new TBufferedReader(isr);
+// wait for response
+String responseLine = br.readTMessage();
+</code></pre>
+
+<hr>
+
+<p>I have simply opened the source of BufferedWriter and BufferedReader andlooked how to obtain my interaction.</p>
+
+<p>BufferedReader can not be simply extended because the use of some function.(It should be rewritten from java Boys). It extends Buffered Reader but is unuseful</p>
+
+<hr>
+
+<pre><code>import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.Writer;
+
+
+public class TBufferedWriter extends BufferedWriter {
+
+
+    public TBufferedWriter(Writer out){
+        super( out );
+    }
+    public TBufferedWriter(Writer out, int sz){
+        super( out, sz );
+    }
+
+    public void writeTMessage(String message) throws IOException {
+         synchronized (lock) {
+              super.write( message );
+              super.write('\0');
+         }
+    }
+     public void writeTMessageFlushing(String message) throws IOException {
+         synchronized (lock) {
+              super.write( message );
+              super.write('\0');
+              super.flush();
+         }
+    }
+
+}
+</code></pre>
+
+<hr>
+
+<pre><code>import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
+
+
+public class TBufferedReader extends BufferedReader {
+    private Reader in;
+    private char cb[];
+    private int nChars, nextChar;
+    private static final int INVALIDATED = -2;
+    private static final int UNMARKED = -1;
+    private int markedChar = UNMARKED;
+    private int readAheadLimit = 0; /* Valid only when markedChar &gt; 0 */
+
+    /** If the next character is a line feed, skip it */
+    private boolean skipNUL = false;
+    /** The skipLF flag when the mark was set */
+    private boolean markedSkipLF = false;
+    private static int defaultCharBufferSize = 8192;
+    private static int defaultExpectedLineLength = 80;
+
+
+    /**
+     * Creates a buffering character-input stream that uses an input buffer of
+     * the specified size.
+     *
+     * @param  in   A Reader
+     * @param  sz   Input-buffer size
+     *
+     * @exception  IllegalArgumentException  If sz is &lt;= 0
+     */
+    public TBufferedReader( Reader in, int sz ) {
+        super( in );
+        if (sz &lt;= 0) {
+            throw new IllegalArgumentException( "Buffer size &lt;= 0" );
+        }
+        this.in = in;
+        cb = new char[ sz ];
+        nextChar = nChars = 0;
+    }
+
+
+    /**
+     * Creates a buffering character-input stream that uses a default-sized
+     * input buffer.
+     *
+     * @param  in   A Reader
+     */
+    public TBufferedReader( Reader in ) {
+        this( in, defaultCharBufferSize );
+    }
+
+
+    /** Checks to make sure that the stream has not been closed */
+    private void ensureOpen() throws IOException {
+        if (in == null) {
+            throw new IOException( "Stream closed" );
+        }
+    }
+
+
+    /**
+     * Fills the input buffer, taking the mark into account if it is valid.
+     */
+    private void fill() throws IOException {
+        int dst;
+        if (markedChar &lt;= UNMARKED) {
+            /* No mark */
+            dst = 0;
+        } else {
+            /* Marked */
+            int delta = nextChar - markedChar;
+            if (delta &gt;= readAheadLimit) {
+                /* Gone past read-ahead limit: Invalidate mark */
+                markedChar = INVALIDATED;
+                readAheadLimit = 0;
+                dst = 0;
+            } else {
+                if (readAheadLimit &lt;= cb.length) {
+                    /* Shuffle in the current buffer */
+                    System.arraycopy( cb, markedChar, cb, 0, delta );
+                    markedChar = 0;
+                    dst = delta;
+                } else {
+                    /* Reallocate buffer to accommodate read-ahead limit */
+                    char ncb[] = new char[ readAheadLimit ];
+                    System.arraycopy( cb, markedChar, ncb, 0, delta );
+                    cb = ncb;
+                    markedChar = 0;
+                    dst = delta;
+                }
+                nextChar = nChars = delta;
+            }
+        }
+
+        int n;
+        do {
+            n = in.read( cb, dst, cb.length - dst );
+        } while (n == 0);
+        if (n &gt; 0) {
+            nChars = dst + n;
+            nextChar = dst;
+        }
+    }
+
+
+    /**
+     * Reads a line of text.  A line is considered to be terminated by any one
+     * of a line feed ('\0')
+     *
+     * @param      ignoreNUL  If true, the next '\0' will be skipped
+     *
+     * @return     A String containing the contents of the line, not including
+     *             any line-termination characters, or null if the end of the
+     *             stream has been reached
+     *
+     * @see        java.io.LineNumberReader#readLine()
+     *
+     * @exception  IOException  If an I/O error occurs
+     */
+    String readTMessage( boolean ignoreNUL ) throws IOException {
+        StringBuffer s = null;
+        int startChar;
+
+        synchronized (lock) {
+            ensureOpen();
+            boolean omitNUL = ignoreNUL || skipNUL;
+bufferLoop:     for (;;) {
+                    if (nextChar &gt;= nChars) {
+                        fill();
+                    }
+                    if (nextChar &gt;= nChars) { /* EOF */
+                        if (s != null &amp;&amp; s.length() &gt; 0) {
+                            return s.toString();
+                        } else {
+                            return null;
+                        }
+                    }
+                    boolean eol = false;
+                    char c = 0;
+                    int i;
+
+                    /* Skip a leftover '\0', if necessary */
+                    if (omitNUL &amp;&amp; (cb[nextChar] == '\0')) {
+                        nextChar++;
+                    }
+                    skipNUL = false;
+                    omitNUL = false;
+
+charLoop:               for (i = nextChar; i &lt; nChars; i++) {
+                            c = cb[i];
+                            if ((c == '\0')) {
+                                eol = true;
+                                break charLoop;
+                            }
+                        }
+
+                    startChar = nextChar;
+                    nextChar = i;
+
+                    if (eol) {
+                        String str;
+                        if (s == null) {
+                            str = new String( cb, startChar, i - startChar );
+                        } else {
+                            s.append( cb, startChar, i - startChar );
+                            str = s.toString();
+                        }
+                        nextChar++;
+                        if (c == '\0') {
+                            skipNUL = true;
+                        }
+                        return str;
+                    }
+
+                    if (s == null) {
+                        s = new StringBuffer( defaultExpectedLineLength );
+                    }
+                    s.append( cb, startChar, i - startChar );
+                }
+        }
+    }
+
+
+    /**
+     * Reads a line of text.  A line is considered to be terminated by any one
+     * of a line feed ('\n'), a carriage return ('\r'), or a carriage return
+     * followed immediately by a linefeed.
+     *
+     * @return     A String containing the contents of the line, not including
+     *             any line-termination characters, or null if the end of the
+     *             stream has been reached
+     *
+     * @exception  IOException  If an I/O error occurs
+     *
+     * @see java.nio.file.Files#readAllLines
+     */
+    public String readTMessage() throws IOException {
+        return readTMessage( false );
+    }
+}
+</code></pre>
+
+<hr>
+
+<p>Other interesting class are </p>
+
+<p><a href="http://www.ibm.com/developerworks/java/zos/javadoc/jzos/index.html?com/ibm/jzos/TranscodingPrintStream.html" rel="nofollow">http://www.ibm.com/developerworks/java/zos/javadoc/jzos/index.html?com/ibm/jzos/TranscodingPrintStream.html</a>.</p>
+
+<p>and</p>
+
+<p>org.apache.james.util.CharTerminatedInputStream</p>
+
+<hr>
+
+<p>I add some news about CharTerminatedInputStream. Using thtat class is dangerous, because you need to manage the correct character set in use. An outputStream is more high level and you can  interpose an InputStreamReader.</p>

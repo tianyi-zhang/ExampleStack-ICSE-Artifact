@@ -1,0 +1,718 @@
+<p>Refer this <a href="https://github.com/SureshCS-50/Android-wifi-print" rel="nofollow">Android-wifi-print - Github</a>, Which contains a demo application I created for the same.</p>
+
+<p><strong>Edit :</strong></p>
+
+<p>As @NileshThakkar said. we may lost connection to that link in future so, I am posting code here.. with flow.</p>
+
+<ol>
+<li>checks connectivity.</li>
+<li>If connected in WiFi.. am storing that WiFi configuration.</li>
+<li>Now checking whether I already have printer's information (WiFi configuration of WiFi printer) is available or not. If available, I'll scan and get list of WiFi ScanResults and connects to that else.. It'll showing list of WiFi and clicking on that, user will connect to printer and stores that WiFi configuration for future printing jobs.</li>
+<li>After print job completes, I'm connecting to my previous WiFi or Mobile data connection.</li>
+<li>Now going back to 2nd step.</li>
+<li>If user connected in Mobile data, I'm just enabling WiFi and following 3rd step.</li>
+<li>After Print job completes, I'm just disabling WiFi. so that, We'll be connected back to Mobile data connection. (That is android default).</li>
+</ol>
+
+<p>Libraries : gson-2.2.4, itextpdf-5.4.3</p>
+
+<p><strong>MyActivity.java</strong></p>
+
+<pre><code>public class MyActivity extends Activity implements PrintCompleteService {
+
+    private Button mBtnPrint;
+
+    private WifiConfiguration mPrinterConfiguration, mOldWifiConfiguration;
+    private WifiManager mWifiManager;
+    private List&lt;ScanResult&gt; mScanResults = new ArrayList&lt;ScanResult&gt;();
+    private WifiScanner mWifiScanner;
+
+    private PrintManager mPrintManager;
+    private List&lt;PrintJob&gt; mPrintJobs;
+    private PrintJob mCurrentPrintJob;
+
+    private File pdfFile;
+    private String externalStorageDirectory;
+
+    private Handler mPrintStartHandler = new Handler();
+    private Handler mPrintCompleteHandler = new Handler();
+    private String connectionInfo;
+
+    private boolean isMobileDataConnection = false;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+
+        try {
+            externalStorageDirectory = Environment.getExternalStorageDirectory().toString();
+            File folder = new File(externalStorageDirectory, Constants.CONTROLLER_RX_PDF_FOLDER);
+            pdfFile = new File(folder, "Print_testing.pdf");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        mWifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+
+        mWifiScanner = new WifiScanner();
+
+        mBtnPrint = (Button) findViewById(R.id.btnPrint);
+
+        mBtnPrint.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+
+                connectionInfo = Util.connectionInfo(MyActivity.this);
+
+                if (connectionInfo.equalsIgnoreCase(Constants.CONTROLLER_MOBILE)) {
+                    isMobileDataConnection = true;
+
+                    if (mWifiManager.isWifiEnabled() == false) {
+                        Toast.makeText(getApplicationContext(), "Enabling WiFi..", Toast.LENGTH_LONG).show();
+                        mWifiManager.setWifiEnabled(true);
+                    }
+
+                    mWifiManager.startScan();
+
+                    printerConfiguration();
+
+                } else if (connectionInfo.equalsIgnoreCase(Constants.CONTROLLER_WIFI)) {
+                    Util.storeCurrentWiFiConfiguration(MyActivity.this);
+
+                    printerConfiguration();
+
+                } else {
+                    Toast.makeText(MyActivity.this, "Please connect to Internet", Toast.LENGTH_SHORT).show();
+                }
+
+            }
+        });
+
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        try {
+            registerReceiver(mWifiScanner, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+            mWifiManager.startScan();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        try {
+            unregisterReceiver(mWifiScanner);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void printerConfiguration() {
+
+        mPrinterConfiguration = Util.getWifiConfiguration(MyActivity.this, Constants.CONTROLLER_PRINTER);
+
+        if (mPrinterConfiguration == null) {
+            showWifiListActivity(Constants.REQUEST_CODE_PRINTER);
+
+        } else {
+
+            boolean isPrinterAvailable = false;
+
+            mWifiManager.startScan();
+
+            for (int i = 0; i &lt; mScanResults.size(); i++) {
+                if (mPrinterConfiguration.SSID.equals("\"" + mScanResults.get(i).SSID + "\"")) {
+                    isPrinterAvailable = true;
+                    break;
+                }
+            }
+
+            if (isPrinterAvailable) {
+
+                connectToWifi(mPrinterConfiguration);
+
+                doPrint();
+
+            } else {
+                showWifiListActivity(Constants.REQUEST_CODE_PRINTER);
+            }
+
+        }
+    }
+
+    private void connectToWifi(WifiConfiguration mWifiConfiguration) {
+        mWifiManager.enableNetwork(mWifiConfiguration.networkId, true);
+    }
+
+    private void showWifiListActivity(int requestCode) {
+        Intent iWifi = new Intent(this, WifiListActivity.class);
+        startActivityForResult(iWifi, requestCode);
+    }
+
+    @Override
+    public void onMessage(int status) {
+
+        mPrintJobs = mPrintManager.getPrintJobs();
+
+        mPrintCompleteHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+
+                mPrintCompleteHandler.postDelayed(this, 2000);
+
+                if (mCurrentPrintJob.getInfo().getState() == PrintJobInfo.STATE_COMPLETED) {
+
+                    for (int i = 0; i &lt; mPrintJobs.size(); i++) {
+                        if (mPrintJobs.get(i).getId() == mCurrentPrintJob.getId()) {
+                            mPrintJobs.remove(i);
+                        }
+                    }
+
+                    switchConnection();
+
+                    mPrintCompleteHandler.removeCallbacksAndMessages(null);
+                } else if (mCurrentPrintJob.getInfo().getState() == PrintJobInfo.STATE_FAILED) {
+                    switchConnection();
+                    Toast.makeText(MyActivity.this, "Print Failed!", Toast.LENGTH_LONG).show();
+                    mPrintCompleteHandler.removeCallbacksAndMessages(null);
+                } else if (mCurrentPrintJob.getInfo().getState() == PrintJobInfo.STATE_CANCELED) {
+                    switchConnection();
+                    Toast.makeText(MyActivity.this, "Print Cancelled!", Toast.LENGTH_LONG).show();
+                    mPrintCompleteHandler.removeCallbacksAndMessages(null);
+                }
+
+            }
+        }, 2000);
+
+    }
+
+    public void switchConnection() {
+        if (!isMobileDataConnection) {
+            mOldWifiConfiguration = Util.getWifiConfiguration(MyActivity.this, Constants.CONTROLLER_WIFI);
+
+            boolean isWifiAvailable = false;
+
+            mWifiManager.startScan();
+
+            for (int i = 0; i &lt; mScanResults.size(); i++) {
+                if (mOldWifiConfiguration.SSID.equals("\"" + mScanResults.get(i).SSID + "\"")) {
+                    isWifiAvailable = true;
+                    break;
+                }
+            }
+
+            if (isWifiAvailable) {
+                connectToWifi(mOldWifiConfiguration);
+            } else {
+                showWifiListActivity(Constants.REQUEST_CODE_WIFI);
+            }
+        } else {
+            mWifiManager.setWifiEnabled(false);
+        }
+    }
+
+    public void printDocument(File pdfFile) {
+        mPrintManager = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+
+        String jobName = getString(R.string.app_name) + " Document";
+
+        mCurrentPrintJob = mPrintManager.print(jobName, new PrintServicesAdapter(MyActivity.this, pdfFile), null);
+    }
+
+    public void doPrint() {
+        mPrintStartHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+
+                Log.d("PrinterConnection Status", "" + mPrinterConfiguration.status);
+
+                mPrintStartHandler.postDelayed(this, 3000);
+
+                if (mPrinterConfiguration.status == WifiConfiguration.Status.CURRENT) {
+                    if (Util.computePDFPageCount(pdfFile) &gt; 0) {
+                        printDocument(pdfFile);
+                    } else {
+                        Toast.makeText(MyActivity.this, "Can't print, Page count is zero.", Toast.LENGTH_LONG).show();
+                    }
+                    mPrintStartHandler.removeCallbacksAndMessages(null);
+                } else if (mPrinterConfiguration.status == WifiConfiguration.Status.DISABLED) {
+                    Toast.makeText(MyActivity.this, "Failed to connect to printer!.", Toast.LENGTH_LONG).show();
+                    mPrintStartHandler.removeCallbacksAndMessages(null);
+                }
+            }
+        }, 3000);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == Constants.REQUEST_CODE_PRINTER &amp;&amp; resultCode == Constants.RESULT_CODE_PRINTER) {
+            mPrinterConfiguration = Util.getWifiConfiguration(MyActivity.this, Constants.CONTROLLER_PRINTER);
+            doPrint();
+        }
+    }
+
+    public class WifiScanner extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            mScanResults = mWifiManager.getScanResults();
+            Log.e("scan result size", "" + mScanResults.size());
+        }
+    }
+
+}
+</code></pre>
+
+<p><strong>WiFiListActivity.java</strong></p>
+
+<pre><code>public class WifiListActivity extends Activity implements View.OnClickListener {
+
+    private ListView mListWifi;
+    private Button mBtnScan;
+
+    private WifiManager mWifiManager;
+    private WifiAdapter adapter;
+    private WifiListener mWifiListener;
+
+    private List&lt;ScanResult&gt; mScanResults = new ArrayList&lt;ScanResult&gt;();
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_wifi_list);
+
+        mBtnScan = (Button) findViewById(R.id.btnNext);
+        mBtnScan.setOnClickListener(this);
+
+        mListWifi = (ListView) findViewById(R.id.wifiList);
+
+        mWifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+
+        if (mWifiManager.isWifiEnabled() == false) {
+            Toast.makeText(getApplicationContext(), "wifi is disabled.. making it enabled", Toast.LENGTH_LONG).show();
+            mWifiManager.setWifiEnabled(true);
+        }
+
+        mWifiListener = new WifiListener();
+
+        adapter = new WifiAdapter(WifiListActivity.this, mScanResults);
+        mListWifi.setAdapter(adapter);
+
+        mListWifi.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView&lt;?&gt; adapterView, View view, int i, long l) {
+                connectToWifi(i);
+            }
+        });
+
+    }
+
+    @Override
+    public void onClick(View view) {
+        mWifiManager.startScan();
+        Toast.makeText(this, "Scanning....", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        try {
+            registerReceiver(mWifiListener, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+            mWifiManager.startScan();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        try {
+            unregisterReceiver(mWifiListener);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void connectToWifi(int position) {
+
+        final ScanResult item = mScanResults.get(position);
+
+        String Capabilities = item.capabilities;
+
+        if (Capabilities.contains("WPA")) {
+            AlertDialog.Builder builder = new AlertDialog.Builder(WifiListActivity.this);
+            builder.setTitle("Password:");
+
+            final EditText input = new EditText(WifiListActivity.this);
+            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            builder.setView(input);
+
+            builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    String m_Text = input.getText().toString();
+                    WifiConfiguration wifiConfiguration = new WifiConfiguration();
+                    wifiConfiguration.SSID = "\"" + item.SSID + "\"";
+                    wifiConfiguration.preSharedKey = "\"" + m_Text + "\"";
+                    wifiConfiguration.hiddenSSID = true;
+                    wifiConfiguration.status = WifiConfiguration.Status.ENABLED;
+                    wifiConfiguration.allowedProtocols.set(WifiConfiguration.Protocol.WPA); // For WPA
+                    wifiConfiguration.allowedProtocols.set(WifiConfiguration.Protocol.RSN); // For WPA2
+                    wifiConfiguration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+                    wifiConfiguration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_EAP);
+                    wifiConfiguration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.TKIP);
+                    wifiConfiguration.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
+                    wifiConfiguration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.TKIP);
+                    wifiConfiguration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
+                    wifiConfiguration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP40);
+                    wifiConfiguration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP104);
+                    int res = mWifiManager.addNetwork(wifiConfiguration);
+                    boolean b = mWifiManager.enableNetwork(res, true);
+
+                    finishActivity(wifiConfiguration, res);
+
+                }
+            });
+            builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dialog.cancel();
+                }
+            });
+
+            builder.show();
+
+
+        } else if (Capabilities.contains("WEP")) {
+            AlertDialog.Builder builder = new AlertDialog.Builder(WifiListActivity.this);
+            builder.setTitle("Title");
+
+            final EditText input = new EditText(WifiListActivity.this);
+            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            builder.setView(input);
+
+            builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    String m_Text = input.getText().toString();
+                    WifiConfiguration wifiConfiguration = new WifiConfiguration();
+                    wifiConfiguration.SSID = "\"" + item.SSID + "\"";
+                    wifiConfiguration.wepKeys[0] = "\"" + m_Text + "\"";
+                    wifiConfiguration.wepTxKeyIndex = 0;
+                    wifiConfiguration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                    wifiConfiguration.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.WEP40);
+                    int res = mWifiManager.addNetwork(wifiConfiguration);
+                    Log.d("WifiPreference", "add Network returned " + res);
+                    boolean b = mWifiManager.enableNetwork(res, true);
+                    Log.d("WifiPreference", "enableNetwork returned " + b);
+
+                    finishActivity(wifiConfiguration, res);
+                }
+            });
+            builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dialog.cancel();
+                }
+            });
+
+            builder.show();
+
+        } else {
+
+            WifiConfiguration wifiConfiguration = new WifiConfiguration();
+            wifiConfiguration.SSID = "\"" + item.SSID + "\"";
+            wifiConfiguration.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+            int res = mWifiManager.addNetwork(wifiConfiguration);
+            Log.d("WifiPreference", "add Network returned " + res);
+            boolean b = mWifiManager.enableNetwork(res, true);
+            Log.d("WifiPreference", "enableNetwork returned " + b);
+
+            finishActivity(wifiConfiguration, res);
+        }
+
+    }
+
+    private void finishActivity(WifiConfiguration mWifiConfiguration, int networkId) {
+
+        mWifiConfiguration.networkId = networkId;
+
+        Util.savePrinterConfiguration(WifiListActivity.this, mWifiConfiguration);
+        Intent intent = new Intent();
+        setResult(Constants.RESULT_CODE_PRINTER, intent);
+        finish();
+    }
+
+    public class WifiListener extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            mScanResults = mWifiManager.getScanResults();
+            Log.e("scan result size ", "" + mScanResults.size());
+            adapter.setElements(mScanResults);
+        }
+    }
+}
+</code></pre>
+
+<p><strong>WifiAdapter.java</strong></p>
+
+<pre><code>public class WifiAdapter extends BaseAdapter {
+
+    private Activity mActivity;
+    private List&lt;ScanResult&gt; mWifiList = new ArrayList&lt;ScanResult&gt;();
+
+    public WifiAdapter(Activity mActivity, List&lt;ScanResult&gt; mWifiList) {
+        this.mActivity = mActivity;
+        this.mWifiList = mWifiList;
+    }
+
+    @Override
+    public int getCount() {
+        return mWifiList.size();
+    }
+
+    @Override
+    public Object getItem(int i) {
+        return mWifiList.get(i);
+    }
+
+    @Override
+    public long getItemId(int i) {
+        return i;
+    }
+
+    @Override
+    public View getView(int i, View view, ViewGroup viewGroup) {
+
+        LayoutInflater inflater = (LayoutInflater) mActivity.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        view = inflater.inflate(R.layout.custom_wifi_list_item, null);
+
+        TextView txtWifiName = (TextView) view.findViewById(R.id.txtWifiName);
+        txtWifiName.setText(mWifiList.get(i).SSID);
+
+        return view;
+    }
+
+    public void setElements(List&lt;ScanResult&gt; mWifis) {
+        this.mWifiList = mWifis;
+        notifyDataSetChanged();
+    }
+}
+</code></pre>
+
+<p><strong>PrintCompleteService.java</strong></p>
+
+<pre><code>public interface PrintCompleteService {
+    public void onMessage(int status);
+}
+</code></pre>
+
+<p><strong>PrintServiceAdapter.java</strong></p>
+
+<pre><code>public class PrintServicesAdapter extends PrintDocumentAdapter {
+    private Activity mActivity;
+    private int pageHeight;
+    private int pageWidth;
+    private PdfDocument myPdfDocument;
+    private int totalpages = 1;
+    private File pdfFile;
+    private PrintCompleteService mPrintCompleteService;
+
+    public PrintServicesAdapter(Activity mActivity, File pdfFile) {
+        this.mActivity = mActivity;
+        this.pdfFile = pdfFile;
+        this.totalpages = Util.computePDFPageCount(pdfFile);
+        this.mPrintCompleteService = (PrintCompleteService) mActivity;
+    }
+
+    @Override
+    public void onLayout(PrintAttributes oldAttributes,
+                         PrintAttributes newAttributes,
+                         CancellationSignal cancellationSignal,
+                         LayoutResultCallback callback,
+                         Bundle metadata) {
+        myPdfDocument = new PrintedPdfDocument(mActivity, newAttributes);
+
+        pageHeight =
+                newAttributes.getMediaSize().getHeightMils() / 1000 * 72;
+        pageWidth =
+                newAttributes.getMediaSize().getWidthMils() / 1000 * 72;
+
+        if (cancellationSignal.isCanceled()) {
+            callback.onLayoutCancelled();
+            return;
+        }
+
+        if (totalpages &gt; 0) {
+            PrintDocumentInfo.Builder builder = new PrintDocumentInfo
+                    .Builder(pdfFile.getName())
+                    .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                    .setPageCount(totalpages);
+
+            PrintDocumentInfo info = builder.build();
+            callback.onLayoutFinished(info, true);
+        } else {
+            callback.onLayoutFailed("Page count is zero.");
+        }
+    }
+
+    @Override
+    public void onWrite(final PageRange[] pageRanges,
+                        final ParcelFileDescriptor destination,
+                        final CancellationSignal cancellationSignal,
+                        final WriteResultCallback callback) {
+        InputStream input = null;
+        OutputStream output = null;
+
+
+        try {
+            input = new FileInputStream(pdfFile);
+            output = new FileOutputStream(destination.getFileDescriptor());
+            byte[] buf = new byte[1024];
+            int bytesRead;
+
+            while ((bytesRead = input.read(buf)) &gt; 0) {
+                output.write(buf, 0, bytesRead);
+            }
+
+            callback.onWriteFinished(new PageRange[]{PageRange.ALL_PAGES});
+
+
+        } catch (FileNotFoundException ee) {
+            //Catch exception
+        } catch (Exception e) {
+            //Catch exception
+        } finally {
+            try {
+                input.close();
+                output.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        cancellationSignal.setOnCancelListener(new CancellationSignal.OnCancelListener() {
+            @Override
+            public void onCancel() {
+                mPrintCompleteService.onMessage(Constants.PRINTER_STATUS_CANCELLED);
+            }
+        });
+    }
+
+    @Override
+    public void onFinish() {
+        mPrintCompleteService.onMessage(Constants.PRINTER_STATUS_COMPLETED);
+    }
+}
+</code></pre>
+
+<p><strong>Util.java</strong></p>
+
+<pre><code>public class Util {
+
+    public static String connectionInfo(Activity mActivity) {
+        String result = "not connected";
+
+        ConnectivityManager cm = (ConnectivityManager) mActivity.getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo[] netInfo = cm.getAllNetworkInfo();
+
+        for (NetworkInfo ni : netInfo) {
+            if (ni.getTypeName().equalsIgnoreCase(Constants.CONTROLLER_WIFI)) {
+                if (ni.isConnected()) {
+                    result = Constants.CONTROLLER_WIFI;
+                    break;
+                }
+            } else if (ni.getTypeName().equalsIgnoreCase(Constants.CONTROLLER_MOBILE)) {
+                if (ni.isConnected()) {
+                    result = Constants.CONTROLLER_MOBILE;
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    public static void saveWifiConfiguration(Activity mActivity, WifiConfiguration mWifiConfiguration) {
+        Gson mGson = new Gson();
+        Type mType = new TypeToken&lt;WifiConfiguration&gt;() {
+        }.getType();
+        String sJson = mGson.toJson(mWifiConfiguration, mType);
+        SharedPreferences mSharedPrefs = mActivity.getSharedPreferences(Constants.DEMO_PREFERENCES, Context.MODE_PRIVATE);
+        mSharedPrefs.edit().putString(Constants.CONTROLLER_WIFI_CONFIGURATION, sJson).commit();
+    }
+
+    public static void savePrinterConfiguration(Activity mActivity, WifiConfiguration mPrinterConfiguration) {
+        Gson mGson = new Gson();
+        Type mType = new TypeToken&lt;WifiConfiguration&gt;() {
+        }.getType();
+        String sJson = mGson.toJson(mPrinterConfiguration, mType);
+        SharedPreferences mSharedPrefs = mActivity.getSharedPreferences(Constants.DEMO_PREFERENCES, Context.MODE_PRIVATE);
+        mSharedPrefs.edit().putString(Constants.CONTROLLER_PRINTER_CONFIGURATION, sJson).commit();
+    }
+
+    public static WifiConfiguration getWifiConfiguration(Activity mActivity, String configurationType) {
+        WifiConfiguration mWifiConfiguration = new WifiConfiguration();
+        Gson mGson = new Gson();
+        SharedPreferences mSharedPrefs = mActivity.getSharedPreferences(Constants.DEMO_PREFERENCES, Context.MODE_PRIVATE);
+        Type mWifiConfigurationType = new TypeToken&lt;WifiConfiguration&gt;() {
+        }.getType();
+        String mWifiJson = "";
+        if (configurationType.equalsIgnoreCase(Constants.CONTROLLER_WIFI)) {
+            mWifiJson = mSharedPrefs.getString(Constants.CONTROLLER_WIFI_CONFIGURATION, "");
+        } else if (configurationType.equalsIgnoreCase(Constants.CONTROLLER_PRINTER)) {
+            mWifiJson = mSharedPrefs.getString(Constants.CONTROLLER_PRINTER_CONFIGURATION, "");
+        }
+        if (!mWifiJson.isEmpty()) {
+            mWifiConfiguration = mGson.fromJson(mWifiJson, mWifiConfigurationType);
+        } else {
+            mWifiConfiguration = null;
+        }
+        return mWifiConfiguration;
+    }
+
+    public static void storeCurrentWiFiConfiguration(Activity mActivity) {
+        try {
+            WifiManager wifiManager = (WifiManager) mActivity.getSystemService(Context.WIFI_SERVICE);
+            final WifiInfo connectionInfo = wifiManager.getConnectionInfo();
+            if (connectionInfo != null &amp;&amp; !TextUtils.isEmpty(connectionInfo.getSSID())) {
+                WifiConfiguration mWifiConfiguration = new WifiConfiguration();
+                mWifiConfiguration.networkId = connectionInfo.getNetworkId();
+                mWifiConfiguration.BSSID = connectionInfo.getBSSID();
+                mWifiConfiguration.hiddenSSID = connectionInfo.getHiddenSSID();
+                mWifiConfiguration.SSID = connectionInfo.getSSID();
+
+                // store it for future use -&gt; after print is complete you need to reconnect wifi to this network.
+                saveWifiConfiguration(mActivity, mWifiConfiguration);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static int computePDFPageCount(File file) {
+        RandomAccessFile raf = null;
+        int pages = 0;
+        try {
+            raf = new RandomAccessFile(file, "r");
+
+            RandomAccessFileOrArray pdfFile = new RandomAccessFileOrArray(
+                    new RandomAccessSourceFactory().createSource(raf));
+            PdfReader reader = new PdfReader(pdfFile, new byte[0]);
+            pages = reader.getNumberOfPages();
+            reader.close();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return pages;
+    }
+}
+</code></pre>

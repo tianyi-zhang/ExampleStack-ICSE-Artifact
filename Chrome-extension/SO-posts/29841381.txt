@@ -1,0 +1,194 @@
+<p>Same problem here but I found the solution.</p>
+
+<p>The problem is the implementation of the createHttpRequest method in com.android.volley.toolbox.HttpClientStack.java which will add the body only if the request method is POST, PUT or PATCH.</p>
+
+<pre><code>/**
+ * Creates the appropriate subclass of HttpUriRequest for passed in request.
+ */
+@SuppressWarnings("deprecation")
+/* protected */ static HttpUriRequest createHttpRequest(Request&lt;?&gt; request,
+        Map&lt;String, String&gt; additionalHeaders) throws AuthFailureError {
+    switch (request.getMethod()) {
+        case Method.DEPRECATED_GET_OR_POST: {
+            // This is the deprecated way that needs to be handled for backwards compatibility.
+            // If the request's post body is null, then the assumption is that the request is
+            // GET.  Otherwise, it is assumed that the request is a POST.
+            byte[] postBody = request.getPostBody();
+            if (postBody != null) {
+                HttpPost postRequest = new HttpPost(request.getUrl());
+                postRequest.addHeader(HEADER_CONTENT_TYPE, request.getPostBodyContentType());
+                HttpEntity entity;
+                entity = new ByteArrayEntity(postBody);
+                postRequest.setEntity(entity);
+                return postRequest;
+            } else {
+                return new HttpGet(request.getUrl());
+            }
+        }
+        case Method.GET:
+            return new HttpGet(request.getUrl());
+        case Method.DELETE:
+            return new HttpDelete(request.getUrl());
+        case Method.POST: {
+            HttpPost postRequest = new HttpPost(request.getUrl());
+            postRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+            setEntityIfNonEmptyBody(postRequest, request);
+            return postRequest;
+        }
+        case Method.PUT: {
+            HttpPut putRequest = new HttpPut(request.getUrl());
+            putRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+            setEntityIfNonEmptyBody(putRequest, request);
+            return putRequest;
+        }
+        case Method.HEAD:
+            return new HttpHead(request.getUrl());
+        case Method.OPTIONS:
+            return new HttpOptions(request.getUrl());
+        case Method.TRACE:
+            return new HttpTrace(request.getUrl());
+        case Method.PATCH: {
+            HttpPatch patchRequest = new HttpPatch(request.getUrl());
+            patchRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+            setEntityIfNonEmptyBody(patchRequest, request);
+            return patchRequest;
+        }
+        default:
+            throw new IllegalStateException("Unknown request method.");
+    }
+}
+</code></pre>
+
+<p>So you have to use your own implementation of HttpStack.java or you override HttpClientStack class.</p>
+
+<p>First of all your should replace your initialization of RequestQueue from</p>
+
+<pre><code>RequestQueue requestQueue = Volley.newRequestQueue(sContext);
+</code></pre>
+
+<p>to </p>
+
+<pre><code>    String userAgent = "volley/0";
+    try {
+        String packageName = getContext().getPackageName();
+        PackageInfo info = getContext().getPackageManager().getPackageInfo(packageName, 0);
+        userAgent = packageName + "/" + info.versionCode;
+    } catch (PackageManager.NameNotFoundException e) {}
+    HttpStack httpStack = new OwnHttpClientStack(AndroidHttpClient.newInstance(userAgent));
+    RequestQueue requesQueue = Volley.newRequestQueue(sContext, httpStack);
+</code></pre>
+
+<p>and write your own implementation of HttpClientStack where you change the case of "Method.POST:" in the method createHttpRequest(). You also have to create an Object like "OwnHttpDelete" as extention of HttpEntityEnclosingRequestBase to use the method setEntityIfNonEmptyBody().</p>
+
+<pre><code>public class OwnHttpClientStack extends com.android.volley.toolbox.HttpClientStack {
+    private final static String HEADER_CONTENT_TYPE = "Content-Type";
+
+    public OwnHttpClientStack(HttpClient client) {
+        super(client);
+    }
+
+    @Override
+    public HttpResponse performRequest(Request&lt;?&gt; request, Map&lt;String, String&gt; additionalHeaders)
+            throws IOException, AuthFailureError {
+        HttpUriRequest httpRequest = createHttpRequest(request, additionalHeaders);
+        addHeaders(httpRequest, additionalHeaders);
+        addHeaders(httpRequest, request.getHeaders());
+        onPrepareRequest(httpRequest);
+        HttpParams httpParams = httpRequest.getParams();
+        int timeoutMs = request.getTimeoutMs();
+        // TODO: Reevaluate this connection timeout based on more wide-scale
+        // data collection and possibly different for wifi vs. 3G.
+        HttpConnectionParams.setConnectionTimeout(httpParams, 5000);
+        HttpConnectionParams.setSoTimeout(httpParams, timeoutMs);
+        return mClient.execute(httpRequest);
+    }
+
+    private static void addHeaders(HttpUriRequest httpRequest, Map&lt;String, String&gt; headers) {
+        for (String key : headers.keySet()) {
+            httpRequest.setHeader(key, headers.get(key));
+        }
+    }
+
+    static HttpUriRequest createHttpRequest(Request&lt;?&gt; request, Map&lt;String, String&gt; additionalHeaders) throws AuthFailureError {
+        switch (request.getMethod()) {
+            case Request.Method.DEPRECATED_GET_OR_POST: {
+                byte[] postBody = request.getPostBody();
+                if (postBody != null) {
+                    HttpPost postRequest = new HttpPost(request.getUrl());
+                    postRequest.addHeader(HEADER_CONTENT_TYPE, request.getPostBodyContentType());
+                    HttpEntity entity;
+                    entity = new ByteArrayEntity(postBody);
+                    postRequest.setEntity(entity);
+                    return postRequest;
+                } else {
+                    return new HttpGet(request.getUrl());
+                }
+            }
+            case Request.Method.GET:
+                return new HttpGet(request.getUrl());
+            case Request.Method.DELETE:
+                OwnHttpDelete deleteRequest =  new OwnHttpDelete(request.getUrl());
+                deleteRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+                setEntityIfNonEmptyBody(deleteRequest, request);
+                return deleteRequest;
+            case Request.Method.POST: {
+                HttpPost postRequest = new HttpPost(request.getUrl());
+                postRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+                setEntityIfNonEmptyBody(postRequest, request);
+                return postRequest;
+            }
+            case Request.Method.PUT: {
+                HttpPut putRequest = new HttpPut(request.getUrl());
+                putRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+                setEntityIfNonEmptyBody(putRequest, request);
+                return putRequest;
+            }
+            case Request.Method.HEAD:
+                return new HttpHead(request.getUrl());
+            case Request.Method.OPTIONS:
+                return new HttpOptions(request.getUrl());
+            case Request.Method.TRACE:
+                return new HttpTrace(request.getUrl());
+            case Request.Method.PATCH: {
+                HttpPatch patchRequest = new HttpPatch(request.getUrl());
+                patchRequest.addHeader(HEADER_CONTENT_TYPE, request.getBodyContentType());
+                setEntityIfNonEmptyBody(patchRequest, request);
+                return patchRequest;
+            }
+            default:
+                throw new IllegalStateException("Unknown request method.");
+        }
+    }
+
+    private static void setEntityIfNonEmptyBody(HttpEntityEnclosingRequestBase httpRequest,
+                                                Request&lt;?&gt; request) throws AuthFailureError {
+        byte[] body = request.getBody();
+        if (body != null) {
+            HttpEntity entity = new ByteArrayEntity(body);
+            httpRequest.setEntity(entity);
+        }
+    }
+
+    private static class OwnHttpDelete extends HttpPost {
+        public static final String METHOD_NAME = "DELETE";
+
+        public OwnHttpDelete() {
+            super();
+        }
+
+        public OwnHttpDelete(URI uri) {
+            super(uri);
+        }
+
+        public OwnHttpDelete(String uri) {
+            super(uri);
+        }
+
+        public String getMethod() {
+            return METHOD_NAME;
+        }
+    }
+}
+</code></pre>
+
+<p>I hope my code will help someone. It should also be possible to add parameters to a HEAD request.</p>

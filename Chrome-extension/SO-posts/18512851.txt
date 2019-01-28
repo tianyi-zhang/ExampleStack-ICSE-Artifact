@@ -1,0 +1,165 @@
+<p>I've played around with this some more, and I've come up with an alternative method of achieving the effect I want. Now, this solution involved writing custom Java code, which means it wouldn't actually help with MY specific situation (since, as I said above, I need a configuration-only solution). However, I figured I may as well post it, because (a) it may help others with the same issue, and (b) it seems like it'd be useful in many other use-cases besides just adding blank lines.</p>
+
+<p>Anyway, my solution was to write my own Converter class, named <code>ConditionalCompositeConverter</code>, which is used to express a general-purpose "if-then" logic within the encoder/layout pattern (e.g. "only show X if Y is true"). Like the <code>%replace</code> conversion word, it extends <code>CompositeConverter</code> (and therefore may contain child converters); it also requires one or more Evaluators, which supply the condition(s) to test. The source code is as follows:</p>
+
+<p><strong>ConditionalCompositeConverter.java</strong></p>
+
+<pre class="lang-java prettyprint-override"><code>package converter;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.CoreConstants;
+import ch.qos.logback.core.boolex.EvaluationException;
+import ch.qos.logback.core.boolex.EventEvaluator;
+import ch.qos.logback.core.pattern.CompositeConverter;
+import ch.qos.logback.core.status.ErrorStatus;
+
+public class ConditionalCompositeConverter extends CompositeConverter&lt;ILoggingEvent&gt;
+{
+    private List&lt;EventEvaluator&lt;ILoggingEvent&gt;&gt; evaluatorList = null;
+    private int errorCount = 0;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void start()
+    {
+        final List&lt;String&gt; optionList = getOptionList();
+        final Map&lt;?, ?&gt; evaluatorMap = (Map&lt;?, ?&gt;) getContext().getObject(CoreConstants.EVALUATOR_MAP);
+
+        for (String evaluatorStr : optionList)
+        {
+            EventEvaluator&lt;ILoggingEvent&gt; ee = (EventEvaluator&lt;ILoggingEvent&gt;) evaluatorMap.get(evaluatorStr);
+            if (ee != null)
+            {
+                addEvaluator(ee);
+            }
+        }
+
+        if ((evaluatorList == null) || (evaluatorList.isEmpty()))
+        {
+            addError("At least one evaluator is expected, whereas you have declared none.");
+            return;
+        }
+
+        super.start();
+    }
+
+    @Override
+    public String convert(ILoggingEvent event)
+    {
+        boolean evalResult = true;
+        for (EventEvaluator&lt;ILoggingEvent&gt; ee : evaluatorList)
+        {
+            try
+            {
+                if (!ee.evaluate(event))
+                {
+                    evalResult = false;
+                    break;
+                }
+            }
+            catch (EvaluationException eex)
+            {
+                evalResult = false;
+
+                errorCount++;
+                if (errorCount &lt; CoreConstants.MAX_ERROR_COUNT)
+                {
+                    addError("Exception thrown for evaluator named [" + ee.getName() + "].", eex);
+                }
+                else if (errorCount == CoreConstants.MAX_ERROR_COUNT)
+                {
+                    ErrorStatus errorStatus = new ErrorStatus(
+                          "Exception thrown for evaluator named [" + ee.getName() + "].",
+                          this, eex);
+                    errorStatus.add(new ErrorStatus(
+                          "This was the last warning about this evaluator's errors. " +
+                          "We don't want the StatusManager to get flooded.", this));
+                    addStatus(errorStatus);
+                }
+            }
+        }
+
+        if (evalResult)
+        {
+            return super.convert(event);
+        }
+        else
+        {
+            return CoreConstants.EMPTY_STRING;
+        }
+    }
+
+    @Override
+    protected String transform(ILoggingEvent event, String in)
+    {
+        return in;
+    }
+
+    private void addEvaluator(EventEvaluator&lt;ILoggingEvent&gt; ee)
+    {
+        if (evaluatorList == null)
+        {
+            evaluatorList = new ArrayList&lt;EventEvaluator&lt;ILoggingEvent&gt;&gt;();
+        }
+        evaluatorList.add(ee);
+    }
+}
+</code></pre>
+
+<p>I then use this converter in my configuration file, like so:</p>
+
+<p><strong>logback.xml</strong></p>
+
+<pre class="lang-xml prettyprint-override"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;configuration&gt;
+
+    &lt;conversionRule conversionWord="onlyShowIf"
+                    converterClass="converter.ConditionalCompositeConverter" /&gt;
+
+    &lt;evaluator name="NOT_EMPTY_EVAL"&gt;
+        &lt;expression&gt;!message.isEmpty()&lt;/expression&gt;
+    &lt;/evaluator&gt;
+
+    &lt;!-- STDOUT (System.out) appender for messages with level "INFO" and below. --&gt;
+    &lt;appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender"&gt;
+        &lt;filter class="ch.qos.logback.core.filter.EvaluatorFilter"&gt;
+            &lt;evaluator class="ch.qos.logback.classic.boolex.JaninoEventEvaluator"&gt;
+                &lt;expression&gt;return level &amp;lt;= INFO;&lt;/expression&gt;
+            &lt;/evaluator&gt;
+            &lt;OnMatch&gt;NEUTRAL&lt;/OnMatch&gt;
+            &lt;OnMismatch&gt;DENY&lt;/OnMismatch&gt;
+        &lt;/filter&gt;
+        &lt;encoder&gt;
+            &lt;pattern&gt;%onlyShowIf(%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg){NOT_EMPTY_EVAL}%n&lt;/pattern&gt;
+        &lt;/encoder&gt;
+        &lt;target&gt;System.out&lt;/target&gt;
+    &lt;/appender&gt;
+
+    &lt;!-- STDERR (System.err) appender for messages with level "WARN" and above. --&gt;
+    &lt;appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender"&gt;
+        &lt;filter class="ch.qos.logback.classic.filter.ThresholdFilter"&gt;
+            &lt;level&gt;WARN&lt;/level&gt;
+        &lt;/filter&gt;
+        &lt;encoder&gt;
+            &lt;pattern&gt;%onlyShowIf(%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg){NOT_EMPTY_EVAL}%n&lt;/pattern&gt;
+        &lt;/encoder&gt;
+        &lt;target&gt;System.err&lt;/target&gt;
+    &lt;/appender&gt;
+
+    &lt;!-- Root logger. --&gt;
+    &lt;root level="DEBUG"&gt;
+        &lt;appender-ref ref="STDOUT" /&gt;
+        &lt;appender-ref ref="STDERR" /&gt;
+    &lt;/root&gt;
+
+&lt;/configuration&gt;
+</code></pre>
+
+<p>I think this is much more elegant than the previous solution, as it lets me use a single Appender to handle both blank and non-blank messages. The <code>%onlyShowIf</code> conversion word tells the Appender to parse the supplied pattern as usual, UNLESS the message is blank, in which case skip the whole thing. Then there's a newline token after the end of the conversion word, to ensure that a linebreak is printed whether the message is blank or not.</p>
+
+<p>The only downside to this solution is that the main pattern (containing child converters) must be passed in FIRST, as arguments within parentheses, whereas the Evaluator(s) must be passed in at the end, via the option list within curly-braces; this means that this "if-then" construct must have the "then" part BEFORE the "if" part, which looks somewhat unintuitive.</p>
+
+<p>Anyway, I hope this proves helpful to anyone with similar issues. I'm not going to "accept" this answer, as I'm still hoping someone will come up with a configuration-only solution that would work in my specific case.</p>

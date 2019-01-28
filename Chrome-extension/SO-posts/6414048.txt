@@ -1,0 +1,167 @@
+<p>JXTable can do so via a Highlighter - see swinglabs-demos for an example (MatchingTextHighlighter in the search demo) - there a background highlight is applied by a Painter.</p>
+
+<p>You can do something like that manually somewhere in your renderer. If using a JLabel as renderingComponent, you basically have to find parts of the text that need the background highlight and paint the background for that region (below is a code snippet for finding the areas, c&amp;p from the demos example). Alternatively you might consider using a JTextField as rendering component: the adv is that Highlighter (from javax.swing.text) is built-in, the disadv are the usual issues with text comps as renderers ;-)</p>
+
+<pre><code>/**
+ * Finds the rectangles that contain rendered characters that match the
+ * pattern.
+ * 
+ * @param object an optional configuration parameter. This may be null.
+ * @param width width of the area to paint.
+ * @param height height of the area to paint.
+ * @return a &lt;code&gt;List&lt;/code&gt; of &lt;code&gt;Rectangle&lt;/code&gt;s marking characters
+ *         to highlight
+ */
+protected List&lt;Rectangle&gt; findHighlightAreas(JLabel object, int width,
+        int height) {
+    String text = object.getText();
+
+    insets = object.getInsets(insets);
+
+    viewR.x = 0 + insets.left;
+    viewR.y = 0 + insets.bottom;
+    viewR.width = width - insets.right;
+    viewR.height = height - insets.top;
+
+    // Reset the text and view rectangle x any y coordinates.
+    // These are not set to 0 in SwingUtilities.layoutCompoundLabel
+    iconR.x = iconR.y = 0;
+    textR.x = textR.y = 0;
+
+    FontMetrics fm = object.getFontMetrics(object.getFont());
+    String clippedText = SwingUtilities.layoutCompoundLabel(object, fm,
+            text, object.getIcon(), object.getVerticalAlignment(), object
+                    .getHorizontalAlignment(), object
+                    .getVerticalTextPosition(), object
+                    .getHorizontalTextPosition(), viewR, iconR, textR,
+            object.getIconTextGap());
+
+    int xOffset = calculateXOffset(object, viewR, textR);
+
+    String textToSearch = clippedText;
+    // Check to see if the text will be clipped
+    if (!object.getText().equals(clippedText)) {
+        // TODO There has to be a better way that assuming ellipses
+        // are the last characters of the text
+        textToSearch = clippedText.substring(0, clippedText.length() - 3);
+    }
+
+    return createHighlightAreas(textToSearch, fm, xOffset, height);
+}
+
+/**
+ * Creates the rectangles that contain matched characters in the given text.
+ * 
+ * @param text the text to search
+ * @param fm the font metrics of the rendered font
+ * @param xOffset the x offset at which text rendering starts
+ * @param height the height of painted highlights
+ * @return a &lt;code&gt;List&lt;/code&gt; of highlight areas to paint
+ */
+protected List&lt;Rectangle&gt; createHighlightAreas(String text, FontMetrics fm,
+        int xOffset, int height) {
+    SearchPredicate predicate = (SearchPredicate) getHighlightPredicate();
+    Matcher matcher = predicate.getPattern().matcher(text);
+
+    List&lt;Rectangle&gt; highlightAreas = null;
+    int startFrom = 0;
+    while (startFrom &lt; text.length() &amp;&amp; matcher.find(startFrom)) {
+        if (highlightAreas == null) {
+            highlightAreas = new ArrayList&lt;Rectangle&gt;();
+        }
+
+        int start = matcher.start();
+        int end = matcher.end();
+
+        if (start == end) {
+            // empty matcher will cause infinite loop
+            break;
+        }
+
+        startFrom = end;
+
+        int highlightx;
+        int highlightWidth;
+
+        if (start == 0) {
+            // start highlight from the start of the field
+            highlightx = textR.x + xOffset;
+        } else {
+            // Calculate the width of the unhighlighted text to
+            // get the start of the highlighted region.
+            String strToStart = text.substring(0, start);
+            highlightx = textR.x + fm.stringWidth(strToStart) + xOffset;
+        }
+
+        // Get the width of the highlighted region
+        String highlightText = text.substring(start, end);
+        highlightWidth = fm.stringWidth(highlightText);
+
+        highlightAreas.add(new Rectangle(highlightx, 0, highlightWidth,
+                height));
+    }
+
+    if (highlightAreas == null) {
+        highlightAreas = Collections.emptyList();
+    } else {
+        coalesceHighlightAreas(highlightAreas);
+    }
+    return highlightAreas;
+}
+
+/**
+ * Joins highlight rectangles that mark adjacent horizontal areas into
+ * single rectangles. This is useful to renderers that vary horizontally,
+ * such a horizontal gradient - the gradient will not restart when there are
+ * two adjacent highlight areas.
+ * 
+ * @param highlightAreas a &lt;code&gt;List&lt;/code&gt; of &lt;code&gt;Rectangle&lt;/code&gt;s.
+ */
+protected void coalesceHighlightAreas(List&lt;Rectangle&gt; highlightAreas) {
+    Collections.sort(highlightAreas, X_AXIS_RECTANGLE_COMPARATOR);
+
+    int i = 0;
+    while (i &lt; highlightAreas.size() - 1) {
+        Rectangle r1 = highlightAreas.get(i);
+        Rectangle r2 = highlightAreas.get(i + 1);
+
+        if (r1.x + r1.width == r2.x) {
+            r1.width += r2.width;
+            highlightAreas.remove(i + 1);
+        } else {
+            i++;
+        }
+    }
+}
+
+/**
+ * Calculates the x offset of highlights based on component orientation and
+ * text direction.
+ * 
+ * @param component the renderer component
+ * @param viewR the view rectangle of the renderer component
+ * @param textR the text rectangle of the renderer component
+ * @return the number of pixels to offset the highlight from the left edge
+ *         of the component
+ */
+protected int calculateXOffset(JLabel component, Rectangle viewR,
+        Rectangle textR) {
+    int horizAlignment = component.getHorizontalAlignment();
+    boolean leftToRight = component.getComponentOrientation()
+            .isLeftToRight();
+
+    if (horizAlignment == SwingConstants.LEFT
+            || (horizAlignment == SwingConstants.LEADING &amp;&amp; leftToRight)
+            || (horizAlignment == SwingConstants.TRAILING &amp;&amp; !leftToRight)) {
+        return 0;
+    } else if (horizAlignment == SwingConstants.RIGHT
+            || (horizAlignment == SwingConstants.TRAILING &amp;&amp; !leftToRight)
+            || (horizAlignment == SwingConstants.LEADING &amp;&amp; leftToRight)) {
+        return viewR.width - textR.width;
+    } else if (horizAlignment == SwingConstants.CENTER) {
+        return (viewR.width - textR.width) / 2;
+    }
+    throw new AssertionError("Unknown horizonal alignment "
+            + horizAlignment);
+}
+</code></pre>

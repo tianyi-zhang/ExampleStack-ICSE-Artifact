@@ -1,0 +1,321 @@
+<p>There is a much better solution. </p>
+
+<p>First I use the a PreferenceFragment that is fit for the support library. Author Christophe Beyls (thank you!).</p>
+
+<p><strong>Step 1</strong>: Base class: PreferenceFragment for the support library </p>
+
+<pre><code>import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.preference.Preference;
+import android.preference.PreferenceManager;
+import android.preference.PreferenceScreen;
+import android.support.v4.app.DialogFragment;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ListView;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+
+/* A PreferenceFragment f/t support library. @author Christophe Beyls */
+public abstract class PreferenceFragment2 extends DialogFragment {
+
+    private static final int FIRST_REQUEST_CODE = 100;
+    private static final int MSG_BIND_PREFERENCES = 1;
+    private static final int MSG_REQUEST_FOCUS = 2;
+    private static final String PREFERENCES_TAG = "android:preferences";
+    private static final float HC_HORIZONTAL_PADDING = 16;
+
+    @SuppressLint("HandlerLeak")
+    private final Handler mHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+            case MSG_BIND_PREFERENCES:
+                bindPreferences();
+                break;
+            case MSG_REQUEST_FOCUS:
+                mList.focusableViewAvailable(mList);
+                break;
+            }
+        }
+   };
+
+    private boolean mHavePrefs;
+    private boolean mInitDone;
+    private ListView mList;
+    private PreferenceManager mPreferenceManager;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setStyle( android.support.v4.app.DialogFragment.STYLE_NORMAL, R.style.FullScreenDialogTheme);
+        try {
+            Constructor&lt;PreferenceManager&gt; c = PreferenceManager.class.getDeclaredConstructor( Activity.class, int.class);
+            c.setAccessible(true);
+            mPreferenceManager = c.newInstance(this.getActivity(), FIRST_REQUEST_CODE);
+        } catch (Exception e) {
+        }
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater layoutInflater, ViewGroup viewGroup, Bundle savedInstanceState) {
+        ListView listView = new ListView(getActivity());
+        listView.setId(android.R.id.list);
+        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB) {
+            final int horizontalPadding = (int) (HC_HORIZONTAL_PADDING * getResources().getDisplayMetrics().density);
+            listView.setPadding(horizontalPadding, 0, horizontalPadding, 0);
+        }
+        return listView;
+    }
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+        super.onActivityCreated(savedInstanceState);
+
+        if (mHavePrefs) {
+            bindPreferences();
+        }
+
+        mInitDone = true;
+
+        if (savedInstanceState != null) {
+            Bundle container = savedInstanceState.getBundle(PREFERENCES_TAG);
+            if (container != null) {
+                final PreferenceScreen preferenceScreen = getPreferenceScreen();
+                if (preferenceScreen != null) {
+                    preferenceScreen.restoreHierarchyState(container);
+                }
+            }
+        }
+    }
+
+    public void onStop() {
+        super.onStop();
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("dispatchActivityStop");
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+        }
+    }
+
+    public void onDestroyView() {
+        mList = null;
+        mHandler.removeCallbacksAndMessages(null);
+        super.onDestroyView();
+    }
+
+    public void onDestroy() {
+        super.onDestroy();
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("dispatchActivityDestroy");
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+        }
+    }
+
+    public void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        PreferenceScreen preferenceScreen = getPreferenceScreen();
+        if (preferenceScreen != null) {
+            Bundle container = new Bundle();
+            preferenceScreen.saveHierarchyState(container);
+            outState.putBundle(PREFERENCES_TAG, container);
+        }
+    }
+
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("dispatchActivityResult", int.class, int.class, Intent.class);
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager, requestCode, resultCode, data);
+        } catch (Exception e) {
+        }
+    }
+
+    public PreferenceManager getPreferenceManager() {
+        return mPreferenceManager;
+    }
+
+    public void setPreferenceScreen(PreferenceScreen screen) {
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("setPreferences", PreferenceScreen.class);
+            m.setAccessible(true);
+            boolean result = (Boolean) m.invoke(mPreferenceManager, screen);
+            if (result &amp;&amp; (screen != null)) {
+                mHavePrefs = true;
+                if (mInitDone) {
+                    postBindPreferences();
+                }
+            }
+        } catch (Exception e) {
+        }
+    }
+
+    public PreferenceScreen getPreferenceScreen() {
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("getPreferenceScreen");
+            m.setAccessible(true);
+            return (PreferenceScreen) m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public void addPreferencesFromIntent(Intent intent) {
+        requirePreferenceManager();
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("inflateFromIntent", Intent.class, PreferenceScreen.class);
+            m.setAccessible(true);
+            PreferenceScreen screen = (PreferenceScreen) m.invoke(mPreferenceManager, intent, getPreferenceScreen());
+            setPreferenceScreen(screen);
+        } catch (Exception e) {
+        }
+    }
+
+    public void addPreferencesFromResource(int resId) {
+        requirePreferenceManager();
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod("inflateFromResource", Context.class, int.class, PreferenceScreen.class);
+            m.setAccessible(true);
+            PreferenceScreen screen = (PreferenceScreen) m.invoke(mPreferenceManager, getActivity(), resId, getPreferenceScreen());
+            setPreferenceScreen(screen);
+        } catch (Exception e) {
+        }
+    }
+
+    public Preference findPreference(CharSequence key) {
+        if (mPreferenceManager == null) {
+            return null;
+        }
+        return mPreferenceManager.findPreference(key);
+    }
+
+    private void requirePreferenceManager() {
+        if (this.mPreferenceManager == null) {
+            throw new RuntimeException("This should be called after super.onCreate.");
+        }
+    }
+
+    private void postBindPreferences() {
+        if (!mHandler.hasMessages(MSG_BIND_PREFERENCES)) {
+            mHandler.sendEmptyMessage(MSG_BIND_PREFERENCES);
+        }
+    }
+
+    private void bindPreferences() {
+        final PreferenceScreen preferenceScreen = getPreferenceScreen();
+        if (preferenceScreen != null) {
+            preferenceScreen.bind(getListView());
+        }
+    }
+
+    public ListView getListView() {
+        ensureList();
+        return mList;
+    }
+
+    private void ensureList() {
+        if (mList != null) {
+            return;
+        }
+        View root = getView();
+        if (root == null) {
+            throw new IllegalStateException("Content view not yet created");
+        }
+        View rawListView = root.findViewById(android.R.id.list);
+        if (!(rawListView instanceof ListView)) {
+            throw new RuntimeException("Content has view with id attribute 'android.R.id.list' that is not a ListView class");
+        }
+        mList = (ListView) rawListView;
+        if (mList == null) {
+            throw new RuntimeException("Your content must have a ListView whose id attribute is 'android.R.id.list'");
+        }
+        mHandler.sendEmptyMessage(MSG_REQUEST_FOCUS);
+    }
+}
+</code></pre>
+
+<p><strong>Step 2</strong>: Create your own FragmentPreferences based on the above file: </p>
+
+<p><strong>Step 2.1</strong> - Create a layout file: res/layout/preferences_with_toolbar.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout
+    android:id="@+id/preferences_dialog"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:background="@color/white"
+    android:orientation="vertical"&gt;
+
+    &lt;android.support.v7.widget.Toolbar
+        android:id="@+id/preferences_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorPrimary"
+        app:itemTextColor="#333"
+        app:itemIconTint="#333"
+        app:layout_scrollFlags="scroll|enterAlways"
+        app:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
+        app:popupTheme="@style/ThemeOverlay.AppCompat.Light"&gt;
+    &lt;/android.support.v7.widget.Toolbar&gt;
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>Step 2.2</strong> - Create the menu options in the toolbar. None in my case. </p>
+
+<pre><code>&lt;menu xmlns:android="http://schemas.android.com/apk/res/android"
+      xmlns:app="http://schemas.android.com/apk/res-auto"&gt;
+&lt;/menu&gt;
+</code></pre>
+
+<p><strong>Step 2.3</strong> - Create your FragmentPreferences</p>
+
+<pre><code>public class FragmentUserPreferences extends PreferenceFragment2 implements SharedPreferences.OnSharedPreferenceChangeListener {
+    View rootView = null; 
+    Preference letterSizePref;
+
+@Override
+public View onCreateView( LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    // Access the main layout file
+    rootView = inflater.inflate( R.layout.preferences_with_toolbar, container, false);
+    Toolbar toolbar = (Toolbar) rootView.findViewById( R.id.preferences_toolbar);
+    toolbar.setNavigationIcon(R.drawable.ic_action_back);
+    toolbar.setNavigationOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+            dismiss();
+        }
+    });
+    toolbar.inflateMenu( R.menu.dialog_toolbar_empty);
+    toolbar.setTitle("Preferences");
+    View view = super.onCreateView( inflater, container, savedInstanceState);
+    view.setBackgroundColor(Color.WHITE);
+    PreferenceManager.getDefaultSharedPreferences( getActivity()).registerOnSharedPreferenceChangeListener( this);
+    LinearLayout prefLayout = (LinearLayout) rootView.findViewById( R.id.preferences_dialog);
+    prefLayout.addView( view);
+
+    // Load the preferences from an XML resource
+    addPreferencesFromResource( R.xml.preferences);
+
+    letterSizePref= (Preference) findPreference( "letterSize");
+
+    // From here this is your default user settings stuff 
+    // ... 
+    return rootView; 
+}
+// etc. 
+</code></pre>

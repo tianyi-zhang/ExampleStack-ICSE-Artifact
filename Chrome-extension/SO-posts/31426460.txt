@@ -1,0 +1,239 @@
+<p>Parse.com only support facebook and twitter yet but not google+, for that you have to implement your own using authentication at cloud (parse.com) side</p>
+
+<p><strong>This is long process so be patient</strong> </p>
+
+<p><strong>Follow this steps</strong></p>
+
+<p>1) get google profile information for that <strong>implement this necessary functions</strong></p>
+
+<p>put in onCreate()</p>
+
+<pre><code>mGoogleApiClient = new GoogleApiClient.Builder(getActivity())
+    .addConnectionCallbacks(this) //lets impement ConnectionCallbacks
+    .addOnConnectionFailedListener(this).addApi(Plus.API) // lets implement OnConnectionFailedListener
+    .addScope(Plus.SCOPE_PLUS_LOGIN).build();
+    mGoogleApiClient.connect();
+</code></pre>
+
+<p><strong>2) method of implemented OnConnectionFailedListener</strong></p>
+
+<pre><code>@Override
+public void onConnectionFailed(ConnectionResult result) {
+    // TODO Auto-generated method stub
+    if (!result.hasResolution()) {
+        GooglePlayServicesUtil.getErrorDialog(result.getErrorCode(), getActivity(),
+                0).show();
+        return;
+    }
+
+    if (!mIntentInProgress) {
+        // Store the ConnectionResult for later usage
+        mConnectionResult = result;
+
+        if (mSignInClicked) {
+            // The user has already clicked 'sign-in' so we attempt to
+            // resolve all
+            // errors until the user is signed in, or they cancel.
+            resolveSignInError();
+        }
+    }
+}
+
+/**
+ * Method to resolve any signin errors for google plus
+ * */
+private void resolveSignInError() {
+    if (mConnectionResult.hasResolution()) {
+        try {
+            mIntentInProgress = true;
+            mConnectionResult.startResolutionForResult(getActivity(), RC_SIGN_IN);
+        } catch (SendIntentException e) {
+            mIntentInProgress = false;
+            mGoogleApiClient.connect();
+        }
+    }
+}
+</code></pre>
+
+<p>3) <strong>call on google+ button click</strong></p>
+
+<pre><code>private void loginUsingGoolgePlus() {
+    // TODO Auto-generated method stub
+    if (!mGoogleApiClient.isConnecting()) {
+        mSignInClicked = true;
+        resolveSignInError();
+    }
+
+}
+</code></pre>
+
+<p><strong>4) methods of implemented ConnectionCallbacks</strong></p>
+
+<pre><code>@Override
+public void onConnected(Bundle arg0) {
+    // TODO Auto-generated method stub
+    mSignInClicked = false;
+    Toast.makeText(getActivity(), "User is connected!", Toast.LENGTH_LONG).show();
+
+    // Get user's information
+    getProfileInformation();
+
+}
+@Override
+public void onConnectionSuspended(int arg0) {
+    // TODO Auto-generated method stub
+    mGoogleApiClient.connect();
+
+}
+</code></pre>
+
+<p><strong>5) this method will give you profile information</strong></p>
+
+<pre><code>/**
+ * Fetching user's information name, email, profile pic
+ * */
+private void getProfileInformation() {
+    try {
+        if (Plus.PeopleApi.getCurrentPerson(mGoogleApiClient) != null) {
+            Person currentPerson = Plus.PeopleApi
+                    .getCurrentPerson(mGoogleApiClient);
+            String personName = currentPerson.getDisplayName();
+            String personPhotoUrl = currentPerson.getImage().getUrl();
+            String personGooglePlusProfile = currentPerson.getUrl();
+            final String email = Plus.AccountApi.getAccountName(mGoogleApiClient);
+
+            Log.e(TAG, "Name: " + personName + ", plusProfile: "
+                    + personGooglePlusProfile + ", email: " + email
+                    + ", Image: " + personPhotoUrl);
+
+            // by default the profile url gives 50x50 px image only
+            // we can replace the value with whatever dimension we want by
+            // replacing sz=X
+            personPhotoUrl = personPhotoUrl.substring(0,
+                    personPhotoUrl.length() - 2)
+                    + PROFILE_PIC_SIZE;
+
+            new Thread(new Runnable() {
+
+                @Override
+                public void run() {
+                    // TODO Auto-generated method stub
+                    googleAuthWithParse(email);
+                }
+            }).start();
+        } else {
+            Toast.makeText(getActivity(),
+                    "Person information is null", Toast.LENGTH_LONG).show();
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+</code></pre>
+
+<p><strong>6) this is important</strong> 
+here we generate one token and using this and email id, we call script function  <code>accessGoogleUser</code> at cloud side (Parse.com) (this cloud code nothing but javascript <code>main.js</code></p>
+
+<p>-<code>accessGoogleUser</code> will give you accessToken using this accessToken you can do login or signup</p>
+
+<pre><code>protected void googleAuthWithParse(String email) {
+    // TODO Auto-generated method stub
+     String scopes = "oauth2:" + Scopes.PLUS_LOGIN + " ";
+     String googleAuthCode = null;
+    try {
+        googleAuthCode = GoogleAuthUtil.getToken(
+                 getActivity(),                                           // Context context
+                 email,                                             // String email
+                 scopes,                                            // String scope
+                 null                                      // Bundle bundle
+         );
+    } catch (UserRecoverableAuthException e1) {
+        // TODO Auto-generated catch block
+        e1.printStackTrace();
+    } catch (IOException e1) {
+        // TODO Auto-generated catch block
+        e1.printStackTrace();
+    } catch (GoogleAuthException e1) {
+        // TODO Auto-generated catch block
+        e1.printStackTrace();
+    }
+
+     //Log.i(TAG, "Authentication Code: " + googleAuthCode);
+
+    final HashMap&lt;String, Object&gt; params = new HashMap&lt;String, Object&gt;();
+    params.put("code", googleAuthCode);
+    params.put("email", email);
+    //loads the Cloud function to create a Google user
+    ParseCloud.callFunctionInBackground("accessGoogleUser", params, new FunctionCallback&lt;Object&gt;() {
+        @Override
+        public void done(Object returnObj, ParseException e) {
+            if (e == null) {
+                Log.e("AccessToken", returnObj.toString());
+                ParseUser.becomeInBackground(returnObj.toString(), new LogInCallback() {
+                    public void done(final ParseUser user, ParseException e) {
+                        if (user != null &amp;&amp; e == null) {
+                            showToast("The Google user validated");
+
+                            if(user.isNew()){
+                                  //isNew means firsttime   
+                            }else{
+
+                              loginSuccess();
+                            }
+                        } else if (e != null) {
+                            showToast("There was a problem creating your account.");
+                            e.printStackTrace();
+                            mGoogleApiClient.disconnect();
+                        } else
+                            showToast("The Google token could not be validated");
+                    }
+                });
+            } else {
+                        if (e != null) {
+
+                            try {
+                                JSONObject jsonObject = new JSONObject(e.getMessage());
+                                showToast(jsonObject.getString("message"));
+                            } catch (JSONException e1) {
+                                // TODO Auto-generated catch block
+                                e1.printStackTrace();
+                            }
+                            e.printStackTrace();
+                            mGoogleApiClient.disconnect();
+                        }
+            }
+        }
+    });
+}
+</code></pre>
+
+<p><strong>7) How to upload cloud code</strong> <code>main.js</code> <strong>at parse.com cloud</strong></p>
+
+<p>read carefully and download Parse.exe and  from <a href="https://parse.com/docs/js/guide#command-line-installation" rel="nofollow">here</a> after download do</p>
+
+<p><code>place parse.exe and ParseConsole.exe in ':\Windows\System32' folder. Then search for Windows PowerShell in the start menu and run it as an administrator. Wait for the prompt in the window (mine was a blue window) to indicate it is in the ':\Windows\System32' folder. Then type '.\ParseConsole.exe' and press enter.</code></p>
+
+<p><strong>this how we upload files</strong></p>
+
+<p>below files will create at C:\Users\xxxx while follow <code>image steps</code></p>
+
+<pre><code>1) cloud
+   - main.js
+2) config
+  ? global.json
+3) public
+  ? index.html
+</code></pre>
+
+<p><img src="http://i.stack.imgur.com/U0h4j.png" alt="enter image description here"></p>
+
+<p><strong>8) download main.js</strong> from <a href="https://github.com/kishorejethava/goolge-with-parse.com/tree/master" rel="nofollow">here</a> and replace with default <code>main.js</code> which created in <code>cloud folder</code></p>
+
+<p><strong>Note :</strong> don't forgot to add your client id and secret into this <code>main.js</code></p>
+
+<p><strong>9) check this too.!!</strong></p>
+
+<p><code>Require Revocable Sessions should be false</code> in parse data browser -> settings 
+->General</p>
+
+<p><strong>Ask me for any doubt. i am ready for help.!!</strong></p>

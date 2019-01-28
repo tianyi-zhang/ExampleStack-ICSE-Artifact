@@ -1,0 +1,126 @@
+<p>Thanks to M. Denium and thanks to <a href="http://www.codesandnotes.be/2014/10/31/restful-authentication-using-spring-security-on-spring-boot-and-jquery-as-a-web-client/" rel="nofollow">this guide</a>, I could find the solution.</p>
+
+<p>First, I had a configuration problem with the login form itself. As the backend has a context-path set to <code>/api</code>, the custom form should have submitted the form params to <code>/api/login</code> but I was actually submitting the data to <code>/api/login/</code> (Notice the extra <code>/</code> at the end).</p>
+
+<p>As a result, I was unknowingly trying to access a protected resource! Hence, the request was handled by the default <code>AuthenticationEntryPoint</code> which default behavior is to redirect the user to the login page.</p>
+
+<p>As a solution, I implemented a custom AuthenticationEntryPoint : </p>
+
+<pre><code>private AuthenticationEntryPoint authenticationEntryPoint() {
+  return new AuthenticationEntryPoint() {
+    @Override
+    public void commence(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, AuthenticationException e) throws IOException, ServletException {
+      httpServletResponse.getWriter().append("Not authenticated");
+      httpServletResponse.setStatus(401);
+    }
+  };
+}
+</code></pre>
+
+<p>Then used it in the configuration : </p>
+
+<pre><code>http
+  .exceptionHandling()
+  .authenticationEntryPoint(authenticationEntryPoint())
+</code></pre>
+
+<p>and I did the same for the other handlers : </p>
+
+<pre><code>@Configuration
+@Order(SecurityProperties.ACCESS_OVERRIDE_ORDER)
+protected static class SecurityConfiguration extends WebSecurityConfigurerAdapter {
+
+  @Override
+  protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+    auth.inMemoryAuthentication()
+        .withUser("user").password("password").roles("ADMIN");
+  }
+
+  @Override
+  public void configure(HttpSecurity http) throws Exception {
+    http
+        .authorizeRequests()
+          .anyRequest().authenticated()
+        .and()
+          .formLogin()
+          .successHandler(successHandler())
+          .failureHandler(failureHandler())
+        .and()
+          .exceptionHandling()
+            .accessDeniedHandler(accessDeniedHandler())
+            .authenticationEntryPoint(authenticationEntryPoint())
+        .and()
+          .csrf().csrfTokenRepository(csrfTokenRepository()).and().addFilterAfter(csrfHeaderFilter(), CsrfFilter.class)
+    ;
+  }
+
+  private AuthenticationSuccessHandler successHandler() {
+    return new AuthenticationSuccessHandler() {
+      @Override
+      public void onAuthenticationSuccess(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, Authentication authentication) throws IOException, ServletException {
+        httpServletResponse.getWriter().append("OK");
+        httpServletResponse.setStatus(200);
+      }
+    };
+  }
+
+  private AuthenticationFailureHandler failureHandler() {
+    return new AuthenticationFailureHandler() {
+      @Override
+      public void onAuthenticationFailure(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, AuthenticationException e) throws IOException, ServletException {
+        httpServletResponse.getWriter().append("Authentication failure");
+        httpServletResponse.setStatus(401);
+      }
+    };
+  }
+
+  private AccessDeniedHandler accessDeniedHandler() {
+    return new AccessDeniedHandler() {
+      @Override
+      public void handle(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, AccessDeniedException e) throws IOException, ServletException {
+        httpServletResponse.getWriter().append("Access denied");
+        httpServletResponse.setStatus(403);
+      }
+    };
+  }
+
+  private AuthenticationEntryPoint authenticationEntryPoint() {
+    return new AuthenticationEntryPoint() {
+      @Override
+      public void commence(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, AuthenticationException e) throws IOException, ServletException {
+        httpServletResponse.getWriter().append("Not authenticated");
+        httpServletResponse.setStatus(401);
+      }
+    };
+  }
+
+  private Filter csrfHeaderFilter() {
+    return new OncePerRequestFilter() {
+      @Override
+      protected void doFilterInternal(HttpServletRequest request,
+                                      HttpServletResponse response, FilterChain filterChain)
+          throws ServletException, IOException {
+        CsrfToken csrf = (CsrfToken) request.getAttribute(CsrfToken.class
+            .getName());
+        if (csrf != null) {
+          Cookie cookie = WebUtils.getCookie(request, "XSRF-TOKEN");
+          String token = csrf.getToken();
+          if (cookie == null || token != null
+              &amp;&amp; !token.equals(cookie.getValue())) {
+            cookie = new Cookie("XSRF-TOKEN", token);
+            cookie.setPath("/");
+            response.addCookie(cookie);
+          }
+        }
+        filterChain.doFilter(request, response);
+      }
+    };
+  }
+
+  private CsrfTokenRepository csrfTokenRepository() {
+    HttpSessionCsrfTokenRepository repository = new HttpSessionCsrfTokenRepository();
+    repository.setHeaderName("X-XSRF-TOKEN");
+    return repository;
+  }
+}
+</code></pre>

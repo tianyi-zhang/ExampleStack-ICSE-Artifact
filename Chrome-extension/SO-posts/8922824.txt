@@ -1,0 +1,122 @@
+<p>While I'm not seeing any issues running the example code you posted, if you're not seeing consistent results in your application it's not too tricky to create your own scroll controller.  Here's an example implementation you could use:</p>
+
+<pre><code>private class ScrollPositioner {
+    private static final int SCROLL_DURATION = 20;
+    private static final int DIR_UP = 1;
+    private static final int DIR_DOWN = 2;
+
+    int mTargetPosition = AdapterView.INVALID_POSITION;
+    int mDirection = AdapterView.INVALID_POSITION;
+    int mLastSeenPosition = AdapterView.INVALID_POSITION;
+    int mExtraScroll;
+    GridView mGrid;
+
+    public ScrollPositioner(GridView grid) {
+        mGrid = grid;
+        mExtraScroll = ViewConfiguration.get(mGrid.getContext()).getScaledFadingEdgeLength();
+    }
+
+    Handler mHandler = new Handler();
+    Runnable mScroller = new Runnable() {
+        public void run() {
+            int firstPos = mGrid.getFirstVisiblePosition();
+            switch(mDirection) {
+            case DIR_UP: {
+                if (firstPos == mLastSeenPosition) {
+                    // No new views, let things keep going.
+                    mHandler.postDelayed(mScroller, SCROLL_DURATION);
+                    return;
+                }
+
+                final View firstView = mGrid.getChildAt(0);
+                if (firstView == null) {
+                    return;
+                }
+                final int firstViewTop = firstView.getTop();
+                final int extraScroll = firstPos &gt; 0 ? mExtraScroll : mGrid.getPaddingTop();
+
+                mGrid.smoothScrollBy(firstViewTop - extraScroll, SCROLL_DURATION);
+
+                mLastSeenPosition = firstPos;
+
+                if (firstPos &gt; mTargetPosition) {
+                    mHandler.postDelayed(mScroller, SCROLL_DURATION);
+                }
+                break;
+            }
+
+            case DIR_DOWN: {
+                final int lastViewIndex = mGrid.getChildCount() - 1;
+                final int lastPos = firstPos + lastViewIndex;
+
+                if (lastViewIndex &lt; 0) {
+                    return;
+                }
+
+                if (lastPos == mLastSeenPosition) {
+                    // No new views, let things keep going.
+                    mHandler.postDelayed(mScroller, SCROLL_DURATION);
+                    return;
+                }
+
+                final View lastView = mGrid.getChildAt(lastViewIndex);
+                final int lastViewHeight = lastView.getHeight();
+                final int lastViewTop = lastView.getTop();
+                final int lastViewPixelsShowing = mGrid.getHeight() - lastViewTop;
+                final int extraScroll = lastPos &lt; mGrid.getAdapter().getCount() - 1 ? mExtraScroll : mGrid.getPaddingBottom();
+
+                mGrid.smoothScrollBy(lastViewHeight - lastViewPixelsShowing + extraScroll, SCROLL_DURATION);
+
+                mLastSeenPosition = lastPos;
+                if (lastPos &lt; mTargetPosition) {
+                    mHandler.postDelayed(mScroller, SCROLL_DURATION);
+                }
+                break;
+            }
+
+            default:
+                break;
+            }
+        }
+    };
+
+    public void scrollToPosition(int position) {
+        mTargetPosition = position;
+        mLastSeenPosition = AdapterView.INVALID_POSITION;
+
+        if(position &lt; mGrid.getFirstVisiblePosition()) {
+            mDirection = DIR_UP;
+        } else if (position &gt; mGrid.getLastVisiblePosition()) {
+            mDirection = DIR_DOWN;
+        } else {
+            return;
+        }
+        mHandler.post(mScroller);
+    }
+}
+</code></pre>
+
+<p>Here's a snippet from the example you linked that includes where this new class to do the scrolling in place of the framework implementation:</p>
+
+<pre><code>GridView g;
+boolean t= false;
+@Override
+public void onBackPressed() {
+    //Instantiate and attach the custom positioner
+    if(mPositioner == null) {
+        mPositioner = new ScrollPositioner(g);
+    }
+    //Use the custom object to scroll the view
+    mPositioner.scrollToPosition(0);
+    if(t) {
+        super.onBackPressed();
+    }
+    else {
+        t = true;
+    }
+}
+</code></pre>
+
+<p>If you want to add a feature where the selected position is always scrolled to the top even when the scrolling direction is down, you could do that.  <strong>This is not something the framework's implementation is designed to do</strong>, but you could accomplish it by adding some code in <code>DIR_DOWN</code> to continue scrolling until the first visible position matches target (like <code>DIR_UP</code> does).  You must also beware of the case where the scrolling ends before the position reaches the top, so you aren't constantly posting the handler in cases where you will never get a different result.</p>
+
+<p>HTH</p>

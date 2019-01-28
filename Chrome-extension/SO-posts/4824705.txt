@@ -1,0 +1,158 @@
+<p>The selected answer is the best approach. For those of you that don't want to code it, here is how I have done it.</p>
+
+<p>Firstly, either I don't understand org.apache.http.impl.cookie.PublicSuffixFilter, or there is a bug in it. </p>
+
+<p>Basically if you pass in google.com it correctly returns false. If you pass in google.com.au it incorrectly returns true. The bug is in the code that applies patterns, e.g. *.au. </p>
+
+<p>Here is the checker code based on org.apache.http.impl.cookie.PublicSuffixFilter:</p>
+
+<pre><code>public class TopLevelDomainChecker  {
+    private Set&lt;String&gt; exceptions;
+    private Set&lt;String&gt; suffixes;
+
+    public void setPublicSuffixes(Collection&lt;String&gt; suffixes) {
+        this.suffixes = new HashSet&lt;String&gt;(suffixes);
+    }
+    public void setExceptions(Collection&lt;String&gt; exceptions) {
+        this.exceptions = new HashSet&lt;String&gt;(exceptions);
+    }
+
+    /**
+     * Checks if the domain is a TLD.
+     * @param domain
+     * @return
+     */
+    public boolean isTLD(String domain) {
+        if (domain.startsWith(".")) 
+            domain = domain.substring(1);
+
+        // An exception rule takes priority over any other matching rule.
+        // Exceptions are ones that are not a TLD, but would match a pattern rule
+        // e.g. bl.uk is not a TLD, but the rule *.uk means it is. Hence there is an exception rule
+        // stating that bl.uk is not a TLD. 
+        if (this.exceptions != null &amp;&amp; this.exceptions.contains(domain)) 
+            return false;
+
+
+        if (this.suffixes == null) 
+            return false;
+
+        if (this.suffixes.contains(domain)) 
+            return true;
+
+        // Try patterns. ie *.jp means that boo.jp is a TLD
+        int nextdot = domain.indexOf('.');
+        if (nextdot == -1)
+            return false;
+        domain = "*" + domain.substring(nextdot);
+        if (this.suffixes.contains(domain)) 
+            return true;
+
+        return false;
+    }
+
+
+    public String extractSLD(String domain)
+    {
+        String last = domain;
+        boolean anySLD = false;
+        do
+        {
+            if (isTLD(domain))
+            {
+                if (anySLD)
+                    return last;
+                else
+                    return "";
+            }
+            anySLD = true;
+            last = domain;
+            int nextDot = domain.indexOf(".");
+            if (nextDot == -1)
+                return "";
+            domain = domain.substring(nextDot+1);
+        } while (domain.length() &gt; 0);
+        return "";
+    }
+}
+</code></pre>
+
+<p>And the parser. I renamed it.</p>
+
+<pre><code>/**
+ * Parses the list from &lt;a href="http://publicsuffix.org/"&gt;publicsuffix.org
+ * Copied from http://svn.apache.org/repos/asf/httpcomponents/httpclient/trunk/httpclient/src/main/java/org/apache/http/impl/cookie/PublicSuffixListParser.java
+ */
+public class TopLevelDomainParser {
+    private static final int MAX_LINE_LEN = 256;
+    private final TopLevelDomainChecker filter;
+
+    TopLevelDomainParser(TopLevelDomainChecker filter) {
+        this.filter = filter;
+    }
+    public void parse(Reader list) throws IOException {
+        Collection&lt;String&gt; rules = new ArrayList();
+        Collection&lt;String&gt; exceptions = new ArrayList();
+        BufferedReader r = new BufferedReader(list);
+        StringBuilder sb = new StringBuilder(256);
+        boolean more = true;
+        while (more) {
+            more = readLine(r, sb);
+            String line = sb.toString();
+            if (line.length() == 0) continue;
+            if (line.startsWith("//")) continue; //entire lines can also be commented using //
+            if (line.startsWith(".")) line = line.substring(1); // A leading dot is optional
+            // An exclamation mark (!) at the start of a rule marks an exception to a previous wildcard rule
+            boolean isException = line.startsWith("!"); 
+            if (isException) line = line.substring(1);
+
+            if (isException) {
+                exceptions.add(line);
+            } else {
+                rules.add(line);
+            }
+        }
+
+        filter.setPublicSuffixes(rules);
+        filter.setExceptions(exceptions);
+    }
+    private boolean readLine(Reader r, StringBuilder sb) throws IOException {
+        sb.setLength(0);
+        int b;
+        boolean hitWhitespace = false;
+        while ((b = r.read()) != -1) {
+            char c = (char) b;
+            if (c == '\n') break;
+            // Each line is only read up to the first whitespace
+            if (Character.isWhitespace(c)) hitWhitespace = true;
+            if (!hitWhitespace) sb.append(c);
+            if (sb.length() &gt; MAX_LINE_LEN) throw new IOException("Line too long"); // prevent excess memory usage
+        }
+        return (b != -1);
+    }
+}
+</code></pre>
+
+<p>And finally, how to use it</p>
+
+<pre><code>    FileReader fr = new FileReader("effective_tld_names.dat.txt");
+    TopLevelDomainChecker checker = new TopLevelDomainChecker();
+    TopLevelDomainParser parser = new TopLevelDomainParser(checker);
+    parser.parse(fr);
+    boolean result;
+    result = checker.isTLD("com"); // true
+    result = checker.isTLD("com.au"); // true
+    result = checker.isTLD("ltd.uk"); // true
+    result = checker.isTLD("google.com"); // false
+    result = checker.isTLD("google.com.au"); // false
+    result = checker.isTLD("metro.tokyo.jp"); // false
+    String sld;
+    sld = checker.extractSLD("com"); // ""
+    sld = checker.extractSLD("com.au"); // ""
+    sld = checker.extractSLD("google.com"); // "google.com"
+    sld = checker.extractSLD("google.com.au"); // "google.com.au"
+    sld = checker.extractSLD("www.google.com.au"); // "google.com.au"
+    sld = checker.extractSLD("www.google.com"); // "google.com"
+    sld = checker.extractSLD("foo.bar.hokkaido.jp"); // "foo.bar.hokkaido.jp"
+    sld = checker.extractSLD("moo.foo.bar.hokkaido.jp"); // "foo.bar.hokkaido.jp"
+</code></pre>

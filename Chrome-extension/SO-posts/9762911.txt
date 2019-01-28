@@ -1,0 +1,104 @@
+<p>For your second question: create a new <code>final</code> to use in your runnable</p>
+
+<pre><code>while ((line = r.readLine()) != null) {
+    total.append(line);
+    Log.d("Server response", line.toString());
+    final String status = line;
+    handler.post(new Runnable() {
+        public void run() {
+            if (status.contentEquals("status:open")) {
+                myTextView.setText(R.string.status_open);
+            } else {
+                myTextView.setText(R.string.status_closed);
+            }
+        }
+    });
+}
+</code></pre>
+
+<p>For your first question:
+You've picked quite a complicated task. Your Thread needs to check some condition that you set from outside so the thread can decide what he needs to do next. From those buttons you could change e.g. an <a href="https://developer.android.com/reference/java/util/concurrent/atomic/AtomicInteger.html" rel="nofollow">AtomicInteger</a> that is 0 as long as there is nothing to do, 1 if you want to switch on the light, 2 ... etc</p>
+
+<p>Your Thread would check the value, reset it to 0 (in one <code>.getAndSet(0)</code>) and do what he is supposed to do.</p>
+
+<p>Edit: that's how it would look like</p>
+
+<p><strong>the Thread</strong></p>
+
+<pre><code>public class LoopingNetworkThread extends Thread {
+    public static final int TASK_END = -1;
+    public static final int TASK_NOOP = 0;
+    public static final int TASK_LIGHTS_ON = 1;
+    public static final int TASK_LIGHTS_OFF = 2;
+
+    private final AtomicInteger mNextTask = new AtomicInteger(0);
+
+    /* Executed in this threads context */
+    @Override
+    public void run() {
+        openSocket();
+        int currentTask;
+        while ((currentTask = mNextTask.getAndSet(TASK_NOOP)) != TASK_END) {
+            switch (currentTask) {
+                case TASK_LIGHTS_ON:
+                    sendLightsOn();
+                    break;
+                case TASK_LIGHTS_OFF:
+                    sendLightsOff();
+                    break;
+                default:
+                    keepAlive();
+                    break;
+            }
+            // depending on your requirements sleep some time inbetween.
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                // ignore
+            }
+        }
+        // the while ends once you set task to TASK_END
+        closeSocket();
+    }
+
+    private void openSocket() {  }
+    private void closeSocket() {  }
+    private void keepAlive() {  }
+    private void sendLightsOn() {  }
+    private void sendLightsOff() {  }
+
+    /* Executed in a different thread context */
+    public int setNextTask(int task){
+        // return what we overwrite here, maybe that is useful.
+        return mNextTask.getAndSet(task);
+    }
+}
+</code></pre>
+
+<p><strong>your Activity</strong></p>
+
+<pre><code>public class YourActivity extends Activity {
+    private LoopingNetworkThread mThread;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        mThread = new LoopingNetworkThread();
+        View startButton = findViewById(R.id.button1);
+        View stopButton = findViewById(R.id.button2);
+        startButton.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mThread.start();
+            }
+        });
+        stopButton.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mThread.setNextTask(LoopingNetworkThread.TASK_END);
+            }
+        });
+    }
+}
+</code></pre>

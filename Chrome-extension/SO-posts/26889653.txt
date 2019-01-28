@@ -1,0 +1,117 @@
+<p>Update:</p>
+
+<p>This seems to be a known bug: <a href="https://bugs.openjdk.java.net/browse/JDK-6193686" rel="nofollow">ComponentColorModel.getNormalizedComponents() does not handle 32-bit TYPE_INT</a>, reported 10 (TEN!) years ago, against Java 5.</p>
+
+<p>The upside, Java is now partly open-sourced. We can now propose a patch, and with some luck it will be evaluated for Java 9 or so... :-P</p>
+
+<p>The bug proposes the following workaround:</p>
+
+<blockquote>
+  <p>Subclass ComponentColorModel and override getNormalizedComponents() to properly handle 32 bit per sample TYPE_INT data by dividing the incoming pixel value by 'Math.pow(2, 32) - 1' when dealing with this data, rather than using the erroneous bit shift. (Using a floating point value is ok, since getNormalizedComponents() converts everything to floating point anyway).</p>
+</blockquote>
+
+<p>My fix is a little different, but the basic idea is the same (feel free to optimize as you see fit :-)):</p>
+
+<pre><code>private static class TypeIntComponentColorModel extends ComponentColorModel {
+    public TypeIntComponentColorModel(final ColorSpace cs, final boolean alpha) {
+        super(cs, alpha, false, alpha ? TRANSLUCENT : OPAQUE, DataBuffer.TYPE_INT);
+    }
+
+    @Override
+    public float[] getNormalizedComponents(Object pixel, float[] normComponents, int normOffset) {
+        int numComponents = getNumComponents();
+
+        if (normComponents == null) {
+            normComponents = new float[numComponents + normOffset];
+        }
+
+        switch (transferType) {
+            case DataBuffer.TYPE_INT:
+                int[] ipixel = (int[]) pixel;
+                for (int c = 0, nc = normOffset; c &lt; numComponents; c++, nc++) {
+                    normComponents[nc] = ((float) (ipixel[c] &amp; 0xffffffffl)) / ((float) ((1l &lt;&lt; getComponentSize(c)) - 1));
+                }
+                break;
+            default:
+                throw new UnsupportedOperationException("This method has not been implemented for transferType " + transferType);
+        }
+
+        return normComponents;
+    }
+}
+</code></pre>
+
+<hr>
+
+<p>Consider the below code. If run as is, for me it displays a mostly black image, with the upper right quarter white overlayed with a black circle. If I change the datatype to <code>TYPE_USHORT</code> (uncomment the <code>transferType</code> line), it displays half/half white and a linear gradient from black to white, with an orange circle in the middle (as it should).</p>
+
+<p>Using <code>ColorConvertOp</code> to convert to a standard type seems to make no difference.</p>
+
+<pre><code>public class Int32Image {
+    public static void main(String[] args) {
+        // Define dimensions and layout of the image
+        int w = 300;
+        int h = 200;
+        int transferType = DataBuffer.TYPE_INT;
+//        int transferType = DataBuffer.TYPE_USHORT;
+
+        ColorModel colorModel = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_sRGB), false, false, Transparency.OPAQUE, transferType);
+        WritableRaster raster = colorModel.createCompatibleWritableRaster(w, h);
+        BufferedImage image = new BufferedImage(colorModel, raster, false, null);
+
+        // Start with linear gradient
+        if (raster.getTransferType() == DataBuffer.TYPE_INT) {
+            DataBufferInt buffer = (DataBufferInt) raster.getDataBuffer();
+            int[] data = buffer.getData();
+
+            for (int y = 0; y &lt; h; y++) {
+                int value = (int) (y * 0xffffffffL / h);
+
+                for (int x = 0; x &lt; w; x++) {
+                    int offset = y * w * 3 + x * 3;
+                    data[offset] = value;
+                    data[offset + 1] = value;
+                    data[offset + 2] = value;
+                }
+            }
+        }
+        else if (raster.getTransferType() == DataBuffer.TYPE_USHORT) {
+            DataBufferUShort buffer = (DataBufferUShort) raster.getDataBuffer();
+            short[] data = buffer.getData();
+
+            for (int y = 0; y &lt; h; y++) {
+                short value = (short) (y * 0xffffL / h);
+
+                for (int x = 0; x &lt; w; x++) {
+                    int offset = y * w * 3 + x * 3;
+                    data[offset] = value;
+                    data[offset + 1] = value;
+                    data[offset + 2] = value;
+                }
+            }
+        }
+
+        // Paint something (in  color)
+        Graphics2D g = image.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, w / 2, h);
+        g.setColor(Color.ORANGE);
+        g.fillOval(100, 50, w - 200, h - 100);
+        g.dispose();
+
+        System.out.println("image = " + image);
+
+//        image = new ColorConvertOp(null).filter(image, new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB));
+
+        JFrame frame = new JFrame();
+        frame.add(new JLabel(new ImageIcon(image)));
+        frame.pack();
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+    }
+}
+</code></pre>
+
+<p>To me, this seems to suggest that there's something wrong with the <code>ColorModel</code> using transferType <code>TYPE_INT</code>. But I'd be happy to be wrong. ;-)</p>
+
+<p>Another thing you could try, is to scale the values down to 16 bit, use a <code>TYPE_USHORT</code> raster and color model, and see if that makes a difference. I bet it will, but I'm too lazy to try. ;-)</p>

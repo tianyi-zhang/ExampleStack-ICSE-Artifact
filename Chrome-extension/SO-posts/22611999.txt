@@ -1,0 +1,295 @@
+<p>Check out my code from <a href="https://github.com/AmanAgnihotri/SnakeGame/blob/master/game/SnakePanel.java" rel="nofollow">here</a>, to get a hint as to how to paint stuff in a game loop properly.</p>
+
+<p>Basically what you need to take care of is double buffering to prevent any flickering and also repainting the background so that you don't leave out any trail of rectangles.</p>
+
+<p>You can also check out the <a href="http://fivedots.coe.psu.ac.th/~ad/jg/" rel="nofollow">Killer Game Programming in Java</a> online book, which can help you learn the game programming concepts and their implementation.</p>
+
+<p>The concept of double buffering is simple. Since painting on the screen takes more time than updating the states of the objects in the gameplay, we use two canvas to prevent any flickering issues which arise when objects are painted directly on the screen.  </p>
+
+<p>When the object states are updated in the game loop, it is rendered in a background canvas. The background canvas is then copied to the screen which takes less time compared to painting directly on the screen. And while this copying is happening, the object states are updated again and they are rendered on the background canvas again, which is then copied to the screen. Repeat this over and over, and you get the double buffering.<br>
+Basically you keep a buffer of screen which is to be painted and your game renders objects in the buffer which is then copied to the screen.</p>
+
+<p>Here's a code which I think might help you understand the concept:</p>
+
+<pre><code>import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Image;
+import java.awt.Toolkit;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+
+public class GamePanel extends JPanel implements Runnable
+{
+  private static final long serialVersionUID = 6892533030374996243L;
+  public static final int WIDTH = 800;
+  public static final int HEIGHT = 600;
+
+  private Thread animator;
+
+  private volatile boolean running = false;
+  private volatile boolean isGameOver = false;
+  private volatile boolean isUserPaused = false;
+  private volatile boolean isWindowPaused = false;
+
+  private Graphics dbg;
+  private Image dbImage = null;
+
+  private static final int NO_DELAYS_PER_YIELD = 16;
+  private static final int MAX_FRAME_SKIPS = 5;
+
+  private static final Color backgroundColor = new Color(245, 245, 245);
+
+  private static long fps = 30;
+  private static long period = 1000000L * (long) 1000.0 / fps;
+
+  private static volatile boolean isPainted = false;
+
+  public GamePanel()
+  {
+    setBackground(backgroundColor);
+    setPreferredSize(new Dimension(WIDTH, HEIGHT));
+
+    setFocusable(true);
+    requestFocus();
+    readyForPause();
+
+    // Add key listeners here...
+  }
+
+  public void addNotify()
+  {
+    super.addNotify();
+    startGame();
+  }
+
+  void startGame()
+  {
+    if (animator == null || !running)
+    {
+      animator = new Thread(this);
+      animator.start();
+    }
+  }
+
+  void stopGame()
+  {
+    running = false;
+  }
+
+  private void readyForPause()
+  {
+    addKeyListener(new KeyAdapter()
+    {
+      public void keyPressed(KeyEvent e)
+      {
+        int keyCode = e.getKeyCode();
+        if ((keyCode == KeyEvent.VK_ESCAPE) || (keyCode == KeyEvent.VK_Q)
+            || (keyCode == KeyEvent.VK_END) || (keyCode == KeyEvent.VK_P)
+            || ((keyCode == KeyEvent.VK_C) &amp;&amp; e.isControlDown()))
+        {
+          if (!isUserPaused)
+            setUserPaused(true);
+          else
+            setUserPaused(false);
+        }
+      }
+    });
+  }
+
+  // This is the game loop. You can copy-paste it even in your own code if you want to.
+  public void run()
+  {
+    long beforeTime, afterTime, timeDiff, sleepTime;
+    long overSleepTime = 0L;
+    int noDelays = 0;
+    long excess = 0L;
+
+    beforeTime = System.nanoTime();
+
+    running = true;
+
+    while (running)
+    {
+      requestFocus();
+      gameUpdate();
+      gameRender();
+      paintScreen();
+
+      afterTime = System.nanoTime();
+
+      timeDiff = afterTime - beforeTime;
+      sleepTime = (period - timeDiff) - overSleepTime;
+
+      if (sleepTime &gt; 0)
+      {
+        try
+        {
+          Thread.sleep(sleepTime / 1000000L);
+        }
+        catch (InterruptedException e)
+        {
+        }
+
+        overSleepTime = (System.nanoTime() - afterTime - sleepTime);
+      }
+      else
+      {
+        excess -= sleepTime;
+        overSleepTime = 0L;
+
+        if (++noDelays &gt;= NO_DELAYS_PER_YIELD)
+        {
+          Thread.yield();
+          noDelays = 0;
+        }
+      }
+
+      beforeTime = System.nanoTime();
+
+      int skips = 0;
+
+      while ((excess &gt; period) &amp;&amp; (skips &lt; MAX_FRAME_SKIPS))
+      {
+        excess -= period;
+        gameUpdate();
+        skips++;
+      }
+
+      isPainted = true;
+    }
+    System.exit(0);
+  }
+
+  private void gameUpdate()
+  {
+    if (!isUserPaused &amp;&amp; !isWindowPaused &amp;&amp; !isGameOver)
+    {
+      // Update the state of your game objects here...
+    }
+  }
+
+  private void gameRender()
+  {
+    if (dbImage == null)
+    {
+      dbImage = createImage(WIDTH, HEIGHT);
+      if (dbImage == null)
+      {
+        System.out.println("Image is null.");
+        return;
+      }
+      else
+        dbg = dbImage.getGraphics();
+    }
+
+    dbg.setColor(backgroundColor);
+    dbg.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // Render your game objects here....
+    // like: xyzObject.draw(dbg);
+    // or dbg.drawOval(...);
+
+    if (isGameOver)
+      gameOverMessage(dbg);
+  }
+
+  private void gameOverMessage(Graphics g)
+  {
+    // Paint a game over message here..
+  }
+
+  private void paintScreen()
+  {
+    Graphics g;
+
+    try
+    {
+      g = this.getGraphics();
+      if ((g != null) &amp;&amp; (dbImage != null))
+        g.drawImage(dbImage, 0, 0, null);
+      Toolkit.getDefaultToolkit().sync();
+      g.dispose();
+    }
+    catch (Exception e)
+    {
+      System.out.println("Graphics context error : " + e);
+    }
+  }
+
+  public void setWindowPaused(boolean isPaused)
+  {
+    isWindowPaused = isPaused;
+  }
+
+  public void setUserPaused(boolean isPaused)
+  {
+    isUserPaused = isPaused;
+  }
+}
+</code></pre>
+
+<p>Then you can simply add your game panel to your JFrame like following:</p>
+
+<pre><code>import java.awt.GridBagLayout;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+
+import javax.swing.JFrame;
+
+public class GameFrame extends JFrame
+{
+  private static final long serialVersionUID = -1624735497099558420L;
+  private GameFrame gamePanel = new GamePanel();
+
+  public GameFrame()
+  {
+    setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    setTitle("Game");
+
+    addWindowListener(new FrameListener());
+
+    getContentPane().setLayout(new GridBagLayout());
+    getContentPane().add(gamePanel);
+
+    pack();
+    setLocationRelativeTo(null);
+    setResizable(false);
+    setVisible(true);
+  }
+
+  public class FrameListener extends WindowAdapter
+  {
+    public void windowActivated(WindowEvent we)
+    {
+      gamePanel.setWindowPaused(false);
+    }
+
+    public void windowDeactivated(WindowEvent we)
+    {
+      gamePanel.setWindowPaused(true);
+    }
+
+    public void windowDeiconified(WindowEvent we)
+    {
+      gamePanel.setWindowPaused(false);
+    }
+
+    public void windowIconified(WindowEvent we)
+    {
+      gamePanel.setWindowPaused(true);
+    }
+
+    public void windowClosing(WindowEvent we)
+    {
+      gamePanel.stopGame();
+    }
+  }
+
+  public static void main(String args[])
+  {
+    new GameFrame();
+  }
+}
+</code></pre>

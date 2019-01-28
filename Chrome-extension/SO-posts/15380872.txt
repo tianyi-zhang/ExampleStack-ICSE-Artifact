@@ -1,0 +1,96 @@
+<p>The method <em><code>decodeSampledBitmapFromResource</code></em> is not memory efficient because it uses 3 streams: the ByteArrayOutputStream baos, ByteArrayInputStream is1 and ByteArrayInputStream is2, <strong>each of those stores the same stream data of the image</strong> (one byte array for each).</p>
+
+<p>And when I test with my device (LG nexus 4) to decode an 2560x1600 image on SDcard to target size 800 it takes something like this: <br></p>
+
+<pre><code>03-13 15:47:52.557: E/DecodeBitmap(11177): dalvikPss (beginning) = 1780
+03-13 15:47:53.157: E/DecodeBitmap(11177): dalvikPss (decoding) = 26393
+03-13 15:47:53.548: E/DecodeBitmap(11177): dalvikPss (after all) = 30401 time = 999
+</code></pre>
+
+<p>We can see: too much memory allocated (28.5 MB) just to decode 4096000 a pixel image.</p>
+
+<p><strong>Solution</strong>: we read the InputStream and store the data directly into one byte array and use this byte array for the rest work. <br>
+Sample code:</p>
+
+<pre><code>public Bitmap decodeSampledBitmapFromResourceMemOpt(
+            InputStream inputStream, int reqWidth, int reqHeight) {
+
+        byte[] byteArr = new byte[0];
+        byte[] buffer = new byte[1024];
+        int len;
+        int count = 0;
+
+        try {
+            while ((len = inputStream.read(buffer)) &gt; -1) {
+                if (len != 0) {
+                    if (count + len &gt; byteArr.length) {
+                        byte[] newbuf = new byte[(count + len) * 2];
+                        System.arraycopy(byteArr, 0, newbuf, 0, count);
+                        byteArr = newbuf;
+                    }
+
+                    System.arraycopy(buffer, 0, byteArr, count, len);
+                    count += len;
+                }
+            }
+
+            final BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(byteArr, 0, count, options);
+
+            options.inSampleSize = calculateInSampleSize(options, reqWidth,
+                    reqHeight);
+            options.inPurgeable = true;
+            options.inInputShareable = true;
+            options.inJustDecodeBounds = false;
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+
+            int[] pids = { android.os.Process.myPid() };
+            MemoryInfo myMemInfo = mAM.getProcessMemoryInfo(pids)[0];
+            Log.e(TAG, "dalvikPss (decoding) = " + myMemInfo.dalvikPss);
+
+            return BitmapFactory.decodeByteArray(byteArr, 0, count, options);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+
+            return null;
+        }
+    }
+</code></pre>
+
+<p>The method that does the calculation:</p>
+
+<pre><code>public void onButtonClicked(View v) {
+        int[] pids = { android.os.Process.myPid() };
+        MemoryInfo myMemInfo = mAM.getProcessMemoryInfo(pids)[0];
+        Log.e(TAG, "dalvikPss (beginning) = " + myMemInfo.dalvikPss);
+
+        long startTime = System.currentTimeMillis();
+
+        FileInputStream inputStream;
+        String filePath = Environment.getExternalStorageDirectory()
+                .getAbsolutePath() + "/test2.png";
+        File file = new File(filePath);
+        try {
+            inputStream = new FileInputStream(file);
+//          mBitmap = decodeSampledBitmapFromResource(inputStream, 800, 800);
+            mBitmap = decodeSampledBitmapFromResourceMemOpt(inputStream, 800,
+                    800);
+            ImageView imageView = (ImageView) findViewById(R.id.image);
+            imageView.setImageBitmap(mBitmap);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        myMemInfo = mAM.getProcessMemoryInfo(pids)[0];
+        Log.e(TAG, "dalvikPss (after all) = " + myMemInfo.dalvikPss
+                + " time = " + (System.currentTimeMillis() - startTime));
+    }
+</code></pre>
+
+<p>And the result:</p>
+
+<pre><code>03-13 16:02:20.373: E/DecodeBitmap(13663): dalvikPss (beginning) = 1823
+03-13 16:02:20.923: E/DecodeBitmap(13663): dalvikPss (decoding) = 18414
+03-13 16:02:21.294: E/DecodeBitmap(13663): dalvikPss (after all) = 18414 time = 917
+</code></pre>

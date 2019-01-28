@@ -1,0 +1,96 @@
+<p>MMS is just a htttp-post request. You should perform the request using <em>extra network feature</em> :</p>
+
+<pre><code>final ConnectivityManager connMgr = (ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
+final int result = connMgr.startUsingNetworkFeature( ConnectivityManager.TYPE_MOBILE, Phone.FEATURE_ENABLE_MMS);
+</code></pre>
+
+<p>If you get result with Phone.APN_REQUEST_STARTED value, you have to wait for proper state. Register BroadCastReciver and wait until Phone.APN_ALREADY_ACTIVE appears:</p>
+
+<pre><code>final IntentFilter filter = new IntentFilter();
+filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
+context.registerReceiver(reciver, filter);
+</code></pre>
+
+<p>If connection background is ready, build content and perform request. If you want to do that using android's internal code, please use this:</p>
+
+<pre><code>final SendReq sendRequest = new SendReq();
+    final EncodedStringValue[] sub = EncodedStringValue.extract(subject);
+    if (sub != null &amp;&amp; sub.length &gt; 0) {
+        sendRequest.setSubject(sub[0]);
+    }
+    final EncodedStringValue[] phoneNumbers = EncodedStringValue
+            .extract(recipient);
+    if (phoneNumbers != null &amp;&amp; phoneNumbers.length &gt; 0) {
+        sendRequest.addTo(phoneNumbers[0]);
+    }
+
+    final PduBody pduBody = new PduBody();
+
+    if (parts != null) {
+        for (MMSPart part : parts) {
+            final PduPart partPdu = new PduPart();
+            partPdu.setName(part.Name.getBytes());
+            partPdu.setContentType(part.MimeType.getBytes());
+            partPdu.setData(part.Data);
+            pduBody.addPart(partPdu);
+        }
+    }
+
+    sendRequest.setBody(pduBody);
+
+    final PduComposer composer = new PduComposer(this.context, sendRequest);
+    final byte[] bytesToSend = composer.make();
+
+    HttpUtils.httpConnection(context, 4444L, MMSCenterUrl,
+            bytesToSendFromPDU, HttpUtils.HTTP_POST_METHOD, !TextUtils
+                    .isEmpty(MMSProxy), MMSProxy, port);
+</code></pre>
+
+<p>MMSCenterUrl: url from MMS-APNs, MMSProxy: proxy from MMS-APNs, port: port from MMS-APNs</p>
+
+<p>Note that some classes are from internal packages. Download from android git is required.</p>
+
+<p>The request should be done with url from user's apn-space...code..:</p>
+
+<pre><code>public class APNHelper {
+
+public class APN {
+    public String MMSCenterUrl = "";
+    public String MMSPort = "";
+    public String MMSProxy = ""; 
+}
+
+public APNHelper(final Context context) {
+    this.context = context;
+}   
+
+public List&lt;APN&gt; getMMSApns() {     
+    final Cursor apnCursor = this.context.getContentResolver().query(Uri.withAppendedPath(Telephony.Carriers.CONTENT_URI, "current"), null, null, null, null);
+if ( apnCursor == null ) {
+        return Collections.EMPTY_LIST;
+    } else {
+        final List&lt;APN&gt; results = new ArrayList&lt;APN&gt;(); 
+            if ( apnCursor.moveToFirst() ) {
+        do {
+            final String type = apnCursor.getString(apnCursor.getColumnIndex(Telephony.Carriers.TYPE));
+            if ( !TextUtils.isEmpty(type) &amp;&amp; ( type.equalsIgnoreCase(Phone.APN_TYPE_ALL) || type.equalsIgnoreCase(Phone.APN_TYPE_MMS) ) ) {
+                final String mmsc = apnCursor.getString(apnCursor.getColumnIndex(Telephony.Carriers.MMSC));
+                final String mmsProxy = apnCursor.getString(apnCursor.getColumnIndex(Telephony.Carriers.MMSPROXY));
+                final String port = apnCursor.getString(apnCursor.getColumnIndex(Telephony.Carriers.MMSPORT));                  
+                final APN apn = new APN();
+                apn.MMSCenterUrl = mmsc;
+                apn.MMSProxy = mmsProxy;
+                apn.MMSPort = port;
+                results.add(apn);
+            }
+        } while ( apnCursor.moveToNext() ); 
+             }              
+        apnCursor.close();
+        return results;
+    }
+}
+
+private Context context;
+
+}
+</code></pre>

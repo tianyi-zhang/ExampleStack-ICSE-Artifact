@@ -1,0 +1,672 @@
+<p>I guess your .xml is incorrect:Replace your xml with this one:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical" &gt;
+
+&lt;RelativeLayout
+        android:id="@+id/top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+       &gt;
+
+        &lt;TextView
+            android:id="@+id/dashboard_logo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_centerHorizontal="true"
+            android:gravity="center"
+            android:textSize="16sp"
+            android:text="Front of the card"
+            android:textColor="#8f928c" /&gt;
+
+    &lt;/RelativeLayout&gt;
+
+
+    &lt;FrameLayout
+            android:id="@+id/camera_preview"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:layout_above="@+id/btn_area"
+            android:layout_below="@+id/top_bar" /&gt;
+
+
+    &lt;LinearLayout 
+        android:id="@+id/btn_area"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_gravity="center_vertical"
+        android:layout_margin="5dp"
+        android:paddingBottom="3.5dp"
+        android:layout_alignParentBottom="true" &gt;
+
+        &lt;Button
+            android:id="@+id/button_preview"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="5dp"
+            android:layout_weight="1"
+
+            android:enabled="false"
+            android:textSize="18sp"
+            android:text="Refresh" /&gt;
+
+        &lt;Button
+            android:id="@+id/button_capture"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="5dp"
+            android:layout_weight="1"
+
+            android:enabled="false"
+            android:textSize="18sp"
+            android:text="Capture" /&gt;
+
+        &lt;Button
+            android:id="@+id/button_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+
+            android:enabled="false"
+            android:textSize="18sp"
+            android:text="Ok" /&gt;
+
+    &lt;/LinearLayout&gt;   
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>Your <strong>CameraActivity.java</strong></p>
+
+<pre><code>import java.io.File;
+import java.io.FileOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Environment;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.drawable.BitmapDrawable;
+import android.hardware.Camera;
+import android.hardware.Camera.Parameters;
+import android.hardware.Camera.PictureCallback;
+import android.util.Log;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.FrameLayout.LayoutParams;
+import android.widget.TextView;
+
+public class CameraActivity extends Activity {
+    private Camera mCamera;
+    private CustomizeCameraPreview mPreview;
+    public static final int MEDIA_TYPE_IMAGE = 1;
+    Button captureButton;
+    Button previewButton;
+    Button viewButton;
+    String pictureFilePath = null;
+    FrameLayout preview;
+    TextView tvheader;
+    //addition for free-hand drawing
+    Drawing mv = null;
+    int color_code = 0xFFFF2525;
+    ImageView colorButton;
+    ImageView undo;
+    boolean startDraw = false;
+    String str="";
+
+
+    private PictureCallback mPicture = new PictureCallback() {
+
+        @Override
+        public void onPictureTaken(byte[] data, android.hardware.Camera camera) {
+            // TODO Auto-generated method stub
+
+            File pictureFile = getOutputMediaFile(MEDIA_TYPE_IMAGE);
+            if (pictureFile == null){
+                Log.d("CameraActivity", "Error creating media file, check storage permissions");
+                return;
+            }
+
+            initDrawing(scale_and_rotateImage(data,480));
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.customcamera);
+        //str=getIntent().getExtras().getString("cardimage");
+        try{
+        str=getIntent().getStringExtra("cardimage");
+        System.out.println("str==="+str);
+        tvheader=(TextView)findViewById(R.id.dashboard_logo);
+        if(str.equals("front"))
+            tvheader.setText("Front of the card");
+        else
+            tvheader.setText("Back of the card");
+        }catch(Exception e)
+        {
+            e.printStackTrace();
+        }
+        startDraw = true;
+    }
+
+
+    @Override
+    public void onResume() {
+        // 31-Jul-2013 ///////////////////
+        preview = (FrameLayout) findViewById(R.id.camera_preview);
+        // Add a listener to the Preview button
+
+
+        previewButton = (Button) findViewById(R.id.button_preview);
+        captureButton = (Button) findViewById(R.id.button_capture);
+        viewButton = (Button) findViewById(R.id.button_view);
+
+        if(checkCameraHardware(getApplicationContext())) {
+            if (mCamera != null) {
+                mCamera.release();
+                mCamera = null;
+            }
+            mCamera = getCameraInstance();
+            flashLightOn(mCamera);
+
+            // Create our Preview view and set it as the content of our activity.
+            mPreview = new CustomizeCameraPreview(getApplicationContext(), mCamera);
+            preview.addView(mPreview);
+            previewButton.setEnabled(false);
+            captureButton.setEnabled(true);
+            viewButton.setEnabled(false);
+        }
+
+        previewButton.setOnClickListener(
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    startDraw = true;
+                    // release previous camera instance
+                    if (mCamera != null) {
+                        mCamera.stopPreview();
+                        preview.removeView(mPreview);
+                        mCamera.release();
+                        mCamera = null;
+                    }
+                    if(mPreview != null) mPreview = null;
+                    // Create an instance of Camera
+                    mCamera = getCameraInstance();
+                    flashLightOn(mCamera);
+
+                    // Create our Preview view and set it as the content of our activity.
+                    mPreview = new CustomizeCameraPreview(getApplicationContext(), mCamera);
+
+                    preview.addView(mPreview);
+                    v.setEnabled(false);
+                    captureButton.setEnabled(true);
+                    viewButton.setEnabled(false);
+                }
+            }
+        );
+
+        // Add a listener to the Capture button
+        captureButton.setOnClickListener (
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    // get an image from the camera
+                    try {
+                    mCamera.takePicture(null, null, mPicture);
+                    previewButton.setEnabled(true);
+                    v.setEnabled(false);
+                    viewButton.setEnabled(true);
+                    }catch(Exception e) {
+                        //mCamera not instantiated
+                    }
+                }
+            }
+        );
+
+        // Add a listener to the View button
+        viewButton.setOnClickListener(
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    // return image path to calling activity
+                    pictureFilePath = saveImage();
+                    if(pictureFilePath != null) {
+                        Intent data = new Intent();
+                        //---set the data to pass back---
+                        data.setData(Uri.parse(pictureFilePath));
+                        setResult(RESULT_OK, data);
+                        //---closes the activity---
+                        finish();
+                    }   
+                    previewButton.setEnabled(true);
+                    captureButton.setEnabled(false);
+                    //v.setEnabled(false);
+                }
+            }
+        );
+
+        //////////////////////////////////
+        super.onResume();
+    }
+
+    public String saveImage() {
+        pictureFilePath = null;
+        File pictureFile = getOutputMediaFile(MEDIA_TYPE_IMAGE);
+        if (pictureFile == null){
+            Log.d("CameraActivity", "Error creating media file, check storage permissions");
+            return null;
+        }
+
+        try {
+            FileOutputStream fos = new FileOutputStream(pictureFile);
+            Bitmap tmp = mv.getDrawingCache();
+            tmp.compress(Bitmap.CompressFormat.JPEG, 90, fos);
+            fos.flush();
+            fos.close();
+            pictureFilePath = pictureFile.getAbsolutePath();
+        } catch (Exception e) {
+            Log.d("CameraActivity", "Error accessing file: " + e.getMessage());
+        }
+        return pictureFilePath;
+    }
+
+
+    /** Check if this device has a camera */
+    private boolean checkCameraHardware(Context context) {
+        if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA)){
+            // this device has a camera
+            return true;
+        } else {
+            // no camera on this device
+            return false;
+        }
+    }
+
+    public void flashLightOn(Camera cam) {
+        try {
+            if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)) {
+                Parameters p = cam.getParameters();
+                p.setFlashMode(Parameters.FLASH_MODE_AUTO);
+                cam.setParameters(p);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            //Toast.makeText(getBaseContext(), "Exception flashLightOn()", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** A safe way to get an instance of the Camera object. */
+    public static Camera getCameraInstance() {
+        Camera c = null;
+        try {
+            c = Camera.open(); // attempt to get a Camera instance
+            c.setDisplayOrientation(90);
+            //context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH);
+        }
+        catch (Exception e){
+            // Camera is not available (in use or does not exist)
+        }
+        return c; // returns null if camera is unavailable
+    }
+
+    /** Create a file Uri for saving an image or video */
+    private static Uri getOutputMediaFileUri(int type) {
+          return Uri.fromFile(getOutputMediaFile(type));
+    }
+
+    /** Create a File for saving an image or video */
+    private static File getOutputMediaFile(int type) {
+        // To be safe, you should check that the SDCard is mounted
+        // using Environment.getExternalStorageState() before doing this.
+        /*
+        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
+                  Environment.DIRECTORY_PICTURES), "MyCameraApp");
+        */
+        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DCIM), "canberra trailpass");
+
+        // This location works best if you want the created images to be shared
+        // between applications and persist after your app has been uninstalled.
+
+        // Create the storage directory if it does not exist
+        if (! mediaStorageDir.exists()){
+            if (! mediaStorageDir.mkdirs()){
+                Log.d("canberra trailpass", "failed to create directory");
+                return null;
+            }
+        }
+
+        // Create a media file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        File mediaFile;
+        if (type == MEDIA_TYPE_IMAGE){
+            mediaFile = new File(mediaStorageDir.getPath() + File.separator +
+            "IMG_"+ timeStamp + ".jpg");
+        } else {
+            return null;
+        }
+
+        return mediaFile;
+    }
+
+    private Bitmap scale_and_rotateImage(byte[] input, int dstWidth) 
+    {
+        // code to free some memory
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+
+        // create the blank bitmap
+        Bitmap inputImage = BitmapFactory.decodeByteArray(input, 0, input.length, opts); // java.lang.OutOfMemoryError error
+
+        // create the smaller bitmap
+        inputImage = null;
+        opts.inJustDecodeBounds = false;
+        opts.inSampleSize = (int) opts.outWidth / dstWidth;
+        opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        inputImage = BitmapFactory.decodeByteArray(input, 0, input.length, opts);
+
+        // create a matrix for the manipulation
+        Matrix m = new Matrix();
+
+        //int width = inputImage.getWidth();
+        //int height = inputImage.getHeight();
+        int width = opts.outWidth;
+        int height = opts.outHeight;
+
+        // calculate the scale - in this case = 0.4f
+        float scaleWidth = ((float) dstWidth) / width;
+        //float scaleHeight = ((float) dstHeight) / height;
+
+        // resize the bit map
+        m.postScale(scaleWidth, scaleWidth);
+        // rotate the Bitmap
+        m.postRotate(90);
+
+        // recreate the new Bitmap
+        Bitmap resizedBitmap = Bitmap.createBitmap(inputImage, 0, 0,
+                          width, height, m, true);
+
+        inputImage.recycle();
+        inputImage = null;
+        /*
+        ByteArrayOutputStream blob = new ByteArrayOutputStream();
+        resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 100, blob);
+
+        resizedBitmap.recycle();
+        resizedBitmap = null;
+
+        return blob.toByteArray();
+        */
+        return resizedBitmap;
+    }
+
+    @Override
+    public void onBackPressed(){
+        Intent data = new Intent();
+        //---set the data to pass back---
+        //data.setData(null);
+        System.out.println("--&gt; Back from camera activity");
+        setResult(RESULT_CANCELED, data);
+        finish();
+        super.onBackPressed();
+    }
+
+    @Override
+    protected void onPause() {
+        // TODO Auto-generated method stub
+        preview.removeView(mPreview);
+        super.onPause();
+    }
+
+    public void initDrawing(Bitmap resizedBitmap) {
+        int line_width = (int) this.getResources().getInteger(R.integer.line_width);
+        mv = new Drawing(this,line_width,color_code,1);
+        mv.setDrawingCacheEnabled(true);
+        //mv.setBackground(new BitmapDrawable(resizedBitmap));
+        mv.setBackgroundDrawable(new BitmapDrawable(getResources(), resizedBitmap));
+        preview.addView(mv);
+
+        LinearLayout bt_container = new LinearLayout(this);
+        bt_container.setLayoutParams(new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT));
+        bt_container.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(
+                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        layoutParams.setMargins(5, 2, 5, 2);
+
+        undo = new ImageView(this);
+        undo.setImageResource(R.drawable.undo_icon);
+        bt_container.addView(undo,layoutParams);
+        undo.setVisibility(View.GONE);
+        undo.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mv.onClickUndo();
+            }
+        });
+
+       /* colorButton = new ImageView(this);
+        //colorButton.setImageResource(R.drawable.pencil1); changed on 25-Nov-13
+        colorButton.setBackgroundColor(color_code);
+        colorButton.setImageResource(R.drawable.pencil2);
+
+        bt_container.addView(colorButton,layoutParams);
+        colorButton.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                AmbilWarnaDialog dialog = new AmbilWarnaDialog(CameraActivity.this, color_code, new OnAmbilWarnaListener() {
+                    @Override
+                    public void onOk(AmbilWarnaDialog dialog, int color) {
+                        startDraw = true;
+                        color_code = color;
+                        mv.setColor(color_code);
+                        colorButton.setBackgroundColor(color_code);
+                        colorButton.setImageResource(R.drawable.pencil2);
+                    }
+
+                    @Override
+                    public void onCancel(AmbilWarnaDialog dialog) { 
+                    }
+                });
+                dialog.show();
+            }
+        });*/
+
+        FrameLayout.LayoutParams fParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, 
+                Gravity.RIGHT | Gravity.TOP);
+
+        preview.addView(bt_container, fParams);
+    }
+
+    public class Drawing extends View {
+        private Paint mPaint, mBitmapPaint;
+        private Bitmap mBitmap;
+        private Canvas mCanvas;
+        private Path mPath;
+        private Context mContext;
+
+        private float mX, mY;
+        private static final float TOUCH_TOLERANCE = 4;
+
+        private int color, size, state;
+
+        private ArrayList&lt;Path&gt; paths = new ArrayList&lt;Path&gt;();
+        private ArrayList&lt;Path&gt; undonePaths = new ArrayList&lt;Path&gt;();
+        private ArrayList&lt;Integer&gt; colors = new ArrayList&lt;Integer&gt;();
+        private ArrayList&lt;Integer&gt; sizes = new ArrayList&lt;Integer&gt;();
+
+        public Drawing(Context c) {
+            super(c);
+            mContext = c;
+        }
+
+        public Drawing(Context c, int size, int color, int state) {
+            super(c);
+            mContext = c;
+
+            mPath = new Path();
+
+            mPaint = new Paint();
+            mPaint.setAntiAlias(true);
+            mPaint.setDither(true);
+            mPaint.setColor(color);
+            mPaint.setStyle(Paint.Style.STROKE);
+            mPaint.setStrokeJoin(Paint.Join.ROUND);
+            mPaint.setStrokeCap(Paint.Cap.ROUND);
+            mPaint.setStrokeWidth(size);        
+            setColor(color);
+            setSize(size);
+            setState(state);
+        }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+            super.onSizeChanged(w, h, oldw, oldh);
+
+            mBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            mCanvas = new Canvas(mBitmap);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            if(!startDraw) return;
+
+            for (int i = 0; i &lt; paths.size(); i++) {
+                mPaint.setColor(colors.get(i));
+                mPaint.setStrokeWidth(sizes.get(i));
+                canvas.drawPath(paths.get(i), mPaint);
+            }
+            mPaint.setColor(color);
+            canvas.drawPath(mPath, mPaint);
+        }
+
+        public void setColor(int color) {
+            this.color = color;
+            mPaint.setColor(color);
+        }
+
+        public void setSize(int size) {
+            this.size = size;
+        }
+
+        public void setState(int state) {
+            this.state = state;
+            paths.clear();
+            sizes.clear();
+            colors.clear();
+            invalidate();
+            mPaint.setXfermode(null);
+            //mPaint.setAlpha(0xFF);
+            mPaint.setStrokeWidth(size);
+        }
+
+        public void clearCanvas() {
+            mBitmap.eraseColor(Color.TRANSPARENT);
+            paths.clear();
+            sizes.clear();
+            colors.clear();
+            mPath.reset();
+            invalidate();
+        }
+
+        public void onClickUndo() {
+            if (paths.size() &gt; 0) {
+                undonePaths.add(paths.remove(paths.size() - 1));
+                sizes.remove(sizes.size() - 1);
+                colors.remove(colors.size() - 1);
+                if(colors.size() &gt; 0)
+                    undo.setBackgroundColor(colors.get(colors.size() - 1));
+                else
+                    undo.setVisibility(View.GONE);
+                invalidate();
+            }
+        }
+
+        private void touch_start(float x, float y) {
+            undo.setVisibility(View.VISIBLE);
+            undo.setBackgroundColor(color);
+            undonePaths.clear();
+            mPath.reset();
+            //colors.add(color);
+            mPath.moveTo(x, y);
+            mX = x;
+            mY = y;
+        }
+
+        private void touch_move(float x, float y) {
+            float dx = Math.abs(x - mX);
+            float dy = Math.abs(y - mY);
+            if (dx &gt;= TOUCH_TOLERANCE || dy &gt;= TOUCH_TOLERANCE) {
+                mPath.quadTo(mX, mY, (x + mX) / 2, (y + mY) / 2);
+                mX = x;
+                mY = y;
+            }
+        }
+
+        private void touch_up() {
+            mPath.lineTo(mX, mY);
+            mCanvas.drawPath(mPath, mPaint);
+            if(state != 0) {
+                colors.add(color);
+                sizes.add(size);
+                paths.add(mPath);
+                mPath = new Path();
+            }
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if(!startDraw) return false;
+
+            float x = event.getX();
+            float y = event.getY();
+
+            switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                touch_start(x, y);
+                invalidate();
+                break;
+            case MotionEvent.ACTION_MOVE:
+                touch_move(x, y);
+                invalidate();
+                break;
+            case MotionEvent.ACTION_UP:
+                touch_up();
+                invalidate();
+                break;
+            }
+            return true;
+        }
+    }
+}
+</code></pre>
+
+<p>and I cant find any mistake in your <strong>CameraPreview.java</strong>
+The output will be like below:</p>
+
+<p><img src="http://i.stack.imgur.com/citZ2.png" alt="enter image description here"></p>

@@ -1,0 +1,190 @@
+<h2>First of all:</h2>
+
+<ul>
+<li>This solution assumes that items that are still visible, after the dataset changed, also slide out to the right and later slide in from the bottom again (This is at least what I understood you are asking for)</li>
+<li>Because of this requirement I couldn't find an easy and nice solution for this problem (At least during the first iteration). The only way I found was to trick the adapter - and fight the framework to do something that it was not intended for. This is why the first part (How it normally works) describes how to achieve nice animations with the <code>RecyclerView</code> the <em>default way</em>. The second part describes the solution how to enforce the slide out/slide in animation for all items after the dataset changed.</li>
+<li>Later on I found a better solution that doesn't require to trick the adapter with random ids (jump to the bottom for the updated version).</li>
+</ul>
+
+<h2>How it normally works</h2>
+
+<p>To enable animations you need to tell the <code>RecyclerView</code> how the dataset changed (So that it knows what kind of animations should be run). This can be done in two ways:</p>
+
+<p><strong>1) Simple Version:</strong>
+We need to set <code>adapter.setHasStableIds(true);</code> and providing the ids of your items via <code>public long getItemId(int position)</code> in your <code>Adapter</code> to the <code>RecyclerView</code>. The <code>RecyclerView</code> utilizes these ids to figure out which items were removed/added/moved during the call to <code>adapter.notifyDataSetChanged();</code></p>
+
+<p><strong>2) Advanced Version:</strong> Instead of calling <code>adapter.notifyDataSetChanged();</code> you can also explicitly state how the dataset changed. The <code>Adapter</code> provides several methods, like <code>adapter.notifyItemChanged(int position)</code>,<code>adapter.notifyItemInserted(int position)</code>,... to describe the changes in the dataset</p>
+
+<p>The animations that are triggered to reflect the changes in the dataset are managed by the <code>ItemAnimator</code>. The <code>RecyclerView</code> is already equipped with a nice default <code>DefaultItemAnimator</code>. Furthermore it is possible to define custom animation behavior with a custom <code>ItemAnimator</code>.</p>
+
+<h2>Strategy to implement the slide out (right), slide in (bottom)</h2>
+
+<p>The slide to the right is the animation that should be played if items are removed from the dataset. The slide from bottom animation should be played for items that were added to the dataset. As mentioned at the beginning I assume that it is desired that all elements slide out to the right and slide in from the bottom. Even if they are visible before and after the dataset change. Normally <code>RecyclerView</code> would play to change/move animation for such items that stay visible. However, because we want to utilize the remove/add animation for all items we need to trick the adapter into thinking that there are only new elements after the change and all previously available items were removed. This can be achieved by providing a random id for each item in the adapter:</p>
+
+<pre><code>@Override
+public long getItemId(int position) {
+    return Math.round(Math.random() * Long.MAX_VALUE);
+}
+</code></pre>
+
+<p>Now we need to provide a custom <code>ItemAnimator</code> that manages the animations for the added/removed items. The structure of the presented <code>SlidingAnimator</code> is very similar to the<code>android.support.v7.widget.DefaultItemAnimator</code> that is provided with the <code>RecyclerView</code>. Also Notice this is a prove of concept and should be adjusted before used in any app:</p>
+
+<pre><code>public class SlidingAnimator extends SimpleItemAnimator {
+    List&lt;RecyclerView.ViewHolder&gt; pendingAdditions = new ArrayList&lt;&gt;();
+    List&lt;RecyclerView.ViewHolder&gt; pendingRemovals = new ArrayList&lt;&gt;();
+
+    @Override
+    public void runPendingAnimations() {
+        final List&lt;RecyclerView.ViewHolder&gt; additionsTmp = pendingAdditions;
+        List&lt;RecyclerView.ViewHolder&gt; removalsTmp = pendingRemovals;
+        pendingAdditions = new ArrayList&lt;&gt;();
+        pendingRemovals = new ArrayList&lt;&gt;();
+
+        for (RecyclerView.ViewHolder removal : removalsTmp) {
+            // run the pending remove animation
+            animateRemoveImpl(removal);
+        }
+        removalsTmp.clear();
+
+        if (!additionsTmp.isEmpty()) {
+            Runnable adder = new Runnable() {
+                public void run() {
+                    for (RecyclerView.ViewHolder addition : additionsTmp) {
+                        // run the pending add animation
+                        animateAddImpl(addition);
+                    }
+                    additionsTmp.clear();
+                }
+            };
+            // play the add animation after the remove animation finished
+            ViewCompat.postOnAnimationDelayed(additionsTmp.get(0).itemView, adder, getRemoveDuration());
+        }
+    }
+
+    @Override
+    public boolean animateAdd(RecyclerView.ViewHolder holder) {
+        pendingAdditions.add(holder);
+        // translate the new items vertically so that they later slide in from the bottom
+        holder.itemView.setTranslationY(300);
+        // also make them invisible
+        holder.itemView.setAlpha(0);
+        // this requests the execution of runPendingAnimations()
+        return true;
+    }
+
+    @Override
+    public boolean animateRemove(final RecyclerView.ViewHolder holder) {
+        pendingRemovals.add(holder);
+        // this requests the execution of runPendingAnimations()
+        return true;
+    }
+
+    private void animateAddImpl(final RecyclerView.ViewHolder holder) {
+        View view = holder.itemView;
+        final ViewPropertyAnimatorCompat anim = ViewCompat.animate(view);
+        anim
+                // undo the translation we applied in animateAdd
+                .translationY(0)
+                // undo the alpha we applied in animateAdd
+                .alpha(1)
+                .setDuration(getAddDuration())
+                .setInterpolator(new DecelerateInterpolator())
+                .setListener(new ViewPropertyAnimatorListener() {
+                    @Override
+                    public void onAnimationStart(View view) {
+                        dispatchAddStarting(holder);
+                    }
+
+                    @Override
+                    public void onAnimationEnd(View view) {
+                        anim.setListener(null);
+                        dispatchAddFinished(holder);
+                        // cleanup
+                        view.setTranslationY(0);
+                        view.setAlpha(1);
+                    }
+
+                    @Override
+                    public void onAnimationCancel(View view) {
+                    }
+                }).start();
+    }
+
+    private void animateRemoveImpl(final RecyclerView.ViewHolder holder) {
+        View view = holder.itemView;
+        final ViewPropertyAnimatorCompat anim = ViewCompat.animate(view);
+        anim
+                // translate horizontally to provide slide out to right
+                .translationX(view.getWidth())
+                // fade out
+                .alpha(0)
+                .setDuration(getRemoveDuration())
+                .setInterpolator(new AccelerateInterpolator())
+                .setListener(new ViewPropertyAnimatorListener() {
+                    @Override
+                    public void onAnimationStart(View view) {
+                        dispatchRemoveStarting(holder);
+                    }
+
+                    @Override
+                    public void onAnimationEnd(View view) {
+                        anim.setListener(null);
+                        dispatchRemoveFinished(holder);
+                        // cleanup
+                        view.setTranslationX(0);
+                        view.setAlpha(1);
+                    }
+
+                    @Override
+                    public void onAnimationCancel(View view) {
+                    }
+                }).start();
+    }
+
+
+    @Override
+    public boolean animateMove(RecyclerView.ViewHolder holder, int fromX, int fromY, int toX, int toY) {
+        // don't handle animateMove because there should only be add/remove animations
+        dispatchMoveFinished(holder);
+        return false;
+    }
+    @Override
+    public boolean animateChange(RecyclerView.ViewHolder oldHolder, RecyclerView.ViewHolder newHolder, int fromLeft, int fromTop, int toLeft, int toTop) {
+        // don't handle animateChange because there should only be add/remove animations
+        if (newHolder != null) {
+            dispatchChangeFinished(newHolder, false);
+        }
+        dispatchChangeFinished(oldHolder, true);
+        return false;
+    }
+    @Override
+    public void endAnimation(RecyclerView.ViewHolder item) { }
+    @Override
+    public void endAnimations() { }
+    @Override
+    public boolean isRunning() { return false; }
+}
+</code></pre>
+
+<p>This is the final result:</p>
+
+<p><a href="http://i.stack.imgur.com/Gass0.gif"><img src="http://i.stack.imgur.com/Gass0.gif" alt="enter image description here"></a></p>
+
+<h2>Update: While Reading the post again I figured out a better solution</h2>
+
+<p>This updated solution doesn't require to trick the adapter with random ids into thinking all items were removed and only new items were added. If we apply the <em>2) Advanced Version</em> - how to notify the adapter about dataset changes, we can just tell the <code>adapter</code> that all previous items were removed and all the new items were added:</p>
+
+<pre><code>int oldSize = oldItems.size();
+oldItems.clear();
+// Notify the adapter all previous items were removed
+notifyItemRangeRemoved(0, oldSize);
+
+oldItems.addAll(items);
+// Notify the adapter all the new items were added
+notifyItemRangeInserted(0, items.size());
+
+// don't call notifyDataSetChanged
+//notifyDataSetChanged();
+</code></pre>
+
+<p>The previously presented <code>SlidingAnimator</code> is still necessary to animate the changes.</p>

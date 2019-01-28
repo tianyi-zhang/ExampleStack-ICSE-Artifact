@@ -1,0 +1,305 @@
+<p>I simply Googled for Java token evaluator and this result came up:</p>
+
+<ul>
+<li><em><a href="http://www.technical-recipes.com/2011/a-mathematical-expression-parser-in-java-and-cpp/" rel="nofollow">Mathematical Expression Parsers in Java and C++ <sup>[technical-recipes.com]</sup></a></em></li>
+</ul>
+
+<p>This blog-post is a great resource for understanding <a href="https://en.wikipedia.org/wiki/Reverse_Polish_notation" rel="nofollow">Reverse Polish Notation (RPN)</a>. The post contains some code, which I have refactored below. I have moved code around and made the flow of things easier to understand.</p>
+
+<p>You simply need to parse the tokens and place them on a stack. Then you evaluate the expression by popping items off the stack until you hit an operator, you will then evaluate all the items that have been popped off.</p>
+
+<p>I have added logic to support <code>x</code> and <code>y</code> variables in the evaluator.</p>
+
+<hr>
+
+<h1>Full code example</h1>
+
+<h3>ExpressionDriver.java</h3>
+
+<pre><code>package math;
+
+public class ExpressionDriver {
+    public static void main(String[] args) {
+        String expression = "x + ( 3 / y ) + 5";
+        double x = 8;
+        double y = 3;
+        Double result = evaluate(expression, x, y);
+
+        // x 3 y / + 5 + 14.0
+        System.out.println(result);
+    }
+
+    public static Double evaluate(String expression, double x, double y) {
+        String[] tokens = expression.split("[ ]+");
+        String[] output = ExpressionParser.infixToRPN(tokens);
+
+        // Build output RPN string minus the commas
+        for (String token : output) {
+            System.out.print(token + " ");
+        }
+
+        // Feed the RPN string to RPNtoDouble to give result
+        return ExpressionParser.RPNtoDouble(output, x, y);
+    }
+}
+</code></pre>
+
+<h3>ExpressionParser.java</h3>
+
+<pre><code>package math;
+import java.util.ArrayList;
+import java.util.Stack;
+
+public class ExpressionParser {
+    // Test if token is an operator
+    private static boolean isOperator(String token) {
+        return Operator.lookup(token) != null;
+    }
+
+    // Test associativity of operator token
+    private static boolean isAssociative(String token, int type) {
+        Operator op = Operator.lookup(token);
+
+        if (op == null) {
+            throw new IllegalArgumentException("Invalid token: " + token);
+        }
+
+        if (op.getAssociativity() == type) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // Compare precedence of operators.
+    private static final int cmpPrecedence(String token1, String token2) {
+        Operator op1 = Operator.lookup(token1);
+        Operator op2 = Operator.lookup(token2);
+
+        if (op1 == null || op2 == null) {
+            throw new IllegalArgumentException("Invalid tokens: " + token1 + " " + token2);
+        }
+
+        return op1.getPrecedence() - op2.getPrecedence();
+    }
+
+    // Convert infix expression format into reverse Polish notation
+    public static String[] infixToRPN(String[] inputTokens) {
+        ArrayList&lt;String&gt; out = new ArrayList&lt;String&gt;();
+        Stack&lt;String&gt; stack = new Stack&lt;String&gt;();
+
+        // For each token
+        for (String token : inputTokens) {
+            // If token is an operator
+            if (isOperator(token)) {
+                // While stack not empty AND stack top element is an operator
+                while (!stack.empty() &amp;&amp; isOperator(stack.peek())) {
+                    if ((isAssociative(token, Operator.LEFT_ASSOC) &amp;&amp; cmpPrecedence(token, stack.peek()) &lt;= 0)
+                            || (isAssociative(token, Operator.RIGHT_ASSOC) &amp;&amp; cmpPrecedence(token, stack.peek()) &lt; 0)) {
+                        out.add(stack.pop());
+                        continue;
+                    }
+                    break;
+                }
+                // Push the new operator on the stack
+                stack.push(token);
+            }
+            // If token is a left bracket '('
+            else if (token.equals(Token.OPEN_PAREN)) {
+                stack.push(token);
+            }
+            // If token is a right bracket ')'
+            else if (token.equals(Token.CLOSED_PAREN)) {
+                while (!stack.empty() &amp;&amp; !stack.peek().equals(Token.OPEN_PAREN)) {
+                    out.add(stack.pop());
+                }
+                stack.pop();
+            }
+            // If token is a number
+            else {
+                out.add(token);
+            }
+        }
+
+        while (!stack.empty()) {
+            out.add(stack.pop());
+        }
+
+        return out.toArray(new String[out.size()]);
+    }
+
+    public static double RPNtoDouble(String[] tokens, double x, double y) {
+        Stack&lt;String&gt; stack = new Stack&lt;String&gt;();
+
+        // For each token
+        for (String token : tokens) {
+            // If the token is a value push it onto the stack
+            if (!isOperator(token)) {
+                stack.push(token);
+            } else {
+                // Token is an operator: pop top two entries
+                Operator op = Operator.lookup(token);
+                Double d2 = getDouble(stack.pop(), x, y);
+                Double d1 = getDouble(stack.pop(), x, y);
+                Double result = op.getExpression().evaluate(d1, d2);
+
+                // Push result onto stack
+                stack.push(String.valueOf(result));
+            }
+        }
+
+        return Double.valueOf(stack.pop());
+    }
+
+    public static Double getDouble(String token, double x, double y) {
+        if (token.equals("x")) {
+            return x;
+        } else if (token.equals("y")) {
+            return y;
+        } else {
+            return Double.valueOf(token);
+        }
+    }
+}
+</code></pre>
+
+<h3>Operator.java</h3>
+
+<pre><code>package math;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public enum Operator {
+    ADDITION(Token.PLUS, 0, Operator.LEFT_ASSOC, new Expression() {
+        @Override
+        public double evaluate(double a, double b) {
+            return a + b;
+        }
+        @Override
+        public int evaluate(int a, int b) {
+            return a + b;
+        }
+        @Override
+        public float evaluate(float a, float b) {
+            return a + b;
+        }
+    }),
+    SUBTRACTION(Token.DASH, 0, Operator.LEFT_ASSOC, new Expression() {
+        @Override
+        public double evaluate(double a, double b) {
+            return a - b;
+        }
+        @Override
+        public int evaluate(int a, int b) {
+            return a - b;
+        }
+        @Override
+        public float evaluate(float a, float b) {
+            return a - b;
+        }
+    }),
+    MULTIPLICATION(Token.ASTERISK, 5, Operator.LEFT_ASSOC, new Expression() {
+        @Override
+        public double evaluate(double a, double b) {
+            return a * b;
+        }
+        @Override
+        public int evaluate(int a, int b) {
+            return a * b;
+        }
+        @Override
+        public float evaluate(float a, float b) {
+            return a * b;
+        }
+    }),
+    DIVISION(Token.SLASH, 5, Operator.LEFT_ASSOC, new Expression() {
+        @Override
+        public double evaluate(double a, double b) {
+            return a / b;
+        }
+        @Override
+        public int evaluate(int a, int b) {
+            return a / b;
+        }
+        @Override
+        public float evaluate(float a, float b) {
+            return a / b;
+        }
+    });
+
+    // Associativity constants for operators
+    protected static final int LEFT_ASSOC = 0;
+    protected static final int RIGHT_ASSOC = 1;
+
+    private static final Map&lt;String, Operator&gt; LOOKUP_MAP;
+
+    static {
+        LOOKUP_MAP = new HashMap&lt;String, Operator&gt;();
+
+        for (Operator operator : Operator.values()) {
+            LOOKUP_MAP.put(operator.getSign(), operator);
+        }
+    }
+
+    private String sign;
+    private int precedence;
+    private int associativity;
+    private Expression expression;
+
+    private Operator(String sign, int precedence, int associativity, Expression expression) {
+        this.sign = sign;
+        this.precedence = precedence;
+        this.associativity = associativity;
+        this.expression = expression;
+    }
+
+    public static Operator lookup(String operator) {
+        return LOOKUP_MAP.get(operator);
+    }
+
+    public String getSign() {
+        return sign;
+    }
+
+    public int getPrecedence() {
+        return precedence;
+    }
+
+    public int getAssociativity() {
+        return associativity;
+    }
+
+    public Expression getExpression() {
+        return expression;
+    }
+}
+</code></pre>
+
+<h3>Expression.java</h3>
+
+<pre><code>package math;
+
+public interface Expression {
+    int evaluate(int a, int b);
+
+    double evaluate(double a, double b);
+
+    float evaluate(float a, float b);
+}
+</code></pre>
+
+<h3>Token.java</h3>
+
+<pre><code>package math;
+
+public class Token {
+    public static final String PLUS = "+";
+    public static final String DASH = "-";
+    public static final String ASTERISK = "*";
+    public static final String SLASH = "/";
+
+    public static final String OPEN_PAREN = "(";
+    public static final String CLOSED_PAREN = ")";
+}
+</code></pre>

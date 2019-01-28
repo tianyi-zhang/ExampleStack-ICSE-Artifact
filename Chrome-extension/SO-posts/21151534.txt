@@ -1,0 +1,86 @@
+<p>I ran into the same problem, and it doesn't seem like google is in any hurry to fix it.</p>
+
+<p>I didn't want to add the deprecated client helper gcm.jar to my app, so I coded a minimal solution that works on my Android 2.3.6 Nexus One phone that fails registration as in the question above</p>
+
+<pre><code>            try {
+                gcm = GoogleCloudMessaging.getInstance(context);
+                regID = gcm.register(SENDER_ID);
+                storeRegistrationId(regID);
+                msg = "Device registered, registration ID=" + regID;
+
+                sendRegistrationIdToBackend();
+            } catch (IOException ex) {
+                msg = "Exception registering for GCM :" + ex.getMessage();
+                // If there is an error, don't just keep trying to register.
+                oldSchoolRegister();
+            }
+</code></pre>
+
+<p>The AUTHENTICATION_FAILED triggers the IOException in the code above</p>
+
+<pre><code>private void oldSchoolRegister() {
+    Intent intent = new Intent("com.google.android.c2dm.intent.REGISTER");
+    intent.setPackage("com.google.android.gsf");
+    setRegCallbackIntent(context, intent);
+    intent.putExtra("sender", SENDER_ID);
+    context.startService(intent);
+}
+
+private static synchronized void setRegCallbackIntent(Context context, Intent intent) {
+    regCallback = PendingIntent.getBroadcast(context, 0, new Intent(), 0);
+    intent.putExtra("app", regCallback);
+}
+
+public static synchronized void cancelRegCallbackIntent() {
+    if (regCallback != null) {
+        regCallback.cancel();
+        regCallback = null;
+    }
+}
+</code></pre>
+
+<p>I added the above code to my app.  They are simplified methods from the Client Helper gcm.jar (so you don't need to add the jar to your app)</p>
+
+<pre><code>protected void onHandleIntent(Intent intent) {
+    Bundle extras = intent.getExtras();
+
+    if (extras != null &amp;&amp; !extras.isEmpty()) {  // has effect of unparcelling Bundle
+        GoogleCloudMessaging gcm = GoogleCloudMessaging.getInstance(this);
+        String messageType = gcm.getMessageType(intent);
+
+        if (messageType != null) {
+            if (GoogleCloudMessaging.MESSAGE_TYPE_MESSAGE.equals(messageType)) {
+                showMessage(extras.getString("message")); // call your code
+                Logger.d(TAG, "Received message: " + message.alert + ": " + message.url);
+            } else if (GoogleCloudMessaging.MESSAGE_TYPE_SEND_ERROR.equals(messageType)) {
+                Logger.e(TAG, "Send error: " + extras.toString());
+            } else if (GoogleCloudMessaging.MESSAGE_TYPE_DELETED.equals(messageType)) {
+                Logger.e(TAG, "Deleted messages on server: " + extras.toString());
+            }
+        } else {
+            String regID = extras.getString("registration_id");
+            if (regID != null &amp;&amp; !regID.isEmpty()) {
+                doRegistration(regID); // send to your server etc.
+                GCMSetup.storeRegistrationId(regID);
+                GCMSetup.cancelRegCallbackIntent();
+            }
+        }
+    }
+    // Release the wake lock provided by the WakefulBroadcastReceiver.
+    GCMBroadcastReceiver.completeWakefulIntent(intent);
+}
+</code></pre>
+
+<p>This code is in the intent service, and has a few lines to store the ID received from GCM.  As you can see only about 20 extra lines of code compared to a basic implementation, and no additional dependencies!  You only need to update your AndroidManifest.xml to make sure you can receive the REGISTRATION intent.</p>
+
+<pre><code>    &lt;receiver android:name="com.camiolog.android.GCMBroadcastReceiver"
+        android:permission="com.google.android.c2dm.permission.SEND" &gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="com.google.android.c2dm.intent.RECEIVE" /&gt;
+            &lt;action android:name="com.google.android.c2dm.intent.REGISTRATION"/&gt;
+            &lt;category android:name="com.camiolog.android"/&gt;
+        &lt;/intent-filter&gt;
+    &lt;/receiver&gt;
+</code></pre>
+
+<p>I hope this helps until google gets their act together!</p>

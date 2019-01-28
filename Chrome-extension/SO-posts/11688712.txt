@@ -1,0 +1,235 @@
+<p>Here is a solution that works very well with Spring 3.1 and Apache HttpComponents 4.1 I created based various answers on this site and reading the spring RestTempalte source code. I am sharing in hopes of saving others time, I think spring should just have some code like this built in but it does not.</p>
+
+<pre><code>RestClient client = new RestClient();
+client.setApplicationPath("someApp");
+String url = client.login("theuser", "123456");
+UserPortfolio portfolio = client.template().getForObject(client.apiUrl("portfolio"), 
+                         UserPortfolio.class);
+</code></pre>
+
+<p>Below is the Factory class which setups up the HttpComponents context to be the same on every request with the RestTemplate.</p>
+
+<pre><code>public class StatefullHttpComponentsClientHttpRequestFactory extends 
+                   HttpComponentsClientHttpRequestFactory
+{
+    private final HttpContext httpContext;
+
+    public StatefullHttpComponentsClientHttpRequestFactory(HttpClient httpClient, HttpContext httpContext)
+    {
+        super(httpClient);
+        this.httpContext = httpContext;
+    }
+
+    @Override
+    protected HttpContext createHttpContext(HttpMethod httpMethod, URI uri)
+    {
+        return this.httpContext;
+    }
+}
+</code></pre>
+
+<p>Below is Statefull Rest template that you can use to remember cookies, once you log in with it will remember the JSESSIONID and sent it on subsequent requests. </p>
+
+<pre><code>public class StatefullRestTemplate extends RestTemplate
+{
+    private final HttpClient httpClient;
+    private final CookieStore cookieStore;
+    private final HttpContext httpContext;
+    private final StatefullHttpComponentsClientHttpRequestFactory statefullHttpComponentsClientHttpRequestFactory;
+
+    public StatefullRestTemplate()
+    {
+        super();
+        httpClient = new DefaultHttpClient();
+        cookieStore = new BasicCookieStore();
+        httpContext = new BasicHttpContext();
+        httpContext.setAttribute(ClientContext.COOKIE_STORE, getCookieStore());
+        statefullHttpComponentsClientHttpRequestFactory = new StatefullHttpComponentsClientHttpRequestFactory(httpClient, httpContext);
+        super.setRequestFactory(statefullHttpComponentsClientHttpRequestFactory);
+    }
+
+    public HttpClient getHttpClient()
+    {
+        return httpClient;
+    }
+
+    public CookieStore getCookieStore()
+    {
+        return cookieStore;
+    }
+
+    public HttpContext getHttpContext()
+    {
+        return httpContext;
+    }
+
+    public StatefullHttpComponentsClientHttpRequestFactory getStatefulHttpClientRequestFactory()
+    {
+        return statefullHttpComponentsClientHttpRequestFactory;
+    }
+}
+</code></pre>
+
+<p>Here is a class to represent a rest client so that you can call into an app secured with spring 
+security.</p>
+
+<pre><code>public class RestClient
+{
+    private String host = "localhost";
+    private String port = "8080";
+    private String applicationPath;
+    private String apiPath = "api";
+    private String loginPath = "j_spring_security_check";
+    private String logoutPath = "logout";
+    private final String usernameInputFieldName = "j_username";
+    private final String passwordInputFieldName = "j_password";
+    private final StatefullRestTemplate template = new StatefullRestTemplate();
+
+    /**
+     * This method logs into a service by doing an standard http using the configuration in this class.
+     * 
+     * @param username
+     *            the username to log into the application with
+     * @param password
+     *            the password to log into the application with
+     * 
+     * @return the url that the login redirects to
+     */
+    public String login(String username, String password)
+    {
+        MultiValueMap&lt;String, String&gt; form = new LinkedMultiValueMap&lt;&gt;();
+        form.add(usernameInputFieldName, username);
+        form.add(passwordInputFieldName, password);
+        URI location = this.template.postForLocation(loginUrl(), form);
+        return location.toString();
+    }
+
+    /**
+     * Logout by doing an http get on the logout url
+     * 
+     * @return result of the get as ResponseEntity
+     */
+    public ResponseEntity&lt;String&gt; logout()
+    {
+        return this.template.getForEntity(logoutUrl(), String.class);
+    }
+
+    public String applicationUrl(String relativePath)
+    {
+        return applicationUrl() + "/" + checkNotNull(relativePath);
+    }
+
+    public String apiUrl(String relativePath)
+    {
+        return applicationUrl(apiPath + "/" + checkNotNull(relativePath));
+    }
+
+    public StatefullRestTemplate template()
+    {
+        return template;
+    }
+
+    public String serverUrl()
+    {
+        return "http://" + host + ":" + port;
+    }
+
+    public String applicationUrl()
+    {
+        return serverUrl() + "/" + nullToEmpty(applicationPath);
+    }
+
+    public String loginUrl()
+    {
+        return applicationUrl(loginPath);
+    }
+
+    public String logoutUrl()
+    {
+        return applicationUrl(logoutPath);
+    }
+
+    public String apiUrl()
+    {
+        return applicationUrl(apiPath);
+    }
+
+    public void setLogoutPath(String logoutPath)
+    {
+        this.logoutPath = logoutPath;
+    }
+
+    public String getHost()
+    {
+        return host;
+    }
+
+    public void setHost(String host)
+    {
+        this.host = host;
+    }
+
+    public String getPort()
+    {
+        return port;
+    }
+
+    public void setPort(String port)
+    {
+        this.port = port;
+    }
+
+    public String getApplicationPath()
+    {
+        return applicationPath;
+    }
+
+    public void setApplicationPath(String contextPath)
+    {
+        this.applicationPath = contextPath;
+    }
+
+    public String getApiPath()
+    {
+        return apiPath;
+    }
+
+    public void setApiPath(String apiPath)
+    {
+        this.apiPath = apiPath;
+    }
+
+    public String getLoginPath()
+    {
+        return loginPath;
+    }
+
+    public void setLoginPath(String loginPath)
+    {
+        this.loginPath = loginPath;
+    }
+
+    public String getLogoutPath()
+    {
+        return logoutPath;
+    }
+
+    @Override
+    public String toString()
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.append("RestClient [\n serverUrl()=");
+        builder.append(serverUrl());
+        builder.append(", \n applicationUrl()=");
+        builder.append(applicationUrl());
+        builder.append(", \n loginUrl()=");
+        builder.append(loginUrl());
+        builder.append(", \n logoutUrl()=");
+        builder.append(logoutUrl());
+        builder.append(", \n apiUrl()=");
+        builder.append(apiUrl());
+        builder.append("\n]");
+        return builder.toString();
+    }
+}
+</code></pre>

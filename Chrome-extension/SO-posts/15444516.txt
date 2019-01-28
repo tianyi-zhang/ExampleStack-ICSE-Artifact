@@ -1,0 +1,371 @@
+<p>Well if every page is text only as you say, You can get the text from textview and add them to an SQLite db.</p>
+
+<p>Here's an example of what I mean, based on an app I did.<br>
+<strong>DatabaseConnector.java:</strong> </p>
+
+<pre><code>import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.SQLException;
+import android.database.sqlite.SQLiteDatabase;
+
+
+public class DatabaseConnector {
+
+    private static final String DB_NAME = "WorldCountries";
+    private SQLiteDatabase database;
+    private DatabaseOpenHelper dbOpenHelper;
+
+    public DatabaseConnector(Context context) {
+            dbOpenHelper = new DatabaseOpenHelper(context, DB_NAME, null, 1);
+    }
+
+    public void open() throws SQLException {
+       database = dbOpenHelper.getWritableDatabase();
+    } 
+
+    public void close() {
+      if (database != null)
+         database.close();
+    }      
+
+    public void insertContact(String name, String cap)  {
+      ContentValues newCon = new ContentValues();
+      newCon.put("name", name);
+      newCon.put("cap", cap);
+
+      open();
+      database.insert("country", null, newCon);
+      close();
+    }
+
+
+    public void updateContact(long id, String name, String cap) {
+      ContentValues editCon = new ContentValues();
+      editCon.put("name", name);
+      editCon.put("cap", cap);
+
+      open();
+      database.update("country", editCon, "_id=" + id, null);
+      close();
+    }
+
+
+    public Cursor getAllContacts() {
+       return database.query("country", new String[] {"_id", "name"}, null, null, null, null, "name");
+    }
+
+    public Cursor getOneContact(long id) {
+       return database.query("country", null, "_id=" + id, null, null, null, null);
+    }
+
+    public void deleteContact(long id) {
+       open(); 
+       database.delete("country", "_id=" + id, null);
+       close();
+    }
+}
+</code></pre>
+
+<p><strong>DatabaseOpenHelper.java:</strong></p>
+
+<pre><code>import android.content.Context;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteDatabase.CursorFactory;
+import android.database.sqlite.SQLiteOpenHelper;
+
+public class DatabaseOpenHelper extends SQLiteOpenHelper {
+
+    public DatabaseOpenHelper(Context context, String name,
+            CursorFactory factory, int version) {
+        super(context, name, factory, version);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        String createQuery = "CREATE TABLE country (_id integer primary key autoincrement,name, cap);";                 
+        db.execSQL(createQuery);        
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+
+    }
+
+}
+</code></pre>
+
+<p>Now this is the activity which contains the list of items added to favorites or bookmarks<br>
+<strong>FavoriteList.java:</strong>  </p>
+
+<pre><code>import android.os.AsyncTask;
+import android.os.Bundle;
+import android.app.ListActivity;
+import android.content.Intent;
+import android.database.Cursor;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.AdapterView;
+import android.widget.CursorAdapter;
+import android.widget.ListView;
+import android.widget.SimpleCursorAdapter;
+import android.widget.AdapterView.OnItemClickListener;
+
+public class FavoriteList extends ListActivity {
+
+    public static final String ROW_ID = "row_id";
+    private ListView conListView;
+    private CursorAdapter conAdapter;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        conListView=getListView();
+        conListView.setOnItemClickListener(viewConListener);
+
+        // map each name to a TextView
+    String[] from = new String[] { "name" };
+    int[] to = new int[] { R.id.countryTextView };
+    conAdapter = new SimpleCursorAdapter(FavoriteList.this, R.layout.country_list, null, from, to);
+    setListAdapter(conAdapter); // set adapter
+    }
+
+
+    @Override
+    protected void onResume() {
+       super.onResume();  
+       new GetContacts().execute((Object[]) null);
+    } 
+
+
+    @Override
+    protected void onStop() {
+       Cursor cursor = conAdapter.getCursor();
+
+       if (cursor != null) 
+          cursor.deactivate();
+
+       conAdapter.changeCursor(null);
+       super.onStop();
+    }    
+
+
+    private class GetContacts extends AsyncTask&lt;Object, Object, Cursor&gt; 
+    {
+       DatabaseConnector dbConnector = new DatabaseConnector(FavoriteList.this);
+
+       @Override
+       protected Cursor doInBackground(Object... params) {
+          dbConnector.open();
+          return dbConnector.getAllContacts(); 
+       } 
+
+       @Override
+       protected void onPostExecute(Cursor result) {
+            conAdapter.changeCursor(result); // set the adapter's Cursor
+            dbConnector.close();
+       } 
+    } 
+
+    OnItemClickListener viewConListener = new OnItemClickListener() {
+       public void onItemClick(AdapterView&lt;?&gt; arg0, View arg1, int arg2,long arg3) {         
+          Intent viewCon = new Intent(FavoriteList.this, ViewFav.class);
+          viewCon.putExtra(ROW_ID, arg3);
+          startActivity(viewCon);
+       }
+    };   
+
+}
+</code></pre>
+
+<p>And this is the activity for viewing each item in the favorites list, with a menu item to delete entry from database<br>
+<strong>ViewFav.java</strong>  </p>
+
+<pre><code>import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.database.Cursor;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.widget.TextView;
+
+public class ViewFav extends Activity {
+
+   private long rowID;
+   private TextView nameTv;
+   private TextView capTv;
+
+   @Override
+   public void onCreate(Bundle savedInstanceState) {
+      super.onCreate(savedInstanceState);
+      setContentView(R.layout.view_fav);
+
+      setUpViews();
+      Bundle extras = getIntent().getExtras();
+      rowID = extras.getLong(FavoriteList.ROW_ID); 
+   }
+
+   private void setUpViews() {
+       nameTv = (TextView) findViewById(R.id.nameText);
+       capTv = (TextView) findViewById(R.id.capText);
+   }
+
+   @Override
+   protected void onResume() {
+      super.onResume();
+      new LoadContacts().execute(rowID);
+   } 
+
+   private class LoadContacts extends AsyncTask&lt;Long, Object, Cursor&gt; {
+      DatabaseConnector dbConnector = new DatabaseConnector(ViewFav.this);
+
+      @Override
+      protected Cursor doInBackground(Long... params) {
+         dbConnector.open();
+         return dbConnector.getOneContact(params[0]);
+      } 
+
+      @Override
+      protected void onPostExecute(Cursor result) {
+         super.onPostExecute(result);
+
+         result.moveToFirst();
+         int nameIndex = result.getColumnIndex("name");
+         int capIndex = result.getColumnIndex("cap");
+
+         nameTv.setText(result.getString(nameIndex));
+         capTv.setText(result.getString(capIndex));
+
+         result.close();
+         dbConnector.close();
+      }
+   } 
+
+
+   @Override
+   public boolean onCreateOptionsMenu(Menu menu)  {
+      super.onCreateOptionsMenu(menu);
+      MenuInflater inflater = getMenuInflater();
+      inflater.inflate(R.menu.view_fav_menu, menu);
+      return true;
+   }
+
+   @Override
+   public boolean onOptionsItemSelected(MenuItem item) {
+      switch (item.getItemId()) {
+         case R.id.deleteItem:
+            deleteContact();
+            return true;
+
+         default:
+            return super.onOptionsItemSelected(item);
+      } 
+   }
+
+   private void deleteContact() {
+      AlertDialog.Builder alert = new AlertDialog.Builder(ViewFav.this);
+      alert.setTitle(R.string.confirmTitle); 
+      alert.setMessage(R.string.confirmMessage); 
+      alert.setPositiveButton(R.string.delete_btn,
+         new DialogInterface.OnClickListener()  {
+            public void onClick(DialogInterface dialog, int button) {
+               final DatabaseConnector dbConnector = 
+                  new DatabaseConnector(ViewFav.this);
+
+               AsyncTask&lt;Long, Object, Object&gt; deleteTask =
+                  new AsyncTask&lt;Long, Object, Object&gt;()  {
+                     @Override
+                     protected Object doInBackground(Long... params) {
+                        dbConnector.deleteContact(params[0]); 
+                        return null;
+                     } 
+
+                     @Override
+                     protected void onPostExecute(Object result) {
+                        finish(); 
+                     }
+                  };
+
+               deleteTask.execute(new Long[] { rowID });               
+            }
+         }
+      );
+
+      alert.setNegativeButton(R.string.cancel_btn, null).show();
+   }
+}
+</code></pre>
+
+<p>And finally putting a favorite button in your activity/fragment
+when clicking on the favorites button in gets the content in your textview and adds them as an entry in the database, in this case the database contains   </p>
+
+<pre><code>    private long rowID; 
+    private TextView nameEt;
+    private TextView capEt;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout....);
+
+         nameEt = (TextView) findViewById(R.id.textView1);
+         capEt = (TextView) findViewById(R.id.textView2);
+
+         //other stuff in OnCreate ......
+    }
+
+    private MenuItem itemfav;
+    @Override
+    public boolean  onCreateOptionsMenu(Menu menu) {
+        itemfav = menu.add(0, 10, 10, "Favorite");
+        itemfav.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        return super.onCreateOptionsMenu(menu);
+    }
+
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        // Handle item selection
+        switch (item.getItemId()) {
+            case 10:
+                fav();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+
+    }
+
+    private void fav() {
+        AsyncTask&lt;Object, Object, Object&gt; saveContactTask = 
+                   new AsyncTask&lt;Object, Object, Object&gt;() 
+                   {
+                      @Override
+                      protected Object doInBackground(Object... params) 
+                      {
+                         saveContact();
+                         return null;
+                      }
+
+                      @Override
+                      protected void onPostExecute(Object result) 
+                      {
+                         Toast.makeText(Button2.this, "Item has been added to favorites", Toast.LENGTH_SHORT).show();
+                      }
+                   }; 
+
+                saveContactTask.execute((Object[]) null); 
+    }
+
+    private void saveContact() 
+       {
+          DatabaseConnector dbConnector = new DatabaseConnector(this);
+              dbConnector.insertContact(nameEt.getText().toString(),capEt.getText().toString());
+
+       }
+</code></pre>

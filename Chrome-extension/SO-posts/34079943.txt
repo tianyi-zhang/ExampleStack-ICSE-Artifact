@@ -1,0 +1,113 @@
+<p>IMO, if your project uses Google's volley as a module (not jar file), you can customize its classes like the following:</p>
+
+<p><strong>OPTION #1:</strong></p>
+
+<p><strong>First file, RequestQueue.java:</strong></p>
+
+<p>add a class variable <code>private boolean mCacheUsed = true;</code></p>
+
+<p>and the following constructors:</p>
+
+<pre><code>    public RequestQueue(Cache cache, Network network, int threadPoolSize,
+                        ResponseDelivery delivery, boolean cacheUsed) {
+        mCache = cache;
+        mNetwork = network;
+        mDispatchers = new NetworkDispatcher[threadPoolSize];
+        mDelivery = delivery;
+        mCacheUsed = cacheUsed;
+    }
+
+    public RequestQueue(Cache cache, Network network, int threadPoolSize, boolean cacheUsed) {
+        this(cache, network, threadPoolSize,
+                    new ExecutorDelivery(new Handler(Looper.getMainLooper())), cacheUsed);
+    }
+
+    public RequestQueue(Cache cache, Network network, boolean cacheUsed) {
+        this(cache, network, DEFAULT_NETWORK_THREAD_POOL_SIZE, cacheUsed);
+    }
+</code></pre>
+
+<p>then, inside <code>public &lt;T&gt; Request&lt;T&gt; add(Request&lt;T&gt; request) {</code>, you check as the following:</p>
+
+<pre><code>        // If the request is uncacheable, skip the cache queue and go straight to the network.
+        if (!request.shouldCache() || !mCacheUsed) {
+            mNetworkQueue.add(request);
+            return request;
+        }
+</code></pre>
+
+<p><strong>Second file, Volley.java:</strong></p>
+
+<pre><code>public static RequestQueue newRequestQueue(Context context, HttpStack stack, boolean cacheUsed) {
+        File cacheDir = new File(context.getCacheDir(), DEFAULT_CACHE_DIR);
+
+        String userAgent = "volley/0";
+        try {
+            String packageName = context.getPackageName();
+            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
+            userAgent = packageName + "/" + info.versionCode;
+        } catch (NameNotFoundException e) {
+        }
+
+        if (stack == null) {
+            if (Build.VERSION.SDK_INT &gt;= 9) {
+                stack = new HurlStack();
+            } else {
+                // Prior to Gingerbread, HttpUrlConnection was unreliable.
+                // See: http://android-developers.blogspot.com/2011/09/androids-http-clients.html
+                stack = new HttpClientStack(AndroidHttpClient.newInstance(userAgent));
+            }
+        }
+
+        Network network = new BasicNetwork(stack);
+
+        RequestQueue queue = new RequestQueue(new DiskBasedCache(cacheDir), network, cacheUsed);
+        queue.start();
+
+        return queue;
+    }
+
+public static RequestQueue newRequestQueue(Context context, boolean cacheUsed) {
+        return newRequestQueue(context, null, cacheUsed);
+    }
+</code></pre>
+
+<p><strong>Finally, in MainActivity,</strong> for example:</p>
+
+<p>If want to use available cache:</p>
+
+<pre><code>RequestQueue requestQueue = Volley.newRequestQueue(this, true); 
+</code></pre>
+
+<p>If don't want to use available cache:</p>
+
+<pre><code>RequestQueue requestQueue = Volley.newRequestQueue(this, false); 
+</code></pre>
+
+<hr>
+
+<p><strong>OPTION #2:</strong></p>
+
+<p><strong>Request.java:</strong></p>
+
+<p>Add a class variable <code>public boolean mSkipAvailableCache = false;</code></p>
+
+<p><strong>RequestQueue.java:</strong></p>
+
+<p>inside <code>public &lt;T&gt; Request&lt;T&gt; add(Request&lt;T&gt; request)</code>, you check as the following:</p>
+
+<pre><code>        // If the request is uncacheable, skip the cache queue and go straight to the network.
+        if (!request.shouldCache() || request.mSkipAvailableCache) {
+            mNetworkQueue.add(request);
+            return request;
+        }
+</code></pre>
+
+<p><strong>MainActivity.java:</strong>
+You can set</p>
+
+<pre><code>jsonArrayRequest.mSkipAvailableCache = true;
+</code></pre>
+
+<p>available cache will not be used.
+Hope this helps!</p>

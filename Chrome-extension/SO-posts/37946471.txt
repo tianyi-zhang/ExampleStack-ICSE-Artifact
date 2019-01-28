@@ -1,0 +1,154 @@
+<p>I wrote <a href="https://vladmihalcea.com/2016/06/20/how-to-map-json-objects-using-generic-hibernate-types/" rel="nofollow">an article</a> about how you can map JSON objects on both PostgreSQL and MySQL.</p>
+
+<p>For PostgreSQL, you need to send the JSON object in a binary form:</p>
+
+<pre><code>public class JsonBinaryType
+    extends AbstractSingleColumnStandardBasicType&lt;Object&gt; 
+    implements DynamicParameterizedType {
+
+    public JsonBinaryType() {
+        super( 
+            JsonBinarySqlTypeDescriptor.INSTANCE, 
+            new JsonTypeDescriptor()
+        );
+    }
+
+    public String getName() {
+        return "jsonb";
+    }
+
+    @Override
+    public void setParameterValues(Properties parameters) {
+        ((JsonTypeDescriptor) getJavaTypeDescriptor())
+            .setParameterValues(parameters);
+    }
+
+}
+</code></pre>
+
+<p>The <code>JsonBinarySqlTypeDescriptor</code> looks like this:</p>
+
+<pre><code>public class JsonBinarySqlTypeDescriptor
+    extends AbstractJsonSqlTypeDescriptor {
+
+    public static final JsonBinarySqlTypeDescriptor INSTANCE = 
+        new JsonBinarySqlTypeDescriptor();
+
+    @Override
+    public &lt;X&gt; ValueBinder&lt;X&gt; getBinder(
+        final JavaTypeDescriptor&lt;X&gt; javaTypeDescriptor) {
+        return new BasicBinder&lt;X&gt;(javaTypeDescriptor, this) {
+            @Override
+            protected void doBind(
+                PreparedStatement st, 
+                X value, 
+                int index, 
+                WrapperOptions options) throws SQLException {
+                st.setObject(index, 
+                    javaTypeDescriptor.unwrap(
+                        value, JsonNode.class, options), getSqlType()
+                );
+            }
+
+            @Override
+            protected void doBind(
+                CallableStatement st, 
+                X value, 
+                String name, 
+                WrapperOptions options)
+                    throws SQLException {
+                st.setObject(name, 
+                    javaTypeDescriptor.unwrap(
+                        value, JsonNode.class, options), getSqlType()
+                );
+            }
+        };
+    }
+}
+</code></pre>
+
+<p>and the <code>JsonTypeDescriptor</code> like this:</p>
+
+<pre><code>public class JsonTypeDescriptor
+        extends AbstractTypeDescriptor&lt;Object&gt; 
+        implements DynamicParameterizedType {
+
+    private Class&lt;?&gt; jsonObjectClass;
+
+    @Override
+    public void setParameterValues(Properties parameters) {
+        jsonObjectClass = ( (ParameterType) parameters.get( PARAMETER_TYPE ) )
+            .getReturnedClass();
+
+    }
+
+    public JsonTypeDescriptor() {
+        super( Object.class, new MutableMutabilityPlan&lt;Object&gt;() {
+            @Override
+            protected Object deepCopyNotNull(Object value) {
+                return JacksonUtil.clone(value);
+            }
+        });
+    }
+
+    @Override
+    public boolean areEqual(Object one, Object another) {
+        if ( one == another ) {
+            return true;
+        }
+        if ( one == null || another == null ) {
+            return false;
+        }
+        return JacksonUtil.toJsonNode(JacksonUtil.toString(one)).equals(
+                JacksonUtil.toJsonNode(JacksonUtil.toString(another)));
+    }
+
+    @Override
+    public String toString(Object value) {
+        return JacksonUtil.toString(value);
+    }
+
+    @Override
+    public Object fromString(String string) {
+        return JacksonUtil.fromString(string, jsonObjectClass);
+    }
+
+    @SuppressWarnings({ "unchecked" })
+    @Override
+    public &lt;X&gt; X unwrap(Object value, Class&lt;X&gt; type, WrapperOptions options) {
+        if ( value == null ) {
+            return null;
+        }
+        if ( String.class.isAssignableFrom( type ) ) {
+            return (X) toString(value);
+        }
+        if ( Object.class.isAssignableFrom( type ) ) {
+            return (X) JacksonUtil.toJsonNode(toString(value));
+        }
+        throw unknownUnwrap( type );
+    }
+
+    @Override
+    public &lt;X&gt; Object wrap(X value, WrapperOptions options) {
+        if ( value == null ) {
+            return null;
+        }
+        return fromString(value.toString());
+    }
+
+}
+</code></pre>
+
+<p>Now, you need to declare the new type on either class level or in a <strong>package-info.java</strong> package-level descriptior:</p>
+
+<pre><code>@TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
+</code></pre>
+
+<p>And the entity mapping will look like this:</p>
+
+<pre><code>@Type(type = "jsonb")
+@Column(columnDefinition = "json")
+private Location location;
+</code></pre>
+
+<p>That's it!</p>

@@ -1,0 +1,63 @@
+<p>I found a solution. <a href="http://stackoverflow.com/questions/33151246/how-to-handle-intent-on-a-webview-url">This question</a> and <a href="https://developer.chrome.com/multidevice/android/intents" rel="nofollow">this documentation</a> helps me to understand situation.</p>
+
+<p>As a result, i've written a link handler which follow this logic:</p>
+
+<ol>
+<li>Open http and https in the same WebView</li>
+<li>Tries to handle known schemes (tel: etc.)</li>
+<li>If can't find a known activity, parses intent: scheme and tries to run appropriate app</li>
+<li>If required app not installed, tries to load provided fallback url into current WebView</li>
+<li>If no fallback url provided, redirects to market and ask to install required app</li>
+</ol>
+
+<p>The code is:</p>
+
+<pre><code>mWebView.setWebViewClient(new CustomWebViewClient());
+
+//...
+
+private class CustomWebViewClient extends WebViewClient {
+
+    @Override
+    public boolean shouldOverrideUrlLoading(WebView webView, String url) {
+        if (url.startsWith("http")) return false;//open web links as usual
+        //try to find browse activity to handle uri
+        Uri parsedUri = Uri.parse(url);
+        PackageManager packageManager = getActivity().getPackageManager();
+        Intent browseIntent = new Intent(Intent.ACTION_VIEW).setData(parsedUri);
+        if (browseIntent.resolveActivity(packageManager) != null) {
+            getActivity().startActivity(browseIntent);
+            return true;
+        }
+        //if not activity found, try to parse intent://
+        if (url.startsWith("intent:")) {
+            try {
+                Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                if (intent.resolveActivity(getActivity().getPackageManager()) != null) {
+                    getActivity().startActivity(intent);
+                    return true;
+                }
+                //try to find fallback url
+                String fallbackUrl = intent.getStringExtra("browser_fallback_url");
+                if (fallbackUrl != null) {
+                    webView.loadUrl(fallbackUrl);
+                    return true;
+                }
+                //invite to install
+                Intent marketIntent = new Intent(Intent.ACTION_VIEW).setData(
+                        Uri.parse("market://details?id=" + intent.getPackage()));
+                if (marketIntent.resolveActivity(packageManager) != null) {
+                    getActivity().startActivity(marketIntent);
+                    return true;
+                }
+            } catch (URISyntaxException e) {
+                //not an intent uri
+            }
+        }
+        return true;//do nothing in other cases
+    }
+
+}
+</code></pre>
+
+<p>Maybe it needs some cleanup, but it can be helpful. Please tell me if you know an easier way of doing this, i still looking for the best solution.</p>

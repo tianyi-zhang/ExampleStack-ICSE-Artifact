@@ -1,0 +1,161 @@
+<p>There is a standard solution for this task, consisting of the following layers:</p>
+
+<p><strong>Database layer</strong></p>
+
+<p>I know nothing about the data source you are using: local or remote, so no advice here</p>
+
+<p><strong>Content Provider, presenting data from your database.</strong></p>
+
+<p>This is not that necessary, but allows usage of built-in loaders and cursorAdapters with minimal modification.</p>
+
+<p>Your <strong>custom Adapter</strong> extending, say, SimpleCursorAdapter, that uses custom layout of a row shown on your example picture. Typically this layout is stored in a separate xml layout file. Adapter contains your logic of binding data from database cursor row to newly created row View.</p>
+
+<p>Finally, <strong>ListView</strong> in your Fragment.
+You set ListView's adapter to your Adapter.</p>
+
+<p>Of course, this is quite a long way and not the only one, but the one with the minimum sweat and blood, I believe.</p>
+
+<p>The details are too lengthy to cover in a single answer, so be sure to study corresponding tutorials:</p>
+
+<p><a href="http://developer.android.com/training/contacts-provider/display-contact-badge.html" rel="nofollow">Custom Adapter and ListView</a></p>
+
+<p><a href="http://thinkandroid.wordpress.com/2010/01/13/writing-your-own-contentprovider/" rel="nofollow">Content Provider on top of Sqlite database</a></p>
+
+<p>You should:
+I. Wrap Content Provider around your database as in tutorial link above.
+Result: class MyContentProvider.</p>
+
+<pre><code> static {
+    sUriMatcher = new UriMatcher(UriMatcher.NO_MATCH);
+    sUriMatcher.addURI(AUTHORITY, DATABASE_TABLE, MATCH_ALL);
+
+    projectionMap = new HashMap&lt;String, String&gt;();
+    projectionMap.put(KEY_ROWID, KEY_ROWID);
+    projectionMap.put(KEY_NAME, KEY_NAME);
+    //...the same for other fields
+    projectionMap.put(KEY_CHARTING_PROC, KEY_CHARTING_PROC);
+ }
+
+
+@Override
+public boolean onCreate() {
+    ourHelper = new DbHelper(getContext());
+    return true;
+}
+
+@Override
+public String getType(Uri uri) {
+    switch (sUriMatcher.match(uri)) {
+        case MATCH_ALL:
+            return MY_CONTENT_TYPE;
+        default:
+            throw new IllegalArgumentException("Unknown URI " + uri);
+    }
+}
+
+@Override
+public int delete(Uri uri, String where, String[] whereArgs) {
+    int count;
+    SQLiteDatabase db = ourHelper.getWritableDatabase();
+    switch (sUriMatcher.match(uri)) {
+        case MATCH_ALL: {
+            count = db.delete(DATABASE_TABLE, where, whereArgs);
+            getContext().getContentResolver().notifyChange(uri, null);
+            return count;
+        }
+        default:
+            throw new IllegalArgumentException("Unknown URI " + uri);
+    }
+}
+//insert and update are just the same: copy from tutorial with the same changes
+
+@Override
+public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
+    SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+
+    SQLiteDatabase db = dbHelper.getReadableDatabase();
+
+    switch (sUriMatcher.match(uri)) {
+        case MATCH_ALL:
+            qb.setTables(DATABASE_TABLE);
+            qb.setProjectionMap(projectionMap);
+            break;
+        default:
+            throw new IllegalArgumentException("Unknown URI " + uri);
+    }
+
+    Cursor c = qb.query(db, projection, selection, selectionArgs, null, null, sortOrder);
+    c.setNotificationUri(getContext().getContentResolver(), uri);
+    return c;
+}
+</code></pre>
+
+<p>II. Create xml layout for single database row (you already have one). Result: entry.xml</p>
+
+<p>III. Write class MyAdapter extending SimpleCursorAdapter, overriding it's newView() and bindView(). Also you shoud write class constructor.</p>
+
+<pre><code>    class MyAdapter extends SimpleCursorAdapter{
+    private int layout;
+
+    public MyAdapter (Context context, int layout, Cursor c, String[] from, int[] to) {
+        super(context, layout, c, from, to); //deprecated, but used here for simplicity
+        this.layout = layout; //your entry.xml id
+    }
+
+    @Override
+    public View newView(Context context, Cursor cursor, ViewGroup parent) {
+
+        Cursor c = getCursor();
+
+        //creating row view from entry.xml
+        final LayoutInflater inflater = LayoutInflater.from(context);
+        View v = inflater.inflate(layout, parent, false);
+
+        bindView(v, context, c)    
+
+        return v;
+    }
+
+    @Override
+    public void bindView(View v, Context context, Cursor c) {
+        //get data from current cursor position
+        int myCol = c.getColumnIndex("my_field");
+        int myField = c.getInt(myCol);
+
+        //find a widget in the view, inflated with your entry.xml
+        ImageView imgType = (ImageView) v.findViewById(R.id.imgMyField);
+        if (imgType != null){
+            if (myField == 0)
+                imgType.setImageResource(R.drawable.img_zero);
+            else
+                imgType.setImageResource(R.drawable.img_non_zero);
+        }
+
+        return v;
+    }
+    }
+</code></pre>
+
+<p>Note, that newView()/bindView will be called automatically for each and every row in Cursor when you set Adapter for ListView or datasource changes.</p>
+
+<p>IV. In your Fragment's onCreateView: View v</p>
+
+<pre><code>        //deprecated: only for simplicity
+        //get database cursor from provider
+        Cursor cursor = managedQuery(MyProvider.MY_CONTENT_URI, PROJECTION, null, null, BaseColumns.ID + " ASC");
+    String[] dataColumns = {/* you columns here*/ } ;
+    adapter
+            = new MyAdapter(
+            this.getActivity(),                             // The Context for the ListView
+            R.layout.entry,          // Points to the XML for a list item
+            cursor,                           // The cursor to get items from
+            dataColumns,
+            null
+    );
+    ListView listView = (ListView) v.findViewById(R.id.listView);
+    listView.setAdapter(adapter); //here list view is actually filled
+</code></pre>
+
+<p>If something is not working, check SearchableDictionary and NotePad samples from Android SDK</p>
+
+<p><strong>Important note</strong>: Don't stick with deprecated ManagedQuery after your listview gets to work. Use Loaders instead.</p>

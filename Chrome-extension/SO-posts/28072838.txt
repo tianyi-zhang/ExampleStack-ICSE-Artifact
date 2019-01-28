@@ -1,0 +1,71 @@
+<p><strong>The behaviour of java.time-package (JSR-310) with respect to support of zone ids is as specified</strong> - see <a href="http://docs.oracle.com/javase/8/docs/api/java/time/ZoneId.html" rel="nofollow">javadoc</a>. Explicit citation of the relevant section (other IDs are just considered as offset-ids in format "Z", "+hh:mm", "-hh:mm" or "UTC+hh:mm" etc.):</p>
+
+<blockquote>
+  <p>A region-based ID must be of two or more characters</p>
+</blockquote>
+
+<p>The requirement of having at least two characters is also implemented in the source code of class <a href="http://hg.openjdk.java.net/jdk8/jdk8/jdk/file/tip/src/share/classes/java/time/ZoneRegion.java" rel="nofollow">ZoneRegion</a> before any loading of timezone data starts:</p>
+
+<pre><code>/**
+ * Checks that the given string is a legal ZondId name.
+ *
+ * @param zoneId  the time-zone ID, not null
+ * @throws DateTimeException if the ID format is invalid
+ */
+private static void checkName(String zoneId) {
+    int n = zoneId.length();
+    if (n &lt; 2) {
+       throw new DateTimeException("Invalid ID for region-based ZoneId, invalid format: " + zoneId);
+    }
+    for (int i = 0; i &lt; n; i++) {
+        char c = zoneId.charAt(i);
+        if (c &gt;= 'a' &amp;&amp; c &lt;= 'z') continue;
+        if (c &gt;= 'A' &amp;&amp; c &lt;= 'Z') continue;
+        if (c == '/' &amp;&amp; i != 0) continue;
+        if (c &gt;= '0' &amp;&amp; c &lt;= '9' &amp;&amp; i != 0) continue;
+        if (c == '~' &amp;&amp; i != 0) continue;
+        if (c == '.' &amp;&amp; i != 0) continue;
+        if (c == '_' &amp;&amp; i != 0) continue;
+        if (c == '+' &amp;&amp; i != 0) continue;
+        if (c == '-' &amp;&amp; i != 0) continue;
+        throw new DateTimeException("Invalid ID for region-based ZoneId, invalid format: " + zoneId);
+    }
+}
+</code></pre>
+
+<p>This explains why it is not possible with JSR-310/Threeten to write an expression like <code>ZoneId.of("A")</code>. The letter Z works because it is specified as well in ISO-8601 as in JSR-310 to represent the zero offset.</p>
+
+<p><strong>The workaround you have found is fine within the scope of JSR-310 which does NOT support military timezones.</strong> Consequently you will not find any format support for it (just study the class <code>DateTimeFormatterBuilder</code> - every processing of format pattern symbols is routed to the builder). The only vague idea I have got was to implement a specialized <code>TemporalField</code> representing a military timezone offset. But the implementation is (if possible at all) with certainty more complex than your workaround.</p>
+
+<p><strong>Another more suitable workaround is just string preprocessing.</strong> Since you work with a fixed format expecting the military letter always at the same position in input, you can simply do this:</p>
+
+<pre><code>String input = "312359A Dec 14";
+String offset = "";
+
+switch (input.charAt(6)) {
+  case 'A':
+    offset = "+01:00";
+    break;
+  case 'B':
+    offset = "+02:00";
+    break;
+  //...
+  case 'Z':
+    offset = "Z";
+    break;
+  default:
+    throw new ParseException("Wrong military timezone: " + input, 6);
+}
+input = input.substring(0, 6) + offset + input.substring(7);
+DateTimeFormatter formatter = DateTimeFormatter.ofPattern("ddHHmmVV MMM yy", Locale.ENGLISH);
+ZonedDateTime odt = ZonedDateTime.parse(input, formatter);
+System.out.println(odt);
+// output: 2014-12-31T23:59+01:00
+</code></pre>
+
+<p>Notes:</p>
+
+<ul>
+<li><p>I have used "Dec" instead of "DEC", otherwise the parser will complain. If your input really has capital letters then you might use the builder method <a href="http://docs.oracle.com/javase/8/docs/api/java/time/format/DateTimeFormatterBuilder.html#parseCaseInsensitive--" rel="nofollow">parseCaseInsensitive()</a>.</p></li>
+<li><p><strong>The other answer using the field <code>OffsetSeconds</code> is the better answer</strong> with regards to the parsing problem and has also got my upvote (have overlooked this feature). It is not better because it puts the burden on the user to define a mapping from military zone letters to offsets - like my suggestion with string preprocessing. <strong>But it is better because it enables using the builder-methods <code>optionalStart()</code> and <code>optionalEnd()</code> so optional time zone letters A, B, ... can be handled.</strong> See also the comment of OP about optional zone ids.</p></li>
+</ul>

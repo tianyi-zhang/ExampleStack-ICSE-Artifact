@@ -1,0 +1,287 @@
+<hr>
+
+<p><strong>Problem</strong> report for <a href="http://stackoverflow.com/questions/4150039/how-can-i-have-case-insensitive-urls-in-spring-mvc-with-annotated-mappings/5438158#5438158">solution by smat</a></p>
+
+<hr>
+
+<p>In <a href="http://stackoverflow.com/questions/4150039/how-can-i-have-case-insensitive-urls-in-spring-mvc-with-annotated-mappings/5438158#5438158">solution by smat</a>, there is one little side-effect (I would blame spring-mvc for that).</p>
+
+<p>At first, <code>AntPathMatcher.doMatch()</code> seems to return true/false depending on requested-url and controller-method's request-mapping string (That's the only thing should be done here). But, this method is used for one more purpose as well (which is not written in <a href="http://docs.spring.io/spring/docs/3.0.4.RELEASE/javadoc-api/org/springframework/util/PathMatcher.html" rel="nofollow">documentation</a>!). Another purpose is to collect corresponding values for <code>@PathVariable</code> in controller-method. These values are collected in <code>Map&lt;String, String&gt; uriTemplateVariables</code>(last parameter).And these collected values are used to pass to controller-method as parameter value.</p>
+
+<p>For example, we have controller-method like this,</p>
+
+<pre><code>@RequestMapping("/code/{userCode}")
+public String getCode(@PathVariable("userCode") String userCode) {
+    System.out.println(userCode);
+}
+</code></pre>
+
+<p>and if we access with URL, <code>/code/AbD</code>
+then with <a href="http://stackoverflow.com/questions/4150039/how-can-i-have-case-insensitive-urls-in-spring-mvc-with-annotated-mappings/5438158#5438158">solution by smat</a> <code>AntPathMatcher.doMatch()</code> will collect <code>@PathVariable</code> value in <code>Map&lt;String, String&gt; uriTemplateVariables</code> as <code>userCode-&gt;abd</code>. As we are lower-casing the path string, values collected are also lower-cased. And this <b>lower-cased userCode value is passed to our controller</b>.</p>
+
+<p>But, I am thankful to <a href="http://stackoverflow.com/questions/4150039/how-can-i-have-case-insensitive-urls-in-spring-mvc-with-annotated-mappings/5438158#5438158">solution by smat</a> which served me well so far without any other problems.</p>
+
+<hr>
+
+<p><strong>Solution</strong></p>
+
+<hr>
+
+<p>Solved this problem by doing work around <a href="http://stackoverflow.com/questions/4150039/how-can-i-have-case-insensitive-urls-in-spring-mvc-with-annotated-mappings/5438158#5438158">solution by smat</a>. Without lower-casing path or pattern string in extended <code>AntPathMatcher</code> class, I forced my extended <code>AntPathMatcher</code> to use my custom <code>AntPathStringMatcher</code>. my custom <code>AntPathStringMatcher</code> does case-insesitive matching without changing the case of actual string.</p>
+
+<p>In following solution code most of the code is copied from original class code(code I wanted to customize was hidden for subclass because of private access).</p>
+
+<p><strong>Custom AntPathMatcher,</strong></p>
+
+<pre><code>public class CaseInsensitivePathMatcher extends AntPathMatcher {
+
+private final Map&lt;String, CaseInsensitiveAntPathStringMatcher&gt; stringMatcherCache = new ConcurrentHashMap&lt;String, CaseInsensitiveAntPathStringMatcher&gt;();
+
+/**
+ * Actually match the given &lt;code&gt;path&lt;/code&gt; against the given
+ * &lt;code&gt;pattern&lt;/code&gt;.
+ * 
+ * @param pattern
+ *            the pattern to match against
+ * @param path
+ *            the path String to test
+ * @param fullMatch
+ *            whether a full pattern match is required (else a pattern match
+ *            as far as the given base path goes is sufficient)
+ * @return &lt;code&gt;true&lt;/code&gt; if the supplied &lt;code&gt;path&lt;/code&gt; matched,
+ *         &lt;code&gt;false&lt;/code&gt; if it didn't
+ */
+protected boolean doMatch(String pattern, String path, boolean fullMatch, Map&lt;String, String&gt; uriTemplateVariables) {
+
+    if (path.startsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR) != pattern.startsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR)) {
+        return false;
+    }
+
+    String[] pattDirs = StringUtils.tokenizeToStringArray(pattern, AntPathMatcher.DEFAULT_PATH_SEPARATOR);
+    String[] pathDirs = StringUtils.tokenizeToStringArray(path, AntPathMatcher.DEFAULT_PATH_SEPARATOR);
+
+    int pattIdxStart = 0;
+    int pattIdxEnd = pattDirs.length - 1;
+    int pathIdxStart = 0;
+    int pathIdxEnd = pathDirs.length - 1;
+
+    // Match all elements up to the first **
+    while (pattIdxStart &lt;= pattIdxEnd &amp;&amp; pathIdxStart &lt;= pathIdxEnd) {
+        String patDir = pattDirs[pattIdxStart];
+        if ("**".equals(patDir)) {
+            break;
+        }
+        if (!matchStrings(patDir, pathDirs[pathIdxStart], uriTemplateVariables)) {
+            return false;
+        }
+        pattIdxStart++;
+        pathIdxStart++;
+    }
+
+    if (pathIdxStart &gt; pathIdxEnd) {
+        // Path is exhausted, only match if rest of pattern is * or **'s
+        if (pattIdxStart &gt; pattIdxEnd) {
+            return (pattern.endsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR) ? path.endsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR) : !path
+                    .endsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR));
+        }
+        if (!fullMatch) {
+            return true;
+        }
+        if (pattIdxStart == pattIdxEnd &amp;&amp; pattDirs[pattIdxStart].equals("*") &amp;&amp; path.endsWith(AntPathMatcher.DEFAULT_PATH_SEPARATOR)) {
+            return true;
+        }
+        for (int i = pattIdxStart; i &lt;= pattIdxEnd; i++) {
+            if (!pattDirs[i].equals("**")) {
+                return false;
+            }
+        }
+        return true;
+    } else if (pattIdxStart &gt; pattIdxEnd) {
+        // String not exhausted, but pattern is. Failure.
+        return false;
+    } else if (!fullMatch &amp;&amp; "**".equals(pattDirs[pattIdxStart])) {
+        // Path start definitely matches due to "**" part in pattern.
+        return true;
+    }
+
+    // up to last '**'
+    while (pattIdxStart &lt;= pattIdxEnd &amp;&amp; pathIdxStart &lt;= pathIdxEnd) {
+        String patDir = pattDirs[pattIdxEnd];
+        if (patDir.equals("**")) {
+            break;
+        }
+        if (!matchStrings(patDir, pathDirs[pathIdxEnd], uriTemplateVariables)) {
+            return false;
+        }
+        pattIdxEnd--;
+        pathIdxEnd--;
+    }
+    if (pathIdxStart &gt; pathIdxEnd) {
+        // String is exhausted
+        for (int i = pattIdxStart; i &lt;= pattIdxEnd; i++) {
+            if (!pattDirs[i].equals("**")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    while (pattIdxStart != pattIdxEnd &amp;&amp; pathIdxStart &lt;= pathIdxEnd) {
+        int patIdxTmp = -1;
+        for (int i = pattIdxStart + 1; i &lt;= pattIdxEnd; i++) {
+            if (pattDirs[i].equals("**")) {
+                patIdxTmp = i;
+                break;
+            }
+        }
+        if (patIdxTmp == pattIdxStart + 1) {
+            // '**/**' situation, so skip one
+            pattIdxStart++;
+            continue;
+        }
+        // Find the pattern between padIdxStart &amp; padIdxTmp in str between
+        // strIdxStart &amp; strIdxEnd
+        int patLength = (patIdxTmp - pattIdxStart - 1);
+        int strLength = (pathIdxEnd - pathIdxStart + 1);
+        int foundIdx = -1;
+
+        strLoop: for (int i = 0; i &lt;= strLength - patLength; i++) {
+            for (int j = 0; j &lt; patLength; j++) {
+                String subPat = pattDirs[pattIdxStart + j + 1];
+                String subStr = pathDirs[pathIdxStart + i + j];
+                if (!matchStrings(subPat, subStr, uriTemplateVariables)) {
+                    continue strLoop;
+                }
+            }
+            foundIdx = pathIdxStart + i;
+            break;
+        }
+
+        if (foundIdx == -1) {
+            return false;
+        }
+
+        pattIdxStart = patIdxTmp;
+        pathIdxStart = foundIdx + patLength;
+    }
+
+    for (int i = pattIdxStart; i &lt;= pattIdxEnd; i++) {
+        if (!pattDirs[i].equals("**")) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Tests whether or not a string matches against a pattern. The pattern may
+ * contain two special characters:&lt;br&gt;
+ * '*' means zero or more characters&lt;br&gt;
+ * '?' means one and only one character
+ * 
+ * @param pattern
+ *            pattern to match against. Must not be &lt;code&gt;null&lt;/code&gt;.
+ * @param str
+ *            string which must be matched against the pattern. Must not be
+ *            &lt;code&gt;null&lt;/code&gt;.
+ * @return &lt;code&gt;true&lt;/code&gt; if the string matches against the pattern, or
+ *         &lt;code&gt;false&lt;/code&gt; otherwise.
+ */
+private boolean matchStrings(String pattern, String str, Map&lt;String, String&gt; uriTemplateVariables) {
+    CaseInsensitiveAntPathStringMatcher matcher = this.stringMatcherCache.get(pattern);
+    if (matcher == null) {
+        matcher = new CaseInsensitiveAntPathStringMatcher(pattern);
+        this.stringMatcherCache.put(pattern, matcher);
+    }
+    return matcher.matchStrings(str, uriTemplateVariables);
+}
+</code></pre>
+
+<p>}</p>
+
+<p><strong>Custom AntPathStringMatcher,</strong></p>
+
+<pre><code>public class CaseInsensitiveAntPathStringMatcher {
+private static final Pattern GLOB_PATTERN = Pattern.compile("\\?|\\*|\\{((?:\\{[^/]+?\\}|[^/{}]|\\\\[{}])+?)\\}");
+
+private static final String DEFAULT_VARIABLE_PATTERN = "(.*)";
+
+private final Pattern pattern;
+
+private final List&lt;String&gt; variableNames = new LinkedList&lt;String&gt;();
+
+
+/** Construct a new instance of the &lt;code&gt;AntPatchStringMatcher&lt;/code&gt;. */
+CaseInsensitiveAntPathStringMatcher(String pattern) {
+    this.pattern = createPattern(pattern);
+}
+
+private Pattern createPattern(String pattern) {
+    StringBuilder patternBuilder = new StringBuilder();
+    Matcher m = GLOB_PATTERN.matcher(pattern);
+    int end = 0;
+    while (m.find()) {
+        patternBuilder.append(quote(pattern, end, m.start()));
+        String match = m.group();
+        if ("?".equals(match)) {
+            patternBuilder.append('.');
+        }
+        else if ("*".equals(match)) {
+            patternBuilder.append(".*");
+        }
+        else if (match.startsWith("{") &amp;&amp; match.endsWith("}")) {
+            int colonIdx = match.indexOf(':');
+            if (colonIdx == -1) {
+                patternBuilder.append(DEFAULT_VARIABLE_PATTERN);
+                variableNames.add(m.group(1));
+            }
+            else {
+                String variablePattern = match.substring(colonIdx + 1, match.length() - 1);
+                patternBuilder.append('(');
+                patternBuilder.append(variablePattern);
+                patternBuilder.append(')');
+                String variableName = match.substring(1, colonIdx);
+                variableNames.add(variableName);
+            }
+        }
+        end = m.end();
+    }
+    patternBuilder.append(quote(pattern, end, pattern.length()));
+    return Pattern.compile(patternBuilder.toString(), Pattern.CASE_INSENSITIVE);    // this line is updated to create case-insensitive pattern object
+}
+
+private String quote(String s, int start, int end) {
+    if (start == end) {
+        return "";
+    }
+    return Pattern.quote(s.substring(start, end));
+}
+
+/**
+ * Main entry point.
+ *
+ * @return &lt;code&gt;true&lt;/code&gt; if the string matches against the pattern, or &lt;code&gt;false&lt;/code&gt; otherwise.
+ */
+public boolean matchStrings(String str, Map&lt;String, String&gt; uriTemplateVariables) {
+    Matcher matcher = pattern.matcher(str);
+    if (matcher.matches()) {
+        if (uriTemplateVariables != null) {
+            // SPR-8455
+            Assert.isTrue(variableNames.size() == matcher.groupCount(),
+                    "The number of capturing groups in the pattern segment " + pattern +
+                    " does not match the number of URI template variables it defines, which can occur if " +
+                    " capturing groups are used in a URI template regex. Use non-capturing groups instead.");
+            for (int i = 1; i &lt;= matcher.groupCount(); i++) {
+                String name = this.variableNames.get(i - 1);
+                String value = matcher.group(i);
+                uriTemplateVariables.put(name, value);
+            }
+        }
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+</code></pre>

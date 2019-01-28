@@ -1,0 +1,47 @@
+<p>Note that your ConcurrentHashMap implementation is not thread safe and could lead to one item being computed twice. It is actually quite complicated to get it right if you store the results directly without using explicit locking, which you certainly want to avoid if performance is a concern.</p>
+
+<p>It is worth noting that ConcurrentHashMap is highly scalable and works well under high contention. I don't know if ThreadLocal would perform better.</p>
+
+<p>Apart from using a library, you could take some inspiration from <a href="http://www.javaconcurrencyinpractice.com/listings/Memoizer.java" rel="nofollow">Java Concurrency in Practice Listing 5.19</a>. The idea is to save a <code>Future&lt;V&gt;</code> in your map instead of a <code>V</code>. That helps a lot in making the whole method thread safe while staying efficient (lock-free). I paste the implementation below for reference but the chapter is worth reading to understand that every detail counts.</p>
+
+<pre><code>public interface Computable&lt;K, V&gt; {
+
+    V compute(K arg) throws InterruptedException;
+}
+
+public class Memoizer&lt;K, V&gt; implements Computable&lt;K, V&gt; {
+
+    private final ConcurrentMap&lt;K, Future&lt;V&gt;&gt; cache = new ConcurrentHashMap&lt;K, Future&lt;V&gt;&gt;();
+    private final Computable&lt;K, V&gt; c;
+
+    public Memoizer(Computable&lt;K, V&gt; c) {
+        this.c = c;
+    }
+
+    public V compute(final K arg) throws InterruptedException {
+        while (true) {
+            Future&lt;V&gt; f = cache.get(arg);
+            if (f == null) {
+                Callable&lt;V&gt; eval = new Callable&lt;V&gt;() {
+                    public V call() throws InterruptedException {
+                        return c.compute(arg);
+                    }
+                };
+                FutureTask&lt;V&gt; ft = new FutureTask&lt;V&gt;(eval);
+                f = cache.putIfAbsent(arg, ft);
+                if (f == null) {
+                    f = ft;
+                    ft.run();
+                }
+            }
+            try {
+                return f.get();
+            } catch (CancellationException e) {
+                cache.remove(arg, f);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e.getCause());
+            }
+        }
+    }
+}
+</code></pre>

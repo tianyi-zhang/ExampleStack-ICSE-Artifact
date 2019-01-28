@@ -1,0 +1,239 @@
+<p>You must to call setPreviewCallback in surfaceChanged method, not only in surfaceCreated. This is my main <strong>CameraActivity.java</strong>:</p>
+
+<pre><code>package com.example.cameraview;
+
+import java.util.Hashtable;
+
+import android.app.Activity;
+import android.hardware.Camera;
+import android.hardware.Camera.Size;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.NotFoundException;
+import com.google.zxing.PlanarYUVLuminanceSource;
+import com.google.zxing.Result;
+import com.google.zxing.common.HybridBinarizer;
+
+public class CameraActivity extends Activity implements Camera.PreviewCallback {
+
+    private Camera mCamera;
+    private CameraPreview mPreview;
+
+    private Result result;
+    private MultiFormatReader reader; 
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.main);
+
+        reader = new MultiFormatReader();
+        Hashtable&lt;DecodeHintType, Object&gt; hints = new Hashtable&lt;DecodeHintType, Object&gt;();
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        reader.setHints(hints);
+
+    // Create an instance of Camera
+    mCamera = getCameraInstance();
+
+    // Create our Preview view and set it as the content of our activity.
+    mPreview = new CameraPreview(this, mCamera);
+    FrameLayout preview = (FrameLayout) findViewById(R.id.camera_preview);
+    preview.addView(mPreview);
+    }
+
+    public void onPause() {
+        super.onPause();
+
+        if (mCamera != null) {
+            mCamera.setPreviewCallback(null);
+            mPreview.getHolder().removeCallback(mPreview);
+            mCamera.release();
+        }
+    }
+
+    /** A safe way to get an instance of the Camera object. */
+    public static Camera getCameraInstance(){
+    Camera c = null;
+    try {
+        c = Camera.open(); // attempt to get a Camera instance
+    }
+    catch (Exception e){
+        // Camera is not available (in use or does not exist)
+    }
+    return c; // returns null if camera is unavailable
+    }
+
+    public void onPreviewFrame(byte[] data, Camera camera) {
+    Size size = mCamera.getParameters().getPreviewSize();
+        PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(data, size.width, size.height, 0, 0, size.width, size.height, false);
+        HybridBinarizer hybBin = new HybridBinarizer(source);
+        BinaryBitmap bitmap = new BinaryBitmap(hybBin);
+
+    ImageView myImage = (ImageView) findViewById(R.id.foto);
+
+        try {
+            result = reader.decode(bitmap);
+        Log.d("Result", "Result found!: " + String.valueOf(result));
+
+        myImage.setVisibility(View.VISIBLE);
+
+        if (String.valueOf(result).contentEquals("1"))
+            myImage.setImageResource(R.drawable.juan);
+        else if (String.valueOf(result).contentEquals("2"))
+            myImage.setImageResource(R.drawable.antonio);
+
+        } catch (NotFoundException e1) {
+
+            if (myImage != null)
+        myImage.setVisibility(View.INVISIBLE);
+
+        Log.d("NotFoundException", "NotFoundException");
+        } finally {
+        reader.reset();
+        }
+    }
+
+ }
+</code></pre>
+
+<p>And this is my CameraPreview.java:</p>
+
+<pre><code>package com.example.cameraview;
+
+import java.io.IOException;
+import java.util.List;
+
+import android.content.Context;
+import android.hardware.Camera;
+import android.hardware.Camera.PreviewCallback;
+import android.hardware.Camera.Size;
+import android.hardware.Camera.Parameters;
+import android.util.Log;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+
+
+/** A basic Camera preview class */
+public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
+    private SurfaceHolder mHolder;
+    private Camera mCamera;
+    private String TAG = "CameraPreview";
+    private Context context;
+
+    @SuppressWarnings("deprecation")
+    public CameraPreview(Context context, Camera camera) {
+    super(context);
+    mCamera = camera;
+    this.context = context;
+
+    // Install a SurfaceHolder.Callback so we get notified when the
+    // underlying surface is created and destroyed.
+    mHolder = getHolder();
+    // deprecated setting, but required on Android versions prior to 3.0
+    mHolder.addCallback(this);
+    mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+    // The Surface has been created, now tell the camera where to draw the preview.
+    try {
+        mCamera.setPreviewDisplay(holder);
+        mCamera.startPreview();
+
+    } catch (NullPointerException e) {
+        Log.d(TAG, "Error setting camera preview - nullpointerexception: " + e.getMessage());
+    } catch (IOException e) {
+        Log.d(TAG, "Error setting camera preview: " + e.getMessage());
+    }
+    }
+
+    public void surfaceDestroyed(SurfaceHolder holder) {
+    // empty. Take care of releasing the Camera preview in your activity.
+    }
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    // If your preview can change or rotate, take care of those events here.
+    // Make sure to stop the preview before resizing or reformatting it.
+
+    if (mHolder.getSurface() == null){
+      // preview surface does not exist
+      return;
+    }
+
+    // stop preview before making changes
+    try {
+        mCamera.stopPreview();
+    } catch (Exception e){
+      // ignore: tried to stop a non-existent preview
+    }
+
+    // set preview size and make any resize, rotate or
+    // reformatting changes here
+
+    // start preview with new settings
+    try {
+        Parameters parameters = mCamera.getParameters();
+
+        List&lt;Size&gt; sizes = parameters.getSupportedPreviewSizes();
+        Size optimalSize = getOptimalPreviewSize(sizes, w, h);
+        parameters.setPreviewSize(optimalSize.width, optimalSize.height);
+
+        if (context.getPackageManager().hasSystemFeature("android.hardware.camera.autofocus"))
+            parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+
+        mCamera.setParameters(parameters);
+
+        mCamera.setPreviewCallback((PreviewCallback) context);
+        mCamera.setPreviewDisplay(mHolder);
+        mCamera.startPreview();
+
+    } catch (Exception e){
+        Log.d(TAG, "Error starting camera preview: " + e.getMessage());
+    }
+    }
+
+    private Size getOptimalPreviewSize(List&lt;Size&gt; sizes, int w, int h) {
+    final double ASPECT_TOLERANCE = 0.05;
+    double targetRatio = (double) w / h;
+    if (sizes == null) return null;
+
+    Size optimalSize = null;
+    double minDiff = Double.MAX_VALUE;
+
+    int targetHeight = h;
+
+    // Try to find an size match aspect ratio and size
+    for (Size size : sizes) {
+        double ratio = (double) size.width / size.height;
+        if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE) continue;
+        if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+            optimalSize = size;
+            minDiff = Math.abs(size.height - targetHeight);
+        }
+    }
+
+    // Cannot find the one match the aspect ratio, ignore the requirement
+    if (optimalSize == null) {
+        minDiff = Double.MAX_VALUE;
+        for (Size size : sizes) {
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+    }
+    return optimalSize;
+    }
+}
+</code></pre>
+
+<p>Ignore reader and zxing things, it's a proof of concept for show layouts over qr detection in ZXing library.</p>
+
+<p>This is a mixed solution found while searching for my code errors in StackOverflow.</p>

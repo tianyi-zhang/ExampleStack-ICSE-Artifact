@@ -1,0 +1,353 @@
+<p>Shooting from my hip here, but if you want to use a 'direct line distance' as your heuristic you have a bug in your code.</p>
+
+<p>The current heuristic is: <em>The node with the smallest sum of delta x and y is closest.</em></p>
+
+<p>Let's say we have a five x five grid and the target is in 2,2 then using this heuristic 2,0 would be equally optimal as 1,1 which of course is wrong.</p>
+
+<p>Try using Pythagoras for a new heuristic: <em>The node with the shortest distance to the end is the closest.</em></p>
+
+<pre><code>protected Double h(Node from, Node to) {
+    int dx = Math.abs(endx - to.x);
+    int dy = Math.abs(endy - to.y);
+    return new Double(Math.sqrt(dx*dx) + (dy*dy));
+}
+</code></pre>
+
+<p>This would make your algorithm use an <a href="http://en.wikipedia.org/wiki/Admissible_heuristic" rel="nofollow">http://en.wikipedia.org/wiki/Admissible_heuristic</a> which is a criteria for A*: <a href="http://en.wikipedia.org/wiki/A_star#Admissibility_and_optimality" rel="nofollow">http://en.wikipedia.org/wiki/A_star#Admissibility_and_optimality</a></p>
+
+<p>Hope this helps.</p>
+
+<hr>
+
+<p>A solution that works for me:</p>
+
+<p><strong>AStar.java</strong></p>
+
+<pre><code>import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.PriorityQueue;
+
+public abstract class AStar&lt;T&gt; {
+
+    private class Path&lt;T&gt; implements Comparable {
+
+        public T point;
+        public Double f;
+        public Double g;
+        public Path&lt;T&gt; parent;
+
+        public Path() {
+            parent = null;
+            point = null;
+            g = f = 0.0;
+        }
+
+        public Path(Path&lt;T&gt; p) {
+            this();
+            parent = p;
+            g = p.g;
+            f = p.f;
+        }
+
+        @Override
+        public int compareTo(Object o) {
+            AStar.Path p = (AStar.Path) o;
+            return (int) (f - p.f);
+        }
+
+        public T getPoint() {
+            return point;
+        }
+
+        public void setPoint(T p) {
+            point = p;
+        }
+    }
+
+    protected abstract boolean isGoal(T node);
+
+    protected abstract Double g(T from, T to);
+
+    protected abstract Double h(T from, T to);
+
+    protected abstract List&lt;T&gt; generateSuccessors(T node, T parent);
+    private PriorityQueue&lt;AStar.Path&gt; paths;
+    private HashMap&lt;T, Double&gt; mindists;
+    private Double lastCost;
+    private int expandedCounter;
+
+    public int getExpandedCounter() {
+        return expandedCounter;
+    }
+
+    public AStar() {
+        paths = new PriorityQueue&lt;&gt;();
+        mindists = new HashMap&lt;&gt;();
+        expandedCounter = 0;
+        lastCost = 0.0;
+    }
+
+    protected Double f(AStar.Path p, T from, T to) {
+        Double g = g(from, to) + ((p.parent != null) ? p.parent.g : 0.0);
+        Double h = h(from, to);
+
+        p.g = g;
+        p.f = g + h;
+
+        return p.f;
+    }
+
+    private void expand(Path&lt;T&gt; path) {
+        if (expandedCounter &gt; 1000000) {
+            return;
+        }
+        T p = path.getPoint();
+        Double min = mindists.get(path.getPoint());
+
+
+        if (min == null || min.doubleValue() &gt; path.f.doubleValue()) {
+            mindists.put(path.getPoint(), path.f);
+        } else {
+            return;
+        }
+
+        List&lt;T&gt; successors = generateSuccessors(p, path.parent != null ? path.parent.getPoint() : null);
+
+        for (T t : successors) {
+            AStar.Path newPath = new AStar.Path(path);
+            newPath.setPoint(t);
+            f(newPath, path.getPoint(), t);
+            paths.offer(newPath);
+        }
+
+        expandedCounter++;
+    }
+
+    public Double getCost() {
+        return lastCost;
+    }
+
+    public List&lt;T&gt; compute(T start) {
+        try {
+            AStar.Path root = new AStar.Path();
+            root.setPoint(start);
+
+            /*
+             * Needed if the initial point has a cost.
+             */
+            f(root, start, start);
+
+            expand(root);
+
+            for (;;) {
+                Path&lt;T&gt; p = paths.poll();
+
+                if (p == null) {
+                    lastCost = Double.MAX_VALUE;
+                    return null;
+                }
+
+                T last = p.getPoint();
+
+                lastCost = p.g;
+
+                if (isGoal(last)) {
+                    LinkedList&lt;T&gt; retPath = new LinkedList&lt;T&gt;();
+
+                    for (Path&lt;T&gt; i = p; i != null; i = i.parent) {
+                        retPath.addFirst(i.getPoint());
+                    }
+
+                    return retPath;
+                }
+                expand(p);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+
+    }
+} 
+</code></pre>
+
+<p><strong>PathFinder.java</strong></p>
+
+<pre><code>package playground;
+
+import java.util.*;
+
+public class PathFinder extends AStar&lt;PathFinder.Node&gt; {
+
+    private int[][] map;
+    private int endx;
+    private int endy;
+
+    public static class Node {
+
+        public int x;
+        public int y;
+
+        Node(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+
+        public String toString() {
+            return "(" + x + ", " + y + ") ";
+        }
+
+        public int getX() {
+            return x;
+        }
+
+        public int getY() {
+            return y;
+        }
+    }
+
+    public PathFinder(int[][] map, int endx, int endy) {
+        this.map = map;
+        this.endx = endx;
+        this.endy = endy;
+    }
+
+    protected boolean isGoal(Node node) {
+        return (node.x == endx) &amp;&amp; (node.y == endy);
+    }
+
+    protected Double g(Node from, Node to) {
+
+        if (from.x == to.x &amp;&amp; from.y == to.y) {
+
+            //   System.out.println("To x1 " + to.x);
+            //     System.out.println("To y1 " + to.y);
+            return 0.0;
+        }
+
+        if (map[to.y][to.x] == 1) {
+            //System.out.println("To x2 " + to.x);
+            //  System.out.println("To y2 " + to.y);
+
+            return 1.0;
+        }
+
+        return Double.MAX_VALUE;
+    }
+
+    protected Double h(Node from, Node to) {
+        int dx = Math.abs(endx - to.x);
+        int dy = Math.abs(endy - to.y);
+        return new Double(Math.sqrt(dx * dx) + (dy * dy));
+        //return new Double(Math.abs(endx - to.x) + Math.abs(endy - to.y));
+    }
+
+    @Override
+    protected List&lt;Node&gt; generateSuccessors(Node node, Node parent) {
+        List&lt;Node&gt; ret = new LinkedList&lt;Node&gt;();
+        int x = node.x;
+        int y = node.y;
+        if (y &lt; map[0].length - 1 &amp;&amp; map[y + 1][x] == 1 &amp;&amp; (parent == null || (parent != null &amp;&amp; !(parent.x == x &amp;&amp; parent.y == y + 1)))) {
+            ret.add(new Node(x, y + 1));
+        }
+
+        if (x &lt; map.length - 1 &amp;&amp; map[y][x + 1] == 1 &amp;&amp; (parent == null || (parent != null &amp;&amp; !(parent.x == x + 1 &amp;&amp; parent.y == y)))) {
+            ret.add(new Node(x + 1, y));
+        }
+
+        if (y != 0 &amp;&amp; map[y - 1][x] == 1 &amp;&amp; (parent == null || (parent != null &amp;&amp; !(parent.x == x &amp;&amp; parent.y == y - 1)))) {
+            ret.add(new Node(x, y - 1));
+        }
+
+        if (x != 0 &amp;&amp; map[y][x - 1] == 1 &amp;&amp; (parent == null || (parent != null &amp;&amp; !(parent.x == x - 1 &amp;&amp; parent.y == y)))) {
+            ret.add(new Node(x - 1, y));
+        }
+
+        return ret;
+    }
+
+    public static void main(String[] args) {
+        int ammountOfBlocks = 200;
+        int width = 25;
+        int length = 25;
+        int startX = 1;
+        int startY = 1;
+        int endX = 24;
+        int endY = 24;
+        int[][] map = {
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1},
+            {1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1},
+            {1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1},
+            {0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1}
+        };
+        int a = map.length;
+        int b = map[0].length;
+        int[][] map2 = new int[b][a];
+        for (int i = 0; i &lt; map.length; i++) {
+            for (int j = 0; j &lt; map[0].length; j++) {
+                map2[j][i] = map[i][j];
+            }
+        }
+        PathFinder pf = new PathFinder(map, endX, endY);
+
+
+        /*
+         * for(int i = 0; i &lt; map.length; i++){ for(int j = 0; j &lt;
+         * map[0].length; j++) System.out.print(map[i][j] + " ");
+         * System.out.println(); }
+         */
+
+        long begin = System.currentTimeMillis();
+
+        List&lt;Node&gt; nodes = pf.compute(new PathFinder.Node(startX, startY));
+
+        long end = System.currentTimeMillis();
+
+
+        System.out.println("Time = " + (end - begin) + " ms");
+        //System.out.println("Expanded = " + pf.getExpandedCounter());
+        System.out.println("Cost = " + pf.getCost());
+
+        if (nodes == null) {
+            System.out.println("No path");
+        } else {
+
+            for (int i = 0; i &lt; nodes.size(); i++) {
+                Node n = nodes.get(i);
+                int x = n.getX();
+                int y = n.getY();
+                map[x][y] = 4;
+            }
+
+            for(int i = 0; i &lt; map.length; i++){ 
+                for(int j = 0; j &lt; map[0].length; j++) 
+                    System.out.print(map[i][j] + " ");
+
+                System.out.println(); 
+            }
+        }
+    }
+}
+</code></pre>

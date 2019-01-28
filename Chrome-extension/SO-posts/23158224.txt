@@ -1,0 +1,273 @@
+<p>The following problems need to be solved:</p>
+
+<ol>
+<li>Linkify the TextView</li>
+<li>Find a way to listen to a click on a link in the TextView</li>
+<li>Get the url of the clicked link and load it in the WebView</li>
+<li>Optional: make the TextView clickable without losing the ability to select text</li>
+<li>Optional: handle formatted text in the TextView (different text sizes and styles)</li>
+</ol>
+
+<p><strong>#1 Linkify the TextView</strong></p>
+
+<p>That's the easiest problem and you already solved that one. I suggest to do it this way:</p>
+
+<pre><code>String text = "These are some sample links:\nwww.google.com\nwww.facebook.com\nwww.yahoo.com";
+Spannable spannable = new SpannableString( Html.fromHtml(text) );
+Linkify.addLinks(spannable, Linkify.WEB_URLS);
+</code></pre>
+
+<p>I'm using a Spannable here to solve problem #2.</p>
+
+<p><strong>#2 + #3 Listen to clicks on links and open them in the WebView</strong></p>
+
+<p>To find out when a link is clicked and retrieve the URL we have to open, we replace all URLSpans in the TextView by our LinkSpan (that's why we need a Spannable):</p>
+
+<pre><code>URLSpan[] spans = spannable.getSpans(0, spannable.length(), URLSpan.class);
+for (URLSpan urlSpan : spans) {
+    LinkSpan linkSpan = new LinkSpan(urlSpan.getURL());
+    int spanStart = spannable.getSpanStart(urlSpan);
+    int spanEnd = spannable.getSpanEnd(urlSpan);
+    spannable.setSpan(linkSpan, spanStart, spanEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    spannable.removeSpan(urlSpan);
+}
+</code></pre>
+
+<p>Our LinkSpan simply grabs the clicked url and opens it in the WebView:</p>
+
+<pre><code>private class LinkSpan extends URLSpan {
+    private LinkSpan(String url) {
+        super(url);
+    }
+
+    @Override
+    public void onClick(View view) {
+        String url = getURL();
+        if (mWebView != null &amp;&amp; url != null) {
+            mWebView.loadUrl(url);
+        }
+    }
+}
+</code></pre>
+
+<p>Now obviously we have to keep a reference to the WebView in an instance variable to make this work. To make this answer as short as possible I chose to define LinkSpan as an inner class but I'd recommend to define it as a top-level. Register a listener or pass the WebView as a parameter to the constructor instead.</p>
+
+<p>Without setting the MovementMethod to LinkMovementMethod the TextView won't open links at all:</p>
+
+<pre><code>tv.setMovementMethod(LinkMovementMethod.getInstance());
+tv.setText(spannable, BufferType.SPANNABLE);
+</code></pre>
+
+<p>Last but not least let's make sure the WebView doesn't start the browser but loads the page within the app:</p>
+
+<pre><code>mWebView.setWebViewClient(new WebViewClient() {
+    @Override
+    public boolean shouldOverrideUrlLoading(WebView view, String url) {
+        // we handle the url ourselves if it's a network url (http / https) 
+        return ! URLUtil.isNetworkUrl(url);
+    }
+});
+</code></pre>
+
+<p><strong>#4 Clickable and selectable TextView + #5 formatted Text</strong></p>
+
+<p>If the MovementMethod is set to LinkMovementMethod you can click links but you can't select text any more (you need ArrowKeyMovementMethod for that). To solve this I created an custom MovementMethod class that inherits from ArrowKeyMovementMethod and adds the ability to click links. On top of that it is able to deal with formatted text. So if you decide to use different font sizes and styles in the TextView the following MovementMethod will have it covered (works with EditTexts as well):</p>
+
+<pre><code>/**
+ * ArrowKeyMovementMethod does support selection of text but not the clicking of links.
+ * LinkMovementMethod does support clicking of links but not the selection of text.
+ * This class adds the link clicking to the ArrowKeyMovementMethod.
+ * We basically take the LinkMovementMethod onTouchEvent code and remove the line
+ *      Selection.removeSelection(buffer);
+ * which deselects all text when no link was found.
+ */
+public class EnhancedLinkMovementMethod extends ArrowKeyMovementMethod {
+
+    private static EnhancedLinkMovementMethod sInstance;
+
+    private static Rect sLineBounds = new Rect();
+
+    public static MovementMethod getInstance() {
+        if (sInstance == null) {
+            sInstance = new EnhancedLinkMovementMethod();
+        }
+        return sInstance;
+    }
+
+    @Override
+    public boolean onTouchEvent(TextView widget, Spannable buffer, MotionEvent event) {
+        int action = event.getAction();
+
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
+
+            int index = getCharIndexAt(widget, event);
+            if (index != -1) {
+                ClickableSpan[] link = buffer.getSpans(index, index, ClickableSpan.class);
+                if (link.length != 0) {
+                    if (action == MotionEvent.ACTION_UP) {
+                        link[0].onClick(widget);
+                    }
+                    else if (action == MotionEvent.ACTION_DOWN) {
+                        Selection.setSelection(buffer, buffer.getSpanStart(link[0]), buffer.getSpanEnd(link[0]));
+                    }
+                    return true;
+                }
+            }
+            /*else {
+                Selection.removeSelection(buffer);
+            }*/
+
+        }
+
+        return super.onTouchEvent(widget, buffer, event);
+    }
+
+    private int getCharIndexAt(TextView textView, MotionEvent event) {
+        // get coordinates
+        int x = (int) event.getX();
+        int y = (int) event.getY();
+        x -= textView.getTotalPaddingLeft();
+        y -= textView.getTotalPaddingTop();
+        x += textView.getScrollX();
+        y += textView.getScrollY();
+
+        /*
+         * Fail-fast check of the line bound.
+         * If we're not within the line bound no character was touched
+         */
+        Layout layout = textView.getLayout();
+        int line = layout.getLineForVertical(y);
+        synchronized (sLineBounds) {
+            layout.getLineBounds(line, sLineBounds);
+            if (! sLineBounds.contains(x, y)) {
+                return -1;
+            }
+        }
+
+        // retrieve line text
+        Spanned text = (Spanned) textView.getText();
+        int lineStart = layout.getLineStart(line);
+        int lineEnd = layout.getLineEnd(line);
+        int lineLength = lineEnd - lineStart;
+        if (lineLength == 0) {
+            return -1;
+        }
+        Spanned lineText = (Spanned) text.subSequence(lineStart, lineEnd);
+
+        // compute leading margin and subtract it from the x coordinate
+        int margin = 0;
+        LeadingMarginSpan[] marginSpans = lineText.getSpans(0, lineLength, LeadingMarginSpan.class);
+        if (marginSpans != null) {
+            for (LeadingMarginSpan span : marginSpans) {
+                margin += span.getLeadingMargin(true);
+            }
+        }
+        x -= margin;
+
+        // retrieve text widths
+        float[] widths = new float[lineLength];
+        TextPaint paint = textView.getPaint();
+        paint.getTextWidths(lineText, 0, lineLength, widths);
+
+        // scale text widths by relative font size (absolute size / default size)
+        final float defaultSize = textView.getTextSize();
+        float scaleFactor = 1f;
+        AbsoluteSizeSpan[] absSpans = lineText.getSpans(0, lineLength, AbsoluteSizeSpan.class);
+        if (absSpans != null) {
+            for (AbsoluteSizeSpan span : absSpans) {
+                int spanStart = lineText.getSpanStart(span);
+                int spanEnd = lineText.getSpanEnd(span);
+                scaleFactor = span.getSize() / defaultSize;
+                int start = Math.max(lineStart, spanStart);
+                int end = Math.min(lineEnd, spanEnd);
+                for (int i = start; i &lt; end; i++) {
+                    widths[i] *= scaleFactor;
+                }
+            }
+        }
+
+        // find index of touched character
+        float startChar = 0;
+        float endChar = 0;
+        for (int i = 0; i &lt; lineLength; i++) {
+            startChar = endChar;
+            endChar += widths[i];
+            if (endChar &gt;= x) {
+                // which "end" is closer to x, the start or the end of the character?
+                int index = lineStart + (x - startChar &lt; endChar - x ? i : i + 1);
+                //Logger.e(Logger.LOG_TAG, "Found character: " + (text.length()&gt;index ? text.charAt(index) : ""));
+                return index;
+            }
+        }
+
+        return -1;
+    }
+}
+</code></pre>
+
+<p><strong>Complete Activity code</strong></p>
+
+<p>Here's the complete sample Activity code that I used. It should do exactly what you want. It's using my EnhandedMovementMethod but you can use a simple LinkMovementMethod (with the drawbacks mentioned before).</p>
+
+<pre><code>public class LinkTestActivity extends Activity {
+
+    private WebView mWebView;
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        setContentView(R.layout.activity_main);
+        mWebView = (WebView) findViewById(R.id.webView);
+        TextView tv = (TextView) findViewById(R.id.textView);
+
+        String text = "These are some sample links:\nwww.google.com\nwww.facebook.com\nwww.yahoo.com";
+
+        // Linkify the TextView
+        Spannable spannable = new SpannableString( Html.fromHtml(text) );
+        Linkify.addLinks(spannable, Linkify.WEB_URLS);
+
+        // Replace each URLSpan by a LinkSpan
+        URLSpan[] spans = spannable.getSpans(0, spannable.length(), URLSpan.class);
+        for (URLSpan urlSpan : spans) {
+            LinkSpan linkSpan = new LinkSpan(urlSpan.getURL());
+            int spanStart = spannable.getSpanStart(urlSpan);
+            int spanEnd = spannable.getSpanEnd(urlSpan);
+            spannable.setSpan(linkSpan, spanStart, spanEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            spannable.removeSpan(urlSpan);
+        }
+
+        // Make sure the TextView supports clicking on Links
+        tv.setMovementMethod(EnhancedLinkMovementMethod.getInstance());
+        tv.setText(spannable, BufferType.SPANNABLE);
+
+        // Make sure we handle clicked links ourselves
+        mWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                // we handle the url ourselves if it's a network url (http / https) 
+                return ! URLUtil.isNetworkUrl(url);
+            }
+        });
+
+        mWebView.getSettings().setJavaScriptEnabled(true);   
+        mWebView.getSettings().setSupportZoom(true);      
+        mWebView.getSettings().setBuiltInZoomControls(true);
+    }
+
+    private class LinkSpan extends URLSpan {
+        private LinkSpan(String url) {
+            super(url);
+        }
+
+        @Override
+        public void onClick(View view) {
+            String url = getURL();
+            if (mWebView != null &amp;&amp; url != null) {
+                mWebView.loadUrl(url);
+            }
+        }
+    }
+}
+</code></pre>

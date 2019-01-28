@@ -1,0 +1,104 @@
+<p>The problem was in the main function i was not specify what is the output of the mapper, so the reducer was expecting the default one as input. For more details refer the <a href="http://stackoverflow.com/questions/16926783/type-mismatch-in-value-from-map-expected-org-apache-hadoop-io-nullwritable-rec">this post</a>.</p>
+
+<p>Changed input type to Object from Text.
+    public static class TokenizerMapper extends Mapper{</p>
+
+<pre><code>public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+</code></pre>
+
+<p>Adding the following lines solved the issue.</p>
+
+<pre><code>job.setMapOutputKeyClass(Text.class);
+job.setMapOutputValueClass(Text.class);
+job.setOutputKeyClass(Text.class);
+job.setOutputValueClass(Text.class);
+</code></pre>
+
+<p>The following is the complete working code.</p>
+
+<pre><code>import java.io.IOException;
+import java.util.StringTokenizer;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.io.LongWritable;
+
+public class mr2 {
+
+  // mapper class
+  public static class TokenizerMapper extends Mapper&lt;Object, Text, Text, Text&gt;{
+
+    private Text word = new Text(); // key
+    private Text value_of_key = new Text(); // value
+
+    public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+
+      String line = value.toString();
+      String IndexAndCategory = "";
+      String value_of_the_key = "";
+
+      StringTokenizer itr = new StringTokenizer(line);
+
+      // key creation
+      IndexAndCategory += itr.nextToken() + " ";
+      IndexAndCategory += itr.nextToken() + " ";
+
+      // value creation
+      value_of_the_key += itr.nextToken() + ":";
+      value_of_the_key += itr.nextToken() + " ";
+
+      // key and value
+      word.set(IndexAndCategory);
+      value_of_key.set(value_of_the_key);
+
+      // write key-value pair
+      context.write(word, value_of_key);
+    }
+  }
+
+  // reducer class
+  public static class IntSumReducer extends Reducer&lt;Text,Text,Text,Text&gt; {
+
+    //private IntWritable result = new IntWritable();
+      private Text values_of_key = new Text();
+
+    public void reduce(Text key, Iterable&lt;Text&gt; values, Context context) throws IOException, InterruptedException {
+
+      String values_ = "";
+      for (Text val : values) {
+        values_ += val.toString();
+      }
+      values_of_key.set(values_);
+      context.write(key, values_of_key);
+    }
+  }
+
+  public static void main(String[] args) throws Exception {
+    Configuration conf = new Configuration();
+    Job job = Job.getInstance(conf, "mr2");
+    job.setJarByClass(mr2.class);
+    job.setMapperClass(TokenizerMapper.class);
+    job.setCombinerClass(IntSumReducer.class);
+    job.setReducerClass(IntSumReducer.class);
+    job.setOutputKeyClass(Text.class);
+    job.setOutputValueClass(IntWritable.class);
+    job.setNumReduceTasks(1);
+
+    job.setMapOutputKeyClass(Text.class);
+    job.setMapOutputValueClass(Text.class);
+    job.setOutputKeyClass(Text.class);
+    job.setOutputValueClass(Text.class);
+
+    FileInputFormat.addInputPath(job, new Path(args[0]));
+    FileOutputFormat.setOutputPath(job, new Path(args[1]));
+    System.exit(job.waitForCompletion(true) ? 0 : 1);
+  }
+}
+</code></pre>

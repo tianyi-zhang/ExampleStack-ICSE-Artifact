@@ -1,0 +1,64 @@
+<p>I have found the reason now, it is a hard work, but full with pleasure.</p>
+
+<p>When added a ExecutionHandler, the message will be wrapped into a Runnable task, and will be executed in a ChildExecutor. The key point is here : A task maybe added to ChildExecutor when the executor  almostly exit , then is will be ignored by the ChildExecutor.</p>
+
+<p>I added three lines code and some comments, the final code looks like below, and it works now,should I mail to the author?  :</p>
+
+<pre><code>private final class ChildExecutor implements Executor, Runnable {
+    private final Queue&lt;Runnable&gt; tasks = QueueFactory
+            .createQueue(Runnable.class);
+    private final AtomicBoolean isRunning = new AtomicBoolean();
+
+    public void execute(Runnable command) {
+        // TODO: What todo if the add return false ?
+        tasks.add(command);
+
+        if (!isRunning.get()) {
+            doUnorderedExecute(this);
+        } else {
+        }
+    }
+
+    public void run() {
+        // check if its already running by using CAS. If so just return
+        // here. So in the worst case the thread
+        // is executed and do nothing
+        boolean acquired = false;
+        if (isRunning.compareAndSet(false, true)) {
+            acquired = true;
+            try {
+                Thread thread = Thread.currentThread();
+                for (;;) {
+                    final Runnable task = tasks.poll();
+                    // if the task is null we should exit the loop
+                    if (task == null) {
+                        break;
+                    }
+
+                    boolean ran = false;
+                    beforeExecute(thread, task);
+                    try {
+                        task.run();
+                        ran = true;
+                        onAfterExecute(task, null);
+                    } catch (RuntimeException e) {
+                        if (!ran) {
+                            onAfterExecute(task, e);
+                        }
+                        throw e;
+                    }
+                }
+                //TODO  NOTE (I added): between here and "isRunning.set(false)",some new tasks maybe added.
+            } finally {
+                // set it back to not running
+                isRunning.set(false);
+            }
+        }
+
+        //TODO NOTE (I added): Do the remaining works.
+        if (acquired &amp;&amp; !isRunning.get() &amp;&amp; tasks.peek() != null) {
+            doUnorderedExecute(this);
+        }
+    }
+}
+</code></pre>

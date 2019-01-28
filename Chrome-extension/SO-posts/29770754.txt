@@ -1,0 +1,201 @@
+<h2>Compiled structure of the regex</h2>
+
+<p><a href="http://stackoverflow.com/a/18975475">Kobi's answer</a> is spot on about the behavior of Java regex (Sun/Oracle implementation) for the case <code>"^\\d{1}{2}$"</code>, or <code>"{1}"</code>.</p>
+
+<p>Below is the internal compiled structure of <code>"^\\d{1}{2}$"</code>:</p>
+
+<pre><code>^\d{1}{2}$
+Begin. \A or default ^
+Curly. Greedy quantifier {1,1}
+  Ctype. POSIX (US-ASCII): DIGIT
+  Node. Accept match
+Curly. Greedy quantifier {2,2}
+  Slice. (length=0)
+
+  Node. Accept match
+Dollar(multiline=false). \Z or default $
+java.util.regex.Pattern$LastNode
+Node. Accept match
+</code></pre>
+
+<h2>Looking at the source code</h2>
+
+<p><strong>From my investigation, the bug is probably due to that fact that <code>{</code> is not properly checked in the private method <code>sequence()</code>.</strong></p>
+
+<p>The method <code>sequence()</code> calls to the <code>atom()</code> to parse the atom, then attach quantifier to the atom by calling <code>closure()</code>, and chains all atoms-with-closure together into one sequence.</p>
+
+<p>For example, given this regex:</p>
+
+<pre><code>^\d{4}a(bc|gh)+d*$
+</code></pre>
+
+<p>Then the top-level call to <code>sequence()</code> will receive the compiled nodes for <code>^</code>, <code>\d{4}</code>, <code>a</code>, <code>(bc|gh)+</code>, <code>d*</code>, <code>$</code> and chain them together.</p>
+
+<p>With that idea in mind, let us look at the source code of <code>sequence()</code>, copied from <a href="http://grepcode.com/file/repository.grepcode.com/java/root/jdk/openjdk/8-b132/java/util/regex/Pattern.java#Pattern.sequence%28java.util.regex.Pattern.Node%29" rel="nofollow">OpenJDK 8-b132</a> (Oracle uses the same code base):</p>
+
+<pre><code>@SuppressWarnings("fallthrough")
+/**
+ * Parsing of sequences between alternations.
+ */
+private Node sequence(Node end) {
+    Node head = null;
+    Node tail = null;
+    Node node = null;
+LOOP:
+    for (;;) {
+        int ch = peek();
+        switch (ch) {
+        case '(':
+            // Because group handles its own closure,
+            // we need to treat it differently
+            node = group0();
+            // Check for comment or flag group
+            if (node == null)
+                continue;
+            if (head == null)
+                head = node;
+            else
+                tail.next = node;
+            // Double return: Tail was returned in root
+            tail = root;
+            continue;
+        case '[':
+            node = clazz(true);
+            break;
+        case '\\':
+            ch = nextEscaped();
+            if (ch == 'p' || ch == 'P') {
+                boolean oneLetter = true;
+                boolean comp = (ch == 'P');
+                ch = next(); // Consume { if present
+                if (ch != '{') {
+                    unread();
+                } else {
+                    oneLetter = false;
+                }
+                node = family(oneLetter, comp);
+            } else {
+                unread();
+                node = atom();
+            }
+            break;
+        case '^':
+            next();
+            if (has(MULTILINE)) {
+                if (has(UNIX_LINES))
+                    node = new UnixCaret();
+                else
+                    node = new Caret();
+            } else {
+                node = new Begin();
+            }
+            break;
+        case '$':
+            next();
+            if (has(UNIX_LINES))
+                node = new UnixDollar(has(MULTILINE));
+            else
+                node = new Dollar(has(MULTILINE));
+            break;
+        case '.':
+            next();
+            if (has(DOTALL)) {
+                node = new All();
+            } else {
+                if (has(UNIX_LINES))
+                    node = new UnixDot();
+                else {
+                    node = new Dot();
+                }
+            }
+            break;
+        case '|':
+        case ')':
+            break LOOP;
+        case ']': // Now interpreting dangling ] and } as literals
+        case '}':
+            node = atom();
+            break;
+        case '?':
+        case '*':
+        case '+':
+            next();
+            throw error("Dangling meta character '" + ((char)ch) + "'");
+        case 0:
+            if (cursor &gt;= patternLength) {
+                break LOOP;
+            }
+            // Fall through
+        default:
+            node = atom();
+            break;
+        }
+
+        node = closure(node);
+
+        if (head == null) {
+            head = tail = node;
+        } else {
+            tail.next = node;
+            tail = node;
+        }
+    }
+    if (head == null) {
+        return end;
+    }
+    tail.next = end;
+    root = tail;      //double return
+    return head;
+}
+</code></pre>
+
+<p>Take note of the line <code>throw error("Dangling meta character '" + ((char)ch) + "'");</code>. This is where the error is thrown if <code>+</code>, <code>*</code>, <code>?</code> are dangling and is not part of a preceding token. As you can see, <code>{</code> is not among the cases to throw error. In fact, it is not present in the list of cases in <code>sequence()</code>, and the compilation process will go by <code>default</code> case directly to <code>atom()</code>.</p>
+
+<pre><code>@SuppressWarnings("fallthrough")
+/**
+ * Parse and add a new Single or Slice.
+ */
+private Node atom() {
+    int first = 0;
+    int prev = -1;
+    boolean hasSupplementary = false;
+    int ch = peek();
+    for (;;) {
+        switch (ch) {
+        case '*':
+        case '+':
+        case '?':
+        case '{':
+            if (first &gt; 1) {
+                cursor = prev;    // Unwind one character
+                first--;
+            }
+            break;
+        // Irrelevant cases omitted
+        // [...]
+        }
+        break;
+    }
+    if (first == 1) {
+        return newSingle(buffer[0]);
+    } else {
+        return newSlice(buffer, first, hasSupplementary);
+    }
+}
+</code></pre>
+
+<p>When the process enters <code>atom()</code>, since it encounters <code>{</code> right away, it breaks from <code>switch</code> and <code>for</code> loop, and <strong>a new slice with length 0</strong> is created (the length comes from <code>first</code>, which is 0).</p>
+
+<p>When this slice is returned, the quantifier is parsed by <code>closure()</code>, resulting in what we see.</p>
+
+<p><strong>Comparing the source code of Java 1.4.0, Java 5 and Java 8, there doesn't seem to be much changes in the source code of <code>sequence()</code> and <code>atom()</code>. It seems this bug has been there since the beginning.</strong></p>
+
+<h2>Standard for regular expression</h2>
+
+<p>The <a href="http://stackoverflow.com/a/18958937">top-voted answer</a> citing <a href="http://pubs.opengroup.org/onlinepubs/009695399/basedefs/xbd_chap09.html" rel="nofollow">IEEE-Standard 1003.1</a> (or POSIX standard) is irrelevant to the discussion, since Java <strong>does not implement</strong> BRE and ERE.</p>
+
+<p>There are many syntax resulting in undefined behavior according to the standard, but is well-defined behavior across many other regex flavors (though whether they agree or not is another matter). For example, <code>\d</code> is undefined according to the standard, but it matches digits (ASCII/Unicode) in many regex flavors.</p>
+
+<p>Sadly, there is no other standard on regular expression syntax.</p>
+
+<p>There is, however, a standard on Unicode Regular Expression, which focuses on features a Unicode regex engine should have. Java <code>Pattern</code> class more or less implements Level 1 support as described in <a href="http://www.unicode.org/reports/tr18/" rel="nofollow">UTS #18: Unicode Regular Expression</a> and RL2.1 (albeit extremely buggy).</p>

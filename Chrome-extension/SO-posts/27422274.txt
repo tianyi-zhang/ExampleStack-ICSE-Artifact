@@ -1,0 +1,73 @@
+<p>Your Uri is not correct. <code>getContentUri(String volumeName)</code> expects the magic word <code>"external"</code> instead of a path. And you may not have a thumbnail yet. </p>
+
+<p>You can load thumbnails with this piece of code</p>
+
+<pre><code>private static final String SELECTION = MediaColumns.DATA + "=?";
+private static final String[] PROJECTION = { BaseColumns._ID };
+public static Bitmap loadVideoThumbnail(String videoFilePath, ContentResolver cr) {
+    Bitmap result = null;
+    Uri uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+    String[] selectionArgs = { videoFilePath };
+    Cursor cursor = cr.query(uri, PROJECTION, SELECTION, selectionArgs, null);
+    if (cursor.moveToFirst()) {
+        // it's the only &amp; first thing in projection, so it is 0
+        long videoId = cursor.getLong(0);
+        result = MediaStore.Video.Thumbnails.getThumbnail(cr, videoId,
+                Thumbnails.MICRO_KIND, null);
+    }
+    cursor.close();
+    return result;
+}
+</code></pre>
+
+<p>What it does is:</p>
+
+<ol>
+<li>Look up the video Id of a file by querying <code>Video.Media</code></li>
+<li>pass that videoId to <code>getThumbnail</code> which blocks (in your case the ui thread..) until the thumbnail was made &amp; decoded.</li>
+</ol>
+
+<p>Big downside is that you can't use a path for Picasso here. (Custom loading works, <a href="https://github.com/square/picasso/blob/master/picasso/src/main/java/com/squareup/picasso/MediaStoreRequestHandler.java" rel="nofollow">https://github.com/square/picasso/blob/master/picasso/src/main/java/com/squareup/picasso/MediaStoreRequestHandler.java</a> seems to be an implementation, some description about it here: <a href="http://blog.jpardogo.com/requesthandler-api-for-picasso-library/" rel="nofollow">http://blog.jpardogo.com/requesthandler-api-for-picasso-library/</a> )</p>
+
+<p>You can get thumbnail paths, but if you have a look at the content of the thumbnails table, e.g. via this snippet of code</p>
+
+<pre><code>    StringBuilder sb = new StringBuilder();
+    Cursor query = getContentResolver().query(
+            Video.Thumbnails.EXTERNAL_CONTENT_URI, null, null, null, null);
+    DatabaseUtils.dumpCursor(query, sb);
+    query.close();
+    Log.d("XXX", sb.toString());
+</code></pre>
+
+<p>You'll see that not every video has a thumbnail.</p>
+
+<p>But those that have can be found via</p>
+
+<pre><code>public static String loadVideoThumbnailPath(String videoFilePath,
+        ContentResolver cr) {
+    String result = null;
+    Uri uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+    String[] selectionArgs = { videoFilePath };
+    Cursor cursor = cr.query(uri, PROJECTION, SELECTION, selectionArgs,
+            null);
+    long videoId = -1;
+    if (cursor.moveToFirst()) {
+        videoId = cursor.getLong(0);
+    }
+    cursor.close();
+    if (videoId &gt; 0) {
+        Uri uri2 = MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI;
+        String[] projection2 = { MediaStore.Video.Thumbnails.DATA };
+        String selection2 = MediaStore.Video.Thumbnails.VIDEO_ID + "=?";
+        String[] selectionArgs2 = { String.valueOf(videoId) };
+        Cursor cursor2 = cr.query(uri2, projection2, selection2, selectionArgs2, null);
+        if (cursor2.moveToFirst()) {
+            result = cursor2.getString(0);
+        }
+        cursor2.close();
+    }
+    return result;
+}
+</code></pre>
+
+<p>(still the same <code>PROJECTION</code> &amp; <code>SELECTION</code> constants from above)</p>

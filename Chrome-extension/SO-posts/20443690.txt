@@ -1,0 +1,153 @@
+<p>Possible in android using ( not mediaPlayer but other stuff further down the stack) but do you really want do pursue RTSP/RTP when the rest of the media ecosystem does not??</p>
+
+<p>IMO - there are far better media/stream approaches under the umbrella of HTML5/WebRTC. Like look at what <a href="http://www.ondello.com/webrtc/" rel="nofollow">'Ondello'</a> is doing with streams. </p>
+
+<p>That said, here is some old-project code for android/RTSP/SDP/RTP using 'netty' and 'efflux'. It will negotiate some portions of 'Sessions' on SDP file providers. Cant remember whether it would actually play the audio portion of <a href="http://snipplr.com/view/63341/youtube-rtsp-cli-request--audio-track-only-p2/" rel="nofollow">Youtube/RTSP stuff</a>, but that is what my goal was at the time. ( i think that it worked using AMR-NB codec but , there were tons of issues and i dropped RTSP on android like a bad habit!)</p>
+
+<p><a href="https://github.com/rowntreerob/android-RTSP" rel="nofollow">on Git</a>.... </p>
+
+<pre><code>        @Override
+        public void mediaDescriptor(Client client, String descriptor)
+        {
+            // searches for control: session and media arguments.
+            final String target = "control:";
+            Log.d(TAG, "Session Descriptor\n" + descriptor);
+            int position = -1;
+            while((position = descriptor.indexOf(target)) &gt; -1)
+            {
+                descriptor = descriptor.substring(position + target.length());
+                resourceList.add(descriptor.substring(0, descriptor.indexOf('\r')));
+            }
+        }
+        private int nextPort()
+        {
+            return (port += 2) - 2;
+        }       
+
+
+        private void getRTPStream(TransportHeader transport){
+
+            String[] words;
+            // only want 2000 part of 'client_port=2000-2001' in the Transport header in the response
+
+            words = transport.getParameter("client_port").substring(transport.getParameter("client_port").indexOf("=") +1).split("-");
+            port_lc = Integer.parseInt(words[0]);
+
+            words = transport.getParameter("server_port").substring(transport.getParameter("server_port").indexOf("=") +1).split("-");
+            port_rm = Integer.parseInt(words[0]);
+
+            source = transport.getParameter("source").substring(transport.getParameter("source").indexOf("=") +1);          
+            ssrc = transport.getParameter("ssrc").substring(transport.getParameter("ssrc").indexOf("=") +1);
+            // assume dynamic Packet type = RTP , 99
+            getRTPStream(session, source, port_lc, port_rm, 99);
+            //getRTPStream("sessiona", source, port_lc, port_rm, 99);
+            Log.d(TAG, "raw parms " +port_lc +" " +port_rm +" " +source );
+//          String[] words = session.split(";");
+        Log.d(TAG, "session: " +session);   
+        Log.d(TAG, "transport: " +transport.getParameter("client_port") 
+                +" "  +transport.getParameter("server_port") +" "  +transport.getParameter("source") 
+                +" "  +transport.getParameter("ssrc"));
+
+        }
+
+        private void getRTPStream(String session, String source, int portl, int portr, int payloadFormat ){
+            // what do u do with ssrc?
+            InetAddress addr;
+            try {
+                addr = InetAddress.getLocalHost();
+                // Get IP Address
+ //             LAN_IP_ADDR = addr.getHostAddress();
+                LAN_IP_ADDR = "192.168.1.125";
+                Log.d(TAG, "using client IP addr " +LAN_IP_ADDR);
+
+            } catch (UnknownHostException e1) {
+                // TODO Auto-generated catch block
+                e1.printStackTrace();
+            }
+
+
+            final CountDownLatch latch = new CountDownLatch(2);
+
+            RtpParticipant local1 = RtpParticipant.createReceiver(new RtpParticipantInfo(1), LAN_IP_ADDR, portl, portl+=1);
+     //       RtpParticipant local1 = RtpParticipant.createReceiver(new RtpParticipantInfo(1), "127.0.0.1", portl, portl+=1);
+            RtpParticipant remote1 = RtpParticipant.createReceiver(new RtpParticipantInfo(2), source, portr, portr+=1);
+
+
+            remote1.getInfo().setSsrc( Long.parseLong(ssrc, 16));
+            session1 = new SingleParticipantSession(session, payloadFormat, local1, remote1);
+
+           Log.d(TAG, "remote ssrc " +session1.getRemoteParticipant().getInfo().getSsrc());
+
+            session1.init();
+
+            session1.addDataListener(new RtpSessionDataListener() {
+                @Override
+                public void dataPacketReceived(RtpSession session, RtpParticipantInfo participant, DataPacket packet) {
+     //               System.err.println("Session 1 received packet: " + packet + "(session: " + session.getId() + ")");
+                    //TODO close the file, flush the buffer
+//                  if (_sink != null) _sink.getPackByte(packet);
+                    getPackByte(packet);
+
+     //             System.err.println("Ssn 1  packet seqn: typ: datasz "  +packet.getSequenceNumber()  + " " +packet.getPayloadType() +" " +packet.getDataSize());
+     //             System.err.println("Ssn 1  packet sessn: typ: datasz "  + session.getId() + " " +packet.getPayloadType() +" " +packet.getDataSize());
+ //                   latch.countDown();
+                }
+
+            });
+     //       DataPacket packet = new DataPacket();
+      //      packet.setData(new byte[]{0x45, 0x45, 0x45, 0x45});
+     //       packet.setSequenceNumber(1);
+     //       session1.sendDataPacket(packet);
+
+
+//        try {
+       //       latch.await(2000, TimeUnit.MILLISECONDS);
+     //     } catch (Exception e) {
+   //         fail("Exception caught: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+
+ //      }
+        }
+ //TODO  below should collaborate with the audioTrack object and should write to the AT buffr
+        // audioTrack write was blocking forever 
+
+    public void getPackByte(DataPacket packet) {
+            //TODO this is getting called but not sure why only one time 
+            // or whether it is stalling in mid-exec??
+
+            //TODO on firstPacket write bytes and start audioTrack
+            // AMR-nb frames at 12.2 KB or format type 7 frames are handled . 
+            // after the normal header, the getDataArray contains extra 10 bytes of dynamic header that are bypassed by 'limit'
+
+
+            // real value for the frame separator comes in the input stream at position 1 in the data array
+            // returned by 
+
+//          int newFrameSep = 0x3c;
+            // bytes avail = packet.getDataSize() - limit;
+
+//          byte[] lbuf = new byte[packet.getDataSize()];
+//          if ( packet.getDataSize() &gt; 0)
+//              lbuf = packet.getDataAsArray();
+            //first frame includes the 1 byte frame header whose value should be used 
+            // to write subsequent frame separators 
+            Log.d(TAG, "getPackByt start and play");
+
+            if(!started){
+                Log.d(TAG, " PLAY  audioTrak");
+                track.play();
+                started = true;
+            }
+
+//          track.write(packet.getDataAsArray(), limit, (packet.getDataSize() - limit));
+            track.write(packet.getDataAsArray(), 0, packet.getDataSize() );
+            Log.d(TAG, "getPackByt aft write");
+
+//          if(!started &amp;&amp; nBytesRead &gt; minBufferSize){
+    //          Log.d(TAG, " PLAY  audioTrak");
+        //      track.play();
+        //  started = true;}
+            nBytesRead += packet.getDataSize(); 
+            if (nBytesRead % 500 &lt; 375) Log.d(TAG, " getPackByte plus 5K received");
+        }       
+    }
+</code></pre>

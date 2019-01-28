@@ -1,0 +1,55 @@
+<p>These are good approaches. </p>
+
+<p>A simpler solution might be to use shared memory.  This has the performance of AtomicLong, while being shared across processes on the same machine.</p>
+
+<pre><code>import net.openhft.lang.io.DirectBytes;
+import net.openhft.lang.io.MappedStore;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+
+public class CounterExampleMain {
+    static volatile long id;
+
+    public static void main(String... ignored) throws IOException {
+        int counters = 128;
+        int repeats = 100000;
+
+        File file = new File(System.getProperty("java.io.tmpdir") + "/counters");
+        MappedStore ms = new MappedStore(file, FileChannel.MapMode.READ_WRITE, counters * 8);
+        DirectBytes slice = ms.bytes();
+
+        long start = System.nanoTime();
+        for (int j = 0; j &lt; repeats; j++) {
+            for (int i = 0; i &lt; counters; i++) {
+                id = slice.addAtomicLong(i * 8, 1);
+            }
+        }
+        long time = System.nanoTime() - start;
+        System.out.printf("Took %.3f second to increment %,d counters, %,d times, last id=%,d%n",
+                time / 1e9, counters, repeats, id);
+        ms.free();
+    }
+}
+</code></pre>
+
+<p>Each time I run it on my laptop, I get</p>
+
+<pre><code>Took 0.252 second to increment 128 counters, 100,000 times, last id=100,000
+Took 0.267 second to increment 128 counters, 100,000 times, last id=200,000
+Took 0.255 second to increment 128 counters, 100,000 times, last id=300,000
+</code></pre>
+
+<p>As you can see this is really cheap, averaging ~25 ns per increment and persisted between runs of the program.  It is also thread safe and can be shared between JVMs.</p>
+
+<p>BTW in a contented example where multiple threads are updating the same counters, I would expect closer to 50 ns.</p>
+
+<p>The library I used was</p>
+
+<pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;net.openhft&lt;/groupId&gt;
+    &lt;artifactId&gt;lang&lt;/artifactId&gt;
+    &lt;version&gt;6.4.8&lt;/version&gt;
+&lt;/dependency&gt;
+</code></pre>

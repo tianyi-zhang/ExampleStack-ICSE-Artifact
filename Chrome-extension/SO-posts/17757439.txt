@@ -1,0 +1,741 @@
+<p>Ok, this took very long to finally work out, as there were a few things which didn't look very important at the beginning, but actually corrupted the file when they haven't been set right - especially in the Ole10Native wrapper, part of the unknown2 field actually contained the size (in bytes) of the following command string.</p>
+
+<p>But first things first:</p>
+
+<p>When you want to embed arbitrary files into one of the office formats, your best bet is to use the OLE 1.0 packager. It will be typically used, when you select insert->object from file.</p>
+
+<p>So I've re-engineered an Excel 2003 file containing a PPT. As mentioned in my comment above, <a href="http://poi.apache.org/poifs/embeded.html">Excel will store its embedded objects</a> in <a href="http://poi.apache.org/apidocs/org/apache/poi/poifs/filesystem/DirectoryNode.html"><code>DirectoryNodes</code></a> named "MBD....". In case of a Ole 1.0 Packager object, the interesting data will be found in the <code>\1Ole10Native</code> entry.</p>
+
+<p>When you've inserted the data, you'll need to link it somehow in the Excel sheet. This is done by an EscherObject similar to a picture entry with additional attached records.</p>
+
+<p>Apart from the many undocumented flags, there were a few things which puzzled me:</p>
+
+<ul>
+<li>are the storage ids for the embedded objects just randomly assigned or is there some kind of number system?</li>
+<li>I've searched for a more detailed description of the Ole10Native wrapper and especially for the ole 1.0 packager format, but apart of the <a href="http://msdn.microsoft.com/en-us/library/dd942265.aspx">M$ docu</a> which sketchily handles it as one big byte chunk, most sources did some reengineering which looked very similar to the <a href="http://poi.apache.org/apidocs/org/apache/poi/poifs/filesystem/Ole10Native.html">poi Ole10Native class</a> ... of course the idea to check the libre office source came also to mind, but I have to admit the ones I've checked, only confused me :(</li>
+<li>which one is the right clsid for the embedded object? ... i.e. for powerpoint there are quite a few. So if in doubt, obviously you'll need to lookup the clsid by a previously saved file from Office </li>
+<li>Excel 2010 generates Biff8 files which embedded objects can't be opened by Libre Office!?!</li>
+<li>the ole10Native object contains among other things a command line entry. would be interesting if someone can start other things than the embedded object with it ...</li>
+<li>the <a href="http://poi.apache.org/apidocs/org/apache/poi/hssf/dev/BiffViewer.html">BiffViewer</a> crashed when I've used preview images bigger than some chunk size (~6kb). So either images would need to be chunked or the BiffViewer implementation is wrong ... this also caused some confusing for a while ...</li>
+</ul>
+
+<p>Tested with POI 3.9, Libre Office 4.0, Office 2010 (I don't have Office 2003 anymore ...)</p>
+
+<pre><code>import java.awt.Color;
+import java.io.*;
+import java.lang.reflect.*;
+import java.net.URL;
+
+import javax.swing.ImageIcon;
+import javax.swing.filechooser.FileSystemView;
+
+import org.apache.poi.ddf.*;
+import org.apache.poi.hpsf.ClassID;
+import org.apache.poi.hslf.HSLFSlideShow;
+import org.apache.poi.hslf.model.*;
+import org.apache.poi.hslf.model.ShapeTypes;
+import org.apache.poi.hslf.usermodel.SlideShow;
+import org.apache.poi.hssf.dev.BiffViewer;
+import org.apache.poi.hssf.model.*;
+import org.apache.poi.hssf.record.*;
+import org.apache.poi.hssf.usermodel.*;
+import org.apache.poi.poifs.filesystem.*;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.util.*;
+
+@SuppressWarnings("unused")
+public class PoiOlePptInXls {
+
+    public static final OleType PACKAGE = new OleType("{0003000C-0000-0000-C000-000000000046}");
+    public static final OleType PPT_SHOW = new OleType("{64818D10-4F9B-11CF-86EA-00AA00B929E8}");
+    public static final OleType XLS_WORKBOOK = new OleType("{00020841-0000-0000-C000-000000000046}");
+    public static final OleType TXT_ONLY = new OleType("{5e941d80-bf96-11cd-b579-08002b30bfeb}"); // ???
+
+    static class OleType {
+        final String classId;
+        OleType(String classId) {
+            this.classId = classId;
+        }
+        ClassID getClassID() {
+            ClassID cls = new ClassID();
+            byte clsBytes[] = cls.getBytes();
+            String clsStr = classId.replaceAll("[{}-]", "");
+            for (int i=0; i&lt;clsStr.length(); i+=2) {
+                clsBytes[i/2] = (byte)Integer.parseInt(clsStr.substring(i, i+2), 16);
+            }
+            return cls;
+        }
+    }   
+
+    public static void main(String[] args) throws Exception {
+        POIFSFileSystem poifs = new POIFSFileSystem(); 
+
+        HSSFWorkbook wb = new HSSFWorkbook();
+        HSSFSheet sheet = wb.createSheet();
+        HSSFPatriarch patriarch = sheet.createDrawingPatriarch();
+
+        int previewIdxPpt = generatePreview(wb, "application/powerpoint");
+        int storageIdPpt = packageOleData(poifs, getSamplePPT(), "Example.ppt", "Example.ppt", "Example.ppt");
+        int previewIdxXls = generatePreview(wb, "application/excel");
+        int storageIdXls = packageOleData(poifs, getSampleXLS(), "Example.xls", "Example.xls", "Example.xls");
+        int previewIdxTxt = generatePreview(wb, "text/plain");
+        int storageIdTxt = packageOleData(poifs, getSampleTXT(), "Example.txt", "Example.txt", "Example.txt");
+
+        int rowoffset = 5;
+        int coloffset = 5;
+
+        CreationHelper ch = wb.getCreationHelper();
+        HSSFClientAnchor anchor = (HSSFClientAnchor)ch.createClientAnchor();
+        anchor.setAnchor((short)(2+coloffset), 1+rowoffset, 0, 0, (short)(3+coloffset), 5+rowoffset, 0, 0);
+        anchor.setAnchorType(ClientAnchor.DONT_MOVE_AND_RESIZE);
+
+        HSSFObjectData oleShape = createObjectData(poifs, storageIdPpt, 1, anchor, previewIdxPpt);
+        addShape(patriarch, oleShape);
+
+        anchor = (HSSFClientAnchor)ch.createClientAnchor();
+        anchor.setAnchor((short)(5+coloffset), 1+rowoffset, 0, 0, (short)(6+coloffset), 5+rowoffset, 0, 0);
+        anchor.setAnchorType(ClientAnchor.DONT_MOVE_AND_RESIZE);
+
+        oleShape = createObjectData(poifs, storageIdXls, 2, anchor, previewIdxXls);
+        addShape(patriarch, oleShape);
+
+        anchor = (HSSFClientAnchor)ch.createClientAnchor();
+        anchor.setAnchor((short)(3+coloffset), 10+rowoffset, 0, 0, (short)(5+coloffset), 11+rowoffset, 0, 0);
+        anchor.setAnchorType(ClientAnchor.DONT_MOVE_AND_RESIZE);
+
+        oleShape = createObjectData(poifs, storageIdTxt, 3, anchor, previewIdxTxt);
+        addShape(patriarch, oleShape);
+
+        anchor = (HSSFClientAnchor)ch.createClientAnchor();
+        anchor.setAnchor((short)(1+coloffset), -2+rowoffset, 0, 0, (short)(7+coloffset), 14+rowoffset, 0, 0);
+        anchor.setAnchorType(ClientAnchor.DONT_MOVE_AND_RESIZE);
+
+        HSSFSimpleShape circle = patriarch.createSimpleShape(anchor);
+        circle.setShapeType(HSSFSimpleShape.OBJECT_TYPE_OVAL);
+        circle.setNoFill(true);
+
+        poifs.getRoot().createDocument("Workbook", new ByteArrayInputStream(wb.getBytes()));
+
+        FileOutputStream fos = new FileOutputStream("ole_ppt_in_xls.xls");
+        poifs.writeFilesystem(fos);
+        fos.close();
+    }
+
+    static void addShape(HSSFPatriarch patriarch, HSSFShape shape) throws Exception {
+        patriarch.addShape(shape);
+        Method m = HSSFPatriarch.class.getDeclaredMethod("onCreate", HSSFShape.class);
+        m.setAccessible(true);
+        m.invoke(patriarch, shape);
+    }
+
+    static HSSFObjectData createObjectData(POIFSFileSystem poifs, int storageId, int objectIdx, HSSFClientAnchor anchor, int previewIdx) {
+        ObjRecord obj = new ObjRecord();
+        CommonObjectDataSubRecord ftCmo = new CommonObjectDataSubRecord();
+        ftCmo.setObjectType(CommonObjectDataSubRecord.OBJECT_TYPE_PICTURE);
+        ftCmo.setObjectId(objectIdx);
+        ftCmo.setLocked(true);
+        ftCmo.setPrintable(true);
+        ftCmo.setAutofill(true);
+        ftCmo.setAutoline(true);
+        ftCmo.setReserved1(0);
+        ftCmo.setReserved2(0);
+        ftCmo.setReserved3(0);
+        obj.addSubRecord(ftCmo);
+
+        obj.addSubRecord(SubRecord.createSubRecord(new LittleEndianByteArrayInputStream(new byte[]{7,0,2,0,2,0}), 0));
+        obj.addSubRecord(SubRecord.createSubRecord(new LittleEndianByteArrayInputStream(new byte[]{8,0,2,0,1,0}), 0));
+
+        EmbeddedObjectRefSubRecord ftPictFmla;
+        try {
+            Constructor&lt;EmbeddedObjectRefSubRecord&gt; con = EmbeddedObjectRefSubRecord.class.getDeclaredConstructor();
+            con.setAccessible(true);
+            ftPictFmla = con.newInstance();
+        } catch (Exception e) {
+            throw new RuntimeException("oops", e);
+        }
+
+        setField(ftPictFmla, "field_2_unknownFormulaData", new byte[]{2, 0, 0, 0, 0});
+        setField(ftPictFmla, "field_4_ole_classname", "Paket");
+        setField(ftPictFmla, "field_5_stream_id", (Integer)storageId);
+
+        obj.addSubRecord(ftPictFmla);
+        obj.addSubRecord(new EndSubRecord());
+
+        // create temporary picture, but don't attach it.
+        // It's neccessary to create the sp-container, which need to be minimal modified
+        // for oleshapes
+
+        HSSFPicture shape = new HSSFPicture(null, anchor);
+        EscherContainerRecord spContainer;
+
+        try {
+            Method m = HSSFPicture.class.getDeclaredMethod("createSpContainer");
+            m.setAccessible(true);
+            spContainer = (EscherContainerRecord)m.invoke(shape);
+        } catch (Exception e) {
+            throw new RuntimeException("oops", e);
+        }
+
+        EscherSpRecord spRecord = spContainer.getChildById(EscherSpRecord.RECORD_ID);
+        spRecord.setFlags(spRecord.getFlags() |  EscherSpRecord.FLAG_OLESHAPE);
+        spRecord.setShapeType((byte)0x4B);
+        EscherOptRecord optRecord = spContainer.getChildById(EscherOptRecord.RECORD_ID);
+
+        EscherProperty ep = new EscherSimpleProperty(EscherProperties.BLIP__PICTUREID, false, false, 1);
+        optRecord.addEscherProperty(ep);
+
+        DirectoryEntry oleRoot;
+        try {
+            oleRoot = (DirectoryEntry)poifs.getRoot().getEntry(formatStorageId(storageId));
+        } catch (FileNotFoundException e) {
+            throw new RuntimeException("oops", e);
+        }
+        HSSFObjectData oleShape = new HSSFObjectData(spContainer, obj, oleRoot); 
+        oleShape.setPictureIndex(previewIdx);
+        return oleShape;
+    }
+
+    static void setField(Object clazz, String fieldname, Object value) {
+        try {
+            Field f = clazz.getClass().getDeclaredField(fieldname);
+            f.setAccessible(true);
+            f.set(clazz, value);
+        } catch (Exception e) {
+            throw new RuntimeException("oops", e);
+        }
+    }
+
+    static void addOleStreamEntry(DirectoryEntry dir) throws IOException {
+        final String OLESTREAM_NAME = "\u0001Ole";
+        if (!dir.hasEntry(OLESTREAM_NAME)) {
+            // the following data was taken from an example libre office document
+            // beside this "\u0001Ole" record there were several other records, e.g. CompObj,
+            // OlePresXXX, but it seems, that they aren't neccessary
+            byte oleBytes[] = { 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            dir.createDocument(OLESTREAM_NAME, new ByteArrayInputStream(oleBytes));
+        }       
+    }
+
+    static String formatStorageId(int storageId) {
+        return String.format("MBD%1$08X", storageId);
+    }
+
+    static int packageOleData(POIFSFileSystem poifs, byte oleData[], String label, String fileName, String command) throws IOException {
+        DirectoryNode root = poifs.getRoot();
+        // get free MBD-Node
+        int storageId = 0;
+        DirectoryEntry oleDir = null;
+        do {
+            String storageStr = formatStorageId(++storageId);
+            if (!root.hasEntry(storageStr)) {
+                oleDir = root.createDirectory(storageStr);
+                oleDir.setStorageClsid(PACKAGE.getClassID());
+            }
+        } while (oleDir == null);
+
+        addOleStreamEntry(oleDir);
+
+        Ole10Native2 oleNative = new Ole10Native2();
+        oleNative.setLabel(label);
+        oleNative.setFileName(fileName);
+        oleNative.setCommand(command);
+        oleNative.setDataBuffer(oleData);
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        oleNative.writeOut(bos);
+        byte buf1[] = bos.toByteArray();
+
+        oleDir.createDocument(Ole10Native2.OLE10_NATIVE, new ByteArrayInputStream(buf1));
+
+        return storageId;
+    }
+
+    static byte[] getSamplePPT() {
+        HSLFSlideShow ss = HSLFSlideShow.create();
+        SlideShow ppt = new SlideShow(ss);
+        Slide slide = ppt.createSlide();
+
+        AutoShape sh1 = new AutoShape(ShapeTypes.Star32);
+        sh1.setAnchor(new java.awt.Rectangle(50, 50, 100, 200));
+        sh1.setFillColor(Color.red);
+        slide.addShape(sh1);
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try {
+            ppt.write(bos);
+
+            POIFSFileSystem poifs = new POIFSFileSystem(new ByteArrayInputStream(bos.toByteArray())); 
+            poifs.getRoot().setStorageClsid(PPT_SHOW.getClassID());
+
+            bos.reset();
+            poifs.writeFilesystem(bos);
+
+            return bos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("bla", e);
+        }
+    }
+
+    static byte[] getSampleXLS() {
+        HSSFWorkbook wb = new HSSFWorkbook();
+        HSSFSheet sheet = wb.createSheet();
+        sheet.createRow(5).createCell(2).setCellValue("yo dawg i herd you like embeddet objekts, so we put a ole in your ole so you can save a file while you save a file");
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try {
+            wb.write(bos);
+
+            POIFSFileSystem poifs = new POIFSFileSystem(new ByteArrayInputStream(bos.toByteArray())); 
+            poifs.getRoot().setStorageClsid(XLS_WORKBOOK.getClassID());
+
+            bos.reset();
+            poifs.writeFilesystem(bos);
+
+            return bos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("bla", e);
+        }
+    }
+
+    static byte[] getSampleTXT() {
+        return "All your base are belong to us".getBytes();
+    }
+
+    /**
+     * to be defined, how to create a preview image for a start, I've taken just
+     * a dummy image, which will be replaced, when the user activates the ole
+     * object
+     * 
+     * not really an alternativ:
+     * http://stackoverflow.com/questions/16704624/how-
+     * to-print-a-workbook-file-made-using-apache-poi-and-java
+     * 
+     * @return image index of the preview image
+     */
+    static int generatePreview(HSSFWorkbook workbook, String mimetype) {
+        try {
+            String url = "";
+            if ("application/powerpoint".equals(mimetype)) {
+                url = "http://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/LibreOffice_Impress_icon_3.3.1_48_px.svg/40px-LibreOffice_Impress_icon_3.3.1_48_px.svg.png";
+            } else if ("application/excel".equals(mimetype)) {
+                url = "http://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/LibreOffice_Calc_icon_3.3.1_48_px.svg/40px-LibreOffice_Calc_icon_3.3.1_48_px.svg.png";
+            } else if ("text/plain".equals(mimetype)) {
+                url = "http://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/LibreOffice_Writer_icon_3.3.1_48_px.svg/40px-LibreOffice_Writer_icon_3.3.1_48_px.svg.png";
+            }
+
+            InputStream is = new URL(url).openStream();
+            byte previewImg[] = IOUtils.toByteArray(is);
+            is.close();
+            int pictIdx = workbook.addPicture(previewImg, HSSFWorkbook.PICTURE_TYPE_PNG);
+            return pictIdx;
+        } catch (IOException e) {
+            throw new RuntimeException("not really?", e);
+        }
+    }
+
+    /*
+     * Helper - determine length of zero terminated string (ASCIIZ).
+     */
+    private static int getStringLength(byte[] data, int ofs) {
+        int len = 0;
+        while (len + ofs &lt; data.length &amp;&amp; data[ofs + len] != 0) {
+            len++;
+        }
+        len++;
+        return len;
+    }
+
+}
+</code></pre>
+
+<p>The adapted Ole10Native class of POI with write-support:</p>
+
+<pre><code>import java.io.*;
+import org.apache.poi.poifs.filesystem.*;
+import org.apache.poi.util.*;
+
+/**
+ * Represents an Ole10Native record which is wrapped around certain binary files
+ * being embedded in OLE2 documents.
+ * 
+ * @author Rainer Schwarze
+ */
+public class Ole10Native2 {
+    public static final String OLE10_NATIVE = "\u0001Ole10Native";
+    protected static final String ISO1 = "ISO-8859-1";
+
+    // (the fields as they appear in the raw record:)
+    protected int totalSize; // 4 bytes, total size of record not including this
+                                // field
+    protected short flags1 = 2; // 2 bytes, unknown, mostly [02 00]
+    protected String label; // ASCIIZ, stored in this field without the
+                            // terminating zero
+    protected String fileName; // ASCIIZ, stored in this field without the
+                                // terminating zero
+    protected short flags2 = 0; // 2 bytes, unknown, mostly [00 00]
+    protected short unknown1 = 3; 
+    protected String command; // ASCIIZ, stored in this field without the
+                                // terminating zero
+    protected byte[] dataBuffer; // varying size, the actual native data
+    protected short flags3 = 0; // some final flags? or zero terminators?,
+                                // sometimes not there
+
+
+    /**
+     * Creates an instance of this class from an embedded OLE Object. The OLE
+     * Object is expected to include a stream &amp;quot;{01}Ole10Native&amp;quot; which
+     * contains the actual data relevant for this class.
+     * 
+     * @param poifs
+     *            POI Filesystem object
+     * @return Returns an instance of this class
+     * @throws IOException
+     *             on IO error
+     * @throws Ole10NativeException
+     *             on invalid or unexcepted data format
+     */
+    public static Ole10Native2 createFromEmbeddedOleObject(POIFSFileSystem poifs) throws IOException, Ole10NativeException {
+        return createFromEmbeddedOleObject(poifs.getRoot());
+    }
+
+    /**
+     * Creates an instance of this class from an embedded OLE Object. The OLE
+     * Object is expected to include a stream &amp;quot;{01}Ole10Native&amp;quot; which
+     * contains the actual data relevant for this class.
+     * 
+     * @param directory
+     *            POI Filesystem object
+     * @return Returns an instance of this class
+     * @throws IOException
+     *             on IO error
+     * @throws Ole10NativeException
+     *             on invalid or unexcepted data format
+     */
+    public static Ole10Native2 createFromEmbeddedOleObject(DirectoryNode directory) throws IOException, Ole10NativeException {
+        boolean plain = false;
+
+        try {
+            directory.getEntry("\u0001Ole10ItemName");
+            plain = true;
+        } catch (FileNotFoundException ex) {
+            plain = false;
+        }
+
+        DocumentEntry nativeEntry = (DocumentEntry) directory.getEntry(OLE10_NATIVE);
+        byte[] data = new byte[nativeEntry.getSize()];
+        directory.createDocumentInputStream(nativeEntry).read(data);
+
+        return new Ole10Native2(data, 0, plain);
+    }
+
+    /**
+     * Creates an instance and fills the fields based on the data in the given
+     * buffer.
+     * 
+     * @param data
+     *            The buffer containing the Ole10Native record
+     * @param offset
+     *            The start offset of the record in the buffer
+     * @throws Ole10NativeException
+     *             on invalid or unexcepted data format
+     */
+    public Ole10Native2(byte[] data, int offset) throws Ole10NativeException {
+        this(data, offset, false);
+    }
+
+    /**
+     * Creates an instance and fills the fields based on the data in the given
+     * buffer.
+     * 
+     * @param data
+     *            The buffer containing the Ole10Native record
+     * @param offset
+     *            The start offset of the record in the buffer
+     * @param plain
+     *            Specified 'plain' format without filename
+     * @throws Ole10NativeException
+     *             on invalid or unexcepted data format
+     */
+    public Ole10Native2(byte[] data, int offset, boolean plain) throws Ole10NativeException {
+        int ofs = offset; // current offset, initialized to start
+
+        if (data.length &lt; offset + 2) {
+            throw new Ole10NativeException("data is too small");
+        }
+
+        totalSize = LittleEndian.getInt(data, ofs);
+        ofs += LittleEndianConsts.INT_SIZE;
+
+        if (plain) {
+            dataBuffer = new byte[totalSize - 4];
+            System.arraycopy(data, 4, dataBuffer, 0, dataBuffer.length);
+            int dataSize = totalSize - 4;
+
+            byte[] oleLabel = new byte[8];
+            System.arraycopy(dataBuffer, 0, oleLabel, 0, Math.min(dataBuffer.length, 8));
+            label = "ole-" + HexDump.toHex(oleLabel);
+            fileName = label;
+            command = label;
+        } else {
+            flags1 = LittleEndian.getShort(data, ofs);
+            ofs += LittleEndianConsts.SHORT_SIZE;
+
+            int len = getStringLength(data, ofs);
+            label = StringUtil.getFromCompressedUnicode(data, ofs, len - 1);
+            ofs += len;
+
+            len = getStringLength(data, ofs);
+            fileName = StringUtil.getFromCompressedUnicode(data, ofs, len - 1);
+            ofs += len;
+
+            flags2 = LittleEndian.getShort(data, ofs);
+            ofs += LittleEndianConsts.SHORT_SIZE;
+
+            unknown1 = LittleEndian.getShort(data, ofs);
+            ofs += LittleEndianConsts.SHORT_SIZE;
+
+            len = LittleEndian.getInt(data, ofs);
+            ofs += LittleEndianConsts.INT_SIZE;
+
+            command = StringUtil.getFromCompressedUnicode(data, ofs, len - 1);
+            ofs += len;
+
+            if (totalSize &lt; ofs) {
+                throw new Ole10NativeException("Invalid Ole10Native");
+            }
+
+            int dataSize = LittleEndian.getInt(data, ofs);
+            ofs += LittleEndianConsts.INT_SIZE;
+
+            if (dataSize &lt; 0 || totalSize - (ofs - LittleEndianConsts.INT_SIZE) &lt; dataSize) {
+                throw new Ole10NativeException("Invalid Ole10Native");
+            }
+
+            dataBuffer = new byte[dataSize];
+            System.arraycopy(data, ofs, dataBuffer, 0, dataSize);
+            ofs += dataSize;
+
+//          if (unknown1.length &gt; 0) {
+//              flags3 = LittleEndian.getShort(data, ofs);
+//              ofs += LittleEndianConsts.SHORT_SIZE;
+//          } else {
+//              flags3 = 0;
+//          }
+        }
+    }
+
+    public Ole10Native2() {}
+
+    /*
+     * Helper - determine length of zero terminated string (ASCIIZ).
+     */
+    private static int getStringLength(byte[] data, int ofs) {
+        int len = 0;
+        while (len + ofs &lt; data.length &amp;&amp; data[ofs + len] != 0) {
+            len++;
+        }
+        len++;
+        return len;
+    }
+
+    /**
+     * Returns the value of the totalSize field - the total length of the
+     * structure is totalSize + 4 (value of this field + size of this field).
+     * 
+     * @return the totalSize
+     */
+    public int getTotalSize() {
+        return totalSize;
+    }
+
+    /**
+     * Returns flags1 - currently unknown - usually 0x0002.
+     * 
+     * @return the flags1
+     */
+    public short getFlags1() {
+        return flags1;
+    }
+
+    /**
+     * Returns the label field - usually the name of the file (without
+     * directory) but probably may be any name specified during
+     * packaging/embedding the data.
+     * 
+     * @return the label
+     */
+    public String getLabel() {
+        return label;
+    }
+
+    /**
+     * Returns the fileName field - usually the name of the file being embedded
+     * including the full path.
+     * 
+     * @return the fileName
+     */
+    public String getFileName() {
+        return fileName;
+    }
+
+    /**
+     * Returns flags2 - currently unknown - mostly 0x0000.
+     * 
+     * @return the flags2
+     */
+    public short getFlags2() {
+        return flags2;
+    }
+
+    /**
+     * Returns unknown1 field - currently unknown.
+     * 
+     * @return the unknown1
+     */
+    public short getUnknown1() {
+        return unknown1;
+    }
+
+    /**
+     * Returns the unknown2 field - currently being a byte[3] - mostly {0, 0,
+     * 0}.
+     * 
+     * @return the unknown2
+     */
+//  public short getUnknown2() {
+//      return unknown2;
+//  }
+
+    /**
+     * Returns the command field - usually the name of the file being embedded
+     * including the full path, may be a command specified during embedding the
+     * file.
+     * 
+     * @return the command
+     */
+    public String getCommand() {
+        return command;
+    }
+
+    /**
+     * Returns the size of the embedded file. If the size is 0 (zero), no data
+     * has been embedded. To be sure, that no data has been embedded, check
+     * whether {@link #getDataBuffer()} returns &lt;code&gt;null&lt;/code&gt;.
+     * 
+     * @return the dataSize
+     */
+    public int getDataSize() {
+        return dataBuffer.length;
+    }
+
+    /**
+     * Returns the buffer containing the embedded file's data, or
+     * &lt;code&gt;null&lt;/code&gt; if no data was embedded. Note that an embedding may
+     * provide information about the data, but the actual data is not included.
+     * (So label, filename etc. are available, but this method returns
+     * &lt;code&gt;null&lt;/code&gt;.)
+     * 
+     * @return the dataBuffer
+     */
+    public byte[] getDataBuffer() {
+        return dataBuffer;
+    }
+
+    /**
+     * Returns the flags3 - currently unknown.
+     * 
+     * @return the flags3
+     */
+    public short getFlags3() {
+        return flags3;
+    }
+
+    /**
+     * Have the contents printer out into an OutputStream, used when writing a
+     * file back out to disk (Normally, atom classes will keep their bytes
+     * around, but non atom classes will just request the bytes from their
+     * children, then chuck on their header and return)
+     */
+    public void writeOut(OutputStream out) throws IOException {
+        byte intbuf[] = new byte[LittleEndianConsts.INT_SIZE];
+        byte shortbuf[] = new byte[LittleEndianConsts.SHORT_SIZE];
+        byte bytebuf[] = new byte[LittleEndianConsts.BYTE_SIZE];
+        // LittleEndian.putInt(_header, 4, _data.length);
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        bos.write(intbuf); // total size, will be determined later ..
+
+        LittleEndian.putShort(shortbuf, 0, getFlags1());
+        bos.write(shortbuf);
+
+        bos.write(getLabel().getBytes(ISO1));
+        bos.write(0);
+
+        bos.write(getFileName().getBytes(ISO1));
+        bos.write(0);
+
+        LittleEndian.putShort(shortbuf, 0, getFlags2());
+        bos.write(shortbuf);
+
+        LittleEndian.putShort(shortbuf, 0, getUnknown1());
+        bos.write(shortbuf);
+
+        LittleEndian.putInt(intbuf, 0, getCommand().length()+1);
+        bos.write(intbuf);
+
+        bos.write(getCommand().getBytes(ISO1));
+        bos.write(0);
+
+        LittleEndian.putInt(intbuf, 0, getDataBuffer().length);
+        bos.write(intbuf);
+
+        bos.write(getDataBuffer());
+
+        LittleEndian.putShort(shortbuf, 0, getFlags3());
+        bos.write(shortbuf);
+
+        // update total size - length of length-field (4 bytes)
+        byte data[] = bos.toByteArray();
+        totalSize = data.length - LittleEndianConsts.INT_SIZE;
+        LittleEndian.putInt(data, 0, totalSize);
+
+        out.write(data);
+    }
+
+    public void setFlags1(short flags1) {
+        this.flags1 = flags1;
+    }
+
+    public void setFlags2(short flags2) {
+        this.flags2 = flags2;
+    }
+
+    public void setFlags3(short flags3) {
+        this.flags3 = flags3;
+    }
+
+    public void setLabel(String label) {
+        this.label = label;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    public void setCommand(String command) {
+        this.command = command;
+    }
+
+    public void setUnknown1(short unknown1) {
+        this.unknown1 = unknown1;
+    }
+
+//  public void setUnknown2(short unknown2) {
+//      this.unknown2 = unknown2;
+//  }
+
+    public void setDataBuffer(byte dataBuffer[]) {
+        this.dataBuffer = dataBuffer;
+    }
+}
+</code></pre>

@@ -1,0 +1,145 @@
+<p>I have some additions to @Nikola Despotoski answer. 
+Firstly, you don't have to change ImageView in R.layout.crop_image_view to PhotoView, because PhotoView logic can be simply attached in code as new PhotoViewAttacher(mImageView).</p>
+
+<p>Also in default logic, a CropView's overlay size calculates only on its initialization according to imageView bitmap size. So it is not appropriate logic for us, becouse we change bitmap size by touches according to the requirement. So, we should change stored bitmap sizes in CropOverlayView and invalidate it each time when we change the main image.</p>
+
+<p>And the last is that a range, where user can make cropping normally based on the image size, but if we made image bigger, it can go beyond the border of screen, so it will be possible to user to move a cropping view beyond the border, which is incorrect. So we also should handle this situation and provide limitation.</p>
+
+<p>And the corresponding part of code for this three issues:
+In CropImageView:</p>
+
+<pre><code> private void init(Context context) {
+
+    final LayoutInflater inflater = LayoutInflater.from(context);
+    final View v = inflater.inflate(R.layout.crop_image_view, this, true);
+
+    mImageView = (ImageView) v.findViewById(R.id.ImageView_image);
+
+    setImageResource(mImageResource);
+    mCropOverlayView = (CropOverlayView) v.findViewById(R.id.CropOverlayView);
+    mCropOverlayView.setInitialAttributeValues(mGuidelines, mFixAspectRatio, mAspectRatioX, mAspectRatioY);
+    mCropOverlayView.setOutlineTouchEventReceiver(mImageView);
+
+    final PhotoViewAttacher photoAttacher = new PhotoViewAttacher(mImageView);
+    photoAttacher.setOnMatrixChangeListener(new PhotoViewAttacher.OnMatrixChangedListener() {
+        @Override
+        public void onMatrixChanged(RectF imageRect) {
+        final Rect visibleRect = ImageViewUtil.getBitmapRectCenterInside(photoAttacher.getVisibleRectangleBitmap(), photoAttacher.getImageView());
+
+        imageRect.top = Math.max(imageRect.top, visibleRect.top);
+        imageRect.left = Math.max(imageRect.left, visibleRect.left);
+        imageRect.right = Math.min(imageRect.right, visibleRect.right);
+        imageRect.bottom = Math.min(imageRect.bottom, visibleRect.bottom);
+
+        Rect bitmapRect = new Rect();
+        imageRect.round(bitmapRect);
+
+        mCropOverlayView.changeBitmapRectInvalidate(bitmapRect);
+        }
+    });
+}
+</code></pre>
+
+<p>In CropOverlayView:</p>
+
+<pre><code>@Override
+public boolean onTouchEvent(MotionEvent event) {
+
+    // If this View is not enabled, don't allow for touch interactions.
+    if (!isEnabled()) {
+        return false;
+    }
+
+    switch (event.getAction()) {
+
+        case MotionEvent.ACTION_DOWN:
+            return onActionDown(event.getX(), event.getY());
+
+        case MotionEvent.ACTION_UP:
+        case MotionEvent.ACTION_CANCEL:
+            getParent().requestDisallowInterceptTouchEvent(false);
+            return onActionUp();
+
+        case MotionEvent.ACTION_MOVE:
+            boolean result = onActionMove(event.getX(), event.getY());
+            getParent().requestDisallowInterceptTouchEvent(true);
+            return result;
+
+        default:
+            return false;
+    }
+}
+
+public void changeBitmapRectInvalidate(Rect bitmapRect) {
+    mBitmapRect = bitmapRect;
+    invalidate();
+}
+
+private boolean onActionDown(float x, float y) {
+
+    final float left = Edge.LEFT.getCoordinate();
+    final float top = Edge.TOP.getCoordinate();
+    final float right = Edge.RIGHT.getCoordinate();
+    final float bottom = Edge.BOTTOM.getCoordinate();
+
+    mPressedHandle = HandleUtil.getPressedHandle(x, y, left, top, right, bottom, mHandleRadius);
+
+    if (mPressedHandle == null){
+        return false;
+    }
+
+    // Calculate the offset of the touch point from the precise location
+    // of the handle. Save these values in a member variable since we want
+    // to maintain this offset as we drag the handle.
+    mTouchOffset = HandleUtil.getOffset(mPressedHandle, x, y, left, top, right, bottom);
+
+    invalidate();
+    return true;
+}
+
+/**
+ * Handles a {@link MotionEvent#ACTION_UP} or
+ * {@link MotionEvent#ACTION_CANCEL} event.
+ * @return true if event vas handled, else - false
+ */
+private boolean onActionUp() {
+
+    if (mPressedHandle == null)
+        return false;
+
+    mPressedHandle = null;
+
+    invalidate();
+    return true;
+}
+
+/**
+ * Handles a {@link MotionEvent#ACTION_MOVE} event.
+ * 
+ * @param x the x-coordinate of the move event
+ * @param y the y-coordinate of the move event
+ */
+private boolean onActionMove(float x, float y) {
+
+    if (mPressedHandle == null)
+        return false;
+
+    // Adjust the coordinates for the finger position's offset (i.e. the
+    // distance from the initial touch to the precise handle location).
+    // We want to maintain the initial touch's distance to the pressed
+    // handle so that the crop window size does not "jump".
+    x += mTouchOffset.first;
+    y += mTouchOffset.second;
+
+    // Calculate the new crop window size/position.
+    if (mFixAspectRatio) {
+        mPressedHandle.updateCropWindow(x, y, mTargetAspectRatio, mBitmapRect, mSnapRadius);
+    } else {
+        mPressedHandle.updateCropWindow(x, y, mBitmapRect, mSnapRadius);
+    }
+    invalidate();
+    return true;
+}
+</code></pre>
+
+<p>For properly getting cropped image you should use the second part of @Nikola Despotoski answer</p>

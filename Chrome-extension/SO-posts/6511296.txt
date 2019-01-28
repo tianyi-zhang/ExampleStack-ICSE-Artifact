@@ -1,0 +1,120 @@
+<p>The excellent answer from hackbod has reminded me that I need to post up the solution that I eventually came to. Please note that this solution, which worked for me for the application I was doing at the time, could be further improved with hackbod's suggestions. In particular I didn't need to handle touch events, and until reading hackbod's post it did not occur to me that if I did then I would need to scale those as well. </p>
+
+<p>To recap, for my application I what I needed to achieve was to have a large diagram (specifically, the floor layout of a building) with other small "marker" symbols superimposed upon it. The background diagram and foreground symbols are all drawn using vector graphics (that is, Path() and Paint() objects applied to Canvas in the onDraw() method). The reason for wanting to create all the graphics this way, as opposed to just using bitmap resources, is because the graphics are converted at run-time using my SVG image converter. </p>
+
+<p>The requirement was that the diagram and associated marker symbols would all be children of a ViewGroup, and could all be pinch-zoomed together. </p>
+
+<p>A lot of the code looks messy (it was a rush job for a demonstration) so rather than just copying it all in, instead I'll try to just explain how I did it with the relevant bits of code quoted. </p>
+
+<p>First of all, I have a ZoomableRelativeLayout. </p>
+
+<pre><code>public class ZoomableRelativeLayout extends RelativeLayout { ...
+</code></pre>
+
+<p>This class includes listener classes that extend ScaleGestureDetector and SimpleGestureListener so that the layout can be panned and zoomed. Of particular interest here is the scale gesture listener, which sets a scale factor variable and then calls invalidate() and requestLayout(). I'm not strictly certain at the moment if invalidate() is necessary, but anyway - here it is:</p>
+
+<pre><code>private class ScaleListener extends ScaleGestureDetector.SimpleOnScaleGestureListener {
+
+@Override
+public boolean onScale(ScaleGestureDetector detector){
+    mScaleFactor *= detector.getScaleFactor();
+    // Apply limits to the zoom scale factor:
+    mScaleFactor = Math.max(0.6f, Math.min(mScaleFactor, 1.5f);
+    invalidate();
+    requestLayout();
+    return true;
+    }
+}
+</code></pre>
+
+<p>The next thing I had to do in my ZoomableRelativeLayout was to override onLayout(). To do this I found it useful to look at other people's attempts at a zoomable layout, and also I found it very useful to look at the original Android source code for RelativeLayout. My overridden method copies much of what's in RelativeLayout's onLayout() but with some modifications. </p>
+
+<pre><code>@Override
+protected void onLayout(boolean changed, int l, int t, int r, int b)
+{
+    int count = getChildCount();
+    for(int i=0;i&lt;count;i++){
+        View child = getChildAt(i); 
+        if(child.getVisibility()!=GONE){
+            RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams)child.getLayoutParams();
+            child.layout(
+                (int)(params.leftMargin * mScaleFactor), 
+                (int)(params.topMargin * mScaleFactor), 
+                (int)((params.leftMargin + child.getMeasuredWidth()) * mScaleFactor), 
+                (int)((params.topMargin + child.getMeasuredHeight()) * mScaleFactor) 
+                );
+        }
+    }
+}
+</code></pre>
+
+<p>What's significant here is that when calling 'layout()' on all the children, I'm applying the scale factor to the layout parameters as well for those children. This is one step towards solving the clipping problem, and also it importantly correctly sets the x,y position of the children relative to each other for different scale factors. </p>
+
+<p>A further key thing is that I am no longer attempting to scale the Canvas in dispatchDraw(). Instead each child View scales its Canvas after obtaining the scale factor from the parent ZoomableRelativeLayout via a getter method.</p>
+
+<p>Next, I shall move onto what I had to do within the child Views of my ZoomableRelativeLayout. There's only one type of View I contain as children in my ZoomableRelativeLayout; it's a View for drawing SVG graphics that I call SVGView. Of course the SVG stuff is not relevant here. Here's its onMeasure() method:</p>
+
+<pre><code>@Override
+protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+
+
+    int widthMode = MeasureSpec.getMode(widthMeasureSpec);
+    int widthSize = MeasureSpec.getSize(widthMeasureSpec);
+
+    int heightMode = MeasureSpec.getMode(heightMeasureSpec);
+    int heightSize = MeasureSpec.getSize(heightMeasureSpec);
+
+    float parentScale = ((FloorPlanLayout)getParent()).getScaleFactor();
+    int chosenWidth, chosenHeight;
+    if( parentScale &gt; 1.0f){
+        chosenWidth =  (int) ( parentScale * (float)svgImage.getDocumentWidth() );
+        chosenHeight = (int) ( parentScale * (float)svgImage.getDocumentHeight() );
+    }
+    else{
+        chosenWidth =  (int) (  (float)svgImage.getDocumentWidth() );
+        chosenHeight = (int) (  (float)svgImage.getDocumentHeight() );          
+    }
+
+    setMeasuredDimension(chosenWidth, chosenHeight);
+}
+</code></pre>
+
+<p>And the onDraw():</p>
+
+<pre><code>@Override
+protected void onDraw(Canvas canvas){   
+    canvas.save(Canvas.MATRIX_SAVE_FLAG);       
+
+    canvas.scale(((FloorPlanLayout)getParent()).getScaleFactor(), 
+            ((FloorPlanLayout)getParent()).getScaleFactor());       
+
+
+    if( null==bm  ||  bm.isRecycled() ){
+        bm = Bitmap.createBitmap(
+                getMeasuredWidth(),
+                getMeasuredHeight(),
+                Bitmap.Config.ARGB_8888);
+
+
+        ... Canvas draw operations go here ...
+    }       
+
+    Paint drawPaint = new Paint();
+    drawPaint.setAntiAlias(true);
+    drawPaint.setFilterBitmap(true);
+
+    // Check again that bm isn't null, because sometimes we seem to get
+    // android.graphics.Canvas.throwIfRecycled exception sometimes even though bitmap should
+    // have been drawn above. I'm guessing at the moment that this *might* happen when zooming into
+    // the house layout quite far and the system decides not to draw anything to the bitmap because
+    // a particular child View is out of viewing / clipping bounds - not sure. 
+    if( bm != null){
+        canvas.drawBitmap(bm, 0f, 0f, drawPaint );
+    }
+
+    canvas.restore();
+
+}
+</code></pre>
+
+<p>Again - as a disclaimer, there are probably some warts in what I have posted there and I am yet to carefully go through hackbod's suggestions and incorporate them. I intend to come back and edit this further. In the meantime, I hope it can start to provide useful pointers to others on how to implement a zoomable ViewGroup.</p>

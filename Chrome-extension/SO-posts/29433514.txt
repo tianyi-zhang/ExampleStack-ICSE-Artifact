@@ -1,0 +1,70 @@
+<p>This is very peculiar, and probably not your fault:</p>
+
+<p>The Javadoc of ReentrantLock.unlock says:</p>
+
+<blockquote>
+  <p>throws IllegalMonitorStateException if the current thread does not hold this lock</p>
+</blockquote>
+
+<p>but the implementation of <code>awaitTermination</code> you have posted shows that the thread has successfully locked the very same object (through the final variable <code>mainLock</code>) previously. Therefore, there has been an intermediary unlock, or the ReentrantLock implementation has a bug (in its Java code, or native code, or possibly even the hard). Further analysis is necessary to discover which is the case. As you are currently the only one to be able to reproduce the problem, you are the only one that can perform that analysis effectively.</p>
+
+<p>A reasonable first step would be to launch the application in debug mode, and set a breakpoint in <code>AbstractOwnableSynchronizer.setExclusiveOwnerThread</code> to verify whether there has been an intermediary unlock (and if so, from where). Should the presence of the breakpoint cause the problem to disappear (because it is timing sensitive), you might use a conditional breakpoint that never halts, but whose condition logs to System.out for your inspection, instead.</p>
+
+<p><strong>Update</strong>
+Thanks to the reproducer provided by Andremoniy in his answer, I was able to perform this analysis myself. I used the following expression in the conditional breakpoint to obtain the stack trace whenever the lock is aquired or released:</p>
+
+<pre><code>new RuntimeException(this + " is now owned by " + arg0).printStackTrace();
+return false;
+</code></pre>
+
+<p>Here is relevant part of the log output for his code:</p>
+
+<pre><code>java.lang.RuntimeException: java.util.concurrent.locks.ReentrantLock$NonfairSync@a5e3519[State = 1, empty queue] is now owned by null
+    at java.util.concurrent.locks.AbstractOwnableSynchronizer.setExclusiveOwnerThread(AbstractOwnableSynchronizer.java:74)
+    at java.util.concurrent.locks.ReentrantLock$Sync.tryRelease(ReentrantLock.java:155)
+    at java.util.concurrent.locks.AbstractQueuedSynchronizer.release(AbstractQueuedSynchronizer.java:1261)
+    at java.util.concurrent.locks.AbstractQueuedSynchronizer.fullyRelease(AbstractQueuedSynchronizer.java:1723)
+    at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.awaitNanos(AbstractQueuedSynchronizer.java:2069)
+    at java.util.concurrent.ThreadPoolExecutor.awaitTermination(ThreadPoolExecutor.java:1465)
+    at stackoverflow.Test$1.run(Test.java:24)
+    at java.lang.Thread.run(Thread.java:745)
+
+...
+
+java.util.concurrent.locks.ReentrantLock$NonfairSync@a5e3519[State = 0, empty queue] could not be released, as it is owned by null rather than Thread[Thread-0,5,main]
+</code></pre>
+
+<p>That is, the executor has released, but not reacquired, <code>mainLock</code> in <code>awaitNanos</code>, which is implemented as follows:</p>
+
+<pre><code>    public final long awaitNanos(long nanosTimeout)
+            throws InterruptedException {
+        if (Thread.interrupted())
+            throw new InterruptedException();
+        Node node = addConditionWaiter();
+        int savedState = fullyRelease(node);
+        final long deadline = System.nanoTime() + nanosTimeout;
+        int interruptMode = 0;
+        while (!isOnSyncQueue(node)) {
+            if (nanosTimeout &lt;= 0L) {
+                transferAfterCancelledWait(node);
+                break;
+            }
+            if (nanosTimeout &gt;= spinForTimeoutThreshold)
+                LockSupport.parkNanos(this, nanosTimeout);
+            if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+                break;
+            nanosTimeout = deadline - System.nanoTime();
+        }
+        if (acquireQueued(node, savedState) &amp;&amp; interruptMode != THROW_IE)
+            interruptMode = REINTERRUPT;
+        if (node.nextWaiter != null)
+            unlinkCancelledWaiters();
+        if (interruptMode != 0)
+            reportInterruptAfterWait(interruptMode);
+        return deadline - System.nanoTime();
+    }
+</code></pre>
+
+<p>As we can see from the absence of a finally block, the method is not exception safe, i.e. the lock not reacquired when an exception is thrown (such as the <code>ThreadDeathException</code> caused by <code>Thread.stop()</code>).</p>
+
+<p>You might wish to report this bug to Oracle. However, since it only appears to manifest upon use of a deprecated api, and the impact is rather minor (wrong exception type is thrown), they might not fix it.</p>

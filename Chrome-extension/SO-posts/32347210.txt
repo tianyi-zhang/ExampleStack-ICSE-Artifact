@@ -1,0 +1,254 @@
+<p>this may help you</p>
+
+<p>QuickReturnRecyclerView.java</p>
+
+<pre><code>import android.content.Context;
+import android.os.Build;
+import android.support.v7.widget.RecyclerView;
+import android.util.AttributeSet;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.TranslateAnimation;
+import android.widget.FrameLayout;
+
+public class QuickReturnRecyclerView extends RecyclerView {
+    private static final String TAG = QuickReturnRecyclerView.class.getName();
+
+    private View mReturningView;
+    private static final int STATE_ONSCREEN = 0;
+    private static final int STATE_OFFSCREEN = 1;
+    private static final int STATE_RETURNING = 2;
+    private int mState = STATE_ONSCREEN;
+    private int mMinRawY = 0;
+    private int mReturningViewHeight;
+    private int mGravity = Gravity.BOTTOM;
+
+    public QuickReturnRecyclerView(Context context) {
+        super(context);
+        init();
+    }
+
+    public QuickReturnRecyclerView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        init();
+    }
+
+    public QuickReturnRecyclerView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        init();
+    }
+
+    private void init(){
+    }
+
+    /**
+     * The view that should be showed/hidden when scrolling the content.
+     * Make sure to set the gravity on the this view to either Gravity.Bottom or
+     * Gravity.TOP and to put it preferable in a FrameLayout.
+     * @param view Any kind of view
+     */
+    public void setReturningView(View view) {
+        mReturningView = view;
+
+        try {
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) mReturningView.getLayoutParams();
+            mGravity = params.gravity;
+        } catch (ClassCastException e) {
+            throw new RuntimeException("The return view need to be put in a FrameLayout");
+        }
+
+        measureView(mReturningView);
+        mReturningViewHeight = mReturningView.getMeasuredHeight();
+        addOnScrollListener(new RecyclerScrollListener());
+    }
+
+    private void measureView(View child) {
+        ViewGroup.LayoutParams p = child.getLayoutParams();
+        if (p == null) {
+            p = new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.FILL_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+
+        int childWidthSpec = ViewGroup.getChildMeasureSpec(0, 0, p.width);
+        int lpHeight = p.height;
+        int childHeightSpec;
+        if (lpHeight &gt; 0) {
+            childHeightSpec = MeasureSpec.makeMeasureSpec(lpHeight, MeasureSpec.EXACTLY);
+        } else {
+            childHeightSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
+        }
+        child.measure(childWidthSpec, childHeightSpec);
+    }
+
+    private class RecyclerScrollListener extends OnScrollListener {
+        private int mScrolledY;
+
+        @Override
+        public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+            if(mGravity == Gravity.BOTTOM)
+                mScrolledY += dy;
+            else if(mGravity == Gravity.TOP)
+                mScrolledY -= dy;
+
+            if(mReturningView == null)
+                return;
+
+            int translationY = 0;
+            int rawY = mScrolledY;
+
+            switch (mState) {
+                case STATE_OFFSCREEN:
+                    if(mGravity == Gravity.BOTTOM) {
+                        if (rawY &gt;= mMinRawY) {
+                            mMinRawY = rawY;
+                        } else {
+                            mState = STATE_RETURNING;
+                        }
+                    } else if(mGravity == Gravity.TOP) {
+                        if (rawY &lt;= mMinRawY) {
+                            mMinRawY = rawY;
+                        } else {
+                            mState = STATE_RETURNING;
+                        }
+                    }
+
+                    translationY = rawY;
+                    break;
+
+                case STATE_ONSCREEN:
+                    if(mGravity == Gravity.BOTTOM) {
+
+                        if (rawY &gt; mReturningViewHeight) {
+                            mState = STATE_OFFSCREEN;
+                            mMinRawY = rawY;
+                        }
+                    } else if(mGravity == Gravity.TOP) {
+
+                        if (rawY &lt; -mReturningViewHeight) {
+                            mState = STATE_OFFSCREEN;
+                            mMinRawY = rawY;
+                        }
+                    }
+                    translationY = rawY;
+                    break;
+
+                case STATE_RETURNING:
+                    if(mGravity == Gravity.BOTTOM) {
+                        translationY = (rawY - mMinRawY) + mReturningViewHeight;
+
+                        if (translationY &lt; 0) {
+                            translationY = 0;
+                            mMinRawY = rawY + mReturningViewHeight;
+                        }
+
+                        if (rawY == 0) {
+                            mState = STATE_ONSCREEN;
+                            translationY = 0;
+                        }
+
+                        if (translationY &gt; mReturningViewHeight) {
+                            mState = STATE_OFFSCREEN;
+                            mMinRawY = rawY;
+                        }
+                    } else if(mGravity == Gravity.TOP) {
+                        translationY = (rawY + Math.abs(mMinRawY)) - mReturningViewHeight;
+
+                        if (translationY &gt; 0) {
+                            translationY = 0;
+                            mMinRawY = rawY - mReturningViewHeight;
+                        }
+
+                        if (rawY == 0) {
+                            mState = STATE_ONSCREEN;
+                            translationY = 0;
+                        }
+
+                        if (translationY &lt; -mReturningViewHeight) {
+                            mState = STATE_OFFSCREEN;
+                            mMinRawY = rawY;
+                        }
+                    }
+                    break;
+            }
+
+            /** this can be used if the build is below honeycomb **/
+            if (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.HONEYCOMB) {
+                TranslateAnimation anim = new TranslateAnimation(0, 0, translationY, translationY);
+                anim.setFillAfter(true);
+                anim.setDuration(0);
+                mReturningView.startAnimation(anim);
+            } else {
+                mReturningView.setTranslationY(translationY);
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>activity_main.xml</p>
+
+<pre><code>&lt;FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"&gt;
+
+    &lt;yourpackagename.QuickReturnRecyclerView
+        android:id="@+id/recycler_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scrollbars="vertical" /&gt;
+
+    &lt;LinearLayout
+        android:id="@+id/linear"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="@android:color/darker_gray"
+        android:orientation="horizontal"
+        android:padding="15dp"&gt;
+
+        &lt;Button
+            android:id="@+id/button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="left|top"
+            android:layout_weight="1"
+            android:text="New Button" /&gt;
+
+        &lt;Button
+            android:id="@+id/button2"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal|top"
+            android:layout_weight="1"
+            android:text="New Button" /&gt;
+
+        &lt;Button
+            android:id="@+id/button3"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="right|top"
+            android:layout_weight="1"
+            android:text="New Button" /&gt;
+    &lt;/LinearLayout&gt;
+
+
+&lt;/FrameLayout&gt;
+</code></pre>
+
+<p>in <code>MainActivity.java</code> just add below lines</p>
+
+<pre><code>        mRecyclerView = (QuickReturnRecyclerView) findViewById(R.id.recycler_view);
+        linear = (LinearLayout) findViewById(R.id.linear);
+        // use this setting to improve performance if you know that changes
+        // in content do not change the layout size of the RecyclerView
+        mRecyclerView.setHasFixedSize(true);
+
+        // use a linear layout manager
+        mLayoutManager = new LinearLayoutManager(getApplicationContext());
+        mRecyclerView.setLayoutManager(mLayoutManager);
+
+        mRecyclerView.setReturningView(linear);
+</code></pre>

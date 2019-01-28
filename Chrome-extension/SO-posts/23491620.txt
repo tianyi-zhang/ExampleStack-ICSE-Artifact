@@ -1,0 +1,117 @@
+<p>If you are not interested in displaying the error message to the user, close the <code>InputStream</code> or invoke <code>disconnect</code> on <code>HttpURLConnection</code> in <code>finally</code> block without reading the error message. This is what you see in most of the examples.</p>
+
+<p>I came across following comment in one of the <a href="https://android.googlesource.com/platform/libcore/+/android-cts-4.1_r2/luni/src/main/java/libcore/net/http/AbstractHttpInputStream.java">source code</a>, while browsing the implementation of HttpURLConnection. That could be the reason why connections are closed without reading all data.</p>
+
+<blockquote>
+  <p>This should be invoked when the connection is closed unexpectedly to
+  invalidate the cache entry and to prevent the HTTP connection from
+  being reused. HTTP messages are sent in serial so whenever a message
+  cannot be read to completion, subsequent messages cannot be read
+  either and the connection must be discarded.</p>
+</blockquote>
+
+<p>According to Android's implementation of <code>HttpURLConnection</code>, in case of exception:</p>
+
+<ul>
+<li>If error is not read and the <code>InputStream</code> is closed, the connection will be considered as not reusable and closed down. </li>
+<li>If you read the error and then close the <code>InputStream</code>, connection is considered as reusable and is added to the connection pool.</li>
+</ul>
+
+<p>You can see in the below image, variable <code>connection</code> &amp; <code>connectionReleased</code> are set to <code>null</code> and <code>true</code> respectively, as soon as all data is read. Note that <code>getErrorStream</code> returns the <code>InputStream</code>, so it is valid in exception scenario also.</p>
+
+<p><img src="http://i.stack.imgur.com/7YbbP.png" alt="enter image description here"></p>
+
+<p><em>Code analysis</em> : Let's look at the <a href="https://android.googlesource.com/platform/libcore/+/android-cts-4.1_r2/luni/src/main/java/libcore/net/http/FixedLengthInputStream.java">FixedLengthInputStream</a> one of the specialized <code>InputStream</code> implementation. Here is the <code>close</code> method implementation:</p>
+
+<pre><code> @Override public void close() throws IOException {
+    if (closed) {
+        return;
+    }
+    closed = true;
+    if (bytesRemaining != 0) {
+        unexpectedEndOfInput();
+    }
+ }
+</code></pre>
+
+<p>Instance variable <code>bytesRemaining</code> contains byte count still available on the <code>InputStream</code> to be read. Here is the <a href="https://android.googlesource.com/platform/libcore/+/757afaa7afe96791a3cc612c9e3c4597a7321c7e/luni/src/main/java/libcore/net/http/AbstractHttpInputStream.java">unexpectedEndOfInput</a> method implementation:</p>
+
+<pre><code>protected final void unexpectedEndOfInput() {
+    if (cacheRequest != null) {
+        cacheRequest.abort();
+    }
+    httpEngine.release(false);
+}
+</code></pre>
+
+<p>Here is the <a href="https://android.googlesource.com/platform/libcore/+/android-cts-4.1_r2/luni/src/main/java/libcore/net/http/HttpEngine.java">release</a> method implementation. Calling <code>disconnect</code> on <code>HttpURLConnection</code> instance leads the call to this <code>release</code> method with <code>false</code> as parameter.
+<strong>The last <code>if</code> check ensures whether connection need to be closed down or added to the connection pool for reuse.</strong></p>
+
+<pre><code>public final void release(boolean reusable) {
+    // If the response body comes from the cache, close it.
+    if (responseBodyIn == cachedResponseBody) {
+        IoUtils.closeQuietly(responseBodyIn);
+    }
+    if (!connectionReleased &amp;&amp; connection != null) {
+        connectionReleased = true;
+        // We cannot reuse sockets that have incomplete output.
+        if (requestBodyOut != null &amp;&amp; !requestBodyOut.closed) {
+            reusable = false;
+        }
+        // If the headers specify that the connection shouldn't be reused, don't reuse it.
+        if (hasConnectionCloseHeader()) {
+            reusable = false;
+        }
+        if (responseBodyIn instanceof UnknownLengthHttpInputStream) {
+            reusable = false;
+        }
+        if (reusable &amp;&amp; responseBodyIn != null) {
+            // We must discard the response body before the connection can be reused.
+            try {
+                Streams.skipAll(responseBodyIn);
+            } catch (IOException e) {
+                reusable = false;
+            }
+        }
+        if (!reusable) {
+            connection.closeSocketAndStreams();
+            connection = null;
+        } else if (automaticallyReleaseConnectionToPool) {
+            HttpConnectionPool.INSTANCE.recycle(connection);
+            connection = null;
+        }
+    }
+}
+</code></pre>
+
+<p>The code shared by you, in which the IOException is handled, error stream is read and then closed, ensures the Connection is reusable and is added to the connection pool. The moment all data is read from <code>InputStream</code> the <code>Connection</code> is added to the connection pool. Here is the <code>read</code> method implementation of <code>FixedLengthInputStream</code> :</p>
+
+<pre><code>@Override public int read(byte[] buffer, int offset, int count) throws IOException {
+        Arrays.checkOffsetAndCount(buffer.length, offset, count);
+        checkNotClosed();
+        if (bytesRemaining == 0) {
+            return -1;
+        }
+        int read = in.read(buffer, offset, Math.min(count, bytesRemaining));
+        if (read == -1) {
+            unexpectedEndOfInput(); // the server didn't supply the promised content length
+            throw new IOException("unexpected end of stream");
+        }
+        bytesRemaining -= read;
+        cacheWrite(buffer, offset, read);
+        if (bytesRemaining == 0) {
+            endOfInput(true);
+        }
+        return read;
+    }
+</code></pre>
+
+<p>When <code>bytesRemaining</code> variable becomes 0, <a href="https://android.googlesource.com/platform/libcore/+/757afaa7afe96791a3cc612c9e3c4597a7321c7e/luni/src/main/java/libcore/net/http/AbstractHttpInputStream.java">endOfInput</a> is called which will futher call <code>release</code> method with <code>true</code> parameter, which will ensures the connection is pooled.</p>
+
+<pre><code>protected final void endOfInput(boolean reuseSocket) throws IOException {
+        if (cacheRequest != null) {
+            cacheBody.close();
+        }
+        httpEngine.release(reuseSocket);
+    }
+</code></pre>

@@ -1,0 +1,42 @@
+<p>I am using the code below:</p>
+
+<pre><code>    private LocalVariableNode getLocalVariableNode(VarInsnNode varInsnNode, MethodNode methodNode) {
+        int varIdx = varInsnNode.var;
+        int instrIdx = getInstrIndex(varInsnNode);
+        List&lt;?&gt; localVariables = methodNode.localVariables;
+        for (int idx = 0; idx &lt; localVariables.size(); idx++) {
+            LocalVariableNode localVariableNode = (LocalVariableNode) localVariables.get(idx);
+            if (localVariableNode.index == varIdx) {
+                int scopeEndInstrIndex = getInstrIndex(localVariableNode.end);
+                if (scopeEndInstrIndex &gt;= instrIdx) {
+                    // still valid for current line
+                    return localVariableNode;
+                }
+            }
+        }
+        throw new RuntimeException("Variable with index " + varIdx + " and scope end &gt;= " + instrIdx
+                + " not found for method " + methodNode.name + "!");
+    }
+</code></pre>
+
+<p>The general problem is that the index of the local variable can be reused. So you have to make sure, that you are getting the correct LocalVariableNode for a given index. To do so, you need to make sure that the given variable is still valid at the code position where it is used. The problem is that you can't use line numbers, because</p>
+
+<ol>
+<li><p>the start position is the next code line <em>after</em> the variable was defined. Since empty lines and comments are ignored, that can be any following line. But since the code could reuse an existing variable, this could also be any line before the current line.</p></li>
+<li><p>the end position can be before the start position line-wise (e.g. in a loop).</p></li>
+<li><p>the code might have been compiled without line information.</p></li>
+</ol>
+
+<p>So you need to use instruction index, which is always correct. But is an internal information in AbstractInsnNode that cannot be accessed from outside. To circumvent this problem, I use the following code, which obviously breaks encapsulation and is not recommendable for a number of reasons. If you come up with anything better, let me know! In the meantime, this works:</p>
+
+<pre><code>    private int getInstrIndex(AbstractInsnNode insnNode) {
+        try {
+            Field indexField = AbstractInsnNode.class.getDeclaredField("index");
+            indexField.setAccessible(true);
+            Object indexValue = indexField.get(insnNode);
+            return ((Integer) indexValue).intValue();
+        } catch (Exception exc) {
+            throw new RuntimeException(exc);
+        }
+    }
+</code></pre>

@@ -1,0 +1,588 @@
+<p>Two solutions:</p>
+
+<p>1.) replace your Realm configuration in your application with an <code>inMemory()</code> Realm from your test </p>
+
+<pre><code>@Before
+public void setup() {
+    Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+    instrumentation.runOnMainSync(new Runnable() {
+        @Override
+        public void run() {
+            ApplicationComponent applicationComponent = Injector.INSTANCE.getApplicationComponent();
+            AppConfig appConfig = applicationComponent.appConfig();
+            CustomApplication customApplication = applicationComponent.application();
+            appConfig.setDefaultRealmConfig(new RealmConfiguration.Builder(customApplication).inMemory()
+                    .deleteRealmIfMigrationNeeded()
+                    .build());
+            if(customApplication.getRealm() != null &amp;&amp; !customApplication.getRealm().isClosed()) {
+                customApplication.getRealm().close();
+            }
+            customApplication.initializeRealm();
+        }
+    });
+</code></pre>
+
+<p>and then use</p>
+
+<pre><code>Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+instrumentation.runOnMainSync(() -&gt; {
+   // ...
+});
+</code></pre>
+
+<p>2.) try to somehow make these following classes work that I snatched from the Realm library instrumentation tests a while ago. I went with 1) because I kinda gave up on it after a while, but I'm pretty sure it worked for Realm, so it shouldn't be impossible.</p>
+
+<pre><code>/*
+ * Copyright 2014 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.realm;
+
+import android.os.Looper;
+
+import java.io.UnsupportedEncodingException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static junit.framework.Assert.fail;
+
+public class TestHelper {
+    // Returns a random key used by encrypted Realms.
+    public static byte[] getRandomKey() {
+        byte[] key = new byte[64];
+        new Random().nextBytes(key);
+        return key;
+    }
+
+    // Returns a random key from the given seed. Used by encrypted Realms.
+    public static byte[] getRandomKey(long seed) {
+        byte[] key = new byte[64];
+        new Random(seed).nextBytes(key);
+        return key;
+    }
+
+    // Alloc as much garbage as we can. Pass maxSize = 0 to use it.
+    public static byte[] allocGarbage(int garbageSize) {
+        if(garbageSize == 0) {
+            long maxMemory = Runtime.getRuntime().maxMemory();
+            long totalMemory = Runtime.getRuntime().totalMemory();
+            garbageSize = (int) (maxMemory - totalMemory) / 10 * 9;
+        }
+        byte garbage[] = new byte[0];
+        try {
+            if(garbageSize &gt; 0) {
+                garbage = new byte[garbageSize];
+                garbage[0] = 1;
+                garbage[garbage.length - 1] = 1;
+            }
+        } catch(OutOfMemoryError oom) {
+            return allocGarbage(garbageSize / 10 * 9);
+        }
+
+        return garbage;
+    }
+
+    // Creates SHA512 hash of a String. Can be used as password for encrypted Realms.
+    public static byte[] SHA512(String str) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-512");
+            md.update(str.getBytes("UTF-8"), 0, str.length());
+            return md.digest();
+        } catch(NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        } catch(UnsupportedEncodingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static void awaitOrFail(CountDownLatch latch) {
+        awaitOrFail(latch, 30);
+    }
+
+    public static void awaitOrFail(CountDownLatch latch, int numberOfSeconds) {
+        try {
+            if(!latch.await(numberOfSeconds, TimeUnit.SECONDS)) {
+                fail("Test took longer than " + numberOfSeconds + " seconds");
+            }
+        } catch(InterruptedException e) {
+            fail(e.getMessage());
+        }
+    }
+
+    // clean resource, shutdown the executor service &amp; throw any background exception
+    public static void exitOrThrow(final ExecutorService executorService, final CountDownLatch signalTestFinished, final CountDownLatch signalClosedRealm, final Looper[] looper, final Throwable[] throwable)
+            throws Throwable {
+
+        // wait for the signal indicating the test's use case is done
+        try {
+            // Even if this fails we want to try as hard as possible to cleanup. If we fail to close all resources
+            // properly, the `after()` method will most likely throw as well because it tries do delete any Realms
+            // used. Any exception in the `after()` code will mask the original error.
+            TestHelper.awaitOrFail(signalTestFinished);
+        } finally {
+            // close the executor
+            executorService.shutdownNow();
+            if(looper[0] != null) {
+                // failing to quit the looper will not execute the finally block responsible
+                // of closing the Realm
+                looper[0].quit();
+            }
+
+            // wait for the finally block to execute &amp; close the Realm
+            TestHelper.awaitOrFail(signalClosedRealm);
+
+            if(throwable[0] != null) {
+                // throw any assertion errors happened in the background thread
+                throw throwable[0];
+            }
+        }
+    }
+
+    public static abstract class Task {
+        public abstract void run()
+                throws Exception;
+    }
+
+    public static void executeOnNonLooperThread(final Task task)
+            throws Throwable {
+        final AtomicReference&lt;Throwable&gt; thrown = new AtomicReference&lt;Throwable&gt;();
+        final Thread thread = new Thread() {
+            @Override
+            public void run() {
+                try {
+                    task.run();
+                } catch(Throwable e) {
+                    thrown.set(e);
+                    if(e instanceof Error) {
+                        throw (Error) e;
+                    }
+                }
+            }
+        };
+        thread.start();
+        thread.join();
+
+        final Throwable throwable = thrown.get();
+        if(throwable != null) {
+            throw throwable;
+        }
+    }
+}
+
+/*
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.realm.rule;
+
+import android.content.Context;
+import android.content.res.AssetManager;
+
+import org.junit.rules.TemporaryFolder;
+import org.junit.runner.Description;
+import org.junit.runners.model.Statement;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import io.realm.Realm;
+import io.realm.RealmConfiguration;
+
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Rule that creates the {@link RealmConfiguration } in a temporary directory and deletes the Realm created with that
+ * configuration once the test finishes. Be sure to close all Realm instances before finishing the test. Otherwise
+ * {@link Realm#deleteRealm(RealmConfiguration)} will throw an exception in the {@link #after()} method.
+ * The temp directory will be deleted regardless if the {@link Realm#deleteRealm(RealmConfiguration)} fails or not.
+ */
+public class TestRealmConfigurationFactory
+        extends TemporaryFolder {
+    private Map&lt;RealmConfiguration, Boolean&gt; map = new ConcurrentHashMap&lt;RealmConfiguration, Boolean&gt;();
+    private Set&lt;RealmConfiguration&gt; configurations = Collections.newSetFromMap(map);
+    protected boolean unitTestFailed = false;
+
+    @Override
+    public Statement apply(final Statement base, Description description) {
+        return new Statement() {
+            @Override
+            public void evaluate()
+                    throws Throwable {
+                before();
+                try {
+                    base.evaluate();
+                } catch(Throwable throwable) {
+                    unitTestFailed = true;
+                    throw throwable;
+                } finally {
+                    after();
+                }
+            }
+        };
+    }
+
+    @Override
+    protected void before()
+            throws Throwable {
+        super.before();
+    }
+
+    @Override
+    protected void after() {
+        try {
+            for(RealmConfiguration configuration : configurations) {
+                Realm.deleteRealm(configuration);
+            }
+        } catch(IllegalStateException e) {
+            // Only throw the exception caused by deleting the opened Realm if the test case itself doesn't throw.
+            if(!unitTestFailed) {
+                throw e;
+            }
+        } finally {
+            // This will delete the temp folder.
+            super.after();
+        }
+    }
+
+    public RealmConfiguration createConfiguration() {
+        RealmConfiguration configuration = new RealmConfiguration.Builder(getRoot()).build();
+
+        configurations.add(configuration);
+        return configuration;
+    }
+
+    public RealmConfiguration createConfiguration(String subDir, String name) {
+        final File folder = new File(getRoot(), subDir);
+        assertTrue(folder.mkdirs());
+        RealmConfiguration configuration = new RealmConfiguration.Builder(folder).name(name).build();
+
+        configurations.add(configuration);
+        return configuration;
+    }
+
+    public RealmConfiguration createConfiguration(String name) {
+        RealmConfiguration configuration = new RealmConfiguration.Builder(getRoot()).name(name).build();
+
+        configurations.add(configuration);
+        return configuration;
+    }
+
+    public RealmConfiguration createConfiguration(String name, byte[] key) {
+        RealmConfiguration configuration = new RealmConfiguration.Builder(getRoot()).name(name).encryptionKey(key).build();
+
+        configurations.add(configuration);
+        return configuration;
+    }
+
+    public RealmConfiguration.Builder createConfigurationBuilder() {
+        return new RealmConfiguration.Builder(getRoot());
+    }
+
+    // Copies a Realm file from assets to temp dir
+    public void copyRealmFromAssets(Context context, String realmPath, String newName)
+            throws IOException {
+        // Delete the existing file before copy
+        RealmConfiguration configToDelete = new RealmConfiguration.Builder(getRoot()).name(newName).build();
+        Realm.deleteRealm(configToDelete);
+
+        AssetManager assetManager = context.getAssets();
+        InputStream is = assetManager.open(realmPath);
+        File file = new File(getRoot(), newName);
+        FileOutputStream outputStream = new FileOutputStream(file);
+        byte[] buf = new byte[1024];
+        int bytesRead;
+        while((bytesRead = is.read(buf)) &gt; -1) {
+            outputStream.write(buf, 0, bytesRead);
+        }
+        outputStream.close();
+        is.close();
+    }
+}
+
+/*
+ * Copyright 2015 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.realm.rule;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
+
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
+
+/**
+ * This annotation should be used along with {@link RunInLooperThread}
+ * When the annotation is present, the test method is executed on a worker thread with a looper.
+ * This will also uses {@link org.junit.rules.TemporaryFolder} to create and open a Realm.
+ * Annotation param {@link io.realm.rule.RunInLooperThread.RunnableBefore} can be supplied which will run before the
+ * looper thread.
+ */
+@Target(METHOD)
+@Retention(RUNTIME)
+public @interface RunTestInLooperThread {
+    Class&lt;? extends RunInLooperThread.RunnableBefore&gt; value() default RunInLooperThread.RunnableBefore.class;
+}
+
+/*
+ * Copyright 2015 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.realm.rule;
+
+import android.os.Handler;
+import android.os.Looper;
+
+import org.junit.runner.Description;
+import org.junit.runners.model.Statement;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.LinkedList;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import io.realm.Realm;
+import io.realm.RealmConfiguration;
+import io.realm.TestHelper;
+
+import static org.junit.Assert.fail;
+
+/**
+ * Rule that runs the test inside a worker looper thread. This rule is responsible
+ * of creating a temp directory containing a Realm instance then delete it, once the test finishes.
+ *
+ * All Realms used in a method method annotated with {@code @RunTestInLooperThread } should use
+ * {@link RunInLooperThread#createConfiguration()} and friends to create their configurations. Failing to do so can
+ * result in the test failing because the Realm could not be deleted (Reason is that {@link TestRealmConfigurationFactory}
+ * and this class does not agree in which order to delete all open Realms.
+ */
+public class RunInLooperThread
+        extends TestRealmConfigurationFactory {
+    public Realm realm;
+    public RealmConfiguration realmConfiguration;
+    private CountDownLatch signalTestCompleted;
+    private Handler backgroundHandler;
+
+    // the variables created inside the test are local and eligible for GC.
+    // but sometimes we need the variables to survive across different Looper
+    // events (Callbacks happening in the future), so we add a strong reference
+    // to them for the duration of the test.
+    public LinkedList&lt;Object&gt; keepStrongReference;
+
+    @Override
+    protected void before()
+            throws Throwable {
+        super.before();
+        realmConfiguration = createConfiguration(UUID.randomUUID().toString());
+        signalTestCompleted = new CountDownLatch(1);
+        keepStrongReference = new LinkedList&lt;Object&gt;();
+    }
+
+    @Override
+    protected void after() {
+        super.after();
+        realmConfiguration = null;
+        realm = null;
+        keepStrongReference = null;
+    }
+
+    @Override
+    public Statement apply(final Statement base, Description description) {
+        final RunTestInLooperThread annotation = description.getAnnotation(RunTestInLooperThread.class);
+        if(annotation == null) {
+            return base;
+        }
+        return new Statement() {
+            private Throwable testException;
+
+            @Override
+            public void evaluate()
+                    throws Throwable {
+                before();
+                Class&lt;? extends RunnableBefore&gt; runnableBefore = annotation.value();
+                if(!runnableBefore.isInterface()) {
+                    runnableBefore.newInstance().run(realmConfiguration);
+                }
+                try {
+                    final CountDownLatch signalClosedRealm = new CountDownLatch(1);
+                    final Throwable[] threadAssertionError = new Throwable[1];
+                    final Looper[] backgroundLooper = new Looper[1];
+                    final ExecutorService executorService = Executors.newSingleThreadExecutor();
+                    executorService.submit(new Runnable() {
+                        @Override
+                        public void run() {
+                            Looper.prepare();
+                            backgroundLooper[0] = Looper.myLooper();
+                            backgroundHandler = new Handler(backgroundLooper[0]);
+                            try {
+                                realm = Realm.getInstance(realmConfiguration);
+                                base.evaluate();
+                                Looper.loop();
+                            } catch(Throwable e) {
+                                threadAssertionError[0] = e;
+                                unitTestFailed = true;
+                            } finally {
+                                try {
+                                    looperTearDown();
+                                } catch(Throwable t) {
+                                    if(threadAssertionError[0] == null) {
+                                        threadAssertionError[0] = t;
+                                    }
+                                    unitTestFailed = true;
+                                }
+                                if(signalTestCompleted.getCount() &gt; 0) {
+                                    signalTestCompleted.countDown();
+                                }
+                                if(realm != null) {
+                                    realm.close();
+                                }
+                                signalClosedRealm.countDown();
+                            }
+                        }
+                    });
+                    TestHelper.exitOrThrow(executorService, signalTestCompleted, signalClosedRealm, backgroundLooper, threadAssertionError);
+                } catch(Throwable error) {
+                    // These exceptions should only come from TestHelper.awaitOrFail()
+                    testException = error;
+                } finally {
+                    // Try as hard as possible to close down gracefully, while still keeping all exceptions intact.
+                    try {
+                        after();
+                    } catch(Throwable e) {
+                        if(testException != null) {
+                            // Both TestHelper.awaitOrFail() and after() threw an exception. Make sure we are aware of
+                            // that fact by printing both exceptions.
+                            StringWriter testStackTrace = new StringWriter();
+                            testException.printStackTrace(new PrintWriter(testStackTrace));
+
+                            StringWriter afterStackTrace = new StringWriter();
+                            e.printStackTrace(new PrintWriter(afterStackTrace));
+
+                            StringBuilder errorMessage = new StringBuilder().append("after() threw an error that shadows a test case error")
+                                    .append('\n')
+                                    .append("== Test case exception ==\n")
+                                    .append(testStackTrace.toString())
+                                    .append('\n')
+                                    .append("== after() exception ==\n")
+                                    .append(afterStackTrace.toString());
+                            fail(errorMessage.toString());
+                        } else {
+                            // Only after() threw an exception
+                            throw e;
+                        }
+                    }
+
+                    // Only TestHelper.awaitOrFail() threw an exception
+                    if(testException != null) {
+                        //noinspection ThrowFromFinallyBlock
+                        throw testException;
+                    }
+                }
+            }
+        };
+    }
+
+    /**
+     * Signal that the test has completed.
+     */
+    public void testComplete() {
+        signalTestCompleted.countDown();
+    }
+
+    /**
+     * Signal that the test has completed.
+     *
+     * @param latches additional latches to wait before set the test completed flag.
+     */
+    public void testComplete(CountDownLatch... latches) {
+        for(CountDownLatch latch : latches) {
+            TestHelper.awaitOrFail(latch);
+        }
+        signalTestCompleted.countDown();
+    }
+
+    /**
+     * Posts a runnable to this worker threads looper.
+     */
+    public void postRunnable(Runnable runnable) {
+        backgroundHandler.post(runnable);
+    }
+
+    /**
+     * Tear down logic which is guaranteed to run after the looper test has either completed or failed.
+     * This will run on the same thread as the looper test.
+     */
+    public void looperTearDown() {
+    }
+
+    /**
+     * If an implementation of this is supplied with the annotation, the {@link RunnableBefore#run(RealmConfiguration)}
+     * will be executed before the looper thread starts. It is normally for populating the Realm before the test.
+     */
+    public interface RunnableBefore {
+        void run(RealmConfiguration realmConfig);
+    }
+}
+</code></pre>

@@ -1,0 +1,132 @@
+<p>A ViewPager when used inside a ListView row needs to have a unique android:id (as in each row must have a different id). This is because the FragmentManager that is associated with the ViewPager adapter uses the id along with the position to store the fragments. This means if you just use the defaults things will get overwritten.</p>
+
+<p>Below is a sample PagerAdapter that allows you to override the default makeFragmentName method.</p>
+
+<pre><code>import android.app.Fragment;
+import android.app.FragmentManager;
+import android.app.FragmentTransaction;
+import android.os.Parcelable;
+import android.support.v13.app.FragmentCompat;
+import android.support.v4.view.PagerAdapter;
+import android.view.View;
+import android.view.ViewGroup;
+
+public abstract class TaggedFragmentPagerAdapter extends PagerAdapter {
+
+    private final FragmentManager mFragmentManager;
+
+    private FragmentTransaction mCurTransaction = null;
+
+    private Fragment mCurrentPrimaryItem = null;
+
+    public TaggedFragmentPagerAdapter(FragmentManager fm) {
+        mFragmentManager = fm;
+    }
+
+    /**
+     * Return the Fragment associated with a specified position.
+     */
+    public abstract Fragment getItem(int position);
+
+    public String getItemTag(int position) {
+        // Maintain backward compatibility
+        return String.valueOf(getItemId(position));
+    }
+
+    @Override
+    public void startUpdate(ViewGroup container) {
+    }
+
+    @Override
+    public Object instantiateItem(ViewGroup container, int position) {
+        if (mCurTransaction == null) {
+            mCurTransaction = mFragmentManager.beginTransaction();
+        }
+
+        // Do we already have this fragment?
+        String name = makeFragmentName(position, container.getId(), getItemTag(position));
+        Fragment fragment = mFragmentManager.findFragmentByTag(name);
+        if (fragment != null) {
+            // FIXME : Start fix.
+            if (!fragment.isDetached()) {
+                mCurTransaction.detach(fragment);
+            }
+            // FIXME : End fix.
+            mCurTransaction.attach(fragment);
+        } else {
+            fragment = getItem(position);
+            mCurTransaction.add(container.getId(), fragment, name);
+        }
+        if (fragment != mCurrentPrimaryItem) {
+            FragmentCompat.setMenuVisibility(fragment, false);
+            FragmentCompat.setUserVisibleHint(fragment, false);
+        }
+
+        return fragment;
+    }
+
+    @Override
+    public void destroyItem(ViewGroup container, int position, Object object) {
+        if (mCurTransaction == null) {
+            mCurTransaction = mFragmentManager.beginTransaction();
+        }
+        mCurTransaction.detach((Fragment) object);
+    }
+
+    @Override
+    public void setPrimaryItem(ViewGroup container, int position, Object object) {
+        Fragment fragment = (Fragment) object;
+        if (fragment != mCurrentPrimaryItem) {
+            if (mCurrentPrimaryItem != null) {
+                FragmentCompat.setMenuVisibility(mCurrentPrimaryItem, false);
+                FragmentCompat.setUserVisibleHint(mCurrentPrimaryItem, false);
+            }
+            if (fragment != null) {
+                FragmentCompat.setMenuVisibility(fragment, true);
+                FragmentCompat.setUserVisibleHint(fragment, true);
+            }
+            mCurrentPrimaryItem = fragment;
+        }
+    }
+
+    @Override
+    public void finishUpdate(ViewGroup container) {
+        if (mCurTransaction != null) {
+            mCurTransaction.commitAllowingStateLoss();
+            mCurTransaction = null;
+            mFragmentManager.executePendingTransactions();
+        }
+    }
+
+    @Override
+    public boolean isViewFromObject(View view, Object object) {
+        return ((Fragment) object).getView() == view;
+    }
+
+    @Override
+    public Parcelable saveState() {
+        return null;
+    }
+
+    @Override
+    public void restoreState(Parcelable state, ClassLoader loader) {
+    }
+
+    /**
+     * Return a unique identifier for the item at the given position.
+     *
+     * &lt;p&gt; The default implementation returns the given position. Subclasses should override this method if the positions of items
+     * can change. &lt;/p&gt;
+     *
+     * @param position Position within this adapter
+     * @return Unique identifier for the item at position
+     */
+    public long getItemId(int position) {
+        return position;
+    }
+
+    protected String makeFragmentName(int position, int viewId, String tagName) {
+        return "android:switcher:" + viewId + ":" + tagName;
+    }
+}
+</code></pre>

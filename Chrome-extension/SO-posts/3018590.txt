@@ -1,0 +1,84 @@
+<p>Here</p>
+
+<pre><code>ArrayList&lt;Integer&gt; byteArray = new ArrayList&lt;Integer&gt;();
+int tempByte;
+do {
+ tempByte = stream.read();
+ byteArray.add(tempByte);
+</code></pre>
+
+<p>you are writing every byte straight into memory in an array of integers! Every integer consumes 4 bytes of memory while you just need one byte of it for every read byte. Effectively you should be using <code>ArrayList&lt;Byte&gt;</code> or better <code>byte[]</code> instead since every <code>byte</code> costs only one byte of memory, but that would per saldo still allocate as much memory as the file large is.</p>
+
+<p>And here</p>
+
+<pre><code>byte[] bytes = new byte[byteArray.size()];
+</code></pre>
+
+<p>you're allocating afterwards as much memory as the file large is. Per saldo you're with both <code>ArrayList&lt;Integer&gt;</code> and <code>byte[]</code> allocating 5 times as much memory as the file large is. </p>
+
+<p>It's a waste.</p>
+
+<p>You should write it to an <code>OutputStream</code> <strong>immediately</strong>, e.g. <code>FileOutputStream</code>.</p>
+
+<pre><code>InputStream input = null;
+OutputStream output = null;
+try {
+    input = license.openStream();
+    output = new FileOutputStream("/file.ext");
+    byte[] buffer = new byte[1024];
+    for (int length; (length = input.read(buffer)) &gt; 0;) {
+        output.write(buffer, 0, length);
+    }
+} finally {
+    if (output != null) try { output.close(); } catch (IOException logOrIgnore) {}
+    if (input != null) try { input.close(); } catch (IOException logOrIgnore) {}
+}
+</code></pre>
+
+<p>This costs effectively only 1KB of memory for the buffer instead of the whole file length of bytes (or 4 times of it when using integers).</p>
+
+<p>Or if you <em>really</em> want to have it in a <code>byte[]</code> then just skip the whole <code>ArrayList&lt;Integer&gt;</code> step. It makes no sense. Use an <a href="http://java.sun.com/javase/6/docs/api/java/io/ByteArrayOutputStream.html" rel="nofollow"><code>ByteArrayOutputStream</code></a> as <code>OutputStream</code>.</p>
+
+<pre><code>InputStream input = null;
+ByteArrayOutputStream output = null;
+try {
+    input = license.openStream();
+    output = new ByteArrayOutputStream();
+    byte[] buffer = new byte[1024];
+    for (int length; (length = input.read(buffer)) &gt; 0;) {
+        output.write(buffer, 0, length);
+    }
+} finally {
+    if (output != null) try { output.close(); } catch (IOException logOrIgnore) {}
+    if (input != null) try { input.close(); } catch (IOException logOrIgnore) {}
+}
+
+byte[] bytes = output.toByteArray();
+</code></pre>
+
+<p>This however still costs as much memory as the file large is, it's only now not 5 times of file size anymore as you initially did with <code>ArrayList&lt;Integer&gt;</code> and a <code>byte[]</code> afterwards.</p>
+
+<hr>
+
+<p><strong>Update:</strong> as per your comment you'd like to store this in the database. You can also do this without storing the whole file in Java's memory. Just write the obtained <code>InputStream</code> <strong>immediately</strong> to the DB using <a href="http://java.sun.com/javase/6/docs/api/java/sql/PreparedStatement.html#setBinaryStream%28int,%20java.io.InputStream%29" rel="nofollow"><code>PreparedStatement#setBinaryStream()</code></a>.</p>
+
+<pre><code>final String SQL = "INSERT INTO file (filename, contentType, content) VALUES (?, ?, ?)";
+String filename = FilenameUtils.getName(license.getName());
+InputStream input = license.openStream();
+
+Connection connection = null;
+PreparedStatement statement = null;
+try {
+    connection = database.getConnection();
+    statement = connection.prepareStatement(SQL);
+    statement.setString(1, filename);
+    statement.setString(2, getServletContext().getMimeType(filename));
+    statement.setBinaryStream(3, input);
+    statement.executeUpdate();
+} catch (SQLException e) {
+    throw new ServletException("Saving file in DB failed", e);
+} finally {
+    if (statement != null) try { statement.close(); } catch (SQLException logOrIgnore) {}
+    if (connection != null) try { connection .close(); } catch (SQLException logOrIgnore) {}
+}
+</code></pre>

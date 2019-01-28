@@ -1,0 +1,205 @@
+<p>By piecing these posts and some from other sources, I was able to get to get this to work for myself.</p>
+
+<p>If I used the above paintComponent() function, it paints the image but any additional html items aren't display properly because they overwrite each other.  To fix this, I tried to minimize the methods which were modified and this approach seemed to work.</p>
+
+<p>Anyways, this is what I did to get it working: <br>
+1) Download the OpenJDK7 files from <a href="http://download.java.net/openjdk/jdk7/" rel="nofollow">http://download.java.net/openjdk/jdk7/</a><br><br>
+2) Unzip the file and copy the openjdk/jdk/src/share/classes/javax/swing/text/html/ImageView.java to your project's src folder  (Use a different name than ImageView.java.  In the following example, we will call it Custom_ImageView.java).  You will have to modify this file, so open it in your text editor and do the following:<br>
+2A) Change the class name from "ImageView" to "Custom_ImageView".<br>
+2B) Change the constructor name from "ImageView" to "Custom_ImageView".<br>   </p>
+
+<pre><code>public ImageView(Element elem) {
+      ...to...
+public Custom_ImageView(Element elem) {
+</code></pre>
+
+<p>2C) Change all "synchronized(ImageView.this)"  to  "synchronized(Custom_ImageView.this)"<br>
+2D) Change the loadImage() to this:</p>
+
+<pre><code>// Modified method in Custom_ImageView.java
+private void loadImage() {
+    URL src = getImageURL();        
+    Image newImage = null;
+    if (src != null) {
+        Dictionary cache = (Dictionary)getDocument().
+                                getProperty(IMAGE_CACHE_PROPERTY);
+        if (cache != null) {
+            newImage = (Image)cache.get(src);                
+        }
+        else {                 
+            newImage = Toolkit.getDefaultToolkit().createImage(src);                                
+            if (newImage != null &amp;&amp; getLoadsSynchronously()) {
+                // Force the image to be loaded by using an ImageIcon.
+                ImageIcon ii = new ImageIcon();
+                ii.setImage(newImage);
+            }
+        }
+    } else {  // BEGIN:  Modified code...              
+        //System.out.println("[DEBUG] Image Source:  " + src);
+        System.out.println("[DEBUG] loadImage() - newImage = null");
+        String b64 = getBASE64Image();        
+        BufferedImage newBufferedImage = null;
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(DatatypeConverter.parseBase64Binary(b64))) {
+            newBufferedImage = ImageIO.read(bais);
+        } catch (IOException ex) {
+            System.out.println("[ERROR] in loadImage() \n\t" + ex);
+        } // End catch()...
+        newImage = newBufferedImage;
+    }  // FINISH: Modified code...
+    image = newImage;
+} 
+</code></pre>
+
+<p>Compared the above snippet to the original code:</p>
+
+<pre><code>// Original code from ImageView.java (OpenJDK7)...
+private void loadImage() {
+    URL src = getImageURL();
+    Image newImage = null;
+    if (src != null) {
+        Dictionary cache = (Dictionary)getDocument().
+                                getProperty(IMAGE_CACHE_PROPERTY);
+        if (cache != null) {
+            newImage = (Image)cache.get(src);
+        }
+        else {
+            newImage = Toolkit.getDefaultToolkit().createImage(src);
+            if (newImage != null &amp;&amp; getLoadsSynchronously()) {
+                // Force the image to be loaded by using an ImageIcon.
+                ImageIcon ii = new ImageIcon();
+                ii.setImage(newImage);
+            }
+        }
+    }
+    image = newImage;
+}
+</code></pre>
+
+<p>2E) Within the Custom_ImageView class, add a method called getBASE64Image(), this is used by the modified loadImage() method:</p>
+
+<pre><code>// Add this method to Custom_ImageView.java
+private String getBASE64Image() {
+    String src = (String) getElement().getAttributes().getAttribute(HTML.Attribute.SRC);
+    if (src == null) {
+        return null;
+    }
+    // This doesn't account for "data:image/png;charset=utf-8;base64,"
+    //return src.replaceFirst("data:image/png;base64,", "");
+    // So I delete all data from beginning of line (^) to ";base64"
+    return src.replaceFirst("^.*;base64,", "");
+} // End getBASE64Image()...
+</code></pre>
+
+<p>This finishes up the Custom_ViewImage.java modifications. <br><br>
+3) Now we need to create our own HTMLEditorKit which will be used by our JEditorPane.  We will call this file Custom_HTMLEditorKit.java.  As stated above, we will need to override the getViewFactory() method so that it knows to use our modified file (Custom_ImageView).  The code should look like this:</p>
+
+<pre><code>package my.app.package;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.Element;
+import javax.swing.text.StyleConstants;
+import javax.swing.text.View;
+import javax.swing.text.ViewFactory;
+import javax.swing.text.html.HTML;
+import javax.swing.text.html.HTMLEditorKit;
+
+public class Custom_HTMLEditorKit extends HTMLEditorKit {
+    private static HTMLFactory factory = null;    
+
+    @Override
+    public ViewFactory getViewFactory() {
+        if (factory == null) {
+            factory = new HTMLFactory() {
+
+                @Override
+                public View create(Element elem) {
+                    AttributeSet attrs = elem.getAttributes();
+                    Object elementName = attrs.getAttribute(AbstractDocument.ElementNameAttribute);
+                    Object o = (elementName != null) ? null : attrs.getAttribute(StyleConstants.NameAttribute);
+                    if (o instanceof HTML.Tag) {
+                        HTML.Tag kind = (HTML.Tag) o;
+                        if (kind == HTML.Tag.IMG) {
+                            // HERE is the call to the special class...
+                            return new Custom_ImageView(elem);
+                        } // End if(kind == IMG)...
+                    } // End if(instance of Tag)...
+                    return super.create(elem);
+                } // End create()...                
+            }; // End new HTMLFactory()...
+        } // End if(factory == null)...
+        return factory;
+    } // End getViewFactory()... 
+} // End Custom_HTMLEditorKit()...
+</code></pre>
+
+<p><br>
+4) Now we are ready to use the code.  Within our main app, you just have to reassign the HTMLEditorKit to Custom_HTMLEditorKit.</p>
+
+<pre><code>package my.app.package;
+
+import javax.swing.JEditorPane;
+import javax.swing.JFrame;
+
+
+public class ExpInlineImage {
+
+    public ExpInlineImage() {
+        JFrame jf = new JFrame();
+        JEditorPane jep = new JEditorPane();
+        jep.setEditable(false);
+        jep.setContentType("text/html");
+        jep.setEditorKit(new Custom_HTMLEditorKit());
+        jep.setText(
+                  "&lt;html&gt;&lt;body&gt;test&lt;br&gt;&lt;img src=\"data:image/png;base64,iVBORw"
+                + "0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACuklEQVR42sWVv09TU"
+                + "RTH71AXE40xaRdXEwbD4ODiIFr6EwcXN1cnR0cXoyTWUjcH3n0dDG4aEwca"
+                + "oqggWn8ERWtoKdVBoA2lxbj4BxzPt+eaPEn7nhDeleRDTr733vP9vtvXU0V"
+                + "E6n8i//79L5KdUKVUXtHobUXxnIAaGtawZzcNdxvgEIw2u0Va39SMa9A9DW"
+                + "vYE2aAKJ4WhpPTipySgBoa1rAnzAAxXPnalkvOjCL3iYAaGtawJ/QA650ia"
+                + "TYuPhVQQ7MbAOazAmqrAdb4hXOe8fW/EFBDsxdgmwM8Z/M5ATU0ewF+cACY"
+                + "vxRQQ7MS4NwtRd9xA/NsviCghoa1vQaIjP2ZcLnBxNng9E1F37p3yYH5awE"
+                + "1NKxhj18PeIx5J6YJ0Jtwaz/vUKObZwoDqW8VaL5xkfQr/gaUBdTQsOZ3Fr"
+                + "3h8dfENAGiCU5X79ygSW7oBKDf8JO/ZXMDamhB59AbHomcZ2KaADGIy+1r5"
+                + "HAjjabv+lMMYNA59ERveCS8L6s3QKV9lRxsfs+H9hn0RG94DAyw1L5CepEP"
+                + "fOCn8cFd7I/vGQa94dE3QJpfjMr2ZZr6oui+D/c+c8OP0tALNKz5nUVveKT"
+                + "zfQKcL6hfmQnVWxxEin9uR8YVlVuXSC+xsQE1NKxhj18PeCSuq/LOl/AIc5"
+                + "KJM6M+ZHB9C60LpD+xuQE1NHO1mYAeI8yJnV/DAyZELIChJJvMtVKkK2xuQ"
+                + "A0tKQGGAnpEjXlkT6M4xSazzTPk8ufpBVrKxm8BTGaap8itsvGyoSqatQCl"
+                + "jWFya2LcoyaatQCPW8dJr/BnXzOsiGYtwKPmMdKrbFw3rIpmJUCaTR60jlL"
+                + "xK199Q0ANLW0jQJaHycPOQZpq8mTbMDRFy+bDDxDNjKsqjPC0XqAlvRMupA"
+                + "CHmWHmbOCECylAxISIBk64kALs+99vkl5XSNCDZhMAAAAASUVORK5CYII="
+                + "\"&gt;&lt;/body&gt;&lt;/html&gt;");
+
+        jf.getRootPane().setContentPane(jep);
+        jf.pack();
+        jf.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        jf.setVisible(true);
+    } // End constructor...
+
+    public static void main(String[] args) {
+        ExpInlineImage app = new ExpInlineImage();
+    } // End main()...
+
+} // End ExpInlineImage{}...
+</code></pre>
+
+<p><br>
+5) Run the app and you should see an image of a green plus sign below the word "test". <br>
+<br> <br>
+Some things worth mentioning: <br>
+  * border="1" seems to work fine.  This will draw a border around the image. <br>
+  * width="100px" works fine. Sets width to 100 pixels regardless of original size. <br>
+  * width="100" works fine.  Sets width to 100 pixels regardless of original size. <br>
+  * width="50%" doesn't work.  This sets the width to 50 pixels instead of 50 percent of original size. <br></p>
+
+<p>For those interested, I posted the example on github.  <br> 
+<a href="https://github.com/GreenElm/expInlineImage/tree/master/src/expinlineimage" rel="nofollow">https://github.com/GreenElm/expInlineImage/tree/master/src/expinlineimage</a>
+<br><br></p>
+
+<p>Or download repo by... </p>
+
+<pre><code>git remote add origin https://github.com/GreenElm/expInlineImage.git
+</code></pre>
+
+<p><br>
+I hope this help.</p>

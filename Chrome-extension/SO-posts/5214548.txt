@@ -1,0 +1,121 @@
+<p>I've tried your code and I've found some mistakes in the exception handler, when you read from the <code>InputStream</code>:</p>
+
+<pre><code>Writer writer = new StringWriter();
+byte[] buffer = new byte[1024];
+
+//Reader reader2 = new BufferedReader(new InputStreamReader(request.getInputStream()));
+InputStream reader = request.getInputStream();
+int n;
+while ((n = reader.read(buffer)) != -1) {
+    writer.toString();
+
+}
+String retval = writer.toString();
+retval = "";
+</code></pre>
+
+<p>I've replaced your code with this one:</p>
+
+<pre><code>BufferedReader reader = new BufferedReader(new   InputStreamReader(request.getInputStream()));
+String line = "";
+StringBuilder stringBuilder = new StringBuilder();
+while ( (line=reader.readLine()) != null ) {
+    stringBuilder.append(line).append("\n");
+}
+
+String retval = stringBuilder.toString();
+</code></pre>
+
+<p>Then I'm able to read from <code>InputStream</code> in the exception handler, it works!
+If you can't still read from <code>InputStream</code>, I suggest you to check how you POST xml data to the request body. 
+You should consider that you can consume the <code>Inputstream</code> only one time per request, so I suggest you to check that there isn't any other call to <code>getInputStream()</code>. If you have to call it two or more times you should write a custom <code>HttpServletRequestWrapper</code> like this to make a copy of the request body, so you can read it more times.</p>
+
+<p><strong>UPDATE</strong><br>
+Your comments has helped me to reproduce the issue. You use the annotation @RequestBody, so it's true that you don't call <code>getInputStream()</code>, but Spring invokes it to retrieve the request's body. Have a look at the class <code>org.springframework.web.bind.annotation.support.HandlerMethodInvoker</code>: if you use <code>@RequestBody</code> this class invokes <code>resolveRequestBody</code> method, and so on... finally you can't read anymore the <code>InputStream</code> from your <code>ServletRequest</code>. If you still want to use both <code>@RequestBody</code> and <code>getInputStream()</code> in your own method, you have to wrap the request to a custom <code>HttpServletRequestWrapper</code> to make a copy of the request body, so you can manually read it more times.
+This is my wrapper:</p>
+
+<pre><code>public class CustomHttpServletRequestWrapper extends HttpServletRequestWrapper {
+
+    private static final Logger logger = Logger.getLogger(CustomHttpServletRequestWrapper.class);
+    private final String body;
+
+    public CustomHttpServletRequestWrapper(HttpServletRequest request) {
+        super(request);
+
+        StringBuilder stringBuilder = new StringBuilder();
+        BufferedReader bufferedReader = null;
+
+        try {
+            InputStream inputStream = request.getInputStream();
+            if (inputStream != null) {
+                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                String line = "";
+                while ((line = bufferedReader.readLine()) != null) {
+                    stringBuilder.append(line).append("\n");
+                }
+            } else {
+                stringBuilder.append("");
+            }
+        } catch (IOException ex) {
+            logger.error("Error reading the request body...");
+        } finally {
+            if (bufferedReader != null) {
+                try {
+                    bufferedReader.close();
+                } catch (IOException ex) {
+                    logger.error("Error closing bufferedReader...");
+                }
+            }
+        }
+
+        body = stringBuilder.toString();
+    }
+
+    @Override
+    public ServletInputStream getInputStream() throws IOException {
+        final StringReader reader = new StringReader(body);
+        ServletInputStream inputStream = new ServletInputStream() {
+            public int read() throws IOException {
+                return reader.read();
+            }
+        };
+        return inputStream;
+    }
+}
+</code></pre>
+
+<p>Then you should write a simple <code>Filter</code> to wrap the request:</p>
+
+<pre><code>public class MyFilter implements Filter {
+
+    public void init(FilterConfig fc) throws ServletException {
+
+    }
+
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+        chain.doFilter(new CustomHttpServletRequestWrapper((HttpServletRequest)request), response);
+
+    }
+
+    public void destroy() {
+
+    }
+
+}
+</code></pre>
+
+<p>Finally, you have to configure your filter in your web.xml:</p>
+
+<pre><code>&lt;filter&gt;     
+    &lt;filter-name&gt;MyFilter&lt;/filter-name&gt;   
+    &lt;filter-class&gt;test.MyFilter&lt;/filter-class&gt;  
+&lt;/filter&gt; 
+&lt;filter-mapping&gt;   
+    &lt;filter-name&gt;MyFilter&lt;/filter-name&gt;   
+    &lt;url-pattern&gt;/*&lt;/url-pattern&gt;   
+&lt;/filter-mapping&gt;
+</code></pre>
+
+<p>You can fire your filter only for controllers that really needs it, so you should change the url-pattern according to your needs.</p>
+
+<p>If you need this feature in only one controller, you can also make a copy of the request body in that controller when you receive it through the <code>@RequestBody</code> annotation.</p>

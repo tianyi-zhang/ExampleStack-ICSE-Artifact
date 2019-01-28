@@ -1,0 +1,176 @@
+<p>This is what worked for me. Note that I have log's at appropriate places to check if my webservice call, and its return value. This is crucial to the working of the autocomplete. In your case you may need to remove the webservice call and populate the adapter yourself with hardcoded values.</p>
+
+<p>Initialize in onCreate</p>
+
+<pre><code>fromAutoComplete = new AutoComplete(this, R.layout.autocomplete_list_item);
+fromAutoComplete.setNotifyOnChange(true);
+fromAddress = (AutoCompleteTextView) findViewById(R.id.fromAddress);
+fromAddress.setAdapter(fromAutoComplete);
+fromAddress.setOnItemClickListener(this);
+</code></pre>
+
+<p>The AutoComplete adapter that checks for your characters and calls the webservice over and over again, to show in the drop down.</p>
+
+<blockquote>
+  <blockquote>
+    <p>Please note, </p>
+    
+    <ol>
+    <li>this api needs a google api key, which you need generate for yourself. Also dont forget to enable Location API's for your key. Without this it <strong>wont</strong> work.</li>
+    <li>the placing of the variables in the webservice call matter (for some crazy reason). the sensor variable at the end worked for me. Feel free to test it on fiddler or chrome from your logcat.</li>
+    </ol>
+  </blockquote>
+</blockquote>
+
+<pre><code>public AutoComplete(Context context, int textViewResourceId) {
+    super(context, textViewResourceId);
+}
+
+@Override
+public int getCount() {
+    return resultList.size();
+}
+
+@Override
+public String getItem(int index) {
+    return resultList.get(index);
+}
+
+@Override
+public Filter getFilter() {
+    Filter filter = new Filter() {
+        @Override
+        protected FilterResults performFiltering(CharSequence constraint) {
+            FilterResults filterResults = new FilterResults();
+            if (constraint != null) {
+                // Retrieve the autocomplete results.
+                resultList = autocomplete(constraint.toString());
+
+                // Assign the data to the FilterResults
+                filterResults.values = resultList;
+                filterResults.count = resultList.size();
+            }
+            return filterResults;
+        }
+
+        @Override
+        protected void publishResults(CharSequence constraint, FilterResults results) {
+            if (results != null &amp;&amp; results.count &gt; 0) {
+                notifyDataSetChanged();
+            } else {
+                notifyDataSetInvalidated();
+            }
+        }
+    };
+    return filter;
+}
+
+private ArrayList&lt;String&gt; autocomplete(String input) {
+    ArrayList&lt;String&gt; resultList = null;
+
+    HttpURLConnection conn = null;
+    StringBuilder jsonResults = new StringBuilder();
+    try {
+        StringBuilder sb = new StringBuilder(PLACES_API_BASE + TYPE_AUTOCOMPLETE + OUT_JSON);
+        sb.append("?key=" + API_KEY+"&amp;sensor=false");
+        sb.append("&amp;components=country:in");
+        sb.append("&amp;input=" + URLEncoder.encode(input, "utf8"));
+        Log.d(LOG_TAG, "Calling "+sb.toString()) ;
+
+        URL url = new URL(sb.toString());
+        conn = (HttpURLConnection) url.openConnection();
+        InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+        // Load the results into a StringBuilder
+        int read;
+        char[] buff = new char[1024];
+        while ((read = in.read(buff)) != -1) {
+            jsonResults.append(buff, 0, read);
+        }
+    } catch (MalformedURLException e) {
+        Log.e(LOG_TAG, "Error processing Places API URL", e);
+        return resultList;
+    } catch (IOException e) {
+        Log.e(LOG_TAG, "Error connecting to Places API", e);
+        return resultList;
+    } finally {
+        if (conn != null) {
+            conn.disconnect();
+        }
+    }
+
+    try {
+        // Create a JSON object hierarchy from the results
+        JSONObject jsonObj = new JSONObject(jsonResults.toString());
+        JSONArray predsJsonArray = jsonObj.getJSONArray("predictions");
+
+        // Extract the Place descriptions from the results
+        resultList = new ArrayList&lt;String&gt;(predsJsonArray.length());
+        for (int i = 0; i &lt; predsJsonArray.length(); i++) {
+            resultList.add(predsJsonArray.getJSONObject(i).getString("description"));
+        }
+    } catch (JSONException e) {
+        Log.e(LOG_TAG, "Cannot process JSON results", e);
+    }
+
+    Log.d(LOG_TAG, resultList.size() + " in total returned.") ;
+
+    return resultList;
+}
+</code></pre>
+
+<p>On Selecting a item from drop down text</p>
+
+<pre><code>@Override
+public void onItemClick(AdapterView&lt;?&gt; adapterView, View view, int position, long id) {
+    Double latitude, longitude;
+    ArrayList&lt;String&gt; resultList = null;
+    HttpURLConnection conn = null;
+    StringBuilder jsonResults = new StringBuilder();
+    String str = (String) adapterView.getItemAtPosition(position);
+    try {
+        StringBuilder sb = new StringBuilder(
+                "http://maps.googleapis.com/maps/api/geocode/json?" + "address="
+                        + URLEncoder.encode(str, "utf-8") + "&amp;sensor=true");
+
+        URL url = new URL(sb.toString());
+        Log.d("Taxeeta", url.toString() + " Called");
+        conn = (HttpURLConnection) url.openConnection();
+        InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+        // Load the results into a StringBuilder
+        int read;
+        char[] buff = new char[1024];
+        while ((read = in.read(buff)) != -1) {
+            jsonResults.append(buff, 0, read);
+        }
+    } catch (MalformedURLException e) {
+        Log.e("Taxeeta", "Error processing Places API URL", e);
+    } catch (IOException e) {
+        Log.e("Taxeeta", "Error connecting to Places API", e);
+    } finally {
+        if (conn != null) {
+            conn.disconnect();
+        }
+    }
+
+    try {
+        // Create a JSON object hierarchy from the results
+        JSONObject jsonObj = new JSONObject(jsonResults.toString());
+        JSONObject location = ((JSONObject) jsonObj.getJSONArray("results").get(0))
+                .getJSONObject("geometry").getJSONObject("location");
+        latitude = location.optDouble("lat");
+        longitude = location.optDouble("lng");
+        Log.d("Taxeeta", "Received Latitude " + latitude + ": Longitude" + longitude);
+        if (view.getId() == fromAddress.getId()) {
+            source = new GeoPoint((int) (latitude * 1E6), (int) (longitude * 1E6));
+            Log.d("Taxeeta", "Source Done");
+        } else {
+            destination = new GeoPoint((int) (latitude * 1E6), (int) (longitude * 1E6));
+            Log.d("Taxeeta", "Destination Done");
+        }
+    } catch (JSONException e) {
+        Log.e("Taxeeta", "Cannot process JSON results", e);
+    }
+}
+</code></pre>

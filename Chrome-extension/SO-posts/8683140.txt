@@ -1,0 +1,545 @@
+<p>OK so here it is. In my case CustomGraphicalView extends org.achartengine.GraphicalView but you can extend whatever class you need.</p>
+
+<pre><code> private CustomGraphicalView mGraphicalView = new BudgetPieChart().createView(this); // you edit the createView() with your input data for the graph
+ private RelativeLayout chart_layout = (RelativeLayout) findViewById(R.id.chart_layout);
+ android.widget.RelativeLayout.LayoutParams param = new RelativeLayout.LayoutParams(width, height);   
+ chart_layout.setGravity(Gravity.CENTER);
+ chart_layout.addView(mGraphicalView, param);
+</code></pre>
+
+<hr>
+
+<pre><code> public CustomGraphicalView createView(Context context) {
+    double[] values = new double[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }; //your desired values
+    int[] colors = new int[] { // Color.BLUE, Color.GREEN, Color.MAGENTA, Color.YELLOW, Color.CYAN (your desired colors)
+    Color.parseColor("#ff3399ff"), Color.parseColor("#ff0066cc"), Color.parseColor("#ff613592"), Color.parseColor("#ff7d3493"), Color.parseColor("#ffe81f53"), Color.parseColor("#ffeb5531"), Color.parseColor("#fff6bb2d"), Color.parseColor("#fff39f2f"), Color.parseColor("#ffe0d347"), Color.parseColor("#ff78c200") };
+    // remember to have enough colors to match the number of elements from the data array for each pie slice
+    DefaultRenderer renderer = buildCategoryRenderer(colors);
+    renderer.setZoomButtonsVisible(false);
+    renderer.setZoomEnabled(false);
+    renderer.setChartTitleTextSize(20);
+    renderer.setAntialiasing(true);
+    renderer.setApplyBackgroundColor(false);
+    renderer.setBackgroundColor(Color.TRANSPARENT);
+    renderer.setPanEnabled(false);
+    renderer.setShowLabels(false);
+    renderer.setShowLegend(false);
+
+    return CustomChartFactory.getPieChartView(context, buildCategoryDataset("Project budget", values), renderer);
+}
+
+@Override
+public Intent execute(Context arg0) {
+    // NOT USED
+    return null;
+}
+</code></pre>
+
+<hr>
+
+<pre><code>public class CustomChartFactory {
+/** The key for the chart data. */
+public static final String CHART = "chart";
+
+/** The key for the chart graphical activity title. */
+public static final String TITLE = "title";
+
+private CustomChartFactory() {
+    // empty for now
+}
+
+/**
+ * Creates a pie chart intent that can be used to start the graphical view activity.
+ * 
+ * @param context
+ *            the context
+ * @param dataset
+ *            the category series dataset (cannot be null)
+ * @param renderer
+ *            the series renderer (cannot be null)
+ * @return a pie chart view
+ * @throws IllegalArgumentException
+ *             if dataset is null or renderer is null or if the dataset number of items is different than the number of series renderers
+ */
+public static final CustomGraphicalView getPieChartView(Context context, CategorySeries dataset, DefaultRenderer renderer) {
+    checkParameters(dataset, renderer);
+    CustomPieChart chart = new CustomPieChart(dataset, renderer);
+    return new CustomGraphicalView(context, chart);
+}
+
+/**
+ * Checks the validity of the dataset and renderer parameters.
+ * 
+ * @param dataset
+ *            the category series dataset (cannot be null)
+ * @param renderer
+ *            the series renderer (cannot be null)
+ * @throws IllegalArgumentException
+ *             if dataset is null or renderer is null or if the dataset number of items is different than the number of series renderers
+ */
+private static void checkParameters(CategorySeries dataset, DefaultRenderer renderer) {
+    if (dataset == null || renderer == null || dataset.getItemCount() != renderer.getSeriesRendererCount()) {
+        throw new IllegalArgumentException("Dataset and renderer should be not null and the dataset number of items should be equal to the number of series renderers");
+    }
+}
+}
+</code></pre>
+
+<p>This should get you going further with your project :) Good luck!</p>
+
+<hr>
+
+<pre><code>public class CustomGraphicalView extends org.achartengine.GraphicalView {
+/** The chart to be drawn. */
+private final AbstractChart mChart;
+
+/** The chart renderer. */
+private DefaultRenderer mRenderer;
+
+/** The view bounds. */
+private final Rect mRect = new Rect();
+
+/** The user interface thread handler. */
+private final Handler mHandler;
+
+/** The zoom buttons rectangle. */
+private final RectF mZoomR = new RectF();
+
+/** The zoom in icon. */
+private Bitmap zoomInImage;
+
+/** The zoom out icon. */
+private Bitmap zoomOutImage;
+
+/** The fit zoom icon. */
+private Bitmap fitZoomImage;
+
+/** The zoom area size. */
+private final int zoomSize = 50;
+
+/** The zoom buttons background color. */
+private static final int ZOOM_BUTTONS_COLOR = Color.argb(175, 150, 150, 150);
+
+/** The zoom in tool. */
+private Zoom mZoomIn;
+
+/** The zoom out tool. */
+private Zoom mZoomOut;
+
+/** The fit zoom tool. */
+private FitZoom mFitZoom;
+
+/** The paint to be used when drawing the chart. */
+private final Paint mPaint = new Paint();
+
+/** The touch handler. */
+private ITouchHandler mTouchHandler;
+
+/** The old x coordinate. */
+private float oldX;
+
+/** The old y coordinate. */
+private float oldY;
+
+public boolean isRotating;
+
+private float mX1, mY1, pY1, pX1, mX2, mY2, py, px, lastAngle, angle_rotation, rotation;
+
+/**
+ * Creates a new graphical view.
+ * 
+ * @param context
+ *            the context
+ * @param chart
+ *            the chart to be drawn
+ */
+public CustomGraphicalView(Context context, AbstractChart chart) {
+    super(context, chart);
+    setOnTouchListener(this);
+    mChart = chart;
+    mHandler = new Handler();
+    if (mChart instanceof XYChart) {
+        mRenderer = ((XYChart) mChart).getRenderer();
+    } else {
+        mRenderer = ((RoundChart) mChart).getRenderer();
+    }
+    if (mRenderer.isZoomButtonsVisible()) {
+        zoomInImage = BitmapFactory.decodeStream(CustomGraphicalView.class.getResourceAsStream("image/zoom_in.png"));
+        zoomOutImage = BitmapFactory.decodeStream(CustomGraphicalView.class.getResourceAsStream("image/zoom_out.png"));
+        fitZoomImage = BitmapFactory.decodeStream(CustomGraphicalView.class.getResourceAsStream("image/zoom-1.png"));
+    }
+
+    if ((mRenderer instanceof XYMultipleSeriesRenderer) &amp;&amp; (((XYMultipleSeriesRenderer) mRenderer).getMarginsColor() == XYMultipleSeriesRenderer.NO_COLOR)) {
+        ((XYMultipleSeriesRenderer) mRenderer).setMarginsColor(mPaint.getColor());
+    }
+    if ((mRenderer.isZoomEnabled() &amp;&amp; mRenderer.isZoomButtonsVisible()) || mRenderer.isExternalZoomEnabled()) {
+        mZoomIn = new Zoom(mChart, true, mRenderer.getZoomRate());
+        mZoomOut = new Zoom(mChart, false, mRenderer.getZoomRate());
+        mFitZoom = new FitZoom(mChart);
+    }
+    int version = 7;
+    try {
+        version = Integer.valueOf(Build.VERSION.SDK);
+    } catch (Exception e) {
+        // do nothing
+    }
+    if (version &lt; 7) {
+        mTouchHandler = new TouchHandlerOld(this, mChart);
+    } else {
+        mTouchHandler = new TouchHandler(this, mChart);
+    }
+}
+
+/**
+ * Returns the current series selection object.
+ * 
+ * @return the series selection
+ */
+@Override
+public SeriesSelection getCurrentSeriesAndPoint() {
+    return mChart.getSeriesAndPointForScreenCoordinate(new Point(oldX, oldY));
+}
+
+/**
+ * Transforms the currently selected screen point to a real point.
+ * 
+ * @param scale
+ *            the scale
+ * @return the currently selected real point
+ */
+@Override
+public double[] toRealPoint(int scale) {
+    if (mChart instanceof XYChart) {
+        XYChart chart = (XYChart) mChart;
+        return chart.toRealPoint(oldX, oldY, scale);
+    }
+    return null;
+}
+
+@Override
+protected void onDraw(Canvas canvas) {
+    // super.onDraw(canvas);
+    canvas.save();
+    canvas.getClipBounds(mRect);
+    int top = mRect.top;
+    int left = mRect.left;
+    int width = mRect.width();
+    int height = mRect.height();
+    if (mRenderer.isInScroll()) {
+        top = 0;
+        left = 0;
+        width = getMeasuredWidth();
+        height = getMeasuredHeight();
+    }
+    mChart.draw(canvas, left, top, width, height, mPaint);
+    if ((mRenderer != null) &amp;&amp; mRenderer.isZoomEnabled() &amp;&amp; mRenderer.isZoomButtonsVisible()) {
+        mPaint.setColor(ZOOM_BUTTONS_COLOR);
+        // zoomSize = Math.max(zoomSize, Math.min(width, height) / 7);
+        mZoomR.set((left + width) - (zoomSize * 3), (top + height) - (zoomSize * 0.775f), left + width, top + height);
+        canvas.drawRoundRect(mZoomR, zoomSize / 3, zoomSize / 3, mPaint);
+        float buttonY = (top + height) - (zoomSize * 0.625f);
+        canvas.drawBitmap(zoomInImage, (left + width) - (zoomSize * 2.75f), buttonY, null);
+        canvas.drawBitmap(zoomOutImage, (left + width) - (zoomSize * 1.75f), buttonY, null);
+        canvas.drawBitmap(fitZoomImage, (left + width) - (zoomSize * 0.75f), buttonY, null);
+    }
+    canvas.restore();
+}
+
+/**
+ * Sets the zoom rate.
+ * 
+ * @param rate
+ *            the zoom rate
+ */
+@Override
+public void setZoomRate(float rate) {
+    if ((mZoomIn != null) &amp;&amp; (mZoomOut != null)) {
+        mZoomIn.setZoomRate(rate);
+        mZoomOut.setZoomRate(rate);
+    }
+}
+
+/**
+ * Do a chart zoom in.
+ */
+@Override
+public void zoomIn() {
+    if (mZoomIn != null) {
+        mZoomIn.apply();
+        repaint();
+    }
+}
+
+/**
+ * Do a chart zoom out.
+ */
+@Override
+public void zoomOut() {
+    if (mZoomOut != null) {
+        mZoomOut.apply();
+        repaint();
+    }
+}
+
+/**
+ * Do a chart zoom reset / fit zoom.
+ */
+@Override
+public void zoomReset() {
+    if (mFitZoom != null) {
+        mFitZoom.apply();
+        mZoomIn.notifyZoomResetListeners();
+        repaint();
+    }
+}
+
+/**
+ * Adds a new zoom listener.
+ * 
+ * @param listener
+ *            zoom listener
+ */
+@Override
+public void addZoomListener(ZoomListener listener, boolean onButtons, boolean onPinch) {
+    if (onButtons) {
+        if (mZoomIn != null) {
+            mZoomIn.addZoomListener(listener);
+            mZoomOut.addZoomListener(listener);
+        }
+        if (onPinch) {
+            mTouchHandler.addZoomListener(listener);
+        }
+    }
+}
+
+/**
+ * Removes a zoom listener.
+ * 
+ * @param listener
+ *            zoom listener
+ */
+@Override
+public synchronized void removeZoomListener(ZoomListener listener) {
+    if (mZoomIn != null) {
+        mZoomIn.removeZoomListener(listener);
+        mZoomOut.removeZoomListener(listener);
+    }
+    mTouchHandler.removeZoomListener(listener);
+}
+
+/**
+ * Adds a new pan listener.
+ * 
+ * @param listener
+ *            pan listener
+ */
+@Override
+public void addPanListener(PanListener listener) {
+    mTouchHandler.addPanListener(listener);
+}
+
+/**
+ * Removes a pan listener.
+ * 
+ * @param listener
+ *            pan listener
+ */
+@Override
+public void removePanListener(PanListener listener) {
+    mTouchHandler.removePanListener(listener);
+}
+
+@Override
+protected RectF getZoomRectangle() {
+    return mZoomR;
+}
+
+@Override
+public boolean onTouchEvent(MotionEvent event) {
+    if (event.getAction() == MotionEvent.ACTION_DOWN) {
+        // save the x and y so they can be used in the click and long press
+        // listeners
+        oldX = event.getX();
+        oldY = event.getY();
+    }
+    if ((mRenderer != null) &amp;&amp; (mRenderer.isPanEnabled() || mRenderer.isZoomEnabled())) {
+        if (mTouchHandler.handleTouch(event)) {
+            return true;
+        }
+    }
+    return super.onTouchEvent(event);
+}
+
+/**
+ * Schedule a view content repaint.
+ */
+@Override
+public void repaint() {
+    mHandler.post(new Runnable() {
+        @Override
+        public void run() {
+            invalidate();
+        }
+    });
+}
+
+/**
+ * Schedule a view content repaint, in the specified rectangle area.
+ * 
+ * @param left
+ *            the left position of the area to be repainted
+ * @param top
+ *            the top position of the area to be repainted
+ * @param right
+ *            the right position of the area to be repainted
+ * @param bottom
+ *            the bottom position of the area to be repainted
+ */
+@Override
+public void repaint(final int left, final int top, final int right, final int bottom) {
+    mHandler.post(new Runnable() {
+        @Override
+        public void run() {
+            invalidate(left, top, right, bottom);
+        }
+    });
+}
+
+/**
+ * Saves the content of the graphical view to a bitmap.
+ * 
+ * @return the bitmap
+ */
+@Override
+public Bitmap toBitmap() {
+    setDrawingCacheEnabled(false);
+    if (!isDrawingCacheEnabled()) {
+        setDrawingCacheEnabled(true);
+    }
+    if (mRenderer.isApplyBackgroundColor()) {
+        setDrawingCacheBackgroundColor(mRenderer.getBackgroundColor());
+    }
+    setDrawingCacheQuality(View.DRAWING_CACHE_QUALITY_HIGH);
+    return getDrawingCache(true);
+}
+
+}
+</code></pre>
+
+<hr>
+
+<pre><code>public class CustomPieChart extends RoundChart {
+public static int radius = 115;
+
+float currentAngle;
+
+/** Handles returning values when tapping on PieChart. */
+private final PieMapper mPieMapper;
+
+/**
+ * Builds a new pie chart instance.
+ * 
+ * @param dataset
+ *            the series dataset
+ * @param renderer
+ *            the series renderer
+ */
+public CustomPieChart(CategorySeries dataset, DefaultRenderer renderer) {
+    super(dataset, renderer);
+    mPieMapper = new PieMapper();
+}
+
+/**
+ * The graphical representation of the pie chart.
+ * 
+ * @param canvas
+ *            the canvas to paint to
+ * @param x
+ *            the top left x value of the view to draw to
+ * @param y
+ *            the top left y value of the view to draw to
+ * @param width
+ *            the width of the view to draw to
+ * @param height
+ *            the height of the view to draw to
+ * @param paint
+ *            the paint
+ */
+@Override
+public void draw(Canvas canvas, int x, int y, int width, int height, Paint paint) {
+    // paint.setAntiAlias(mRenderer.isAntialiasing());
+    paint.setAntiAlias(true);
+    paint.setStyle(Style.FILL);
+    paint.setTextSize(mRenderer.getLabelsTextSize());
+    int legendSize = getLegendSize(mRenderer, height / 5, 0);
+    int left = x;
+    int top = y;
+    int right = x + width;
+    int sLength = mDataset.getItemCount();
+    double total = 0;
+    String[] titles = new String[sLength];
+    for (int i = 0; i &lt; sLength; i++) {
+        total += mDataset.getValue(i);
+        titles[i] = mDataset.getCategory(i);
+    }
+    if (mRenderer.isFitLegend()) {
+        legendSize = drawLegend(canvas, mRenderer, titles, left, right, y, width, height, legendSize, paint, true);
+    }
+    int bottom = y + height - legendSize;
+    drawBackground(mRenderer, canvas, x, y, width, height, paint, false, DefaultRenderer.NO_COLOR);
+
+    currentAngle = 0;
+    int mRadius = Math.min(Math.abs(right - left), Math.abs(bottom - top));
+
+    // radius = (int) (mRadius * 0.35 * mRenderer.getScale());
+    if (mCenterX == NO_VALUE) {
+        mCenterX = (left + right) / 2;
+    }
+    if (mCenterY == NO_VALUE) {
+        mCenterY = (bottom + top) / 2;
+    }
+
+    // Hook in clip detection after center has been calculated
+    mPieMapper.setDimensions(mRadius, mCenterX, mCenterY);
+    boolean loadPieCfg = !mPieMapper.areAllSegmentPresent(sLength);
+    if (loadPieCfg) {
+        mPieMapper.clearPieSegments();
+    }
+
+    // float shortRadius = radius * 0.9f;
+    // float longRadius = radius * 1.1f;
+
+    RectF oval = new RectF(mCenterX - radius, mCenterY - radius, mCenterX + radius, mCenterY + radius);
+    // List&lt;RectF&gt; prevLabelsBounds = new ArrayList&lt;RectF&gt;();
+
+    for (int i = 0; i &lt; sLength; i++) {
+        paint.setColor(mRenderer.getSeriesRendererAt(i).getColor());
+        float value = (float) mDataset.getValue(i);
+        float angle = (float) (value / total * 360);
+        canvas.drawArc(oval, currentAngle, angle, true, paint);
+        // drawLabel(canvas, mDataset.getCategory(i), mRenderer, prevLabelsBounds, mCenterX, mCenterY,
+        // shortRadius, longRadius, currentAngle, angle, left, right, paint);
+
+        // Save details for getSeries functionality
+        if (loadPieCfg) {
+            mPieMapper.addPieSegment(i, value, currentAngle, angle);
+        }
+        currentAngle += angle;
+    }
+    // prevLabelsBounds.clear();
+    // drawLegend(canvas, mRenderer, titles, left, right, y, width, height, legendSize, paint, false);
+    // drawTitle(canvas, x, y, width, paint);
+
+}
+
+public static int getRadius() {
+    return radius;
+}
+
+@Override
+public SeriesSelection getSeriesAndPointForScreenCoordinate(Point screenPoint) {
+    return mPieMapper.getSeriesAndPointForScreenCoordinate(screenPoint);
+}
+
+}
+</code></pre>

@@ -1,0 +1,142 @@
+<p>Unfortunatly no any one has tried to reply; I found the solution.</p>
+
+<p>The solution is based on the <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html" rel="nofollow">HTTP 1.1</a> <code>CONNECT</code> command and doesn't support direct tunnel.</p>
+
+<h1>On the Java client</h1>
+
+<blockquote>
+<pre><code>         // Install the all-trusting trust manager
+         final SSLContext sc = SSLContext.getInstance("SSL");
+         sc.init(null, trustAllCerts, new java.security.SecureRandom());
+         JSch jsch = new JSch();
+         Session session = jsch.getSession("root", "SSH-server", 22);
+
+         session.setSocketFactory(new SocketFactory() {
+          Socket tunnel = null;
+
+          public Socket createSocket(String host, int port) throws IOException, UnknownHostException {
+
+              SSLSocketFactory ssf = sc.getSocketFactory();
+
+              // HTTP
+              tunnel = ssf.createSocket(System.getProperty("https.proxyHost"), Integer.getInteger("https.proxyPort"));
+              tunnel.setKeepAlive(true);
+
+              doTunnelHandshake(tunnel, host, port);
+              System.out.println(tunnel + " connect " + tunnel.isConnected());
+              return tunnel; // dummy
+          }
+
+          public InputStream getInputStream(Socket socket) throws IOException {
+              System.out.println(tunnel + " getInputStream " + socket.isConnected());
+              return tunnel.getInputStream();
+          }
+
+          public OutputStream getOutputStream(Socket socket) throws IOException {
+              System.out.println("getOutputStream");
+              return socket.getOutputStream();
+          }           });
+
+      session.connect();
+
+      try {
+          session.setPortForwardingR(3391, "localhost", 3389);
+      ....
+</code></pre>
+</blockquote>
+
+<p>where</p>
+
+<blockquote>
+<pre><code>  private static void doTunnelHandshake(Socket tunnel, String host, int port) throws IOException {
+        OutputStream out = tunnel.getOutputStream();
+        String msg = "CONNECT " + host + ":" + port + " HTTP/1.0\n" + 
+       "User-Agent: " +
+       sun.net.www.protocol.http.HttpURLConnection.userAgent + "\r\n\r\n";
+        byte b[];
+        try {
+
+              b = msg.getBytes("ASCII7");
+        } catch (UnsupportedEncodingException ignored) {
+              /*
+               * If ASCII7 isn't there, something serious is wrong, but Paranoia
+               * Is Good (tm)
+               */
+              b = msg.getBytes();
+        }
+        out.write(b);
+        out.flush();
+
+        /*
+         * We need to store the reply so we can create a detailed error message
+         * to the user.
+         */
+        byte reply[] = new byte[200];
+        int replyLen = 0;
+        int newlinesSeen = 0;
+        boolean headerDone = false; /* Done on first newline */
+
+        InputStream in = tunnel.getInputStream();
+        boolean error = false;
+
+        while (newlinesSeen &lt; 2) {
+              int i = in.read();
+              if (i &lt; 0) {
+                    throw new IOException("Unexpected EOF from proxy");
+              }
+              if (i == '\n') {
+                    headerDone = true;
+                    ++newlinesSeen;
+              } else if (i != '\r') {
+                    newlinesSeen = 0;
+                    if (!headerDone &amp;&amp; replyLen &lt; reply.length) {
+                          reply[replyLen++] = (byte) i;
+                    }
+              }
+        }
+
+        /*
+         * Converting the byte array to a string is slightly wasteful in the
+         * case where the connection was successful, but it's insignificant
+         * compared to the network overhead.
+         */
+        String replyStr;
+        try {
+              replyStr = new String(reply, 0, replyLen, "ASCII7");
+        } catch (UnsupportedEncodingException ignored) {
+              replyStr = new String(reply, 0, replyLen);
+        }
+
+        System.out.println(replyStr);
+
+        /* We asked for HTTP/1.0, so we should get that back */
+        if (!replyStr.startsWith("HTTP/1.0 200")) {
+              throw new IOException("Unable to tunnel for " + host + ":" + port + ".  Proxy returns \"" + replyStr + "\"");
+        }
+
+        /* tunneling Handshake was successful! */
+  }
+</code></pre>
+</blockquote>
+
+<h1>On the apache configuration</h1>
+
+<p>add the ssl support</p>
+
+<blockquote>
+<pre><code> SSLEngine on
+ SSLCertificateFile "conf/ssl.crt/server.crt"
+ SSLCertificateKeyFile "conf/ssl.key/server.key"
+</code></pre>
+</blockquote>
+
+<p>here the result</p>
+
+<pre><code>Connecting to localhost port 22
+HTTP/1.0 200 Connection Established
+....
+Authentications that can continue: password
+Next authentication method: password
+Authentication succeeded (password).
+Connected
+</code></pre>

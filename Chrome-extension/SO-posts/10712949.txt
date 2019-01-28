@@ -1,0 +1,141 @@
+<p>Vijay,</p>
+
+<p>Your code helped me a lot thanks! I am posting here to offer my solution to the problem of using AccountManager to log into Google talk. So far I have not found a full solution out there, but I have developed mine based on the above code and correcting a few lines that do not work.</p>
+
+<p>There are two parts to the solution. The first is based on the above idea and code. It is to create a subclass of SASLMechanism:</p>
+
+<pre><code>import java.io.IOException;
+import java.net.URLEncoder;
+
+import org.jivesoftware.smack.SASLAuthentication;
+import org.jivesoftware.smack.XMPPException;
+import org.jivesoftware.smack.packet.Packet;
+import org.jivesoftware.smack.sasl.SASLMechanism;
+
+import android.util.Base64;
+import android.util.Log;
+
+public class GTalkOAuth2 extends SASLMechanism {
+public static final String NAME="X-GOOGLE-TOKEN";
+
+
+public GTalkOAuth2(SASLAuthentication saslAuthentication) {
+    super(saslAuthentication);
+}
+
+@Override
+protected String getName() {
+    return NAME;
+}
+
+static void enable() { }
+
+@Override
+protected void authenticate() throws IOException, XMPPException
+{
+    String authCode = password;
+    String jidAndToken = "\0" + URLEncoder.encode( authenticationId, "utf-8" ) + "\0" + authCode;
+
+    StringBuilder stanza = new StringBuilder();
+    stanza.append( "&lt;auth mechanism=\"" ).append( getName() );
+    stanza.append( "\" xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"&gt;" );
+    stanza.append( new String(Base64.encode( jidAndToken.getBytes( "UTF-8" ), Base64.DEFAULT ) ) );
+
+    stanza.append( "&lt;/auth&gt;" );
+
+    Log.v("BlueTalk", "Authentication text is "+stanza);
+    // Send the authentication to the server
+    getSASLAuthentication().send( new Auth2Mechanism(stanza.toString()) );
+}
+
+public class Auth2Mechanism extends Packet {
+    String stanza;
+    public Auth2Mechanism(String txt) {
+        stanza = txt;
+    }
+    public String toXML() {
+        return stanza;
+    }
+}
+
+/**
+ * Initiating SASL authentication by select a mechanism.
+ */
+public class AuthMechanism extends Packet {
+    final private String name;
+    final private String authenticationText;
+
+    public AuthMechanism(String name, String authenticationText) {
+        if (name == null) {
+            throw new NullPointerException("SASL mechanism name shouldn't be null.");
+        }
+        this.name = name;
+        this.authenticationText = authenticationText;
+    }
+
+    public String toXML() {
+        StringBuilder stanza = new StringBuilder();
+        stanza.append("&lt;auth mechanism=\"").append(name);
+        stanza.append("\" xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"&gt;");
+        if (authenticationText != null &amp;&amp;
+                authenticationText.trim().length() &gt; 0) {
+            stanza.append(authenticationText);
+        }
+        stanza.append("&lt;/auth&gt;");
+        return stanza.toString();
+    }
+    }
+}
+</code></pre>
+
+<p>The second part is the use of it. The big thing that no other example gave me is that when getting the token from the AccountManager system, the token type is not "ah" but "mail". The idea was out there in examples doing a direct communication with google servers to get the token but not in requesting it from AccountManager. Putting them together gives that you need to do the following in your driver code. Create a function to get the token:</p>
+
+<pre><code>public String getAuthToken(String name)
+{
+    Context context = getApplicationContext();
+    Activity activity = this;
+    String retVal = "";
+    Account account = new Account(name, "com.google");
+    AccountManagerFuture&lt;Bundle&gt; accFut = AccountManager.get(context).getAuthToken(account, "mail", null, activity, null, null);
+    try
+    {
+        Bundle authTokenBundle = accFut.getResult();
+        retVal = authTokenBundle.get(AccountManager.KEY_AUTHTOKEN).toString();
+    }
+    catch (OperationCanceledException e)
+    {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+    catch (AuthenticatorException e)
+    {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+    catch (IOException e)
+    {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+    return retVal;
+}
+</code></pre>
+
+<p>And then call it after making sure the right SASL system will be used:</p>
+
+<pre><code>SASLAuthentication.registerSASLMechanism( GTalkOAuth2.NAME, GTalkOAuth2.class );
+SASLAuthentication.supportSASLMechanism( GTalkOAuth2.NAME, 0 );
+config.setSASLAuthenticationEnabled(true);
+
+String saslAuthString = getAuthToken(acct.name);
+connection = new XMPPConnection(config);
+try {
+    connection.connect();
+    connection.login(name, saslAuthString);
+} catch (XMPPException e) {
+    // Most likely an expired token
+    // Invalidate the token and start over. There are example of this available
+}
+</code></pre>
+
+<p>Happy Google Talking!</p>

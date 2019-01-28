@@ -1,0 +1,254 @@
+<p>Investigated this. The reason is breakSpots caching. Looks like <code>LabelView</code> stores them and don't recalculate offsets on previos text edit. If I reset them manually the bug does not happen.</p>
+
+<p>A workaround (very dirty because of private breakSpots fields) is following</p>
+
+<pre><code>import java.awt.Dimension;
+import java.lang.reflect.Field;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.text.*;
+
+public class BugWrapJava7 {
+
+    private JFrame frame = new JFrame();
+    private JTextPane jtp;
+    private StyledDocument doc;
+
+    public BugWrapJava7() {
+        jtp = new JTextPane();
+        jtp.setEditorKit(new MyStyledEditorKit());
+        jtp.setText("\ntype some text in the above empty line and check the wrapping behavior");
+        doc = jtp.getStyledDocument();
+        doc.addDocumentListener(new DocumentListener() {
+
+            public void insertUpdate(DocumentEvent e) {
+                insert();
+            }
+
+            public void removeUpdate(DocumentEvent e) {
+                insert();
+            }
+
+            public void changedUpdate(DocumentEvent e) {
+                insert();
+            }
+
+            public void insert() {
+                SwingUtilities.invokeLater(new Runnable() {
+
+                    public void run() {
+                        Style defaultStyle = jtp.getStyle(StyleContext.DEFAULT_STYLE);
+                        doc.setCharacterAttributes(0, doc.getLength(), defaultStyle, false);
+                    }
+                });
+            }
+        });
+        JScrollPane scroll = new JScrollPane(jtp);
+        scroll.setPreferredSize(new Dimension(200, 200));
+        frame.add(scroll);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.pack();
+        frame.setVisible(true);
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+
+            public void run() {
+                BugWrapJava7 bugWrapJava7 = new BugWrapJava7();
+            }
+        });
+    }
+}
+
+class MyStyledEditorKit extends StyledEditorKit {
+    private MyFactory factory;
+
+    public ViewFactory getViewFactory() {
+        if (factory == null) {
+            factory = new MyFactory();
+        }
+        return factory;
+    }
+}
+
+class MyFactory implements ViewFactory {
+    public View create(Element elem) {
+        String kind = elem.getName();
+        if (kind != null) {
+            if (kind.equals(AbstractDocument.ContentElementName)) {
+                return new MyLabelView(elem);
+            } else if (kind.equals(AbstractDocument.ParagraphElementName)) {
+                return new ParagraphView(elem);
+            } else if (kind.equals(AbstractDocument.SectionElementName)) {
+                return new BoxView(elem, View.Y_AXIS);
+            } else if (kind.equals(StyleConstants.ComponentElementName)) {
+                return new ComponentView(elem);
+            } else if (kind.equals(StyleConstants.IconElementName)) {
+                return new IconView(elem);
+            }
+        }
+
+        // default to text display
+        return new LabelView(elem);
+    }
+}
+
+class MyLabelView extends LabelView {
+    public MyLabelView(Element elem) {
+        super(elem);
+    }
+    public View breakView(int axis, int p0, float pos, float len) {
+        if (axis == View.X_AXIS) {
+            resetBreakSpots();
+        }
+        return super.breakView(axis, p0, pos, len);
+    }
+
+    private void resetBreakSpots() {
+        try {
+            // HACK the breakSpots private fields
+            Field f=GlyphView.class.getDeclaredField("breakSpots");
+            f.setAccessible(true);
+            f.set(this, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+}
+</code></pre>
+
+<p>Less hack without the reflection. Based on usual reset of breakSpots on model change.</p>
+
+<pre><code>class MyLabelView extends LabelView {
+
+    boolean isResetBreakSpots=false;
+
+    public MyLabelView(Element elem) {
+        super(elem);
+    }
+    public View breakView(int axis, int p0, float pos, float len) {
+        if (axis == View.X_AXIS) {
+            resetBreakSpots();
+        }
+        return super.breakView(axis, p0, pos, len);
+    }
+
+    private void resetBreakSpots() {
+        isResetBreakSpots=true;
+        removeUpdate(null, null, null);
+        isResetBreakSpots=false;
+
+//        try {
+//            Field f=GlyphView.class.getDeclaredField("breakSpots");
+//            f.setAccessible(true);
+//            f.set(this, null);
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//        }
+    }
+
+    public void removeUpdate(DocumentEvent e, Shape a, ViewFactory f) {
+        super.removeUpdate(e, a, f);
+    }
+
+    public void preferenceChanged(View child, boolean width, boolean height) {
+        if (!isResetBreakSpots) {
+            super.preferenceChanged(child, width, height);
+        }
+    }
+}
+</code></pre>
+
+<p>UPDATE: This one fixes TextSamplerDemo as well. I reset all spots for all labels views.</p>
+
+<pre><code>class MyStyledEditorKit extends StyledEditorKit {
+    private MyFactory factory;
+
+    public ViewFactory getViewFactory() {
+        if (factory == null) {
+            factory = new MyFactory();
+        }
+        return factory;
+    }
+}
+
+class MyFactory implements ViewFactory {
+    public View create(Element elem) {
+        String kind = elem.getName();
+        if (kind != null) {
+            if (kind.equals(AbstractDocument.ContentElementName)) {
+                return new MyLabelView(elem);
+            } else if (kind.equals(AbstractDocument.ParagraphElementName)) {
+                return new MyParagraphView(elem);
+            } else if (kind.equals(AbstractDocument.SectionElementName)) {
+                return new BoxView(elem, View.Y_AXIS);
+            } else if (kind.equals(StyleConstants.ComponentElementName)) {
+                return new ComponentView(elem);
+            } else if (kind.equals(StyleConstants.IconElementName)) {
+                return new IconView(elem);
+            }
+        }
+
+        // default to text display
+        return new LabelView(elem);
+    }
+}
+
+class MyParagraphView extends ParagraphView {
+
+    public MyParagraphView(Element elem) {
+        super(elem);
+    }
+public void removeUpdate(DocumentEvent e, Shape a, ViewFactory f) {
+    super.removeUpdate(e, a, f);
+    resetBreakSpots();
+}
+public void insertUpdate(DocumentEvent e, Shape a, ViewFactory f) {
+    super.insertUpdate(e, a, f);
+    resetBreakSpots();
+}
+
+private void resetBreakSpots() {
+    for (int i=0; i&lt;layoutPool.getViewCount(); i++) {
+        View v=layoutPool.getView(i);
+        if (v instanceof MyLabelView) {
+            ((MyLabelView)v).resetBreakSpots();
+        }
+    }
+}
+
+}
+
+class MyLabelView extends LabelView {
+
+    boolean isResetBreakSpots=false;
+
+    public MyLabelView(Element elem) {
+        super(elem);
+    }
+    public View breakView(int axis, int p0, float pos, float len) {
+        if (axis == View.X_AXIS) {
+            resetBreakSpots();
+        }
+        return super.breakView(axis, p0, pos, len);
+    }
+
+    public void resetBreakSpots() {
+        isResetBreakSpots=true;
+        removeUpdate(null, null, null);
+        isResetBreakSpots=false;
+   }
+
+    public void removeUpdate(DocumentEvent e, Shape a, ViewFactory f) {
+        super.removeUpdate(e, a, f);
+    }
+
+    public void preferenceChanged(View child, boolean width, boolean height) {
+        if (!isResetBreakSpots) {
+            super.preferenceChanged(child, width, height);
+        }
+    }
+}
+</code></pre>

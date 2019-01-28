@@ -1,0 +1,203 @@
+<p>Before the Android sdk for opencv came out, I was trying this sort of thing out so I may be able to help.</p>
+
+<p>In my case I wanted to pass preview images frame after frame to a C++ library with the custom calls to the C++ opencv library. I will go through what I did but be aware that I was using the onPreviewFrame() call with my activity implementing Camera.PreviewCallback. This meant that the image data was handily delivered as a byte array in YUV format (I have a Galaxy S2 but worth checking as other devices may have different formats). However, it should be fairly straightforward to extract the byte data from the Mat that onCameraFrame returns. I've extracted and adapted the following from the code I was working on so you will need to tailor for your situation but hopefully this should get you on the right track.</p>
+
+<p>Ok, so to pass the image data you need to build a C++ shared library that you can link into your Android application. I'm assuming you know how to do that but I can dig out some more info on that front if not. The library will have at least one method that through JNI integration. This method will be seen as a Java method that your Android code can call but will be implemented in C++ and will allow you apply your custom method to the data. You can also use the method to pass back data - perhaps the speed of the vehicle as a float or maybe processed image data.</p>
+
+<p>Lets say you want to pass in the image, and return the speed and say a processed version of the image. You will likely want to pass in the width and height of the image too. </p>
+
+<p>btw, in the following I am assuming you library will be called yourapp.so and it will have the qualified name of com.yourname.youapp obviously adapt that as need be.</p>
+
+<p>The jni header file (say com_yourname_libs_YourApp.h) will look like:</p>
+
+<pre><code>#include &lt;jni.h&gt;
+#ifndef _Included_com_yourname_libs_YourApp
+#define _Included_com_yourname_libs_YourApp
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+JNIEXPORT void JNICALL Java_com_yourname_libs_YourApp_nativeImageExchange(
+                        JNIEnv* jnienv,
+                        jobject jo,
+                        jint w,
+                        jint h,
+                        jbyteArray procImage,
+                        jbyteArray float_speed);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
+</code></pre>
+
+<p>In the main cpp file (say yourapp.cpp) that will form the C++ library the content will look like:</p>
+
+<pre><code>include "cv.h"
+#include "com_yourname_libs_YourApp.h"
+#include &lt;Android/log.h&gt;
+#include &lt;stdio.h&gt;
+#include "highgui.h"
+
+IplImage* createImageFromRawData(char* data, int w, int h,int nChannels);
+void decodeYUV420toRGB(char yuv420sp[], char rgb[], int w, int h);
+int widthPadding(int w);
+char* g_rgbData;
+
+
+
+JNIEXPORT void JNICALL Java_com_yourname_libs_YourApp_nativeImageExchange(
+                        JNIEnv* jnienv,
+                        jobject jo,
+                        jbyteArray dataArray,
+                        jint w,
+                        jint h,
+                        jbyteArray procImage,
+                        jbyteArray float_speed) {
+
+char* data = (char*) jnienv-&gt;GetByteArrayElements(dataArray, 0);
+
+char* procImageData = (char*) jnienv-&gt;GetByteArrayElements(procImage, 0); 
+IplImage* imageReturn = createImageFromRawData(procImageData, w, h, 3); 
+
+float* speed= (float*) jnienv-&gt;GetByteArrayElements(float_speed, 0);
+
+if (g_rgbData == NULL) {
+   g_rgbData = new char [(3*w + widthPadding(w))*h];
+}
+
+decodeYUV420toRGB(data, g_rgbData, w, h, 3);
+
+
+// your processing here with g_rgbData
+// set speed and imageReturn to pass back image data
+// ...
+// ...
+
+// these calls commit the data back to the Java layer
+jnienv-&gt;ReleaseByteArrayElements(procImage, (jbyte*) procImageData, JNI_COMMIT); 
+jnienv-&gt;ReleaseByteArrayElements(float_speed, (jbyte*) speed, JNI_COMMIT);
+
+}
+</code></pre>
+
+<p>The other method used here are as follows:</p>
+
+<pre><code>IplImage* createImageFromRawData(char* data, int w, int h, int nChannels) {
+
+   IplImage* out = cvCreateImage(cvSize(w,h), IPL_DEPTH_8U, nChannels);
+
+   int dataWidth = nChannels * w;
+
+   cvSetData(out, data, dataWidth + widthPadding(dataWidth)); 
+
+   return out;
+}
+
+void decodeYUV420toRGB(char yuv420sp[], char rgb[], int width, int height) {
+
+   int frameSize = width * height;
+   int pixval;
+   int ix = 0;
+
+   for (int j = 0, yp = 0; j &lt; height; j++) {
+       int uvp = frameSize + (j &gt;&gt; 1) * width, u = 0, v = 0;
+   for (int i = 0; i &lt; width; i++, yp++) {
+           int y = (0xff &amp; ((int) yuv420sp[yp])) - 16;
+           if (y &lt; 0) y = 0;
+           if ((i &amp; 1) == 0) {
+          v = (0xff &amp; yuv420sp[uvp++]) - 128;
+          u = (0xff &amp; yuv420sp[uvp++]) - 128;
+           }
+
+           int y1192 = 1192 * y;
+           int r = (y1192 + 1634 * v);
+           int g = (y1192 - 833 * v - 400 * u);
+           int b = (y1192 + 2066 * u);
+
+           if (r &lt; 0) r = 0;
+           else if (r &gt; 262143) r = 262143;
+           if (g &lt; 0) g = 0;
+           else if (g &gt; 262143) g = 262143;
+           if (b &lt; 0) b = 0;
+           else if (b &gt; 262143) b = 262143;
+
+           pixval = (0xff000000 | ((r &lt;&lt; 6) &amp; 0xff0000) | ((g &gt;&gt; 2) &amp; 0xff00) | ((b &gt;&gt; 10) &amp; 0xff));
+
+           rgb[ix++] = (char) pixval;
+           rgb[ix++] = (char) (pixval &gt;&gt; 8);
+           rgb[ix++] = (char) (pixval &gt;&gt; 16);
+        }
+
+        ix += widthPadding(width);
+    }
+}
+
+int widthPadding(int w) {
+   int pad = w % 4;
+   return (pad &gt; 0 ? (4 - pad) : 0);
+}
+</code></pre>
+
+<p>Application.mk should look something like this:</p>
+
+<pre><code>APP_BUILD_SCRIPT := $(call my-dir)/Android.mk
+APP_PROJECT_PATH := $(call my-dir)/..
+APP_MODULES      := cxcore cv cvaux cvml cvhighgui yourapp
+</code></pre>
+
+<p>and then add the following to Android.mk</p>
+
+<pre><code>include $(BUILD_STATIC_LIBRARY)
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE    := yourapp
+LOCAL_C_INCLUDES := \
+    $(LOCAL_PATH)/cv/src \
+    $(LOCAL_PATH)/cv/include \
+    $(LOCAL_PATH)/cxcore/include \
+    $(LOCAL_PATH)/cvaux/src \
+    $(LOCAL_PATH)/cvaux/include \
+    $(LOCAL_PATH)/ml/include \
+    $(LOCAL_PATH)/otherlibs/highgui
+LOCAL_CFLAGS := $(LOCAL_C_INCLUDES:%=-I%)
+LOCAL_LDLIBS := -L$(SYSROOT)/usr/lib -ldl -llog \
+            -L$(TARGET_OUT) -lcxcore -lcv -lcvaux -lcvml -lcvhighgui
+
+
+LOCAL_SRC_FILES := \
+    yourapp.cpp
+</code></pre>
+
+<p>ok, so now back to the Java layer; in com.yourname.libs create YourApp.java, which will load the library so something like:</p>
+
+<pre><code>package com.yourname.libs;
+
+public class YourApp{
+static {
+    System.loadLibrary("yourapp");
+}
+
+private native int nativeYourApp(byte[] data, int w,
+        int h,  byte[] procImage, byte[] float_speed);
+}
+</code></pre>
+
+<p>You will then be able to create an instance of YourApp() and call the method nativeYourApp(...) procImage and float_speed can then be converted back to a float using something like:</p>
+
+<pre><code>public class FloatByteArrayUtil {
+private static final int MASK = 0xff;
+
+public static float byteArrayToFloat(byte test[]) {
+    int bits = 0;
+    int i = 0;
+    for (int shifter = 0; shifter &lt;= 3; shifter++) {
+        bits |= ((int) test[i] &amp; MASK) &lt;&lt; (shifter * 8);
+        i++;
+    }
+
+    return Float.intBitsToFloat(bits);
+}
+}
+</code></pre>

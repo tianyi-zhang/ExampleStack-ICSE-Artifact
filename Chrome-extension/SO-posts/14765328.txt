@@ -1,0 +1,132 @@
+<p>I finally managed to get it working after a lot of trial and error! It now fully highlights a specified route from A to B on a map (as seen in my screenshot below). I have also thrown in my code for anyone who may need it in future.</p>
+
+<p><img src="http://i.stack.imgur.com/p7J1N.png" alt="enter image description here"></p>
+
+<pre><code>public class PolyMap extends Activity {
+        ProgressDialog pDialog;
+        GoogleMap map;
+        List&lt;LatLng&gt; polyz;
+        JSONArray array;
+        static final LatLng DUBLIN = new LatLng(53.344103999999990000,
+                -6.267493699999932000);
+
+        @SuppressLint("NewApi")
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.map_layout);
+            map = ((MapFragment) getFragmentManager().findFragmentById(R.id.map))
+                    .getMap();
+            map.moveCamera(CameraUpdateFactory.newLatLngZoom(DUBLIN, 15));
+            map.animateCamera(CameraUpdateFactory.zoomTo(10), 2000, null);
+            new GetDirection().execute();
+        }
+
+        class GetDirection extends AsyncTask&lt;String, String, String&gt; {
+
+            @Override
+            protected void onPreExecute() {
+                super.onPreExecute();
+                pDialog = new ProgressDialog(PolyMap.this);
+                pDialog.setMessage("Loading route. Please wait...");
+                pDialog.setIndeterminate(false);
+                pDialog.setCancelable(false);
+                pDialog.show();
+            }
+
+            protected String doInBackground(String... args) {
+                Intent i = getIntent();
+                String startLocation = i.getStringExtra("startLoc");
+                String endLocation = i.getStringExtra("endLoc");
+                            startLocation = startLocation.replace(" ", "+");
+                    endLocation = endLocation.replace(" ", "+");;
+                String stringUrl = "http://maps.googleapis.com/maps/api/directions/json?origin=" + startLocation + ",+dublin&amp;destination=" + endLocation + ",+dublin&amp;sensor=false";
+                StringBuilder response = new StringBuilder();
+                try {
+                    URL url = new URL(stringUrl);
+                    HttpURLConnection httpconn = (HttpURLConnection) url
+                            .openConnection();
+                    if (httpconn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                        BufferedReader input = new BufferedReader(
+                                new InputStreamReader(httpconn.getInputStream()),
+                                8192);
+                        String strLine = null;
+
+                        while ((strLine = input.readLine()) != null) {
+                            response.append(strLine);
+                        }
+                        input.close();
+                    }
+
+                    String jsonOutput = response.toString();
+
+                    JSONObject jsonObject = new JSONObject(jsonOutput);
+
+                    // routesArray contains ALL routes
+                    JSONArray routesArray = jsonObject.getJSONArray("routes");
+                    // Grab the first route
+                    JSONObject route = routesArray.getJSONObject(0);
+
+                    JSONObject poly = route.getJSONObject("overview_polyline");
+                    String polyline = poly.getString("points");
+                    polyz = decodePoly(polyline);
+
+                } catch (Exception e) {
+
+                }
+
+                return null;
+
+            }
+
+            protected void onPostExecute(String file_url) {
+
+                for (int i = 0; i &lt; polyz.size() - 1; i++) {
+                    LatLng src = polyz.get(i);
+                    LatLng dest = polyz.get(i + 1);
+                    Polyline line = map.addPolyline(new PolylineOptions()
+                            .add(new LatLng(src.latitude, src.longitude),
+                                    new LatLng(dest.latitude,                dest.longitude))
+                            .width(2).color(Color.RED).geodesic(true));
+
+                }
+                pDialog.dismiss();
+
+            }
+        }
+
+        /* Method to decode polyline points */
+        private List&lt;LatLng&gt; decodePoly(String encoded) {
+
+            List&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+            int index = 0, len = encoded.length();
+            int lat = 0, lng = 0;
+
+            while (index &lt; len) {
+                int b, shift = 0, result = 0;
+                do {
+                    b = encoded.charAt(index++) - 63;
+                    result |= (b &amp; 0x1f) &lt;&lt; shift;
+                    shift += 5;
+                } while (b &gt;= 0x20);
+                int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+                lat += dlat;
+
+                shift = 0;
+                result = 0;
+                do {
+                    b = encoded.charAt(index++) - 63;
+                    result |= (b &amp; 0x1f) &lt;&lt; shift;
+                    shift += 5;
+                } while (b &gt;= 0x20);
+                int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+                lng += dlng;
+
+                LatLng p = new LatLng((((double) lat / 1E5)),
+                        (((double) lng / 1E5)));
+                poly.add(p);
+            }
+
+            return poly;
+        }
+    }
+</code></pre>

@@ -1,0 +1,105 @@
+<p>Inspired from <a href="http://stackoverflow.com/questions/2860943/suggestions-for-library-to-hash-passwords-in-java">this post</a> and <a href="http://security.stackexchange.com/questions/4781/do-any-security-experts-recommend-bcrypt-for-password-storage/6415#6415">that post</a>, I use this code to generate and verify hashed salted passwords. It only uses JDK provided classes, no external dependency.</p>
+
+<p>The process is:</p>
+
+<ul>
+<li>you create a salt with <code>getNextSalt</code></li>
+<li>you ask the user his password and use the <code>hash</code> method to generate a salted and hashed password. The method returns a <code>byte[]</code> which you can save as is in a database with the salt</li>
+<li>to authenticate a user, you ask his password, retrieve the salt and hashed password from the database and use the <code>isExpectedPassword</code> method to check that the details match</li>
+</ul>
+
+
+
+<pre><code>/**
+ * A utility class to hash passwords and check passwords vs hashed values. It uses a combination of hashing and unique
+ * salt. The algorithm used is PBKDF2WithHmacSHA1 which, although not the best for hashing password (vs. bcrypt) is
+ * still considered robust and &lt;a href="http://security.stackexchange.com/a/6415/12614"&gt; recommended by NIST &lt;/a&gt;.
+ * The hashed value has 256 bits.
+ */
+public class Passwords {
+
+  private static final Random RANDOM = new SecureRandom();
+  private static final int ITERATIONS = 10000;
+  private static final int KEY_LENGTH = 256;
+
+  /**
+   * static utility class
+   */
+  private Passwords() { }
+
+  /**
+   * Returns a random salt to be used to hash a password.
+   *
+   * @return a 16 bytes random salt
+   */
+  public static byte[] getNextSalt() {
+    byte[] salt = new byte[16];
+    RANDOM.nextBytes(salt);
+    return salt;
+  }
+
+  /**
+   * Returns a salted and hashed password using the provided hash.&lt;br&gt;
+   * Note - side effect: the password is destroyed (the char[] is filled with zeros)
+   *
+   * @param password the password to be hashed
+   * @param salt     a 16 bytes salt, ideally obtained with the getNextSalt method
+   *
+   * @return the hashed password with a pinch of salt
+   */
+  public static byte[] hash(char[] password, byte[] salt) {
+    PBEKeySpec spec = new PBEKeySpec(password, salt, ITERATIONS, KEY_LENGTH);
+    Arrays.fill(password, Character.MIN_VALUE);
+    try {
+      SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
+      return skf.generateSecret(spec).getEncoded();
+    } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+      throw new AssertionError("Error while hashing a password: " + e.getMessage(), e);
+    } finally {
+      spec.clearPassword();
+    }
+  }
+
+  /**
+   * Returns true if the given password and salt match the hashed value, false otherwise.&lt;br&gt;
+   * Note - side effect: the password is destroyed (the char[] is filled with zeros)
+   *
+   * @param password     the password to check
+   * @param salt         the salt used to hash the password
+   * @param expectedHash the expected hashed value of the password
+   *
+   * @return true if the given password and salt match the hashed value, false otherwise
+   */
+  public static boolean isExpectedPassword(char[] password, byte[] salt, byte[] expectedHash) {
+    byte[] pwdHash = hash(password, salt);
+    Arrays.fill(password, Character.MIN_VALUE);
+    if (pwdHash.length != expectedHash.length) return false;
+    for (int i = 0; i &lt; pwdHash.length; i++) {
+      if (pwdHash[i] != expectedHash[i]) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Generates a random password of a given length, using letters and digits.
+   *
+   * @param length the length of the password
+   *
+   * @return a random password
+   */
+  public static String generateRandomPassword(int length) {
+    StringBuilder sb = new StringBuilder(length);
+    for (int i = 0; i &lt; length; i++) {
+      int c = RANDOM.nextInt(62);
+      if (c &lt;= 9) {
+        sb.append(String.valueOf(c));
+      } else if (c &lt; 36) {
+        sb.append((char) ('a' + c - 10));
+      } else {
+        sb.append((char) ('A' + c - 36));
+      }
+    }
+    return sb.toString();
+  }
+}
+</code></pre>

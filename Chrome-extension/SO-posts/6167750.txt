@@ -1,0 +1,163 @@
+<p>I had this same problem and ended up creating an OrmLiteActivityListener, to listen to my RoboActivity and handle the events it raises.</p>
+
+<pre><code>public class RoboOrmActivityBase&lt;H extends IOrmLiteSqliteOpenHelper&gt; extends RoboActivity {
+@Inject RoboOrmLiteActivityListener&lt;H&gt; OrmActivityListener;
+
+/*
+ * Get a helper for this action.
+ */
+public H getHelper() {
+    return OrmActivityListener.getHelper();
+}
+
+/**
+ * Get a connection source for this action.
+ */
+public ConnectionSource getConnectionSource() {
+    return OrmActivityListener.getHelper().getConnectionSource();
+}
+}
+</code></pre>
+
+<p>RoboOrmLiteActivityListener class was derived from the OrmLiteActivityBase class.
+I removed its inheritance and made it listen instead.</p>
+
+<pre><code>public class RoboOrmLiteActivityListener&lt;H extends IOrmLiteSqliteOpenHelper&gt; {
+private volatile H helper;
+private volatile boolean created = false;
+private volatile boolean destroyed = false;
+
+OrmLiteSqliteOpenHelperProvider databaseHelperProvider;
+
+@Inject
+public RoboOrmLiteActivityListener(OrmLiteSqliteOpenHelperProvider databaseHelperProvider) {
+    this.databaseHelperProvider = databaseHelperProvider;
+}
+
+/**
+ * Get a helper for this action.
+ */
+public H getHelper() {
+    if (helper == null) {
+        if (!created) {
+            throw new IllegalStateException("A call has not been made to onCreate() yet so the helper is null");
+        } else if (destroyed) {
+            throw new IllegalStateException(
+                    "A call to onDestroy has already been made and the helper cannot be used after that point");
+        } else {
+            throw new IllegalStateException("Helper is null for some unknown reason");
+        }
+    } else {
+        return helper;
+    }
+}
+
+/**
+ * Get a connection source for this action.
+ */
+public ConnectionSource getConnectionSource() {
+    return getHelper().getConnectionSource();
+}
+
+// As you might expect, some events can have parameters.  The OnCreate event
+// has the savedInstanceState parameter that Android passes to onCreate(Bundle)   
+public void onCreate(@Observes OnCreateEvent onCreate) {
+    //Ln.d("onCreate savedInstanceState is %s", onCreate.getSavedInstanceState())
+    if (helper == null) {
+        helper = getHelperInternal();
+        created = true;
+    }
+}
+
+public void onDestroy(@Observes OnDestroyEvent onDestroy) {
+    releaseHelper(helper);
+    destroyed = true;
+}
+
+/**
+ * This is called internally by the class to populate the helper object instance. This should not be called directly
+ * by client code unless you know what you are doing. Use {@link #getHelper()} to get a helper instance. If you are
+ * managing your own helper creation, override this method to supply this activity with a helper instance.
+ * 
+ * &lt;p&gt;
+ * &lt;b&gt; NOTE: &lt;/b&gt; If you override this method, you most likely will need to override the
+ * {@link #releaseHelper(OrmLiteSqliteOpenHelper)} method as well.
+ * &lt;/p&gt;
+ */
+private H getHelperInternal() {
+    @SuppressWarnings("unchecked")
+    H newHelper = (H) databaseHelperProvider.get();
+    return newHelper;
+}
+
+/**
+ * Release the helper instance created in {@link #getHelperInternal(Context)}. You most likely will not need to call
+ * this directly since {@link #onDestroy()} does it for you.
+ * 
+ * &lt;p&gt;
+ * &lt;b&gt; NOTE: &lt;/b&gt; If you override this method, you most likely will need to override the
+ * {@link #getHelperInternal(Context)} method as well.
+ * &lt;/p&gt;
+ */
+private void releaseHelper(H helper) {
+    OpenHelperManager.releaseHelper();
+    helper = null;
+}
+}
+</code></pre>
+
+<p>Then I have a DatabaseHelperProvider which provides my Helper that extends from OrmLiteSqliteOpenHelper.  This provider manually performs injection on my helper after retrieving it from OpenHelperManager.</p>
+
+<pre><code>public class OrmLiteSqliteOpenHelperProvider implements Provider&lt;OrmLiteSqliteOpenHelper&gt; {
+  private final Context context;
+  private final Injector injector;
+
+  @Inject
+  public OrmLiteSqliteOpenHelperProvider(Context context, Injector injector) {
+      this.context=context;
+      this.injector=injector;
+  }
+  public OrmLiteSqliteOpenHelper get() {
+      //The OpenHelperManager built the DatabaseHelper, not us.  So we need to guice it up manually.  
+      //Guice normally does its injections when it does its constructions. 
+    OrmLiteSqliteOpenHelper dbhelp = OpenHelperManager.getHelper(context);
+      injector.injectMembers(dbhelp);
+    return dbhelp;
+  }
+}
+</code></pre>
+
+<p>I also have an interface called IOrmLiteSqliteOpenHelper, which contains members extracted from OrmLiteSqliteOpenHelper.  Then when I build my interface (IDatabaseHelper) for my helper which derives from OrmLiteSqliteOpenHelper I can extend from IOrmLiteSqliteOpenHelper.</p>
+
+<p>Then to bind in my Module I have</p>
+
+<pre><code>static {
+    OpenHelperManager.setOpenHelperClass(DatabaseHelper.class);
+}
+</code></pre>
+
+<p>and </p>
+
+<pre><code>@SuppressWarnings("unchecked")
+private void bindDataHelperProvider() {
+    bind(IDatabaseHelper.class)
+    .toProvider((Class&lt;? extends Provider&lt;? extends IDatabaseHelper&gt;&gt;) OrmLiteSqliteOpenHelperProvider.class);
+}
+</code></pre>
+
+<p>Then my Activity has everything for RoboGuice and Ormlite handled entirely in the baseclass and looks like this:</p>
+
+<pre><code>public class MyActivity extends RoboOrmActivityBase&lt;IDatabaseHelper&gt; {
+
+    List&lt;IMyEntity&gt; lis;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    // TODO Auto-generated method stub
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.routine);
+
+    try {
+        Dao&lt;IMyEntity,Integer&gt; myDao = getHelper().getMyDao();
+        lis = myDao.queryForAll();
+</code></pre>

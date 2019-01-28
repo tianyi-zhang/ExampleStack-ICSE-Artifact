@@ -1,0 +1,92 @@
+<p>Here's what I wrote to do it.  I'm sure it doesn't get everything if you're doing anything weird with the classpath, but it seems to work well for me.  Note that it doesn't actually load the classes, it just returns their names.  This is so that it won't load all classes into memory, and because some classes in my company's codebase were causing initialization errors if loaded at the wrong time...</p>
+
+<pre><code>public interface Visitor&lt;T&gt; {
+    /**
+     * @return {@code true} if the algorithm should visit more results,
+     * {@code false} if it should terminate now.
+     */
+    public boolean visit(T t);
+}
+
+public class ClassFinder {
+    public static void findClasses(Visitor&lt;String&gt; visitor) {
+        String classpath = System.getProperty("java.class.path");
+        String[] paths = classpath.split(System.getProperty("path.separator"));
+
+        String javaHome = System.getProperty("java.home");
+        File file = new File(javaHome + File.separator + "lib");
+        if (file.exists()) {
+            findClasses(file, file, true, visitor);
+        }
+
+        for (String path : paths) {
+            file = new File(path);
+            if (file.exists()) {
+                findClasses(file, file, false, visitor);
+            }
+        }
+    }
+
+    private static boolean findClasses(File root, File file, boolean includeJars, Visitor&lt;String&gt; visitor) {
+        if (file.isDirectory()) {
+            for (File child : file.listFiles()) {
+                if (!findClasses(root, child, includeJars, visitor)) {
+                    return false;
+                }
+            }
+        } else {
+            if (file.getName().toLowerCase().endsWith(".jar") &amp;&amp; includeJars) {
+                JarFile jar = null;
+                try {
+                    jar = new JarFile(file);
+                } catch (Exception ex) {
+
+                }
+                if (jar != null) {
+                    Enumeration&lt;JarEntry&gt; entries = jar.entries();
+                    while (entries.hasMoreElements()) {
+                        JarEntry entry = entries.nextElement();
+                        String name = entry.getName();
+                        int extIndex = name.lastIndexOf(".class");
+                        if (extIndex &gt; 0) {
+                            if (!visitor.visit(name.substring(0, extIndex).replace("/", "."))) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            else if (file.getName().toLowerCase().endsWith(".class")) {
+                if (!visitor.visit(createClassName(root, file))) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static String createClassName(File root, File file) {
+        StringBuffer sb = new StringBuffer();
+        String fileName = file.getName();
+        sb.append(fileName.substring(0, fileName.lastIndexOf(".class")));
+        file = file.getParentFile();
+        while (file != null &amp;&amp; !file.equals(root)) {
+            sb.insert(0, '.').insert(0, file.getName());
+            file = file.getParentFile();
+        }
+        return sb.toString();
+    }
+}
+</code></pre>
+
+<p>To use it:</p>
+
+<pre><code>ClassFinder.findClasses(new Visitor&lt;String&gt;() {
+    @Override
+    public boolean visit(String clazz) {
+        System.out.println(clazz)
+        return true; // return false if you don't want to see any more classes
+    }
+});
+</code></pre>

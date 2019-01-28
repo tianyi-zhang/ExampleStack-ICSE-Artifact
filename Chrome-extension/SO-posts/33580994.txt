@@ -1,0 +1,181 @@
+<p>With your help (community) I figured out the solution.
+I am sure that there are other better ways to do it but my solution is not very complicated and should work with any image, any Android since API level 8.</p>
+
+<p>The solution is to use two <code>ImageView</code> objects instead of one.</p>
+
+<p>The first <code>ImageView</code> will be working like before but loaded image will be scaled down so that it's width will be smaller than the width of the <code>ImageView</code> and it's height will be smaller than the height of the <code>ImageView</code>.</p>
+
+<p>The second <code>ImageView</code> will be blank at the start. Everytime the <strong>x</strong>, <strong>y</strong>, <strong>fw</strong> and <strong>fh</strong> properties are changing the <code>AsyncTask</code> will be executed to load only visible part of the image. When properties are changing fast the <code>AsyncTask</code> will not be able to finish in time. It will have to be canceled and new one will be started. When it finishes the result <code>Bitmap</code> will be loaded onto the second <code>ImageView</code> so it will be visible to user. When the properties changes again loaded <code>Bitmap</code> will be deleted, so it will not cover moving <code>Bitmap</code> loaded to the first <code>ImageView</code>. <strong>Note:</strong> <code>BitmapRegionDecoder</code> which I will use to load sub-image is available since Android API level 10, so API 8 and API 9 users will only see scaled down image. I decided it is OK.</p>
+
+<hr>
+
+<p>Code needed:</p>
+
+<ul>
+<li>Setting the first (bottom) <code>ImageView</code> <code>scaleType="matrix"</code> (best in XML)</li>
+<li>Setting the second (top) <code>ImageView</code> <code>scaleType="fitXY"</code> (best in XML)</li>
+<li>Functions from Android Documentation <a href="http://developer.android.com/training/displaying-bitmaps/load-bitmap.html" rel="nofollow">(here)</a> - thanks to user <a href="http://stackoverflow.com/users/5516843/vishavjeet-singh">Vishavjeet Singh</a>.  </li>
+</ul>
+
+<p><strong>NOTE:</strong> Notice the <code>||</code> operator instead of <code>&amp;&amp;</code> while calculating <code>inSampleSize</code>. We want the image loaded to be smaller than <code>ImageView</code> so that we are sure we have enough RAM to load it. (I presume <code>ImageView</code> size is not bigger than the size of the device display. I also presume that the device has enough memory to load at least 2 <code>Bitmaps</code> of the size of the device display. Please tell me if I am making a mistake here.)<br>
+<strong>NOTE 2:</strong> I am loading images using <code>InputStream</code>. To load a file different way you will have to change code in <code>try{...} catch(...){...}</code> blocks.</p>
+
+<pre><code>public static int calculateInSampleSize(
+        BitmapFactory.Options options, int reqWidth, int reqHeight) {
+    // Raw height and width of image
+    final int height = options.outHeight;
+    final int width = options.outWidth;
+    int inSampleSize = 1;
+
+    if (height &gt; reqHeight || width &gt; reqWidth) {
+
+        final int halfHeight = height / 2;
+        final int halfWidth = width / 2;
+
+        // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+        // height and width larger than the requested height and width.
+        while ((halfHeight / inSampleSize) &gt; reqHeight
+                || (halfWidth / inSampleSize) &gt; reqWidth) {
+            inSampleSize *= 2;
+        }
+    }
+
+    return inSampleSize;
+}
+
+public Bitmap decodeSampledBitmapFromResource(Uri fileUri,
+                                              int reqWidth, int reqHeight) {
+
+    // First decode with inJustDecodeBounds=true to check dimensions
+    final BitmapFactory.Options options = new BitmapFactory.Options();
+    options.inJustDecodeBounds = true;
+
+    try {
+        InputStream is = this.getContentResolver().openInputStream(fileUri);
+        BitmapFactory.decodeStream(is, null, options);
+    } catch (Exception e) {
+        e.printStackTrace();
+        return null;
+    }
+
+    // Calculate inSampleSize
+    options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+
+    // Decode bitmap with inSampleSize set
+    options.inJustDecodeBounds = false;
+
+    try {
+        InputStream is = this.getContentResolver().openInputStream(fileUri);
+        return BitmapFactory.decodeStream(is, null, options);
+    } catch (Exception e) {
+        e.printStackTrace();
+        return null;
+    }
+}
+</code></pre>
+
+<ul>
+<li>Function returning a sub-image of an image.</li>
+</ul>
+
+<p><strong>NOTE:</strong> Size of Rectangle that will be cut out of source image is relative to the image. Values that specify it are from 0 to 1 because the size of the <code>ImageView</code> and loaded <code>Bitmap</code>s differs from the size of the original image.</p>
+
+<pre><code>public Bitmap getCroppedBitmap (Uri fileUri, int outWidth, int outHeight,
+                                    double rl, double rt, double rr, double rb) {
+        // rl, rt, rr, rb are relative (values from 0 to 1) to the size of the image.
+        // That is because image moving will be smaller than the original.
+        if (Build.VERSION.SDK_INT &gt;= 10) {
+            // Ensure that device supports at least API level 10
+            // so we can use BitmapRegionDecoder
+            BitmapRegionDecoder brd;
+            try {
+                // Again loading from URI. Change the code so it suits yours.
+                InputStream is = this.getContentResolver().openInputStream(fileUri);
+                brd = BitmapRegionDecoder.newInstance(is, true);
+
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.outWidth = (int)((rr - rl) * brd.getWidth());
+                options.outHeight = (int)((rb - rt) * brd.getHeight());
+                options.inSampleSize = calculateInSampleSize(options,
+                        outWidth, outHeight);
+
+                return brd.decodeRegion(new Rect(
+                        (int) (rl * brd.getWidth()),
+                        (int) (rt * brd.getHeight()),
+                        (int) (rr * brd.getWidth()),
+                        (int) (rb * brd.getHeight())
+                ), options);
+            } catch (Exception e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
+        else
+            return null;
+    }
+</code></pre>
+
+<ul>
+<li><code>AsyncTask</code> loading the sub-image <code>Bitmap</code>.</li>
+</ul>
+
+<p><strong>NOTE:</strong> notice declaring a variable of the type of this class. It will be used later.</p>
+
+<pre><code>private LoadHiResImageTask loadHiResImageTask = new LoadHiResImageTask();
+
+private class LoadHiResImageTask extends AsyncTask&lt;Double, Void, Bitmap&gt; {
+        /** The system calls this to perform work in a worker thread and
+         * delivers it the parameters given to AsyncTask.execute() */
+        protected Bitmap doInBackground(Double... numbers) {
+            return getCroppedBitmap(
+                    // You will have to change first parameter here!
+                    Uri.parse(imagesToCrop[0]),
+                    numbers[0].intValue(), numbers[1].intValue(),
+                    numbers[2], numbers[3], numbers[4], numbers[5]);
+        }
+
+        /** The system calls this to perform work in the UI thread and delivers
+         * the result from doInBackground() */
+        protected void onPostExecute(Bitmap result) {
+            ImageView hiresImage = (ImageView) findViewById(R.id.hiresImage);
+            hiresImage.setImageBitmap(result);
+            hiresImage.postInvalidate();
+        }
+    }
+</code></pre>
+
+<ul>
+<li>Function that will make it all work together.</li>
+</ul>
+
+<p>This function will be called every time the <strong>x</strong>, <strong>y</strong>, <strong>fw</strong> or <strong>fh</strong> property changes.<br>
+<strong>NOTE:</strong> <em>hiresImage</em> in my code is the <code>id</code> of the second (top) <code>ImageView</code></p>
+
+<pre><code>private void updateImageView () {
+        //  ... your code to update ImageView matrix ...
+        // 
+        // imageToCrop.setImageMatrix(m);
+        // imageToCrop.postInvalidateDelayed(10);
+
+        if (Build.VERSION.SDK_INT &gt;= 10) {
+            ImageView hiresImage = (ImageView) findViewById(R.id.hiresImage);
+            hiresImage.setImageDrawable(null);
+            hiresImage.invalidate();
+            if (loadHiResImageTask.getStatus() != AsyncTask.Status.FINISHED) {
+                loadHiResImageTask.cancel(true);
+            }
+            loadHiResImageTask = null;
+            loadHiResImageTask = new LoadHiResImageTask();
+            loadHiResImageTask.execute(
+                    (double) hiresImage.getWidth(),
+                    (double) hiresImage.getHeight(),
+                    // x, y, fw, fh are properties from the question
+                    (double) x / d.getIntrinsicWidth(),
+                    (double) y / d.getIntrinsicHeight(),
+                    (double) x / d.getIntrinsicWidth()
+                            + fw / d.getIntrinsicWidth(),
+                    (double) y / d.getIntrinsicHeight()
+                            + fh / d.getIntrinsicHeight());
+        }
+    }
+</code></pre>

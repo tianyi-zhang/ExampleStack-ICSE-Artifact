@@ -1,0 +1,75 @@
+<p>I agree with McDowell's answer that the <strong>most important thing is to fix the invalid data source</strong> in the first place.</p>
+
+<p>Anyway, here is an <code>InputStream</code> which looks for lonely <code>&amp;</code> characters and marries them with an additional <code>amp;</code> in case it's missing. Again, fixing broken data this way does not pay off most of the time.</p>
+
+<p>This solution fixes the three flaws mentioned in the OP and shows only one way to implement transforming InputStreams.</p>
+
+<ul>
+<li>Within the constructor, only the reference to the original InputStream is held. <strong>No processing takes place in the constructor</strong>, until the stream is really asked for data (by calls to read()).</li>
+<li>The contents is <strong>not transformed to a large single String</strong> for transformation. Instead, the stream works as a stream and only performs minimal read-ahead (e.g. the four bytes necessary to find out whether <code>&amp;</code> is followed by <code>amp;</code> or not.</li>
+<li>The stream only replaces lonely <code>&amp;</code>, and <strong>does not try to clean up <code>amp;amp;</code></strong> in any way, because they don't happen with this solution.</li>
+</ul>
+
+<p>.</p>
+
+<pre><code>import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+public class ReplacerInputStream extends InputStream {
+
+private static final byte[] REPLACEMENT = "amp;".getBytes();
+    private final byte[] readBuf = new byte[REPLACEMENT.length];
+    private final Deque&lt;Byte&gt; backBuf = new ArrayDeque&lt;Byte&gt;();
+    private final InputStream in;
+
+    public ReplacerInputStream(InputStream in) {
+        this.in = in;
+    }
+
+    @Override
+    public int read() throws IOException {
+        if (!backBuf.isEmpty()) {
+            return backBuf.pop();
+        }
+        int first = in.read();
+        if (first == '&amp;') {
+            peekAndReplace();
+        }
+        return first;
+    }
+
+    private void peekAndReplace() throws IOException {
+        int read = super.read(readBuf, 0, REPLACEMENT.length);
+        for (int i1 = read - 1; i1 &gt;= 0; i1--) {
+            backBuf.push(readBuf[i1]);
+        }
+        for (int i = 0; i &lt; REPLACEMENT.length; i++) {
+            if (read != REPLACEMENT.length || readBuf[i] != REPLACEMENT[i]) {
+                for (int j = REPLACEMENT.length - 1; j &gt;= 0; j--) {
+                    // In reverse order
+                    backBuf.push(REPLACEMENT[j]);
+                }
+                return;
+            }
+        }
+    }
+
+}
+</code></pre>
+
+<p>The code has been tested with the following input data (first parameter is expected output, second parameter is raw input):</p>
+
+<pre><code>    test("Foo &amp;amp; Bar", "Foo &amp; Bar");
+    test("&amp;amp;&amp;amp;&amp;amp;", "&amp;&amp;&amp;");
+    test("&amp;amp;&amp;amp;&amp;amp; ", "&amp;&amp;&amp; ");
+    test(" &amp;amp;&amp;amp;&amp;amp;", " &amp;&amp;&amp;");
+    test("&amp;amp;", "&amp;");
+    test("&amp;amp;", "&amp;amp;");
+    test("&amp;amp;&amp;amp;", "&amp;amp;&amp;amp;");
+    test("&amp;amp;&amp;amp;&amp;amp;", "&amp;amp;&amp;&amp;amp;");
+    test("test", "test");
+    test("", "");
+    test("testtesttest&amp;amp;", "testtesttest&amp;");
+</code></pre>

@@ -1,0 +1,631 @@
+<p>Here is the complete implementation of <code>DiskLruCache</code>.</p>
+
+<p>First download <a href="https://android.googlesource.com/platform/libcore/+/jb-mr2-release/luni/src/main/java/libcore/io/DiskLruCache.java" rel="nofollow" title="DiskLruCache.java">DiskLruCache.java</a> from AOSP.</p>
+
+<p>Here is my <code>DiskCache.java</code> a helper class for basic cache operations.</p>
+
+<pre><code>/**
+ * Created by Babar on 12-Aug-15.
+ */
+public class DiskCache
+{
+
+    private Context context;
+
+    private static DiskCache diskCache;
+
+    public DiskLruCache mDiskLruCache;
+
+    private final Object mDiskCacheLock = new Object();
+
+    private BitmapProcessor bitmapProcessor;
+
+    private static final int DISK_CACHE_INDEX = 0;
+
+    public static boolean mDiskCacheStarting = true;
+
+    private static final String DISK_CACHE_SUBDIR = "ooredoo_thumbnails";
+
+    private static final int DISK_CACHE_SIZE = 1024 * 1024 * 100; // 100MB
+
+    public static DiskCache getInstance()
+    {
+        if(diskCache == null)
+        {
+            diskCache = new DiskCache();
+        }
+
+        return diskCache;
+    }
+
+    private DiskCache() {}
+
+    public void requestInit(Context context)
+    {
+        this.context = context;
+
+        bitmapProcessor = new BitmapProcessor();
+
+        new DiskCacheTask(this).execute(DiskCacheTask.INIT);
+    }
+
+    public void init() throws IOException {
+        synchronized (mDiskCacheLock)
+        {
+            if(mDiskLruCache == null || mDiskLruCache.isClosed())
+            {
+                File cacheDir = FileUtils.getDiskCacheDir(context, DISK_CACHE_SUBDIR);
+
+                if(!cacheDir.exists())
+                {
+                    cacheDir.mkdir();
+                }
+
+                if(FileUtils.getUsableSpace(cacheDir) &gt; DISK_CACHE_SIZE)
+                {
+                    mDiskLruCache = DiskLruCache.open(cacheDir, 1, 1, DISK_CACHE_SIZE);
+                }
+                else
+                {
+                    Logger.print("InitDiskCache failed: NOT enough space on disk");
+                }
+            }
+
+            mDiskCacheStarting = false; // Finished initialization
+            mDiskCacheLock.notifyAll(); // Wake any waiting threads
+        }
+    }
+
+
+    public void addBitmapToDiskCache(final String key, final Bitmap value) {
+        if (key == null || value == null) {
+            return;
+        }
+
+        synchronized (mDiskCacheLock)
+        {
+            if (mDiskLruCache != null) {
+                OutputStream out = null;
+
+                String encryptedKey = CryptoUtils.encryptToMD5(key);
+
+                Logger.print("addBitmapToDiskCache encryptToMD5: " + encryptedKey);
+
+                try {
+                    DiskLruCache.Snapshot snapshot = mDiskLruCache.get(encryptedKey);
+
+                    if (snapshot == null) {
+                        final DiskLruCache.Editor editor = mDiskLruCache.edit(encryptedKey);
+
+                        if (editor != null) {
+                            out = editor.newOutputStream(DISK_CACHE_INDEX);
+
+                            value.compress(Bitmap.CompressFormat.JPEG, 100, out);
+
+                            editor.commit();
+                            out.close();
+                        }
+                    } else {
+                        snapshot.getInputStream(DISK_CACHE_INDEX).close();
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } finally {
+                    if (out != null) {
+                        try {
+                            out.close();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Get from disk cache.
+     *
+     * @param key Unique identifier for which item to get
+     * @return The bitmap if found in cache, null otherwise
+     */
+    public Bitmap getBitmapFromDiskCache(final String key)
+    {
+        Bitmap bitmap = null;
+
+        String encryptedKey = CryptoUtils.encryptToMD5(key);
+
+        Logger.print("getBitmapFromDiskCache encryptToMD5: " + encryptedKey);
+
+        synchronized (mDiskCacheLock)
+        {
+            Logger.print("mDiskcachestarting: "+mDiskCacheStarting);
+            // Wait while disk cache is started from background thread
+            while (mDiskCacheStarting)
+            {
+                try
+                {
+                    mDiskCacheLock.wait();
+                }
+                catch (InterruptedException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+
+            if(mDiskLruCache != null)
+            {
+                InputStream inputStream = null;
+
+                try
+                {
+                    final DiskLruCache.Snapshot snapshot = mDiskLruCache.get(encryptedKey);
+
+                    if(snapshot != null)
+                    {
+                        Logger.print("Disk cache hit");
+
+                        inputStream = snapshot.getInputStream(DISK_CACHE_INDEX);
+
+                        if(inputStream != null)
+                        {
+                            FileDescriptor fd = ((FileInputStream) inputStream).getFD();
+
+                            // Decode bitmap, but we don't want to sample so give
+                            // MAX_VALUE as the target dimensions
+
+                            bitmap = bitmapProcessor.decodeSampledBitmapFromDescriptor(fd);
+                        }
+                    }
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+                finally
+                {
+                    if(inputStream != null)
+                    {
+                        try
+                        {
+                            inputStream.close();
+                        }
+                        catch (IOException e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+            Logger.print("dCache getBitmapFromDiskCache synchronized completed");
+        }
+
+        Logger.print("dCache getBitmapFromDiskCache returning Bitmap");
+        return bitmap;
+    }
+
+    public void requestFlush()
+    {
+        new DiskCacheTask(this).execute(DiskCacheTask.FLUSH);
+    }
+
+    /**
+     * Flushes the disk cache associated with this ImageCache object. Note that this includes
+     * disk access so this should not be executed on the main/UI thread.
+     */
+    public void flush()
+    {
+        synchronized (mDiskCacheLock)
+        {
+            if(mDiskLruCache != null)
+            {
+                try
+                {
+                    mDiskLruCache.flush();
+
+                    Logger.print("flush: disk cache flushed");
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    public void requestClose()
+    {
+        new DiskCacheTask(this).execute(DiskCacheTask.CLOSE);
+    }
+
+    /**
+     * Closes the disk cache associated with this ImageCache object. Note that this includes
+     * disk access so this should not be executed on the main/UI thread.
+     */
+    public void close()
+    {
+        synchronized (mDiskCacheLock)
+        {
+            if(mDiskLruCache != null)
+            {
+                if(!mDiskLruCache.isClosed())
+                {
+                    try
+                    {
+                        mDiskLruCache.close();
+                        mDiskLruCache = null;
+
+                        Logger.print("disk cache closed");
+                    }
+                    catch (IOException e)
+                    {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Do not call this method unless you need to explicitly clear disk cache
+     */
+    public void requestTearDown()
+    {
+        new DiskCacheTask(this).execute(DiskCacheTask.TEAR_DOWN);
+    }
+
+    public final void tearDown()
+    {
+        synchronized (mDiskCacheLock)
+        {
+            mDiskCacheStarting = true;
+
+            if(mDiskLruCache != null &amp;&amp; !mDiskLruCache.isClosed())
+            {
+                try
+                {
+                    mDiskLruCache.delete();
+
+                    Logger.print("disk cache cleared");
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+
+                mDiskLruCache = null;
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Here is <code>BitmapProcesser.java</code></p>
+
+<pre><code>/**
+ * @author  Babar
+ * @since 15-Jun-15.
+ */
+public class BitmapProcessor
+{
+    public Bitmap decodeSampledBitmapFromStream(InputStream inputStream, URL url,
+                                                int reqWidth, int reqHeight) throws IOException {
+        Bitmap bitmap;
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+
+        BitmapFactory.decodeStream(inputStream, null, options);
+
+        int width = options.outWidth;
+        int height = options.outHeight;
+
+        Logger.print("@Req Width: "+reqWidth);
+        Logger.print("@Req Height: " + reqHeight);
+
+        Logger.print("@Actual Width: "+width);
+        Logger.print("@Actual Height: " + height);
+
+        int sampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+
+        options.inJustDecodeBounds = false;
+        options.inSampleSize = sampleSize;
+
+        inputStream = url.openStream();
+
+        bitmap = BitmapFactory.decodeStream(inputStream, null, options);
+
+        if(bitmap != null)
+        {
+            width = bitmap.getWidth();
+            height = bitmap.getHeight();
+
+            Logger.print("@inSample:"+sampleSize);
+            Logger.print("@Modified Width: "+width);
+            Logger.print("@Modified Height: " + height);
+        }
+
+        return bitmap;
+    }
+
+    public Bitmap decodeSampledBitmapFromDescriptor(FileDescriptor fd)
+    {
+        /*final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+
+        BitmapFactory.decodeFileDescriptor(fd, null, options);
+
+        options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+
+        options.inJustDecodeBounds = false;*/
+
+        return BitmapFactory.decodeFileDescriptor(fd);
+
+    }
+
+    public Bitmap decodeSampledBitmapFromFile(String pathName, int reqWidth, int reqHeight) throws IOException {
+        Bitmap bitmap;
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+
+        BitmapFactory.decodeFile(pathName, options);
+
+        int width = options.outWidth;
+        int height = options.outHeight;
+
+        Logger.print("@Req Width: "+reqWidth);
+        Logger.print("@Req Height: " + reqHeight);
+
+        Logger.print("@Actual Width: "+width);
+        Logger.print("@Actual Height: " + height);
+
+        int sampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+
+        options.inJustDecodeBounds = false;
+        options.inSampleSize = sampleSize;
+
+        bitmap = BitmapFactory.decodeFile(pathName, options);
+
+        if(bitmap != null)
+        {
+            width = bitmap.getWidth();
+            height = bitmap.getHeight();
+
+            Logger.print("@inSample:"+sampleSize);
+            Logger.print("@Modified Width: "+width);
+            Logger.print("@Modified Height: " + height);
+        }
+
+        return bitmap != null ? rotateBitmapIfNeeded(pathName, bitmap) : null;
+    }
+
+    public int calculateInSampleSize(BitmapFactory.Options options,
+                                     int requiredWidth, int requiredHeight)
+    {
+        final int width = options.outWidth;
+        final int height = options.outHeight;
+
+        int inSampleSize = 1;
+
+        if(width &gt; requiredWidth || height &gt; requiredHeight)
+        {
+            final int halfWidth = width / 2;
+            final int halfHeight = height / 2;
+
+            // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+            // height and width larger than the requested height and width.
+            while ((halfWidth / inSampleSize) &gt; requiredWidth
+                                    &amp;&amp;
+                    (halfHeight / inSampleSize) &gt; requiredHeight)
+            {
+                inSampleSize *= 2;
+            }
+        }
+
+        return inSampleSize;
+    }
+
+    public static Bitmap rotateBitmapIfNeeded(String pathName, Bitmap bitmap) throws IOException {
+        ExifInterface exifInterface = new ExifInterface(pathName);
+
+        int orientation = exifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION,
+                                                        ExifInterface.ORIENTATION_NORMAL);
+
+        Logger.logI("BITMAP_ORIENTATION: " + orientation, pathName);
+
+        switch (orientation)
+        {
+            case ExifInterface.ORIENTATION_ROTATE_90:
+
+                return rotateBitmap(bitmap, 90);
+
+            case ExifInterface.ORIENTATION_ROTATE_180:
+
+                return rotateBitmap(bitmap, 180);
+
+            case ExifInterface.ORIENTATION_ROTATE_270:
+
+                return rotateBitmap(bitmap, 270);
+        }
+
+        return bitmap;
+    }
+
+    public Bitmap makeBitmapRound(Bitmap src)
+    {
+        int width = src.getWidth();
+        int height = src.getHeight();
+
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+
+       // Canvas canvas = new Canvas(bitmap);
+
+        BitmapShader shader = new BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+
+        Paint paint = new Paint();
+        paint.setAntiAlias(true);
+        paint.setShader(shader);
+
+
+
+        RectF rectF = new RectF(0.0f, 0.0f, width, height);
+
+        // rect contains the bounds of the shape
+        // radius is the radius in pixels of the rounded corners
+        // paint contains the shader that will texture the shape
+
+        Canvas canvas = new Canvas(src);
+
+        canvas.drawRoundRect(rectF, 30, 30, paint);
+
+        return src;
+    }
+
+    public static Bitmap rotateBitmap(Bitmap bitmap, int degree) {
+        Matrix matrix = new Matrix();
+        matrix.postRotate(degree);
+
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+    }
+}
+</code></pre>
+
+<p>Here is <code>CryptoUtils.java</code></p>
+
+<pre><code>/**
+ * @author Babar
+ * @since 29-Jun-15.
+ */
+public class CryptoUtils
+{
+    private static final String MD5_ALGO = "MD5";
+
+
+    public static String encryptToMD5(String text)
+    {
+        try
+        {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance(MD5_ALGO);
+            md.update(text.getBytes());
+
+            byte[] bytes = md.digest();
+
+            String hex = bytesToHexString(bytes);
+
+            return hex;
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            e.printStackTrace();
+
+            return String.valueOf(text.hashCode());
+        }
+    }
+
+    private static String bytesToHexString(byte[] bytes)
+    {
+        StringBuffer sb = new StringBuffer();
+
+        for(int i = 0; i &lt; bytes.length; i++)
+        {
+            String hex = Integer.toHexString(0xFF &amp; bytes[i]);
+
+            if(hex.length() == 1)
+            {
+                sb.append('0');
+            }
+
+            sb.append(hex);
+        }
+
+        return sb.toString();
+    }
+
+    public static String encodeToBase64(String str) {
+        String tmp = "";
+        if(isNotNullOrEmpty(str)) {
+            try {
+                tmp = new String(Base64.encode(str.getBytes(), Base64.DEFAULT)).trim();
+            } catch(Throwable e) {
+                e.printStackTrace();
+            }
+        }
+        return tmp;
+    }
+}
+</code></pre>
+
+<p>Here is <code>DiskCacheTask.java</code></p>
+
+<pre><code>/**
+ * Created by Babar on 12-Aug-15.
+ */
+public class DiskCacheTask extends BaseAsyncTask&lt;Integer, Void, Void&gt;
+{
+    private DiskCache diskCache;
+
+    public static final int INIT = 1;
+
+    public static final int FLUSH = 2;
+
+    public static final int CLOSE = 3;
+
+    public static final int TEAR_DOWN = 4;
+
+    public static final int REMOVE = 5;
+
+    public DiskCacheTask(DiskCache diskCache)
+    {
+        this.diskCache = diskCache;
+    }
+
+    @Override
+    protected Void doInBackground(Integer... params)
+    {
+        switch (params[0])
+        {
+            case INIT:
+
+                try
+                {
+                    diskCache.init();
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+
+                break;
+
+            case FLUSH:
+
+                diskCache.flush();
+
+                break;
+
+            case CLOSE:
+
+                diskCache.close();
+
+                break;
+
+            case TEAR_DOWN:
+
+                diskCache.tearDown();
+
+                break;
+
+            case REMOVE:
+
+                diskCache.remove();
+
+                break;
+        }
+
+        return null;
+    }
+}
+</code></pre>
+
+<p>To initialize the cache simply call <code>new DiskCache().getInstance().requestInit();</code> ideally from your MainActivity's <code>onCreate()</code>. Also note Disk operation should be done in separate thread for example <code>Handler</code> , <code>AsyncTask</code>. So when ever you want to add/get bitmap to/from disk cache do this from a worker thread.</p>

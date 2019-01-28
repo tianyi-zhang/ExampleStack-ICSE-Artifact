@@ -1,0 +1,175 @@
+<p>BladeCoder's comments have been very insightful, thanks.</p>
+
+<p>However I have realized, that all the hassle with saving and restoring <code>mResolvingError</code> is unnecessary, because <a href="https://developers.google.com/android/reference/com/google/android/gms/common/ConnectionResult" rel="nofollow">startResolutionForResult()</a> starts a separate Activity anyway and obstructs my app - so it doesn't really matter if I rotate device or not.</p>
+
+<p>Here is my final code to initiate GCM and fetch Google+ user data -</p>
+
+<p><a href="http://i.stack.imgur.com/3AaKo.png" rel="nofollow"><img src="http://i.stack.imgur.com/3AaKo.png" alt="screenshot 1"></a></p>
+
+<p><a href="http://i.stack.imgur.com/ZZ6IF.png" rel="nofollow"><img src="http://i.stack.imgur.com/ZZ6IF.png" alt="screenshot 2"></a></p>
+
+<p><strong>MainActivity.java:</strong></p>
+
+<pre><code>public static final int REQUEST_GOOGLE_PLAY_SERVICES = 1972;
+public static final int REQUEST_GOOGLE_PLUS_LOGIN = 2015;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    if (savedInstanceState == null)
+        startRegistrationService();
+}
+
+private void startRegistrationService() {
+    GoogleApiAvailability api = GoogleApiAvailability.getInstance();
+    int code = api.isGooglePlayServicesAvailable(this);
+    if (code == ConnectionResult.SUCCESS) {
+        onActivityResult(REQUEST_GOOGLE_PLAY_SERVICES, Activity.RESULT_OK, null);
+    } else if (api.isUserResolvableError(code) &amp;&amp;
+        api.showErrorDialogFragment(this, code, REQUEST_GOOGLE_PLAY_SERVICES)) {
+        // wait for onActivityResult call (see below)
+    } else {
+        String str = GoogleApiAvailability.getInstance().getErrorString(code);
+        Toast.makeText(this, str, Toast.LENGTH_LONG).show();
+    }
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    switch(requestCode) {
+        case REQUEST_GOOGLE_PLAY_SERVICES:
+            if (resultCode == Activity.RESULT_OK) {
+                Intent i = new Intent(this, RegistrationService.class); 
+                startService(i); // OK, init GCM
+            }
+            break;
+
+        case REQUEST_GOOGLE_PLUS_LOGIN:
+            if (resultCode == Activity.RESULT_OK) {
+                GoogleFragment f = (GoogleFragment) getSupportFragmentManager().
+                    findFragmentByTag(GoogleFragment.TAG);
+                if (f != null &amp;&amp; f.isVisible())
+                    f.onActivityResult(requestCode, resultCode, data);
+            }
+            break;
+
+        default:
+            super.onActivityResult(requestCode, resultCode, data);
+    }
+}
+</code></pre>
+
+<p><strong>GoogleFragment.java:</strong></p>
+
+<pre><code>public class GoogleFragment extends Fragment
+        implements View.OnClickListener,
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
+
+    public final static String TAG = "GoogleFragment";
+
+    private GoogleApiClient mGoogleApiClient;
+
+    private ImageButton mLoginButton;
+    private ImageButton mLogoutButton;
+
+    public GoogleFragment() {
+        // required empty public constructor
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                             Bundle savedInstanceState) {
+
+        View v = inflater.inflate(R.layout.fragment_google, container, false);
+
+        mGoogleApiClient = new GoogleApiClient.Builder(getContext())
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .addApi(Plus.API)
+                .addScope(Plus.SCOPE_PLUS_PROFILE)
+                .build();
+
+        mLoginButton = (ImageButton) v.findViewById(R.id.login_button);
+        mLoginButton.setOnClickListener(this);
+
+        mLogoutButton = (ImageButton) v.findViewById(R.id.logout_button);
+        mLogoutButton.setOnClickListener(this);
+
+        return v;
+    }
+
+    private void googleLogin() {
+        mGoogleApiClient.connect();
+    }
+
+    private void googleLogout() {
+        if (mGoogleApiClient.isConnecting() || mGoogleApiClient.isConnected())
+            mGoogleApiClient.disconnect();
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode == Activity.RESULT_OK)
+            mGoogleApiClient.connect();
+    }
+
+    @Override
+    public void onClick(View v) {
+        if (v == mLoginButton)
+            googleLogin();
+        else
+            googleLogout();
+    }
+
+    @Override
+    public void onConnected(Bundle bundle) {
+        Person me = Plus.PeopleApi.getCurrentPerson(mGoogleApiClient);
+        if (me != null) {
+            String id = me.getId();
+            Person.Name name = me.getName();
+            String given = name.getGivenName();
+            String family = name.getFamilyName();
+            boolean female = (me.hasGender() &amp;&amp; me.getGender() == 1);
+
+            String photo = null;
+            if (me.hasImage() &amp;&amp; me.getImage().hasUrl()) {
+                photo = me.getImage().getUrl();
+                photo = photo.replaceFirst("\\bsz=\\d+\\b", "sz=300");
+            }
+
+            String city = "Unknown city";
+            List&lt;Person.PlacesLived&gt; places = me.getPlacesLived();
+            if (places != null) {
+                for (Person.PlacesLived place : places) {
+                    city = place.getValue();
+                    if (place.isPrimary())
+                        break;
+                }
+            }
+
+            Toast.makeText(getContext(), "Given: " + given + ", Family: " + family + ", Female: " + female + ", City: " + city, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+        // ignore? don't know what to do here...
+    }
+
+    @Override
+    public void onConnectionFailed(ConnectionResult connectionResult) {
+        if (connectionResult.hasResolution()) {
+            try {
+                connectionResult.startResolutionForResult(getActivity(), MainActivity.REQUEST_GOOGLE_PLUS_LOGIN);
+            } catch (IntentSender.SendIntentException e) {
+                mGoogleApiClient.connect();
+            }
+        } else {
+            int code = connectionResult.getErrorCode();
+            String str = GoogleApiAvailability.getInstance().getErrorString(code);
+            Toast.MakeText(getContext(), str, Toast.LENGTH_LONG).show();
+        }
+    }
+}
+</code></pre>

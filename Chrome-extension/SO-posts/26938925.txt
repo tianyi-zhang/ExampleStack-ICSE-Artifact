@@ -1,0 +1,255 @@
+<p>So the component scanner is picking up your Controller. </p>
+
+<p><strong>See if this works for you:</strong></p>
+
+<p>My approach uses Jackson to JSon encode an object and POST's the Rest service with Json directly. The controller has a utility designed to retrieve the body containing the Json from the HttpServlettRequest. There are other ways to do that I know. </p>
+
+<p><strong>My Test</strong></p>
+
+
+
+<pre><code>package com.myproject.test;
+
+import static org.junit.Assert.fail;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.log4j.Logger;
+import org.codehaus.jackson.map.ObjectMapper;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.InjectMocks;
+import org.mockito.MockitoAnnotations;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.web.WebAppConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+
+import com.myproject.domain.Element;
+import com.myproject.model.DbBrokerModel;
+import com.myproject.rest.PostJsonRestTest;
+
+// Not sure if you need any of this for your test so just delete it if you don't 
+@Configuration
+@PropertySource(value={
+        "classpath:usermgmt.properties",
+        "classpath:ldap.properties",
+        "classpath:jdbc.properties",
+        "classpath:email.properties"
+})
+@ContextConfiguration(locations = {
+        "file:src/main/webapp/WEB-INF/spring-config.xml",
+        "file:src/main/webapp/WEB-INF/conf/applicationContext-email.xml",
+        "file:src/main/webapp/WEB-INF/conf/applicationContext-jdbc.xml"
+
+})
+@WebAppConfiguration
+@RunWith(SpringJUnit4ClassRunner.class)
+public class PostJsonRestTest {
+
+
+    private static final Logger log = Logger.getLogger(PostJsonRestTest.class);
+
+
+    @Autowired
+    private WebApplicationContext ctx;
+    MockMvc mockMvc;
+
+    @InjectMocks
+    private PostJsonRest jsonRest;
+
+
+    // TODO @Inject or @Autowired anything you may need 
+
+
+    @Before
+    public void setUp() throws Exception {
+        MockitoAnnotations.initMocks(this);
+        this.mockMvc = MockMvcBuilders.webAppContextSetup(this.ctx).build();
+    }
+
+    @After
+    public void tearDown() throws Exception {
+    }
+
+
+    /**
+     * &lt;b&gt;triggerJsonPostTest&lt;/b&gt;&lt;br/&gt;
+     * Explain what you are doing
+     * 
+     */
+    @Test
+    public void triggerJsonPostTest() {
+
+
+        //Set up the model to be converted to Json
+        TestModel requestModel = new TestModel();
+
+
+        // Build the Model object and stuff them with test data
+        List&lt;Element&gt; elements = new ArrayList&lt;Element&gt;();
+        requestModel.setElementId("123");
+        requestModel.setElementType("change");
+        requestModel.setElementsAffected(3);
+        requestModel.setChanges(elements);
+
+
+
+        try {
+            //Convert the Test Model To JSon
+            ObjectMapper objectMapper = new ObjectMapper();
+            byte[] requestJson =  objectMapper.writeValueAsBytes(requestModel);
+
+            //Call your rest contoller 
+            MvcResult result = this.mockMvc.perform(post("/test/receive-json")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(requestJson))
+                    .andDo(print())
+                    .andExpect(status().isOk())             
+                    .andReturn();
+            //TODO Wrtie a bunch of validation for the return OBJECT
+            //TODO: Remember to test for positive and negative results in seperate @Test's 
+
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            fail(e.getMessage());
+        }
+    }
+
+}
+</code></pre>
+
+
+
+<p><strong>My Rest Controller</strong>
+So I am receiving Json in the HttpServlettRequest so you will see a utility method to retrieve the body from the request. You may or may not get any use out of it but its here for the purposes of my example.</p>
+
+
+
+<pre><code>package com.myproject.rest;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import org.apache.log4j.Logger;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.ResponseBody;
+
+/**
+ * &lt;b&gt;PostJsonRest&lt;/b&gt;&lt;br/&gt;
+ * Rest Controller Example
+ * @author dhargis
+ *
+ *
+ */
+@Controller
+public class PostJsonRest {
+
+    private static final Logger log = Logger.getLogger(PostJsonRest.class);
+
+
+    //TODO You may want to @Inject or @Autowire something here 
+
+    /**
+     * &lt;b&gt;receivePostJSon&lt;/b&gt;&lt;br/&gt;
+     * Listens for properly formated JSon formated request of object type TestModel
+     * @param request
+     * @param response
+     * @throws Exception
+     */
+    @RequestMapping(
+            value = "/trigger/receive-json", 
+            method = RequestMethod.POST, 
+            produces = {MediaType.APPLICATION_JSON_VALUE})
+    @ResponseBody
+    public void receivePostJSon(HttpServletRequest request, HttpServletResponse response) throws Exception{
+
+        String body = "";
+        try{
+            //See below utility class 
+            body =  getBody(request);
+
+            //TODO You may want to log something here 
+
+        }
+        catch(IOException e){
+
+            log.warn("Error: Problems parsing incoming JSON request  ", e);
+
+        }
+
+        finally{
+
+
+        }
+
+        // TODO REMOVE Temporary Output to the command line before deployment
+        System.out.println(body);
+
+    }
+
+    /**
+     * &lt;b&gt;getBody&lt;/b&gt;&lt;br/&gt;
+     * This little utility class will give you the body containing the JSON
+     * @param request
+     * @return
+     * @throws IOException
+     */
+
+    private String getBody(HttpServletRequest request) throws IOException {
+        String body = null;
+        StringBuilder stringBuilder = new StringBuilder();
+        BufferedReader bufferedReader = null;
+        try {
+            InputStream inputStream = request.getInputStream();
+            if (inputStream != null) {
+                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                char[] charBuffer = new char[128];
+                int bytesRead = -1;
+                while ((bytesRead = bufferedReader.read(charBuffer)) &gt; 0) {
+                    stringBuilder.append(charBuffer, 0, bytesRead);
+                }
+            } else {
+                stringBuilder.append("");
+            }
+        } catch (IOException ex) {
+            log.error("Error while reading the request body", ex);
+            throw ex;
+        } finally {
+            if (bufferedReader != null) {
+                try {
+                    bufferedReader.close();
+                } catch (IOException ex) {
+                    log.error("Error while closing the reading for request body", ex);
+                    throw ex;
+                }
+            }
+        }
+        body = stringBuilder.toString();
+        return body;
+    }
+
+}
+</code></pre>
+
+<p>Hope that helps good luck.</p>

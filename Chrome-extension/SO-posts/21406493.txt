@@ -1,0 +1,56 @@
+<p>I found out my own answers after a bit of investigation:</p>
+
+<ol>
+<li><p>Yes, calling <code>AccountManager#invalidateAuthToken</code> removes the last saved authentication token (access token in the OAuth2 case) and expects that you are detecting that on the next <code>AccountAuthenticator#getAuthToken</code> call. For example, the following is my code for that method:</p>
+
+<pre><code>@Override
+public Bundle getAuthToken(AccountAuthenticatorResponse response, Account account, String authTokenType, Bundle options) throws NetworkErrorException {
+    // Extract the username and password from the Account Manager, and ask
+    // for an appropriate AuthToken.
+    final AccountManager am = AccountManager.get(mContext);
+
+    String authToken = am.peekAuthToken(account, authTokenType);
+
+    // EXTRA: I am also storing the OAuth2 refresh token in the AccountManager
+    Map&lt;String, String&gt; refreshResult = null;
+    String refreshToken = am.getUserData(account, KEY_REFRESH_TOKEN);
+    if (TextUtils.isEmpty(authToken) &amp;&amp; !TextUtils.isEmpty(refreshToken)) {
+        // lets try to refresh the token
+        // EXTRA: AuthenticationProvider is my class for accessing the authentication server, getting new access and refresh token based on the existing refresh token
+        refreshResult = AuthenticationProvider.
+            refreshAccessToken(am.getUserData(account, KEY_REFRESH_TOKEN));
+    }
+
+    // If we get a result from the refresh - we return it
+    if (!refreshResult.isEmpty()) {
+        authToken = refreshResult.get(AccountManager.KEY_AUTHTOKEN);
+        // EXTRA: new refresh token used only in OAuth2
+        refreshToken = refreshResult.get(KEY_REFRESH_TOKEN);
+
+        final Bundle result = new Bundle();
+        result.putString(AccountManager.KEY_ACCOUNT_NAME, account.name);
+        result.putString(AccountManager.KEY_ACCOUNT_TYPE, account.type);
+
+        // store the new tokens in the system
+        am.setAuthToken(account, authTokenType, authToken);
+        am.setUserData(account, KEY_REFRESH_TOKEN, refreshToken);
+
+        result.putString(AccountManager.KEY_AUTHTOKEN, refreshResult.get(AccountManager.KEY_AUTHTOKEN));
+        result.putString(KEY_REFRESH_TOKEN, refreshResult.get(KEY_REFRESH_TOKEN));
+        return result;
+    }
+
+    // If we get here, then we couldn't access the user's password - so we
+    // need to re-prompt them for their credentials. We do that by creating
+    // an intent to display our AuthenticatorActivity.
+    final Intent intent = new Intent(mContext, LoginActivity.class);
+    intent.putExtra(AccountManager.KEY_ACCOUNT_AUTHENTICATOR_RESPONSE, response);
+    final Bundle bundle = new Bundle();
+    bundle.putParcelable(AccountManager.KEY_INTENT, intent);
+    return bundle;
+}
+</code></pre>
+
+<p>I also received a <a href="http://udinic.wordpress.com/2013/04/24/write-your-own-android-authenticator/#comment-729">confirmation from the author of the blog post</a> mentioned in the question.</p></li>
+<li><p><code>SyncAdapter</code>s cannot help directly, as their true purpose is obtaining data from network asynchronously (for the developer) and transparently (for the user). They just use <code>AbstractAccountAuthenticator</code> and call its methods where appropriate.</p></li>
+</ol>

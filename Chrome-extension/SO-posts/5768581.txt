@@ -1,0 +1,631 @@
+<p>Ok, thanks for all your suggestions, but I was able to get it working like I wanted.... it CAN be done, you CAN add files after closing the file, as long as you save your place!!! :-D</p>
+
+<p>Here's how I was able to get it going working:</p>
+
+<pre><code>        try  {
+            for(int i=0; i &lt; _files.size(); i++) {
+                //beginning of initial setup stuff
+                BufferedInputStream origin = null;
+                FileOutputStream dest = new FileOutputStream(_zipFile,true); 
+                ZipOutputStreamNew out = new ZipOutputStreamNew(new BufferedOutputStream(dest));
+                byte data[] = new byte[BUFFER];
+                if (havePreviousData) {
+                    out.setWritten(tempWritten);
+                    out.setXentries(tempXentries);
+                }
+                //end of initial setup stuff
+
+                //beginning of for loop
+                Log.i("Compress", "Adding: " + _files.get(i));
+                FileInputStream fi = new FileInputStream(_files.get(i)); 
+                origin = new BufferedInputStream(fi, BUFFER);
+                TempString = _files.get(i).substring(_files.get(i).lastIndexOf("/") + 1);
+                ZipEntry entry = new ZipEntry(_paths.get(i) + TempString);
+                out.putNextEntry(entry);
+                int count;
+                while ((count = origin.read(data, 0, BUFFER)) != -1) { 
+                    out.write(data, 0, count); 
+                }
+                origin.close();
+                out.closeEntry();
+                //end of for loop
+
+                //beginning of finishing stuff
+                if (i == (_files.size()-1)) {
+                    //it's the last record so we should finish it off
+                    out.closeAndFinish();
+                } else {
+                    //close the file, but don't write the Central Directory
+                    //first, back up where the zip file was...
+                    tempWritten = out.getWritten();
+                    tempXentries = out.getXentries();
+                    havePreviousData = true;
+                    //now close the file
+                    out.close();
+                }
+                //end of finishing stuff
+            }
+            //zip succeeded
+    } catch(Exception e) {
+        Log.e("ZipCreation", "Error writing zip", e);
+        e.printStackTrace();
+    }
+</code></pre>
+
+<p>Also, keep in mind, this is not the only code I had to do.  I also had to make my own copy of ZipOutputStream so that I could expose the following functions that I created within my ZipOutputStreamNew class....</p>
+
+<pre><code>getWritten()
+getXentries()
+</code></pre>
+
+<p>as well as </p>
+
+<pre><code>setWritten(long mWritten)
+setXentries(Vector&lt;XEntry&gt; mXEntries)
+</code></pre>
+
+<p>For the most part, all this does, is it starts writing like normal, then, instead of closing like normal, it backs up those two variables, and then for the next iteration, it restores just those variables.</p>
+
+<p>Let me know if you have any questions about all this, but I knew it would work, all it has to do is save where it was. :-D</p>
+
+<p>Thanks again for all the help everybody! :-)</p>
+
+<p>At Raj's request, here is the source code for ZipOutputStreamNew:</p>
+
+<pre><code>/**
+ * This class implements an output stream filter for writing files in the
+ * ZIP file format. Includes support for both compressed and uncompressed
+ * entries.
+ *
+ * @author  David Connelly
+ * @version %I%, %G%
+ */
+public class ZipOutputStreamNew extends DeflaterOutputStream implements ZipConstants {
+    public static class XEntry {
+        public final ZipEntry entry;
+        public final long offset;
+        public final int flag;
+        public XEntry(ZipEntry entry, long offset) {
+            this.entry = entry;
+            this.offset = offset;
+            this.flag = (entry.getMethod() == DEFLATED &amp;&amp;
+                 (entry.getSize() == -1 ||
+                  entry.getCompressedSize() == -1 ||
+                  entry.getCrc() == -1))
+            // store size, compressed size, and crc-32 in data descriptor
+            // immediately following the compressed entry data
+            ? 8
+            // store size, compressed size, and crc-32 in LOC header
+            : 0;
+        }
+    }
+
+    private XEntry current;
+    private Vector&lt;XEntry&gt; xentries = new Vector&lt;XEntry&gt;();
+    private HashSet&lt;String&gt; names = new HashSet&lt;String&gt;();
+    private CRC32 crc = new CRC32();
+    private long written = 0;
+    private long locoff = 0;
+    private String comment;
+    private int method = DEFLATED;
+    private boolean finished;
+
+    private boolean closed = false;
+    private boolean closeItPermanently = false;
+
+    private static int version(ZipEntry e) throws ZipException {
+    switch (e.getMethod()) {
+    case DEFLATED: return 20;
+    case STORED:   return 10;
+    default: throw new ZipException("unsupported compression method");
+    }
+    }
+
+    /**
+     * Checks to make sure that this stream has not been closed.
+     */
+    private void ensureOpen() throws IOException {
+    if (closed) {
+        throw new IOException("Stream closed");
+        }
+    }
+    /**
+     * Compression method for uncompressed (STORED) entries.
+     */
+    public static final int STORED = ZipEntry.STORED;
+
+    /**
+     * Compression method for compressed (DEFLATED) entries.
+     */
+    public static final int DEFLATED = ZipEntry.DEFLATED;
+
+    /**
+     * Creates a new ZIP output stream.
+     * @param out the actual output stream
+     */
+    public ZipOutputStreamNew(OutputStream out) {
+    super(out, new Deflater(Deflater.DEFAULT_COMPRESSION, true));
+        usesDefaultDeflater = true;
+    }
+
+    /**
+     * Sets the ZIP file comment.
+     * @param comment the comment string
+     * @exception IllegalArgumentException if the length of the specified
+     *        ZIP file comment is greater than 0xFFFF bytes
+     */
+    public void setComment(String comment) {
+        if (comment != null &amp;&amp; comment.length() &gt; 0xffff/3
+                                           &amp;&amp; getUTF8Length(comment) &gt; 0xffff) {
+        throw new IllegalArgumentException("ZIP file comment too long.");
+    }
+    this.comment = comment;
+    }
+
+    /**
+     * Sets the default compression method for subsequent entries. This
+     * default will be used whenever the compression method is not specified
+     * for an individual ZIP file entry, and is initially set to DEFLATED.
+     * @param method the default compression method
+     * @exception IllegalArgumentException if the specified compression method
+     *        is invalid
+     */
+    public void setMethod(int method) {
+    if (method != DEFLATED &amp;&amp; method != STORED) {
+        throw new IllegalArgumentException("invalid compression method");
+    }
+    this.method = method;
+    }
+
+    /**
+     * Sets the compression level for subsequent entries which are DEFLATED.
+     * The default setting is DEFAULT_COMPRESSION.
+     * @param level the compression level (0-9)
+     * @exception IllegalArgumentException if the compression level is invalid
+     */
+    public void setLevel(int level) {
+    def.setLevel(level);
+    }
+
+    /**
+     * Begins writing a new ZIP file entry and positions the stream to the
+     * start of the entry data. Closes the current entry if still active.
+     * The default compression method will be used if no compression method
+     * was specified for the entry, and the current time will be used if
+     * the entry has no set modification time.
+     * @param e the ZIP entry to be written
+     * @exception ZipException if a ZIP format error has occurred
+     * @exception IOException if an I/O error has occurred
+     */
+    public void putNextEntry(ZipEntry e) throws IOException {
+    ensureOpen();
+    if (current != null) {
+        closeEntry();   // close previous entry
+    }
+    if (e.getTime() == -1) {
+        e.setTime(System.currentTimeMillis());
+    }
+    if (e.getMethod() == -1) {
+        e.setMethod(method);    // use default method
+    }
+    switch (e.getMethod()) {
+    case DEFLATED:
+        break;
+    case STORED:
+        // compressed size, uncompressed size, and crc-32 must all be
+        // set for entries using STORED compression method
+        if (e.getSize() == -1) {
+        e.setSize(e.getCompressedSize());
+        } else if (e.getCompressedSize() == -1) {
+        e.setCompressedSize(e.getSize());
+        } else if (e.getSize() != e.getCompressedSize()) {
+        throw new ZipException(
+            "STORED entry where compressed != uncompressed size");
+        }
+        if (e.getSize() == -1 || e.getCrc() == -1) {
+        throw new ZipException(
+            "STORED entry missing size, compressed size, or crc-32");
+        }
+        break;
+    default:
+        throw new ZipException("unsupported compression method");
+    }
+    if (! names.add(e.getName())) {
+        throw new ZipException("duplicate entry: " + e.getName());
+    }
+    current = new XEntry(e, written);
+    xentries.add(current);
+        writeLOC(current);
+    }
+
+    /**
+     * Closes the current ZIP entry and positions the stream for writing
+     * the next entry.
+     * @exception ZipException if a ZIP format error has occurred
+     * @exception IOException if an I/O error has occurred
+     */
+    public void closeEntry() throws IOException {
+    ensureOpen();
+    if (current != null) {
+        ZipEntry e = current.entry;
+        switch (e.getMethod()) {
+        case DEFLATED:
+        def.finish();
+        while (!def.finished()) {
+            deflate();
+        }
+        if ((current.flag &amp; 8) == 0) {
+            // verify size, compressed size, and crc-32 settings
+            if (e.getSize() != def.getBytesRead()) {
+            throw new ZipException(
+                "invalid entry size (expected " + e.getSize() +
+                " but got " + def.getBytesRead() + " bytes)");
+            }
+            if (e.getCompressedSize() != def.getBytesWritten()) {
+            throw new ZipException(
+                "invalid entry compressed size (expected " +
+                e.getCompressedSize() + " but got " + def.getBytesWritten() + " bytes)");
+            }
+            if (e.getCrc() != crc.getValue()) {
+            throw new ZipException(
+                "invalid entry CRC-32 (expected 0x" +
+                Long.toHexString(e.getCrc()) + " but got 0x" +
+                Long.toHexString(crc.getValue()) + ")");
+            }
+        } else {
+            e.setSize(def.getBytesRead());
+            e.setCompressedSize(def.getBytesWritten());
+            e.setCrc(crc.getValue());
+            writeEXT(e);
+        }
+        def.reset();
+        written += e.getCompressedSize();
+        break;
+        case STORED:
+        // we already know that both e.size and e.csize are the same
+        if (e.getSize() != written - locoff) {
+            throw new ZipException(
+            "invalid entry size (expected " + e.getSize() +
+            " but got " + (written - locoff) + " bytes)");
+        }
+        if (e.getCrc() != crc.getValue()) {
+            throw new ZipException(
+             "invalid entry crc-32 (expected 0x" +
+             Long.toHexString(e.getCrc()) + " but got 0x" +
+             Long.toHexString(crc.getValue()) + ")");
+        }
+        break;
+        default:
+        throw new ZipException("invalid compression method");
+        }
+        crc.reset();
+        current = null;
+    }
+    }
+
+    /**
+     * Writes an array of bytes to the current ZIP entry data. This method
+     * will block until all the bytes are written.
+     * @param b the data to be written
+     * @param off the start offset in the data
+     * @param len the number of bytes that are written
+     * @exception ZipException if a ZIP file error has occurred
+     * @exception IOException if an I/O error has occurred
+     */
+    public synchronized void write(byte[] b, int off, int len)
+    throws IOException
+    {
+    ensureOpen();
+        if (off &lt; 0 || len &lt; 0 || off &gt; b.length - len) {
+        throw new IndexOutOfBoundsException();
+    } else if (len == 0) {
+        return;
+    }
+
+    if (current == null) {
+        throw new ZipException("no current ZIP entry");
+    }
+    ZipEntry entry = current.entry;
+    switch (entry.getMethod()) {
+    case DEFLATED:
+        super.write(b, off, len);
+        break;
+    case STORED:
+        written += len;
+        if (written - locoff &gt; entry.getSize()) {
+        throw new ZipException(
+            "attempt to write past end of STORED entry");
+        }
+        out.write(b, off, len);
+        break;
+    default:
+        throw new ZipException("invalid compression method");
+    }
+    crc.update(b, off, len);
+    }
+
+    /**
+     * Finishes writing the contents of the ZIP output stream without closing
+     * the underlying stream. Use this method when applying multiple filters
+     * in succession to the same output stream.
+     * @exception ZipException if a ZIP file error has occurred
+     * @exception IOException if an I/O exception has occurred
+     */
+    public void finish() throws IOException {
+        ensureOpen();
+        if (finished) {
+            return;
+        }
+        if (current != null) {
+            closeEntry();
+        }
+        if (xentries.size() &lt; 1) {
+            throw new ZipException("ZIP file must have at least one entry");
+        }
+        if (closeItPermanently) {
+            // write central directory
+            long off = written;
+            for (XEntry xentry : xentries)
+                writeCEN(xentry);
+            writeEND(off, written - off);
+            finished = true;
+            //Log.e("ZipOutputStreamNew", "I just ran wrote the Central Directory Jared!");
+        }
+        //Log.e("ZipOutputStreamNew", "I just ran finish() Jared!");
+    }
+
+    /**
+     * Gets the value of the "xentries" variable (for later use)
+     * @return
+     */
+    public Vector&lt;XEntry&gt; getXentries() {
+        return xentries;
+
+        //TODO convert this to primitive data types
+    }
+
+    /**
+     * Gets the value of the "written" variable (for later use)
+     * @return
+     */
+    public long getWritten() {
+        return written;
+    }
+
+
+    /**
+     * Sets the value of the "xentries" variable (for later use)
+     * @return
+     */
+    public void setXentries(Vector&lt;XEntry&gt; mXEntries) {
+        xentries = mXEntries;
+        //TODO convert this to primitive data types
+    }
+
+    /**
+     * Sets the value of the "written" variable (for later use)
+     * @return
+     */
+    public void setWritten(long mWritten) {
+        written = mWritten;
+    }
+
+
+    /**
+     * Closes the ZIP output stream as well as the stream being filtered.
+     * @exception ZipException if a ZIP file error has occurred
+     * @exception IOException if an I/O error has occurred
+     */
+    public void closeAndFinish() throws IOException {
+        if (!closed) {
+            closeItPermanently=true;
+            super.close();
+            closed = true;
+        }
+    }
+
+    /**
+     * Used to close the ZIP output stream as well as the stream being filtered.
+     * instead it does nothing :-P
+     * @exception ZipException if a ZIP file error has occurred
+     * @exception IOException if an I/O error has occurred
+     */
+    public void close() throws IOException {
+        if (!closed) {
+            closeItPermanently=false;
+            super.close();
+            closed = true;
+        }
+    }
+
+    /*
+     * Writes local file (LOC) header for specified entry.
+     */
+    private void writeLOC(XEntry xentry) throws IOException {
+    ZipEntry e = xentry.entry;
+    int flag = xentry.flag;
+    writeInt(LOCSIG);       // LOC header signature
+    writeShort(version(e));     // version needed to extract
+    writeShort(flag);           // general purpose bit flag
+    writeShort(e.getMethod());       // compression method
+    writeInt(e.getTime());           // last modification time
+    if ((flag &amp; 8) == 8) {
+        // store size, uncompressed size, and crc-32 in data descriptor
+        // immediately following compressed entry data
+        writeInt(0);
+        writeInt(0);
+        writeInt(0);
+    } else {
+        writeInt(e.getCrc());        // crc-32
+        writeInt(e.getCompressedSize());      // compressed size
+        writeInt(e.getSize());       // uncompressed size
+    }
+    byte[] nameBytes = getUTF8Bytes(e.getName());
+    writeShort(nameBytes.length);
+    writeShort(e.getExtra() != null ? e.getExtra().length : 0);
+    writeBytes(nameBytes, 0, nameBytes.length);
+    if (e.getExtra() != null) {
+        writeBytes(e.getExtra(), 0, e.getExtra().length);
+    }
+    locoff = written;
+    }
+
+    /*
+     * Writes extra data descriptor (EXT) for specified entry.
+     */
+    private void writeEXT(ZipEntry e) throws IOException {
+    writeInt(EXTSIG);       // EXT header signature
+    writeInt(e.getCrc());       // crc-32
+    writeInt(e.getCompressedSize());        // compressed size
+    writeInt(e.getSize());      // uncompressed size
+    }
+
+    /*
+     * Write central directory (CEN) header for specified entry.
+     * REMIND: add support for file attributes
+     */
+    private void writeCEN(XEntry xentry) throws IOException {
+    ZipEntry e  = xentry.entry;
+    int flag = xentry.flag;
+    int version = version(e);
+    writeInt(CENSIG);       // CEN header signature
+    writeShort(version);        // version made by
+    writeShort(version);        // version needed to extract
+    writeShort(flag);       // general purpose bit flag
+    writeShort(e.getMethod());      // compression method
+    writeInt(e.getTime());      // last modification time
+    writeInt(e.getCrc());       // crc-32
+    writeInt(e.getCompressedSize());        // compressed size
+    writeInt(e.getSize());      // uncompressed size
+    byte[] nameBytes = getUTF8Bytes(e.getName());
+    writeShort(nameBytes.length);
+    writeShort(e.getExtra() != null ? e.getExtra().length : 0);
+    byte[] commentBytes;
+    if (e.getComment() != null) {
+        commentBytes = getUTF8Bytes(e.getComment());
+        writeShort(commentBytes.length);
+    } else {
+        commentBytes = null;
+        writeShort(0);
+    }
+    writeShort(0);          // starting disk number
+    writeShort(0);          // internal file attributes (unused)
+    writeInt(0);            // external file attributes (unused)
+    writeInt(xentry.offset);    // relative offset of local header
+    writeBytes(nameBytes, 0, nameBytes.length);
+    if (e.getExtra() != null) {
+        writeBytes(e.getExtra(), 0, e.getExtra().length);
+    }
+    if (commentBytes != null) {
+        writeBytes(commentBytes, 0, commentBytes.length);
+    }
+    }
+
+    /*
+     * Writes end of central directory (END) header.
+     */
+    private void writeEND(long off, long len) throws IOException {
+    int count = xentries.size();
+    writeInt(ENDSIG);       // END record signature
+    writeShort(0);          // number of this disk
+    writeShort(0);          // central directory start disk
+    writeShort(count);      // number of directory entries on disk
+    writeShort(count);      // total number of directory entries
+    writeInt(len);          // length of central directory
+    writeInt(off);          // offset of central directory
+    if (comment != null) {      // zip file comment
+        byte[] b = getUTF8Bytes(comment);
+        writeShort(b.length);
+        writeBytes(b, 0, b.length);
+    } else {
+        writeShort(0);
+    }
+    }
+
+    /*
+     * Writes a 16-bit short to the output stream in little-endian byte order.
+     */
+    private void writeShort(int v) throws IOException {
+    OutputStream out = this.out;
+    out.write((v &gt;&gt;&gt; 0) &amp; 0xff);
+    out.write((v &gt;&gt;&gt; 8) &amp; 0xff);
+    written += 2;
+    }
+
+    /*
+     * Writes a 32-bit int to the output stream in little-endian byte order.
+     */
+    private void writeInt(long v) throws IOException {
+    OutputStream out = this.out;
+    out.write((int)((v &gt;&gt;&gt;  0) &amp; 0xff));
+    out.write((int)((v &gt;&gt;&gt;  8) &amp; 0xff));
+    out.write((int)((v &gt;&gt;&gt; 16) &amp; 0xff));
+    out.write((int)((v &gt;&gt;&gt; 24) &amp; 0xff));
+    written += 4;
+    }
+
+    /*
+     * Writes an array of bytes to the output stream.
+     */
+    private void writeBytes(byte[] b, int off, int len) throws IOException {
+    super.out.write(b, off, len);
+    written += len;
+    }
+
+    /*
+     * Returns the length of String's UTF8 encoding.
+     */
+    static int getUTF8Length(String s) {
+        int count = 0;
+        for (int i = 0; i &lt; s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch &lt;= 0x7f) {
+                count++;
+            } else if (ch &lt;= 0x7ff) {
+                count += 2;
+            } else {
+                count += 3;
+            }
+        }
+        return count;
+    }
+
+    /*
+     * Returns an array of bytes representing the UTF8 encoding
+     * of the specified String.
+     */
+    private static byte[] getUTF8Bytes(String s) {
+    char[] c = s.toCharArray();
+    int len = c.length;
+    // Count the number of encoded bytes...
+    int count = 0;
+    for (int i = 0; i &lt; len; i++) {
+        int ch = c[i];
+        if (ch &lt;= 0x7f) {
+        count++;
+        } else if (ch &lt;= 0x7ff) {
+        count += 2;
+        } else {
+        count += 3;
+        }
+    }
+    // Now return the encoded bytes...
+    byte[] b = new byte[count];
+    int off = 0;
+    for (int i = 0; i &lt; len; i++) {
+        int ch = c[i];
+        if (ch &lt;= 0x7f) {
+        b[off++] = (byte)ch;
+        } else if (ch &lt;= 0x7ff) {
+        b[off++] = (byte)((ch &gt;&gt; 6) | 0xc0);
+        b[off++] = (byte)((ch &amp; 0x3f) | 0x80);
+        } else {
+        b[off++] = (byte)((ch &gt;&gt; 12) | 0xe0);
+        b[off++] = (byte)(((ch &gt;&gt; 6) &amp; 0x3f) | 0x80);
+        b[off++] = (byte)((ch &amp; 0x3f) | 0x80);
+        }
+    }
+    return b;
+    }
+}
+</code></pre>

@@ -1,0 +1,488 @@
+<p>I started with Chase's AutoResizeTextView class, and made a minor change so it would fit both vertically and horizontally.</p>
+
+<p>I also discovered a bug which causes a Null Pointer Exception in the Layout Editor (in Eclipse) under some rather obscure conditions.</p>
+
+<p><strong>Change 1:  Fit the text both vertically and horizontally</strong></p>
+
+<p>Chase's original version reduces the text size until it fits vertically, but allows the text to be wider than the target.  In my case, I needed the text to fit a specified width.</p>
+
+<p>This change makes it resize until the text fits both vertically and horizontally.</p>
+
+<p>In <code>resizeText(</code><em>int</em><code>,</code><em>int</em><code>)</code> change from:</p>
+
+<pre><code>// Get the required text height
+int textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+
+// Until we either fit within our text view or we had reached our min text size, incrementally try smaller sizes
+while(textHeight &gt; height &amp;&amp; targetTextSize &gt; mMinTextSize) {
+    targetTextSize = Math.max(targetTextSize - 2, mMinTextSize);
+    textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+    }
+</code></pre>
+
+<p>to:</p>
+
+<pre><code>// Get the required text height
+int textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+int textWidth  = getTextWidth(text, textPaint, width, targetTextSize);
+
+// Until we either fit within our text view or we had reached our min text size, incrementally try smaller sizes
+while(((textHeight &gt;= height) || (textWidth &gt;= width) ) &amp;&amp; targetTextSize &gt; mMinTextSize) {
+    targetTextSize = Math.max(targetTextSize - 2, mMinTextSize);
+    textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+    textWidth  = getTextWidth(text, textPaint, width, targetTextSize);
+    }
+</code></pre>
+
+<p>Then, at the end of the file, append the <code>getTextWidth()</code> routine; it's just a slightly modified <code>getTextHeight()</code>.  It probably would be more efficient to combine them to one routine which returns both height and width.</p>
+
+<pre><code>// Set the text size of the text paint object and use a static layout to render text off screen before measuring
+private int getTextWidth(CharSequence source, TextPaint paint, int width, float textSize) {
+    // Update the text paint object
+    paint.setTextSize(textSize);
+    // Draw using a static layout
+    StaticLayout layout = new StaticLayout(source, paint, width, Alignment.ALIGN_NORMAL, mSpacingMult, mSpacingAdd, true);
+    layout.draw(sTextResizeCanvas);
+    return layout.getWidth();
+}  
+</code></pre>
+
+<p><br>
+<br>
+<br>
+<strong>Change 2:  Fix a EmptyStackException in the Eclipse Android Layout Editor</strong></p>
+
+<p>Under rather obscure and very precise conditions, the Layout Editor will fail to display the graphical display of the layout; it will throw an "EmptyStackException: null" exception in com.android.ide.eclipse.adt.</p>
+
+<p>The conditions required are:<br>
+- create an AutoResizeTextView widget<br>
+- create a style for that widget<br>
+- specify the text item in the style; not in the widget definition  </p>
+
+<p>as in:</p>
+
+<p><em><strong>res/layout/main.xml:</em></strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical" &gt;
+
+    &lt;com.ajw.DemoCrashInADT.AutoResizeTextView
+        android:id="@+id/resizingText"
+        style="@style/myTextStyle" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><em><strong>res/values/myStyles.xml:</em></strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+
+    &lt;style name="myTextStyle" parent="@android:style/Widget.TextView"&gt;
+        &lt;item name="android:layout_height"&gt;wrap_content&lt;/item&gt;
+        &lt;item name="android:layout_width"&gt;fill_parent&lt;/item&gt;
+        &lt;item name="android:text"&gt;some message&lt;/item&gt;
+    &lt;/style&gt;
+
+&lt;/resources&gt;
+</code></pre>
+
+<p>With these files, selecting the <em>Graphical Layout</em> tab when editing <code>main.xml</code> will display:  </p>
+
+<blockquote>
+  <blockquote>
+    <p>error!<br>
+    EmptyStackException: null<br>
+    Exception details are logged in Window > Show View > Error Log  </p>
+  </blockquote>
+</blockquote>
+
+<p>instead of the graphical view of the layout.</p>
+
+<p>To keep an already too-long story shorter, I tracked this down to the following lines (again in <code>resizeText</code>):</p>
+
+<pre><code>// If there is a max text size set, use the lesser of that and the default text size
+float targetTextSize = mMaxTextSize &gt; 0 ? Math.min(mTextSize, mMaxTextSize) : mTextSize;
+</code></pre>
+
+<p>The problem is that under the specific conditions, mTextSize is never initialized; it has the value 0.</p>
+
+<p>With the above, <code>targetTextSize</code> is set to zero (as a result of Math.min).</p>
+
+<p>That zero is passed to <code>getTextHeight()</code> (and <code>getTextWidth()</code>) as the <code>textSize</code> argument.  When it gets to<br>
+<code>layout.draw(sTextResizeCanvas);</code><br>
+we get the exception.</p>
+
+<p>It's more efficient to test if <code>(mTextSize == 0)</code> at the beginning of <code>resizeText()</code> rather than testing in <code>getTextHeight()</code> and <code>getTextWidth()</code>; testing earlier saves all the intervening work.</p>
+
+<p>With these updates, the file (as in my crash-demo test app) is now:</p>
+
+<pre><code>//
+// from:  http://stackoverflow.com/questions/5033012/auto-scale-textview-text-to-fit-within-bounds
+//
+//
+
+package com.ajw.DemoCrashInADT;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.text.Layout.Alignment;
+import android.text.StaticLayout;
+import android.text.TextPaint;
+import android.util.AttributeSet;
+import android.util.TypedValue;
+import android.widget.TextView;
+
+/**
+ * Text view that auto adjusts text size to fit within the view. If the text
+ * size equals the minimum text size and still does not fit, append with an
+ * ellipsis.
+ *
+ * 2011-10-29 changes by Alan Jay Weiner
+ *              * change to fit both vertically and horizontally  
+ *              * test mTextSize for 0 in resizeText() to fix exception in Layout Editor
+ *
+ * @author Chase Colburn
+ * @since Apr 4, 2011
+ */
+public class AutoResizeTextView extends TextView {
+
+    // Minimum text size for this text view
+    public static final float MIN_TEXT_SIZE = 20;
+
+    // Interface for resize notifications
+    public interface OnTextResizeListener {
+        public void onTextResize(TextView textView, float oldSize, float newSize);
+    }
+
+    // Off screen canvas for text size rendering
+    private static final Canvas sTextResizeCanvas = new Canvas();
+
+    // Our ellipse string
+    private static final String mEllipsis = "...";
+
+    // Registered resize listener
+    private OnTextResizeListener mTextResizeListener;
+
+    // Flag for text and/or size changes to force a resize
+    private boolean mNeedsResize = false;
+
+    // Text size that is set from code. This acts as a starting point for
+    // resizing
+    private float mTextSize;
+
+    // Temporary upper bounds on the starting text size
+    private float mMaxTextSize = 0;
+
+    // Lower bounds for text size
+    private float mMinTextSize = MIN_TEXT_SIZE;
+
+    // Text view line spacing multiplier
+    private float mSpacingMult = 1.0f;
+
+    // Text view additional line spacing
+    private float mSpacingAdd = 0.0f;
+
+    // Add ellipsis to text that overflows at the smallest text size
+    private boolean mAddEllipsis = true;
+
+
+    // Default constructor override
+    public AutoResizeTextView(Context context) {
+        this(context, null);
+    }
+
+
+    // Default constructor when inflating from XML file
+    public AutoResizeTextView(Context context, AttributeSet attrs) {
+        this(context, attrs, 0);
+    }
+
+
+    // Default constructor override
+    public AutoResizeTextView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        mTextSize = getTextSize();
+    }
+
+
+    /**
+     * When text changes, set the force resize flag to true and reset the text
+     * size.
+     */
+    @Override
+    protected void onTextChanged(final CharSequence text, final int start,
+            final int before, final int after) {
+        mNeedsResize = true;
+        // Since this view may be reused, it is good to reset the text size
+        resetTextSize();
+    }
+
+
+    /**
+     * If the text view size changed, set the force resize flag to true
+     */
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        if (w != oldw || h != oldh) {
+            mNeedsResize = true;
+        }
+    }
+
+
+    /**
+     * Register listener to receive resize notifications
+     *
+     * @param listener
+     */
+    public void setOnResizeListener(OnTextResizeListener listener) {
+        mTextResizeListener = listener;
+    }
+
+
+    /**
+     * Override the set text size to update our internal reference values
+     */
+    @Override
+    public void setTextSize(float size) {
+        super.setTextSize(size);
+        mTextSize = getTextSize();
+    }
+
+
+    /**
+     * Override the set text size to update our internal reference values
+     */
+    @Override
+    public void setTextSize(int unit, float size) {
+        super.setTextSize(unit, size);
+        mTextSize = getTextSize();
+    }
+
+
+    /**
+     * Override the set line spacing to update our internal reference values
+     */
+    @Override
+    public void setLineSpacing(float add, float mult) {
+        super.setLineSpacing(add, mult);
+        mSpacingMult = mult;
+        mSpacingAdd = add;
+    }
+
+
+    /**
+     * Set the upper text size limit and invalidate the view
+     *
+     * @param maxTextSize
+     */
+    public void setMaxTextSize(float maxTextSize) {
+        mMaxTextSize = maxTextSize;
+        requestLayout();
+        invalidate();
+    }
+
+
+    /**
+     * Return upper text size limit
+     *
+     * @return
+     */
+    public float getMaxTextSize() {
+        return mMaxTextSize;
+    }
+
+
+    /**
+     * Set the lower text size limit and invalidate the view
+     *
+     * @param minTextSize
+     */
+    public void setMinTextSize(float minTextSize) {
+        mMinTextSize = minTextSize;
+        requestLayout();
+        invalidate();
+    }
+
+
+    /**
+     * Return lower text size limit
+     *
+     * @return
+     */
+    public float getMinTextSize() {
+        return mMinTextSize;
+    }
+
+
+    /**
+     * Set flag to add ellipsis to text that overflows at the smallest text size
+     *
+     * @param addEllipsis
+     */
+    public void setAddEllipsis(boolean addEllipsis) {
+        mAddEllipsis = addEllipsis;
+    }
+
+
+    /**
+     * Return flag to add ellipsis to text that overflows at the smallest text
+     * size
+     *
+     * @return
+     */
+    public boolean getAddEllipsis() {
+        return mAddEllipsis;
+    }
+
+
+    /**
+     * Reset the text to the original size
+     */
+    public void resetTextSize() {
+        super.setTextSize(TypedValue.COMPLEX_UNIT_PX, mTextSize);
+        mMaxTextSize = mTextSize;
+    }
+
+
+    /**
+     * Resize text after measuring
+     */
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        if (changed || mNeedsResize) {
+            int widthLimit = (right - left) - getCompoundPaddingLeft()
+                    - getCompoundPaddingRight();
+            int heightLimit = (bottom - top) - getCompoundPaddingBottom()
+                    - getCompoundPaddingTop();
+            resizeText(widthLimit, heightLimit);
+        }
+        super.onLayout(changed, left, top, right, bottom);
+    }
+
+
+    /**
+     * Resize the text size with default width and height
+     */
+    public void resizeText() {
+        int heightLimit = getHeight() - getPaddingBottom() - getPaddingTop();
+        int widthLimit = getWidth() - getPaddingLeft() - getPaddingRight();
+        resizeText(widthLimit, heightLimit);
+    }
+
+
+    /**
+     * Resize the text size with specified width and height
+     *
+     * @param width
+     * @param height
+     */
+    public void resizeText(int width, int height) {
+        CharSequence text = getText();
+        // Do not resize if the view does not have dimensions or there is no
+        // text
+        // or if mTextSize has not been initialized
+        if (text == null || text.length() == 0 || height &lt;= 0 || width &lt;= 0
+                || mTextSize == 0) {
+            return;
+        }
+
+        // Get the text view's paint object
+        TextPaint textPaint = getPaint();
+
+        // Store the current text size
+        float oldTextSize = textPaint.getTextSize();
+
+        // If there is a max text size set, use the lesser of that and the
+        // default text size
+        float targetTextSize = mMaxTextSize &gt; 0 ? Math.min(mTextSize, mMaxTextSize)
+                : mTextSize;
+
+        // Get the required text height
+        int textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+        int textWidth = getTextWidth(text, textPaint, width, targetTextSize);
+
+        // Until we either fit within our text view or we had reached our min
+        // text size, incrementally try smaller sizes
+        while (((textHeight &gt; height) || (textWidth &gt; width))
+                &amp;&amp; targetTextSize &gt; mMinTextSize) {
+            targetTextSize = Math.max(targetTextSize - 2, mMinTextSize);
+            textHeight = getTextHeight(text, textPaint, width, targetTextSize);
+            textWidth = getTextWidth(text, textPaint, width, targetTextSize);
+        }
+
+        // If we had reached our minimum text size and still don't fit, append
+        // an ellipsis
+        if (mAddEllipsis &amp;&amp; targetTextSize == mMinTextSize &amp;&amp; textHeight &gt; height) {
+            // Draw using a static layout
+            StaticLayout layout = new StaticLayout(text, textPaint, width,
+                    Alignment.ALIGN_NORMAL, mSpacingMult, mSpacingAdd, false);
+            layout.draw(sTextResizeCanvas);
+            int lastLine = layout.getLineForVertical(height) - 1;
+            int start = layout.getLineStart(lastLine);
+            int end = layout.getLineEnd(lastLine);
+            float lineWidth = layout.getLineWidth(lastLine);
+            float ellipseWidth = textPaint.measureText(mEllipsis);
+
+            // Trim characters off until we have enough room to draw the
+            // ellipsis
+            while (width &lt; lineWidth + ellipseWidth) {
+                lineWidth = textPaint.measureText(text.subSequence(start, --end + 1)
+                        .toString());
+            }
+            setText(text.subSequence(0, end) + mEllipsis);
+
+        }
+
+        // Some devices try to auto adjust line spacing, so force default line
+        // spacing
+        // and invalidate the layout as a side effect
+        textPaint.setTextSize(targetTextSize);
+        setLineSpacing(mSpacingAdd, mSpacingMult);
+
+        // Notify the listener if registered
+        if (mTextResizeListener != null) {
+            mTextResizeListener.onTextResize(this, oldTextSize, targetTextSize);
+        }
+
+        // Reset force resize flag
+        mNeedsResize = false;
+    }
+
+
+    // Set the text size of the text paint object and use a static layout to
+    // render text off screen before measuring
+    private int getTextHeight(CharSequence source, TextPaint paint, int width,
+            float textSize) {
+        // Update the text paint object
+        paint.setTextSize(textSize);
+        // Draw using a static layout
+        StaticLayout layout = new StaticLayout(source, paint, width,
+                Alignment.ALIGN_NORMAL, mSpacingMult, mSpacingAdd, true);
+        layout.draw(sTextResizeCanvas);
+        return layout.getHeight();
+    }
+
+
+    // Set the text size of the text paint object and use a static layout to
+    // render text off screen before measuring
+    private int getTextWidth(CharSequence source, TextPaint paint, int width,
+            float textSize) {
+        // Update the text paint object
+        paint.setTextSize(textSize);
+        // Draw using a static layout
+        StaticLayout layout = new StaticLayout(source, paint, width,
+                Alignment.ALIGN_NORMAL, mSpacingMult, mSpacingAdd, true);
+        layout.draw(sTextResizeCanvas);
+        return layout.getWidth();
+    }
+
+}
+</code></pre>
+
+<p><br>
+<br>
+A big thank you to Chase for posting the initial code.  I enjoyed reading through it to see how it worked, and I'm pleased to be able to add to it.</p>

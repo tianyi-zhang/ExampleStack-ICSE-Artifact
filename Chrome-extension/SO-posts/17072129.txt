@@ -1,0 +1,203 @@
+<p>I was having the same problem, after some days in this puzzle, my Java class end up on this code:</p>
+
+<p>So, The problem was happening because the camera display had a size (hight x width) 576x720, and my display was 1184x720. So, the camera preview (my surface view class) stretched to fill in the parent. </p>
+
+<p>So, the approach that worked is to make this view bigger than my screen, and that just display the area of my screen. So, I had to use this weird frame combination (a relative layout inside a linearlayout), so that the size of the relative will be as big as I want - the surface view will fill in it -, and the linear will take just the part that I wanna display.</p>
+
+<pre><code>package com.example.frame.camera;
+
+import android.content.Context;
+import android.hardware.Camera;
+import android.util.Log;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.ViewGroup.LayoutParams;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
+import android.widget.Toast;
+
+import com.example.frame.MainActivity;
+
+public class NativeCamera extends SurfaceView implements SurfaceHolder.Callback {
+
+    static private NativeCamera instance;
+
+    private LinearLayout        frame               = null;
+    private RelativeLayout      innerFrame          = null;
+
+    private Camera              camera;
+    private final SurfaceHolder previewHolder;
+    private static final String TAG                 = "NativeCamera.java";
+
+    private boolean             inPreview           = false;
+    private boolean             cameraConfigured    = false;
+    private boolean             frontCamera         = false;
+
+    private Camera.Size         size;
+
+    static public NativeCamera getInstance() {
+        if (NativeCamera.instance == null) {
+            if (MainActivity.debug) {
+                Log.d(TAG, "Creating Camera Singleton");
+            }
+            NativeCamera.instance = new NativeCamera(MainActivity.instance);
+        }
+        return NativeCamera.instance;
+    }
+
+    public void onResume() {
+        if (MainActivity.debug) {
+            Log.d(TAG, "onResume");
+        }
+        camera = Camera.open();
+        if (size != null) {
+            initPreview(size.width, size.height);
+        }
+        startPreview();
+    }
+
+    public void onPause() {
+        if (MainActivity.debug) {
+            Log.d(TAG, "onPause");
+        }
+        if (inPreview) {
+            camera.stopPreview();
+        }
+        camera.release();
+        camera = null;
+        inPreview = false;
+    }
+
+    public void onDestroy() {
+        if (MainActivity.debug) {
+            Log.d(TAG, "onDestroy");
+        }
+        NativeCamera.instance = null;
+    }
+
+    public void onSwitch() {
+        frontCamera = !frontCamera;
+        if (inPreview) {
+            camera.stopPreview();
+        }
+        camera.release();
+
+        int cam = frontCamera ? 1 : 0;
+
+        camera = Camera.open(cam);
+        if (size != null) {
+            initPreview(size.width, size.height);
+        }
+        startPreview();
+    }
+
+    private NativeCamera(Context context) {
+        super(context);
+        // TODO Auto-generated constructor stub
+
+        // Install a SurfaceHolder.Callback so we get notified when the
+        // underlying surface is created and destroyed.
+        previewHolder = getHolder();
+        previewHolder.addCallback(this);
+        // deprecated setting, but required on Android versions prior to 3.0
+        // previewHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+        innerFrame = new RelativeLayout(MainActivity.instance);
+        innerFrame.addView(this);
+        frame = new LinearLayout(MainActivity.instance);
+        frame.addView(innerFrame);
+    }
+
+    public LinearLayout getFrame() {
+        return frame;
+    }
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int width,
+            int height) {
+        // TODO Auto-generated method stub
+        if (MainActivity.debug) {
+            Log.d(TAG, "surfaceChanged");
+        }
+        initPreview(width, height);
+        startPreview();
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+        // TODO Auto-generated method stub
+        // no-op -- wait until surfaceChanged()
+
+    }
+
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // TODO Auto-generated method stub
+        // no-op
+    }
+
+    private Camera.Size getBestPreviewSize(int width, int height,
+            Camera.Parameters parameters) {
+        Camera.Size result = null;
+
+        for (Camera.Size size : parameters.getSupportedPreviewSizes()) {
+            if (size.width &lt;= width &amp;&amp; size.height &lt;= height) {
+                if (result == null) {
+                    result = size;
+                } else {
+                    int resultArea = result.width * result.height;
+                    int newArea = size.width * size.height;
+
+                    if (newArea &gt; resultArea) {
+                        result = size;
+                    }
+                }
+            }
+        }
+
+        this.size = result;
+        return (result);
+    }
+
+    private void initPreview(int width, int height) {
+        if (camera != null &amp;&amp; previewHolder.getSurface() != null) {
+
+            if (!cameraConfigured) {
+                Camera.Parameters parameters = camera.getParameters();
+                Camera.Size size = getBestPreviewSize(width, height, parameters);
+
+                if (size != null) {
+                    parameters.setPreviewSize(size.width, size.height);
+                    camera.setParameters(parameters);
+                    cameraConfigured = true;
+                    // Setting up correctly the view
+                    double ratio = size.height / (double) size.width;
+                    LayoutParams params = innerFrame.getLayoutParams();
+                    params.height = MainActivity.size.y;
+                    params.width = (int) (MainActivity.size.y * ratio);
+                    innerFrame.setLayoutParams(params);
+                    int deslocationX = (int) (params.width / 2.0 - MainActivity.size.x / 2.0);
+                    innerFrame.animate().translationX(-deslocationX);
+                }
+            }
+
+            try {
+                camera.setPreviewDisplay(previewHolder);
+                camera.setDisplayOrientation(90);
+
+            } catch (Throwable t) {
+                Log.e(TAG, "Exception in setPreviewDisplay()", t);
+                Toast.makeText(MainActivity.instance, t.getMessage(), Toast.LENGTH_LONG).show();
+            }
+
+        }
+    }
+
+    private void startPreview() {
+        if (MainActivity.debug) {
+            Log.d(TAG, "startPreview");
+        }
+        if (cameraConfigured &amp;&amp; camera != null) {
+            camera.startPreview();
+            inPreview = true;
+        }
+    }
+
+}
+</code></pre>

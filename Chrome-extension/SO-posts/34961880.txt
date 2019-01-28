@@ -1,0 +1,115 @@
+<p>Below's the better version, which chunks up large files into chunks of 8K.
+A file X is written to /tmp/X. Note that the /home/bela/fast.xml config has to be changed, of course:</p>
+
+<pre><code>public class SimpleFileTransfer extends ReceiverAdapter {
+protected String   filename;
+protected JChannel channel;
+protected Map&lt;String,OutputStream&gt; files=new ConcurrentHashMap&lt;&gt;();
+protected static final short ID=3500;
+
+private void start(String name, String filename) throws Exception {
+    ClassConfigurator.add((short)3500, FileHeader.class);
+    this.filename=filename;
+    channel=new JChannel("/home/bela/fast.xml").name(name);
+    channel.setReceiver(this);
+    channel.connect("FileCluster");
+    eventLoop();
+}
+
+private void eventLoop() throws Exception {
+    while(true) {
+        Util.keyPress(String.format("&lt;enter to send %s&gt;\n", filename));
+        sendFile();
+    }
+}
+
+protected void sendFile() throws Exception {
+    FileInputStream in=new FileInputStream(filename);
+    try {
+        for(;;) {
+            byte[] buf=new byte[8096];
+            int bytes=in.read(buf);
+            if(bytes == -1)
+                break;
+            sendMessage(buf, 0, bytes, false);
+        }
+    }
+    catch(Exception e) {
+        e.printStackTrace();
+    }
+    finally {
+        sendMessage(null, 0, 0, true);
+    }
+}
+
+
+public void receive(Message msg) {
+    byte[] buf=msg.getRawBuffer();
+    FileHeader hdr=(FileHeader)msg.getHeader(ID);
+    if(hdr == null)
+        return;
+    OutputStream out=files.get(hdr.filename);
+    try {
+        if(out == null) {
+            File tmp=new File(hdr.filename);
+            String fname=tmp.getName();
+            fname="/tmp/" + fname;
+            out=new FileOutputStream(fname);
+            files.put(hdr.filename, out);
+        }
+        if(hdr.eof) {
+            Util.close(files.remove(hdr.filename));
+        }
+        else {
+            out.write(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+        }
+    }
+    catch(Throwable t) {
+        System.err.println(t);
+    }
+}
+
+
+protected void sendMessage(byte[] buf, int offset, int length, boolean eof) throws Exception {
+    Message msg=new Message(null, buf, offset, length).putHeader(ID, new FileHeader(filename, eof));
+    // set this if the sender doesn't want to receive the file
+    // msg.setTransientFlag(Message.TransientFlag.DONT_LOOPBACK);
+    channel.send(msg);
+}
+
+protected static class FileHeader extends Header {
+    protected String  filename;
+    protected boolean eof;
+
+    public FileHeader() {} // for de-serialization
+
+    public FileHeader(String filename, boolean eof) {
+        this.filename=filename;
+        this.eof=eof;
+    }
+
+    public int size() {
+        return Util.size(filename) + Global.BYTE_SIZE;
+    }
+
+    public void writeTo(DataOutput out) throws Exception {
+        Util.writeObject(filename, out);
+        out.writeBoolean(eof);
+    }
+
+    public void readFrom(DataInput in) throws Exception {
+        filename=(String)Util.readObject(in);
+        eof=in.readBoolean();
+    }
+}
+
+public static void main(String[] args) throws Exception {
+    if(args.length != 2) {
+        System.out.printf("%s &lt;name&gt; &lt;filename&gt;\n", SimpleFileTransfer.class.getSimpleName());
+        return;
+    }
+    new SimpleFileTransfer().start(args[0], args[1]); // name and file
+}
+</code></pre>
+
+<p>}</p>

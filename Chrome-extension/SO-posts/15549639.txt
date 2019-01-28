@@ -1,0 +1,466 @@
+<h2>Edit as of 30.12.2015 - The Ultimate Guide to image downloading</h2>
+
+<hr>
+
+<p><em>last major update: Mar 31 2016</em></p>
+
+<hr>
+
+<p><strong><em>TL;DR a.k.a. stop talking, just give me the code!!</em></strong></p>
+
+<blockquote>
+  <p>Skip to the bottom of this post, copy the <code>BasicImageDownloader</code> (javadoc version <a href="https://github.com/vad-zuev/ImageDownloader/blob/master/app/src/main/java/com/so/example/tools/BasicImageDownloader.java">here</a>)
+  into your project, implement the <code>OnImageLoaderListener</code> interface
+  and you're done.</p>
+  
+  <p><strong>Note</strong>: though the <code>BasicImageDownloader</code> handles possible errors
+  and will prevent your app from crashing in case anything goes wrong, it will not perform
+  any post-processing (e.g. downsizing) on the downloaded <code>Bitmaps</code>. </p>
+</blockquote>
+
+<hr>
+
+<p>Since this post has received quite a lot of attention, I have decided to completely rework it to prevent the folks from using deprecated technologies, bad programming practices or just doing silly things - like looking for "hacks" to run network on the main thread or accept all SSL certs. </p>
+
+<p>I've created a demo project named "Image Downloader" that demonstrates how to download (and save) an image using my own downloader implementation, the Android's built-in <code>DownloadManager</code> as well as some popular open-source libraries. You can view the complete source code or download the project <a href="https://github.com/vad-zuev/ImageDownloader/">on GitHub</a>.</p>
+
+<blockquote>
+  <p><strong>Note</strong>: I have not adjusted the permission management for SDK 23+ (Marshmallow) yet, thus the project is targeting SDK 22 (Lollipop).</p>
+</blockquote>
+
+<p>In my <strong><em>conclusion</em></strong> at the end of this post I will share <em>my humble opinion</em> about the proper use-case for each particular way of image downloading I've mentioned.</p>
+
+<p>Let's start with an own implementation (you can find the code at the end of the post). First of all, this is a <strong>Basic</strong>ImageDownloader and that's it. All it does is connecting to the given url, reading the data and trying to decode it as a <code>Bitmap</code>, triggering the <code>OnImageLoaderListener</code> interface callbacks when appropriate.
+The advantage of this approach - it is simple and you have a clear overview of what's going on. A good way to go if all you need is downloading/displaying and saving some images, whilst you don't care about maintaining a memory/disk cache. </p>
+
+<blockquote>
+  <p>Note: in case of large images, you might need to <a href="http://developer.android.com/training/displaying-bitmaps/load-bitmap.html">scale them
+  down</a>.</p>
+</blockquote>
+
+<p>--</p>
+
+<p>Android <a href="http://developer.android.com/reference/android/app/DownloadManager.html">DownloadManager</a> is a way to let the system handle the download for you. It's actually capable of downloading any kind of files, not just images. You may let your download happen silently and invisible to the user, or you can enable the user to see the download in the notification area. You can also register a <code>BroadcastReceiver</code> to get notified after you download is complete. The setup is pretty much straightforward, refer to the linked project for sample code.</p>
+
+<p>Using the <code>DownloadManager</code> is generally not a good idea if you also want to display the image, since you'd need to read and decode the saved file instead of just setting the downloaded <code>Bitmap</code> into an <code>ImageView</code>. The <code>DownloadManager</code> also does not provide any API for you app to track the download progress. </p>
+
+<p>--</p>
+
+<p>Now the introduction of the great stuff - the libraries. They can do much more than just downloading and displaying images, including: creating and managing the memory/disk cache, resizing images, transforming them and more.</p>
+
+<p>I will start with <a href="http://developer.android.com/training/volley/index.html">Volley</a>, a powerful library created by Google and covered by the official documentation. While being a general-purpose networking library not specializing on images, Volley features quite a powerful API for managing images.</p>
+
+<p>You will need to implement a <a href="https://en.wikipedia.org/wiki/Singleton_pattern">Singleton</a> class for managing Volley requests and you are good to go. </p>
+
+<p>You might want to replace your <code>ImageView</code> with Volley's <code>NetworkImageView</code>, so the download basically becomes a one-liner: </p>
+
+<pre><code>((NetworkImageView) findViewById(R.id.myNIV)).setImageUrl(url, MySingleton.getInstance(this).getImageLoader());
+</code></pre>
+
+<p>If you need more control, this is what it looks like to create an <code>ImageRequest</code> with Volley:</p>
+
+<pre><code>     ImageRequest imgRequest = new ImageRequest(url, new Response.Listener&lt;Bitmap&gt;() {
+             @Override
+             public void onResponse(Bitmap response) {
+                    //do stuff
+                }
+            }, 0, 0, ImageView.ScaleType.CENTER_CROP, Bitmap.Config.ARGB_8888, 
+             new Response.ErrorListener() {
+             @Override
+             public void onErrorResponse(VolleyError error) {
+                   //do stuff
+                }
+            });
+</code></pre>
+
+<p>It is worth mentioning that Volley features an excellent error handling mechanism by providing the <code>VolleyError</code> class that helps you to determine the exact cause of an error. If your app does a lot of networking and managing images isn't its main purpose, then Volley it a perfect fit for you.</p>
+
+<p>--</p>
+
+<p>Square's <a href="http://square.github.io/picasso/">Picasso</a> is a well-known library which will do all of the image loading stuff for you. Just displaying an image using Picasso is as simple as:</p>
+
+<pre><code> Picasso.with(myContext)
+       .load(url)
+       .into(myImageView); 
+</code></pre>
+
+<p>By default, Picasso manages the disk/memory cache so you don't need to worry about that. For more control you can implement the <code>Target</code> interface and use it to load your image into - this will provide callbacks similar to the Volley example. Check the demo project for examples.</p>
+
+<p>Picasso also lets you apply transformations to the downloaded image and there are even <a href="https://github.com/wasabeef/picasso-transformations">other libraries</a> around that extend those API. Also works very well in a <code>RecyclerView</code>/<code>ListView</code>/<code>GridView</code>.</p>
+
+<p>--</p>
+
+<p><a href="https://github.com/nostra13/Android-Universal-Image-Loader">Universal Image Loader</a> is an another very popular library serving the purpose of image management. It uses its own <code>ImageLoader</code> that (once initialized) has a global instance which can be used to download images in a single line of code:</p>
+
+<pre><code>  ImageLoader.getInstance().displayImage(url, myImageView);
+</code></pre>
+
+<p>If you want to track the download progress or access the downloaded <code>Bitmap</code>:</p>
+
+<pre><code> ImageLoader.getInstance().displayImage(url, myImageView, opts, 
+ new ImageLoadingListener() {
+     @Override
+     public void onLoadingStarted(String imageUri, View view) {
+                     //do stuff
+                }
+
+      @Override
+      public void onLoadingFailed(String imageUri, View view, FailReason failReason) {
+                   //do stuff
+                }
+
+      @Override
+      public void onLoadingComplete(String imageUri, View view, Bitmap loadedImage) {
+                   //do stuff
+                }
+
+      @Override
+      public void onLoadingCancelled(String imageUri, View view) {
+                   //do stuff
+                }
+            }, new ImageLoadingProgressListener() {
+      @Override
+      public void onProgressUpdate(String imageUri, View view, int current, int total) {
+                   //do stuff
+                }
+            });
+</code></pre>
+
+<p>The <code>opts</code> argument in this example is a <code>DisplayImageOptions</code> object. Refer to the demo project to learn more.</p>
+
+<p>Similar to Volley, UIL provides the <code>FailReason</code> class that enables you to check what went wrong on download failure. By default, UIL maintains a memory/disk cache if you don't explicitly tell it not to do so.</p>
+
+<p><strong>Note</strong>: the author has mentioned that he is no longer maintaining the project as of Nov 27th, 2015. But since there are many contributors, we can hope that the Universal Image Loader will live on.</p>
+
+<p>--</p>
+
+<p>Facebook's <a href="http://frescolib.org/">Fresco</a> is the newest and (IMO) the most advanced library that takes image management to a new level: from keeping <code>Bitmaps</code> off the java heap (prior to Lollipop) to supporting <a href="http://frescolib.org/docs/animations.html">animated formats</a> and <a href="http://frescolib.org/docs/progressive-jpegs.html">progressive JPEG streaming</a>. </p>
+
+<p>To learn more about ideas and techniques behind Fresco, refer to <a href="https://code.facebook.com/posts/366199913563917/introducing-fresco-a-new-image-library-for-android/">this post</a>.</p>
+
+<p>The basic usage is quite simple. Note that you'll need to call  <code>Fresco.initialize(Context);</code> only once, preferable in the <code>Application</code> class. Initializing Fresco more than once may lead to unpredictable behavior and OOM errors.</p>
+
+<p>Fresco uses <code>Drawee</code>s to display images, you can think of them as of <code>ImageView</code>s:</p>
+
+<pre><code>    &lt;com.facebook.drawee.view.SimpleDraweeView
+    android:id="@+id/drawee"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    fresco:fadeDuration="500"
+    fresco:actualImageScaleType="centerCrop"
+    fresco:placeholderImage="@drawable/placeholder_grey"
+    fresco:failureImage="@drawable/error_orange"
+    fresco:placeholderImageScaleType="fitCenter"
+    fresco:failureImageScaleType="centerInside"
+    fresco:retryImageScaleType="centerCrop"
+    fresco:progressBarImageScaleType="centerInside"
+    fresco:progressBarAutoRotateInterval="1000"
+    fresco:roundAsCircle="false" /&gt;
+</code></pre>
+
+<p>As you can see, a lot of stuff (including transformation options) gets already defined in XML, so all you need to do to display an image is a one-liner:</p>
+
+<pre><code> mDrawee.setImageURI(Uri.parse(url));
+</code></pre>
+
+<p>Fresco provides an extended customization API, which, under circumstances, can be quite complex and requires the user to read the docs carefully (yes, sometimes <em>you need to</em> RTFM).</p>
+
+<p>I have included examples for progressive JPEG's and animated images into the sample project.</p>
+
+<hr>
+
+<h3>Conclusion - "I have learned about the great stuff, what should I use now?"</h3>
+
+<blockquote>
+  <p><em>Note that the following text reflects my personal opinion and should
+  not be taken as a postulate.</em></p>
+</blockquote>
+
+<ul>
+<li>If you only need to download/save/display some images, don't plan to use them in a <code>Recycler-/Grid-/ListView</code> and don't need a whole bunch of images to be display-ready, the <strong>BasicImageDownloader</strong> should fit your needs.</li>
+<li>If your app saves images (or other files) as a result of a user or an automated action and you don't need the images to be displayed often, use the Android <strong>DownloadManager</strong>.</li>
+<li>In case your app does a lot of networking, transmits/receives <code>JSON</code> data, works with images, but those are not the main purpose of the app, go with <strong>Volley</strong>.</li>
+<li>Your app is image/media-focused, you'd like to apply some transformations to images and don't want to bother with complex API: use <strong>Picasso</strong> (Note: does not provide any API to track the intermediate download status) or <strong>Universal Image Loader</strong></li>
+<li>If your app is all about images, you need advanced features like displaying animated formats and you are ready to read the docs, go with <strong>Fresco</strong>.</li>
+</ul>
+
+<p>In case you missed that, the <a href="https://github.com/vad-zuev/ImageDownloader">Github link</a> for the demo project.</p>
+
+<hr>
+
+<p>And here's the <code>BasicImageDownloader.java</code></p>
+
+<pre><code>import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.os.AsyncTask;
+import android.support.annotation.NonNull;
+import android.util.Log;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.HashSet;
+import java.util.Set;
+
+public class BasicImageDownloader {
+
+    private OnImageLoaderListener mImageLoaderListener;
+    private Set&lt;String&gt; mUrlsInProgress = new HashSet&lt;&gt;();
+    private final String TAG = this.getClass().getSimpleName();
+
+    public BasicImageDownloader(@NonNull OnImageLoaderListener listener) {
+        this.mImageLoaderListener = listener;
+    }
+
+    public interface OnImageLoaderListener {
+        void onError(ImageError error);      
+        void onProgressChange(int percent);
+        void onComplete(Bitmap result);
+    }
+
+
+    public void download(@NonNull final String imageUrl, final boolean displayProgress) {
+        if (mUrlsInProgress.contains(imageUrl)) {
+            Log.w(TAG, "a download for this url is already running, " +
+                    "no further download will be started");
+            return;
+        }
+
+        new AsyncTask&lt;Void, Integer, Bitmap&gt;() {
+
+            private ImageError error;
+
+            @Override
+            protected void onPreExecute() {
+                mUrlsInProgress.add(imageUrl);
+                Log.d(TAG, "starting download");
+            }
+
+            @Override
+            protected void onCancelled() {
+                mUrlsInProgress.remove(imageUrl);
+                mImageLoaderListener.onError(error);
+            }
+
+            @Override
+            protected void onProgressUpdate(Integer... values) {
+                mImageLoaderListener.onProgressChange(values[0]);
+            }
+
+        @Override
+        protected Bitmap doInBackground(Void... params) {
+            Bitmap bitmap = null;
+            HttpURLConnection connection = null;
+            InputStream is = null;
+            ByteArrayOutputStream out = null;
+            try {
+                connection = (HttpURLConnection) new URL(imageUrl).openConnection();
+                if (displayProgress) {
+                    connection.connect();
+                    final int length = connection.getContentLength();
+                    if (length &lt;= 0) {
+                        error = new ImageError("Invalid content length. The URL is probably not pointing to a file")
+                                .setErrorCode(ImageError.ERROR_INVALID_FILE);
+                        this.cancel(true);
+                    }
+                    is = new BufferedInputStream(connection.getInputStream(), 8192);
+                    out = new ByteArrayOutputStream();
+                    byte bytes[] = new byte[8192];
+                    int count;
+                    long read = 0;
+                    while ((count = is.read(bytes)) != -1) {
+                        read += count;
+                        out.write(bytes, 0, count);
+                        publishProgress((int) ((read * 100) / length));
+                    }
+                    bitmap = BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size());
+                } else {
+                    is = connection.getInputStream();
+                    bitmap = BitmapFactory.decodeStream(is);
+                }
+            } catch (Throwable e) {
+                if (!this.isCancelled()) {
+                    error = new ImageError(e).setErrorCode(ImageError.ERROR_GENERAL_EXCEPTION);
+                    this.cancel(true);
+                }
+            } finally {
+                try {
+                    if (connection != null)
+                        connection.disconnect();
+                    if (out != null) {
+                        out.flush();
+                        out.close();
+                    }
+                    if (is != null)
+                        is.close();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            return bitmap;
+        }
+
+            @Override
+            protected void onPostExecute(Bitmap result) {
+                if (result == null) {
+                    Log.e(TAG, "factory returned a null result");
+                    mImageLoaderListener.onError(new ImageError("downloaded file could not be decoded as bitmap")
+                            .setErrorCode(ImageError.ERROR_DECODE_FAILED));
+                } else {
+                    Log.d(TAG, "download complete, " + result.getByteCount() +
+                            " bytes transferred");
+                    mImageLoaderListener.onComplete(result);
+                }
+                mUrlsInProgress.remove(imageUrl);
+                System.gc();
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+    }
+
+    public interface OnBitmapSaveListener {
+        void onBitmapSaved();
+        void onBitmapSaveError(ImageError error);
+    }
+
+
+    public static void writeToDisk(@NonNull final File imageFile, @NonNull final Bitmap image,
+                               @NonNull final OnBitmapSaveListener listener,
+                               @NonNull final Bitmap.CompressFormat format, boolean shouldOverwrite) {
+
+    if (imageFile.isDirectory()) {
+        listener.onBitmapSaveError(new ImageError("the specified path points to a directory, " +
+                "should be a file").setErrorCode(ImageError.ERROR_IS_DIRECTORY));
+        return;
+    }
+
+    if (imageFile.exists()) {
+        if (!shouldOverwrite) {
+            listener.onBitmapSaveError(new ImageError("file already exists, " +
+                    "write operation cancelled").setErrorCode(ImageError.ERROR_FILE_EXISTS));
+            return;
+        } else if (!imageFile.delete()) {
+            listener.onBitmapSaveError(new ImageError("could not delete existing file, " +
+                    "most likely the write permission was denied")
+                    .setErrorCode(ImageError.ERROR_PERMISSION_DENIED));
+            return;
+        }
+    }
+
+    File parent = imageFile.getParentFile();
+    if (!parent.exists() &amp;&amp; !parent.mkdirs()) {
+        listener.onBitmapSaveError(new ImageError("could not create parent directory")
+                .setErrorCode(ImageError.ERROR_PERMISSION_DENIED));
+        return;
+    }
+
+    try {
+        if (!imageFile.createNewFile()) {
+            listener.onBitmapSaveError(new ImageError("could not create file")
+                    .setErrorCode(ImageError.ERROR_PERMISSION_DENIED));
+            return;
+        }
+    } catch (IOException e) {
+        listener.onBitmapSaveError(new ImageError(e).setErrorCode(ImageError.ERROR_GENERAL_EXCEPTION));
+        return;
+    }
+
+    new AsyncTask&lt;Void, Void, Void&gt;() {
+
+        private ImageError error;
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            FileOutputStream fos = null;
+            try {
+                fos = new FileOutputStream(imageFile);
+                image.compress(format, 100, fos);
+            } catch (IOException e) {
+                error = new ImageError(e).setErrorCode(ImageError.ERROR_GENERAL_EXCEPTION);
+                this.cancel(true);
+            } finally {
+                if (fos != null) {
+                    try {
+                        fos.flush();
+                        fos.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+            return null;
+        }
+
+        @Override
+        protected void onCancelled() {
+            listener.onBitmapSaveError(error);
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            listener.onBitmapSaved();
+        }
+    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+  }
+
+public static Bitmap readFromDisk(@NonNull File imageFile) {
+    if (!imageFile.exists() || imageFile.isDirectory()) return null;
+    return BitmapFactory.decodeFile(imageFile.getAbsolutePath());
+}
+
+public interface OnImageReadListener {
+    void onImageRead(Bitmap bitmap);
+    void onReadFailed();
+}
+
+public static void readFromDiskAsync(@NonNull File imageFile, @NonNull final OnImageReadListener listener) {
+    new AsyncTask&lt;String, Void, Bitmap&gt;() {
+        @Override
+        protected Bitmap doInBackground(String... params) {
+            return BitmapFactory.decodeFile(params[0]);
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap bitmap) {
+            if (bitmap != null)
+                listener.onImageRead(bitmap);
+            else
+                listener.onReadFailed();
+        }
+    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, imageFile.getAbsolutePath());
+}
+
+    public static final class ImageError extends Throwable {
+
+        private int errorCode;
+        public static final int ERROR_GENERAL_EXCEPTION = -1;
+        public static final int ERROR_INVALID_FILE = 0;
+        public static final int ERROR_DECODE_FAILED = 1;
+        public static final int ERROR_FILE_EXISTS = 2;
+        public static final int ERROR_PERMISSION_DENIED = 3;
+        public static final int ERROR_IS_DIRECTORY = 4;
+
+
+        public ImageError(@NonNull String message) {
+            super(message);
+        }
+
+        public ImageError(@NonNull Throwable error) {
+            super(error.getMessage(), error.getCause());
+            this.setStackTrace(error.getStackTrace());
+        }
+
+        public ImageError setErrorCode(int code) {
+            this.errorCode = code;
+            return this;
+        }
+
+        public int getErrorCode() {
+            return errorCode;
+        }
+      }
+   }
+</code></pre>

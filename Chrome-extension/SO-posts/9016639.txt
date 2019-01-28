@@ -1,0 +1,251 @@
+<p>Since I have not received any response on my question, I will answer my own question. I decided to go with another approach than used in the code sample of my question. The basic outline of my new approach is:</p>
+
+<ul>
+<li><p>I switched my base test class to ActivityInstrumentationTestCase2</p></li>
+<li><p>I created a <code>MockHttpClient</code> class, which I inject into my code, and this <code>MockHttpClient</code> returns a successful <code>HttpResponse</code> with a response entity containing my JSON fixture data. The <code>MockHttpClient</code> class implements the <code>HttpClient</code> interface and returns <code>null</code> for all methods but the <code>execute()</code> methods that should return a <code>HttpResponse</code> object.</p></li>
+<li><p>Because the <code>ListFragment</code> I am testing registers a <code>BroadcastReceiver</code> to determine that the data retrieval service is finished, I also register a <code>BroadcastReceiver</code> in my test. I block my test with a <code>CountDownLatch</code> until the broadcast is received.</p></li>
+<li><p>When the broadcast is received, I use <code>Thread.sleep(500)</code> to let my activity update the <code>ListView</code>. After that I run my assertions against the <code>ListView</code>.</p></li>
+<li><p>I annotated my test with <code>FlakyTest(tolerance=5)</code>, which executes the test up to 5 times when assertions fail.</p></li>
+</ul>
+
+<p>I am not sure if this is a good approach, so please feel free to leave some comments. But for now it works. To conclude my answer, the new code for my test:</p>
+
+<p><strong>TEST CLASS</strong></p>
+
+<pre><code>public class TopscorersActivityTest extends ActivityInstrumentationTestCase2&lt;TopscorersActivity&gt; {
+
+    public static final String JSON = "[" 
+        +   "{\"position\": 1, \"name\": \"Bas Dost\", \"club\": \"sc Heerenveen\", \"goals\": \"16\" },"
+        +   "{\"position\": 2, \"name\": \"Dries Mertens\", \"club\": \"PSV\", \"goals\": \"13\"},"
+        +   "{\"position\": 3, \"name\": \"Luuk de Jong\", \"club\": \"FC Twente\", \"goals\": \"12\"}"
+        + "]";
+
+    private TopscorersActivity mActivity;
+    private ListView mListView;
+
+    public TopscorersActivityTest() {
+        super("com.example.package", TopscorersActivity.class);
+    }
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        ConnectivityUtils.setHttpClient(MockHttpClient.createInstance(JSON));
+        mActivity = getActivity();
+        mListView = (ListView) getActivity().findViewById(android.R.id.list);
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        super.tearDown();
+        ConnectivityUtils.setHttpClient(null);
+    }
+
+    @MediumTest
+    public void testPreconditions() {
+        assertNotNull(mActivity);
+        assertNotNull(mListView);
+        assertEquals(0, mListView.getFirstVisiblePosition());
+    }
+
+    @FlakyTest(tolerance=5)
+    @LargeTest
+    public void testListItemsPopulatedCorrectly() throws InterruptedException {
+        waitForBroadcast(mActivity, TopscorersService.BROADCAST_ACTION, Intent.CATEGORY_DEFAULT);
+
+        assertEquals(3, mListView.getCount());
+
+        // First list item
+        View view = mListView.getChildAt(0);
+        assertNotNull(view);
+
+        TextView positionTextView = (TextView) view.findViewById(R.id.topscorerPositionTextView);
+        TextView nameTextView = (TextView) view.findViewById(R.id.topscorerNameTextView);
+        TextView goalsTextView = (TextView) view.findViewById(R.id.topscorerGoalsTextView);
+
+        assertEquals("1", positionTextView.getText());
+        assertEquals("16", goalsTextView.getText());
+        assertEquals(
+            Html.fromHtml("Bas Dost&lt;br /&gt;&lt;i&gt;sc Heerenveen&lt;/i&gt;").toString(), 
+            nameTextView.getText().toString()
+        );
+
+        // Second list item
+        view = mListView.getChildAt(1);
+        assertNotNull(view);
+
+        positionTextView = (TextView) view.findViewById(R.id.topscorerPositionTextView);
+        nameTextView = (TextView) view.findViewById(R.id.topscorerNameTextView);
+        goalsTextView = (TextView) view.findViewById(R.id.topscorerGoalsTextView);
+
+        assertEquals("2", positionTextView.getText());
+        assertEquals("13", goalsTextView.getText());
+        assertEquals(
+                Html.fromHtml("Dries Mertens&lt;br /&gt;&lt;i&gt;PSV&lt;/i&gt;").toString(), 
+                nameTextView.getText().toString()
+        );
+
+        // Third list item
+        view = mListView.getChildAt(2);
+        assertNotNull(view);
+
+        positionTextView = (TextView) view.findViewById(R.id.topscorerPositionTextView);
+        nameTextView = (TextView) view.findViewById(R.id.topscorerNameTextView);
+        goalsTextView = (TextView) view.findViewById(R.id.topscorerGoalsTextView);
+
+        assertEquals("3", positionTextView.getText());
+        assertEquals("12", goalsTextView.getText());
+        assertEquals(
+                Html.fromHtml("Luuk de Jong&lt;br /&gt;&lt;i&gt;FC Twente&lt;/i&gt;").toString(), 
+                nameTextView.getText().toString()
+        );
+    }
+
+    private void waitForBroadcast(Context context, String action, String category) throws InterruptedException {
+        final CountDownLatch signal = new CountDownLatch(1);
+
+        IntentFilter intentFilter = new IntentFilter(action);
+        intentFilter.addCategory(category);
+        BroadcastReceiver broadcastReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                signal.countDown();
+            }
+        };
+
+        context.registerReceiver(broadcastReceiver, intentFilter);
+        signal.await(1500, TimeUnit.MILLISECONDS);
+        context.unregisterReceiver(broadcastReceiver);
+        Thread.sleep(500);
+    }
+}
+</code></pre>
+
+<p><strong>MOCK HTTP CLIENT CLASS</strong></p>
+
+<pre><code>public class MockHttpClient implements HttpClient {
+    private HttpResponse mHttpResponse;
+
+    /**
+     * A MockHttpClient with an HTTP 1.1 200 OK response
+     * 
+     * @param response
+     * @return
+     * @throws UnsupportedEncodingException
+     */
+    public static HttpClient createInstance(String response) 
+            throws UnsupportedEncodingException {
+
+        return createInstance(200, "OK", response);
+    }
+
+    /**
+     * A MockHttpClient with an HTTP 1.1 response
+     * 
+     * @param statusCode
+     * @param reasonPhrase
+     * @param response
+     * @return
+     * @throws UnsupportedEncodingException
+     */
+    public static HttpClient createInstance(int statusCode, String reasonPhrase, String response) 
+        throws UnsupportedEncodingException {
+
+        return createInstance(HttpVersion.HTTP_1_1, statusCode, reasonPhrase, response);
+    }
+
+    /**
+     * 
+     * @param version
+     * @param statusCode
+     * @param reasonPhrase
+     * @param response
+     * @return
+     * @throws UnsupportedEncodingException
+     */
+    public static HttpClient createInstance(ProtocolVersion version, int statusCode, String reasonPhrase, String response)
+            throws UnsupportedEncodingException {
+
+        StatusLine statusLine = new BasicStatusLine(version, statusCode, reasonPhrase);
+        HttpResponse httpResponse = new BasicHttpResponse(statusLine);
+        HttpEntity httpEntity = new StringEntity(response);
+        httpResponse.setEntity(httpEntity);
+        return new MockHttpClient(httpResponse);
+    }
+
+    /**
+     * Constructor.
+     * 
+     * @param httpResponse
+     */
+    private MockHttpClient(HttpResponse httpResponse) {
+        mHttpResponse = httpResponse;
+    }
+
+    /**
+     * 
+     * @param request
+     * @return
+     */
+    public HttpResponse execute(HttpUriRequest request) {
+        return mHttpResponse;
+    }
+
+    @Override
+    public HttpResponse execute(HttpUriRequest request, HttpContext context)
+            throws IOException, ClientProtocolException {
+        return mHttpResponse;
+    }
+
+    @Override
+    public HttpResponse execute(HttpHost target, HttpRequest request)
+            throws IOException, ClientProtocolException {
+        return mHttpResponse;
+    }
+
+    @Override
+    public &lt;T&gt; T execute(HttpUriRequest arg0,
+            ResponseHandler&lt;? extends T&gt; arg1) throws IOException,
+            ClientProtocolException {
+        return null;
+    }
+
+    @Override
+    public HttpResponse execute(HttpHost target, HttpRequest request,
+            HttpContext context) throws IOException,
+            ClientProtocolException {
+        return mHttpResponse;
+    }
+
+    @Override
+    public &lt;T&gt; T execute(HttpUriRequest arg0,
+            ResponseHandler&lt;? extends T&gt; arg1, HttpContext arg2)
+            throws IOException, ClientProtocolException {
+        return null;
+    }
+
+    @Override
+    public &lt;T&gt; T execute(HttpHost arg0, HttpRequest arg1,
+            ResponseHandler&lt;? extends T&gt; arg2) throws IOException,
+            ClientProtocolException {
+        return null;
+    }
+
+    @Override
+    public &lt;T&gt; T execute(HttpHost arg0, HttpRequest arg1,
+            ResponseHandler&lt;? extends T&gt; arg2, HttpContext arg3)
+            throws IOException, ClientProtocolException {
+        return null;
+    }
+
+    @Override
+    public ClientConnectionManager getConnectionManager() {
+        return null;
+    }
+
+    @Override
+    public HttpParams getParams() {
+        return null;
+    }
+}
+</code></pre>

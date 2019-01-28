@@ -1,0 +1,162 @@
+<p>I've found a quick Solution for transfering the whole database from phone to Smartwatch.</p>
+
+<p>First i create a helper class which converts my database content into a json-string, that can be send to smartwatch by using the <a href="https://developer.android.com/training/wearables/data-layer/accessing.html">Wearable.DataApi</a>:</p>
+
+<p><strong>DatabaseToJSON.java:</strong></p>
+
+<pre><code>public class DatabaseToJSON {
+DatabaseHandler dbhandler;
+
+public DatabaseToJSON(Context context) {
+    dbhandler = new DatabaseHandler(context);
+}
+
+public JSONObject getJSON() throws JSONException{
+    Item[] item = null;
+    JSONObject pl = new JSONObject();
+    item = dbhandler.getItems();
+    dbhandler.close();
+    JSONArray jsonArray = new JSONArray();  
+    for(int i=0;i&lt;item.length;i++){
+        JSONObject val = new JSONObject();
+        try {
+            val.put("id", item[i].getID());
+            val.put("name", item[i].getName());
+            ...
+            jsonArray.put(val);
+        } catch (JSONException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        pl.put(String.valueOf(j), jsonArray);
+    }
+
+     if(jsonArray.length()&lt;1){
+       pl.put(String.valueOf(j),new JSONArray());
+     }
+
+    }
+
+    JSONObject result = new JSONObject();
+    result.put("data",pl);
+    return result;      
+} }
+</code></pre>
+
+<p><strong>DemoActivity.java (Phone):</strong></p>
+
+<pre><code>public class DemoActivity extends Activity implements  GoogleApiClient.ConnectionCallbacks,  GoogleApiClient.OnConnectionFailedListener {
+
+/** Android Wear **/
+GoogleApiClient googleClient;
+
+@Override
+public void onStart(){
+    super.onStart();
+    googleClient.connect();
+}
+
+
+@Override
+public void onStop(){
+    if (null != googleClient &amp;&amp; googleClient.isConnected()) {
+        googleClient.disconnect();
+    }
+    super.onStop();
+}
+
+ @Override
+ protected void onCreate(Bundle savedInstanceState) {  
+     super.onCreate(savedInstanceState);  
+     googleClient = new GoogleApiClient.Builder(this)
+             .addApi(Wearable.API)
+             .addConnectionCallbacks(this)
+             .addOnConnectionFailedListener(this)
+             .build();
+
+     ...
+}
+
+@Override
+public void onConnected(Bundle bundle) {
+
+    DatabaseToJSON dbJson = new DatabaseToJSON(DemoActivity.this);
+    try {
+        JSONObject json = dbJson.getJSON();
+        new SendToDataLayerThread("/path", json.toString()).start();
+    } catch (JSONException e) {
+        e.printStackTrace();
+    }
+}
+
+class SendToDataLayerThread extends Thread {
+    String path;
+    String message;
+
+    SendToDataLayerThread(String p, String msg) {
+        path = p;
+        message = msg;
+    }
+
+    public void run() {
+        NodeApi.GetConnectedNodesResult nodes = Wearable.NodeApi.getConnectedNodes(googleClient).await();
+        for (Node node : nodes.getNodes()) {
+            MessageApi.SendMessageResult result = Wearable.MessageApi.sendMessage(googleClient, node.getId(), path, message.getBytes()).await();
+            if (result.getStatus().isSuccess()) {
+                Log.v("myTag", "Message: {" + message + "} sent to: " + node.getDisplayName());
+            }
+            else {
+                Log.v("myTag", "ERROR: failed to send Message");
+            }
+        }
+    }
+}
+
+@Override
+public void onConnectionSuspended(int i) {
+
+}
+
+@Override
+public void onConnectionFailed(ConnectionResult connectionResult) {
+
+}
+
+}
+</code></pre>
+
+<p><strong>DataLayerListenerService.java (wear)</strong></p>
+
+<pre><code>public class DataLayerListenerService extends WearableListenerService {
+
+@Override
+public void onMessageReceived(MessageEvent messageEvent) {
+
+if (messageEvent.getPath().equals("/path")) {
+    final String message = new String(messageEvent.getData());
+
+
+    // do what you want with the json-string
+    SharedPreferences pref = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+    SharedPreferences.Editor edit = pref.edit();
+    edit.putString("demo_json",message).apply();
+
+}
+else {
+    super.onMessageReceived(messageEvent);
+}
+}
+</code></pre>
+
+<p><strong>Add to AndroidManifest.xml (wear)</strong></p>
+
+<pre class="lang-xml prettyprint-override"><code> &lt;service android:name=".DataLayerListenerService" &gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="com.google.android.gms.wearable.BIND_LISTENER" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/service&gt;
+</code></pre>
+
+<p>After receiving the json-string on your wear you can save them within a database on your wear or do something else with it...</p>
+
+<p>I think thats the simplest way to transfer such data between handheld and wear device.</p>

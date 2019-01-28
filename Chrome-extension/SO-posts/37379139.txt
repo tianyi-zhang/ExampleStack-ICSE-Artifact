@@ -1,0 +1,187 @@
+<p>I've found that all existing solutions (libraries) I've reviewed suffered from one or several of the below issues:</p>
+
+<ul>
+<li>They don't tell you in the Javadoc exactly what they replace.</li>
+<li>They escape too much ... which makes the HTML much harder to read.</li>
+<li>They do not document <em>when</em> the returned value is safe to use (safe to use for an HTML entity?, for an HTML attributute?, etc)</li>
+<li>They are not optimized for speed.</li>
+<li>They do not have a feature for avoiding double escaping (do not escape what is already escaped)</li>
+<li>They replace single quote with <code>&amp;apos;</code>  (wrong!)</li>
+</ul>
+
+<p>On top of this I also had the problem of not being able to bring in an external library, at least not without a certain amount of red tape.</p>
+
+<p>So, I rolled my own. Gilty.</p>
+
+<p>Here we go:</p>
+
+<pre><code>/**
+ * HTML string utilities
+ */
+public class SafeHtml {
+
+    /**
+     * Escapes a string for use in an HTML entity or HTML attribute.
+     * 
+     * &lt;p&gt;
+     * The returned value is always suitable for an HTML &lt;i&gt;entity&lt;/i&gt; but only
+     * suitable for an HTML &lt;i&gt;attribute&lt;/i&gt; if the attribute value is inside
+     * double quotes. In other words the method is not safe for use with HTML
+     * attributes unless you put the value in double quotes like this:
+     * &lt;pre&gt;
+     *    &amp;lt;div title="value-from-this-method" &amp;gt; ....
+     * &lt;/pre&gt;
+     * Putting attribute values in double quotes is always a good idea anyway.
+     * 
+     * &lt;p&gt;The following characters will be escaped:
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code &amp;} (ampersand) -- replaced with {@code &amp;amp;}&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;} (less than) -- replaced with {@code &amp;lt;}&lt;/li&gt;
+     *   &lt;li&gt;{@code &gt;} (greater than) -- replaced with {@code &amp;gt;}&lt;/li&gt;
+     *   &lt;li&gt;{@code "} (double quote) -- replaced with {@code &amp;quot;}&lt;/li&gt;
+     *   &lt;li&gt;{@code '} (single quote) -- replaced with {@code &amp;#39;}&lt;/li&gt;
+     *   &lt;li&gt;{@code /} (forward slash) -- replaced with {@code &amp;#47;}&lt;/li&gt;
+     * &lt;/ul&gt;
+     * It is not necessary to escape more than this as long as the HTML page
+     * &lt;a href="https://en.wikipedia.org/wiki/Character_encodings_in_HTML"&gt;uses
+     * a Unicode encoding&lt;/a&gt;. (Most web pages uses UTF-8 which is also the HTML5
+     * recommendation.). Escaping more than this makes the HTML much less readable.
+     * 
+     * @param s the string to make HTML safe
+     * @param avoidDoubleEscape avoid double escaping, which means for example not 
+     *     escaping {@code &amp;lt;} one more time. Any sequence {@code &amp;....;} as explained in
+     *     {@link #isHtmlCharEntityRef(java.lang.String, int) isHtmlCharEntityRef()} will not be escaped.
+     * 
+     * @return a HTML safe string 
+     */
+    public static String htmlEscape(String s, boolean avoidDoubleEscape) {
+        if (s == null || s.length() == 0) {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder(s.length()+16);
+        for (int i = 0; i &lt; s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '&amp;':
+                    // Avoid double escaping if already escaped
+                    if (avoidDoubleEscape &amp;&amp; (isHtmlCharEntityRef(s, i))) {
+                        sb.append('&amp;');
+                    } else {
+                        sb.append("&amp;amp;");
+                    }
+                    break;
+                case '&lt;':
+                    sb.append("&amp;lt;");
+                    break;
+                case '&gt;':
+                    sb.append("&amp;gt;");
+                    break;
+                case '"':
+                    sb.append("&amp;quot;"); 
+                    break;
+                case '\'':
+                    sb.append("&amp;#39;"); 
+                    break;
+                case '/':
+                    sb.append("&amp;#47;"); 
+                    break;
+                default:
+                    sb.append(c);
+            }
+        }
+        return sb.toString();
+  }
+
+  /**
+   * Checks if the value at {@code index} is a HTML entity reference. This
+   * means any of :
+   * &lt;ul&gt;
+   *   &lt;li&gt;{@code &amp;amp;} or {@code &amp;lt;} or {@code &amp;gt;} or {@code &amp;quot;} &lt;/li&gt;
+   *   &lt;li&gt;A value of the form {@code &amp;#dddd;} where {@code dddd} is a decimal value&lt;/li&gt;
+   *   &lt;li&gt;A value of the form {@code &amp;#xhhhh;} where {@code hhhh} is a hexadecimal value&lt;/li&gt;
+   * &lt;/ul&gt;
+   * @param str the string to test for HTML entity reference.
+   * @param index position of the {@code '&amp;'} in {@code str}
+   * @return 
+   */
+  public static boolean isHtmlCharEntityRef(String str, int index)  {
+      if (str.charAt(index) != '&amp;') {
+          return false;
+      }
+      int indexOfSemicolon = str.indexOf(';', index + 1);
+      if (indexOfSemicolon == -1) { // is there a semicolon sometime later ?
+          return false;
+      }
+      if (!(indexOfSemicolon &gt; (index + 2))) {   // is the string actually long enough
+          return false;
+      }
+      if (followingCharsAre(str, index, "amp;")
+              || followingCharsAre(str, index, "lt;")
+              || followingCharsAre(str, index, "gt;")
+              || followingCharsAre(str, index, "quot;")) {
+          return true;
+      }
+      if (str.charAt(index+1) == '#') {
+          if (str.charAt(index+2) == 'x' || str.charAt(index+2) == 'X') {
+              // It's presumably a hex value
+              if (str.charAt(index+3) == ';') {
+                  return false;
+              }
+              for (int i = index+3; i &lt; indexOfSemicolon; i++) {
+                  char c = str.charAt(i);
+                  if (c &gt;= 48 &amp;&amp; c &lt;=57) {  // 0 -- 9
+                      continue;
+                  }
+                  if (c &gt;= 65 &amp;&amp; c &lt;=70) {   // A -- F
+                      continue;
+                  }
+                  if (c &gt;= 97 &amp;&amp; c &lt;=102) {   // a -- f
+                      continue;
+                  }
+                  return false;  
+              }
+              return true;   // yes, the value is a hex string
+          } else {
+              // It's presumably a decimal value
+              for (int i = index+2; i &lt; indexOfSemicolon; i++) {
+                  char c = str.charAt(i);
+                  if (c &gt;= 48 &amp;&amp; c &lt;=57) {  // 0 -- 9
+                      continue;
+                  }
+                  return false;
+              }
+              return true; // yes, the value is decimal
+          }
+      }
+      return false;
+  } 
+
+
+  /**
+   * Tests if the chars following position &lt;code&gt;startIndex&lt;/code&gt; in string
+   * &lt;code&gt;str&lt;/code&gt; are that of &lt;code&gt;nextChars&lt;/code&gt;.
+   * 
+   * &lt;p&gt;Optimized for speed. Otherwise this method would be exactly equal to
+   * {@code (str.indexOf(nextChars, startIndex+1) == (startIndex+1))}.
+   *
+   * @param str
+   * @param startIndex
+   * @param nextChars
+   * @return 
+   */  
+  private static boolean followingCharsAre(String str, int startIndex, String nextChars)  {
+      if ((startIndex + nextChars.length()) &lt; str.length()) {
+          for(int i = 0; i &lt; nextChars.length(); i++) {
+              if ( nextChars.charAt(i) != str.charAt(startIndex+i+1)) {
+                  return false;
+              }
+          }
+          return true;
+      } else {
+          return false;
+      }
+  }
+}
+</code></pre>
+
+<p>TODO: Preserve consecutive whitespace.</p>

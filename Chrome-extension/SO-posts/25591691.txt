@@ -1,0 +1,373 @@
+<p>Ive actually managed to get the file picker to appear in Kitkat, to select a image and to get the filepath in activity result but the only thing that im not able to "fix" (cause this workaround) is to make the input filed to fill out with file data.</p>
+
+<p>Does anyone know any way how to access the input-field from a activity ? Am using this example <a href="http://stackoverflow.com/a/15423907/1071184">comment</a>. Is just this last piece, the last brick in the wall that i just have to put into right place (tho i could trigger upload of image file directly from code.</p>
+
+<h2>UPDATE #1</h2>
+
+<p>Im no hardcore Android dev so i'll show code on newbie level. Im creating a new Activity in already existing Activity</p>
+
+<p>Manifest part</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.INTERNET"/&gt;
+&lt;uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/&gt;
+&lt;application android:label="TestApp"&gt;
+ &lt;activity android:name=".BrowseActivity"&gt;&lt;/activity&gt;
+&lt;/application&gt;
+</code></pre>
+
+<p>Am creating my BrowseActivity class from this example <a href="http://stackoverflow.com/a/15423907/1071184">answer</a>. The WebChromeClient() instance basically looks the same, except last piece, triggering the picker UI part...</p>
+
+<pre><code>private final static int FILECHOOSER_RESULTCODE=1;  
+private final static int KITKAT_RESULTCODE = 2;
+
+...
+
+// The new WebChromeClient() looks pretty much the same, except one piece...
+
+WebChromeClient chromeClient = new WebChromeClient(){  
+    // For Android 3.0+
+    public void openFileChooser(ValueCallback&lt;Uri&gt; uploadMsg) { /* Default code */ }  
+
+    // For Android 3.0+
+    public void openFileChooser( ValueCallback uploadMsg, String acceptType ) { /* Default code */ }  
+
+    //For Android 4.1, also default but it'll be as example
+    public void openFileChooser(ValueCallback&lt;Uri&gt; uploadMsg, String acceptType, String capture){
+        mUploadMessage = uploadMsg;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        BrowseActivity.this.startActivityForResult(Intent.createChooser(i, "File Chooser"), BrowseActivity.FILECHOOSER_RESULTCODE);
+
+    }  
+
+    // The new code
+    public void showPicker( ValueCallback&lt;Uri&gt; uploadMsg ){  
+        // Here is part of the issue, the uploadMsg is null since it is not triggered from Android
+        mUploadMessage = uploadMsg; 
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        BrowseActivity.this.startActivityForResult(Intent.createChooser(i, "File Chooser"), BrowseActivity.KITKAT_RESULTCODE);
+    }}
+</code></pre>
+
+<p>And some more stuff  </p>
+
+<pre><code>web = new WebView(this);
+// Notice this part, setting chromeClient as js interface is just lazy
+web.getSettings().setJavaScriptEnabled(true);
+web.addJavascriptInterface(chromeClient, "jsi" );
+web.getSettings().setAllowFileAccess(true);
+web.getSettings().setAllowContentAccess(true);
+web.clearCache(true);
+web.loadUrl( "http://as3breeze.com/upload.html" );
+web.setWebViewClient(new myWebClient());
+web.setWebChromeClient(chromeClient);
+
+
+@Override protected void onActivityResult(int requestCode, int resultCode, Intent intent) {  
+  Log.d("Result", "("+requestCode+ ") - (" +resultCode  + ") - (" + intent + ") - " + mUploadMessage);  
+    if (null == intent) return;  
+    Uri result = null;  
+    if(requestCode==FILECHOOSER_RESULTCODE)  
+    {  
+        Log.d("Result","Old android");  
+        if (null == mUploadMessage) return;  
+        result = intent == null || resultCode != RESULT_OK ? null  : intent.getData();  
+        mUploadMessage.onReceiveValue(result);  
+        mUploadMessage = null;  
+    } else if (requestCode == KITKAT_RESULTCODE) {  
+        Log.d("Result","Kitkat android");  
+        result = intent.getData();  
+        final int takeFlags = intent.getFlags() &amp; (Intent.FLAG_GRANT_READ_URI_PERMISSION  | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);  
+        String path = getPath( this, result);  
+        File selectedFile = new File(path); 
+//I used you example with a bit of editing so thought i would share, here i added a method to upload the file to the webserver
+File selectedFile = new File(path);  
+            UploadFile(selectedFile);
+
+
+        //mUploadMessage.onReceiveValue( Uri.parse(selectedFile.toString()) );  
+        // Now we have the file but since mUploadMessage was null, it gets errors
+    }  
+}
+
+ public void UploadFile(File selectedFile)
+{
+    Random rnd = new Random();
+    String sName = "File" + rnd.nextInt(999999) + selectedFile.getAbsolutePath().substring(selectedFile.getAbsolutePath().lastIndexOf("."));
+    UploadedFileName = sName;
+    uploadFile = selectedFile;
+    if (progressBar != null &amp;&amp; progressBar.isShowing())
+    {
+        progressBar.dismiss();
+    }
+ // prepare for a progress bar dialog
+    progressBar = new ProgressDialog(mContext);
+    progressBar.setCancelable(true);
+    progressBar.setMessage("Uploading File");
+    progressBar.setProgressStyle(ProgressDialog.STYLE_SPINNER);            
+    progressBar.show();
+    new Thread() {
+
+        public void run() 
+        {
+            int serverResponseCode;
+            String serverResponseMessage;
+            HttpURLConnection connection = null;
+            DataOutputStream outputStream = null;
+            DataInputStream inputStream = null;
+            String pathToOurFile = uploadFile.getAbsolutePath();
+            String urlServer = "http://serveraddress/Scripts/UploadHandler.php?name" + UploadedFileName;
+            String lineEnd = "\r\n";
+            String twoHyphens = "--";
+            String boundary =  "*****";
+
+            int bytesRead, bytesAvailable, bufferSize;
+            byte[] buffer;
+            int maxBufferSize = 1*1024*1024;
+
+            try
+            {
+                FileInputStream fileInputStream = new FileInputStream(uploadFile);
+
+                URL url = new URL(urlServer);
+                connection = (HttpURLConnection) url.openConnection();
+                Log.i("File", urlServer);
+
+                // Allow Inputs &amp;amp; Outputs.
+                connection.setDoInput(true);
+                connection.setDoOutput(true);
+                connection.setUseCaches(false);
+
+                // Set HTTP method to POST.
+                connection.setRequestMethod("POST");
+
+                connection.setRequestProperty("Connection", "Keep-Alive");
+                connection.setRequestProperty("Content-Type", "multipart/form-data;boundary="+boundary);
+                Log.i("File", "Open conn");
+
+                outputStream = new DataOutputStream( connection.getOutputStream() );
+
+                outputStream.writeBytes(twoHyphens + boundary + lineEnd);
+                outputStream.writeBytes("Content-Disposition: form-data; name=\"uploadedfile\";filename=\"" + pathToOurFile +"\"" + lineEnd);
+                outputStream.writeBytes(lineEnd);
+                Log.i("File", "write bytes");
+
+                bytesAvailable = fileInputStream.available();
+                bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                buffer = new byte[bufferSize];
+                Log.i("File", "available: " + fileInputStream.available());
+
+                // Read file
+                bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+
+                Log.i("file", "Bytes Read: " + bytesRead);
+                while (bytesRead &gt; 0)
+                {
+                    outputStream.write(buffer, 0, bufferSize);
+                    bytesAvailable = fileInputStream.available();
+                    bufferSize = Math.min(bytesAvailable, maxBufferSize);
+                    bytesRead = fileInputStream.read(buffer, 0, bufferSize);
+                }
+
+                outputStream.writeBytes(lineEnd);
+                outputStream.writeBytes(twoHyphens + boundary + twoHyphens + lineEnd);
+
+                // Responses from the server (code and message)
+                serverResponseCode = connection.getResponseCode();
+                serverResponseMessage = connection.getResponseMessage();
+                Log.i("file repsonse", serverResponseMessage);
+
+//once the file is uploaded call a javascript function to verify the user wants to save the image
+                progressBar.dismiss();
+                runOnUiThread(new Runnable() 
+                {
+
+                    @Override
+                    public void run() 
+                    {
+                        Log.i("start", "File name: " + UploadedFileName);
+                        WebView myWebView = (WebView) findViewById(R.id.webview);
+                        myWebView.loadUrl("javascript:CheckImage('" + UploadedFileName + "')");
+                    }
+                });
+
+
+                fileInputStream.close();
+                outputStream.flush();
+                outputStream.close();
+            }
+            catch (Exception ex)
+            {
+                Log.i("exception", "Error: " + ex.toString());
+            }               
+        }
+    }.start();
+</code></pre>
+
+<p>}</p>
+
+<p>Lastly, some more code to get the actual file path, code found on SO, ive added post url in comments as well so the author gets credits for his work.  </p>
+
+<pre><code>/**
+ * Get a file path from a Uri. This will get the the path for Storage Access
+ * Framework Documents, as well as the _data field for the MediaStore and
+ * other file-based ContentProviders.
+ *
+ * @param context The context.
+ * @param uri The Uri to query.
+ * @author paulburke
+ * @source http://stackoverflow.com/a/20559175
+ */
+@TargetApi(Build.VERSION_CODES.KITKAT)
+public static String getPath(final Context context, final Uri uri) {
+
+    final boolean isKitKat = Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.KITKAT;
+
+    // DocumentProvider
+    if (isKitKat &amp;&amp; DocumentsContract.isDocumentUri(context, uri)) {
+        // ExternalStorageProvider
+        if (isExternalStorageDocument(uri)) {
+            final String docId = DocumentsContract.getDocumentId(uri);
+            final String[] split = docId.split(":");
+            final String type = split[0];
+
+            if ("primary".equalsIgnoreCase(type)) {
+                return Environment.getExternalStorageDirectory() + "/" + split[1];
+            }
+
+            // TODO handle non-primary volumes
+        }
+        // DownloadsProvider
+        else if (isDownloadsDocument(uri)) {
+
+            final String id = DocumentsContract.getDocumentId(uri);
+            final Uri contentUri = ContentUris.withAppendedId(
+                    Uri.parse("content://downloads/public_downloads"), Long.valueOf(id));
+
+            return getDataColumn(context, contentUri, null, null);
+        }
+        // MediaProvider
+        else if (isMediaDocument(uri)) {
+            final String docId = DocumentsContract.getDocumentId(uri);
+            final String[] split = docId.split(":");
+            final String type = split[0];
+
+            Uri contentUri = null;
+            if ("image".equals(type)) {
+                contentUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+            } else if ("video".equals(type)) {
+                contentUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+            } else if ("audio".equals(type)) {
+                contentUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
+            }
+
+            final String selection = "_id=?";
+            final String[] selectionArgs = new String[] {
+                    split[1]
+            };
+
+            return getDataColumn(context, contentUri, selection, selectionArgs);
+        }
+    }
+    // MediaStore (and general)
+    else if ("content".equalsIgnoreCase(uri.getScheme())) {
+        return getDataColumn(context, uri, null, null);
+    }
+    // File
+    else if ("file".equalsIgnoreCase(uri.getScheme())) {
+        return uri.getPath();
+    }
+
+    return null;
+}
+
+/**
+ * Get the value of the data column for this Uri. This is useful for
+ * MediaStore Uris, and other file-based ContentProviders.
+ *
+ * @param context The context.
+ * @param uri The Uri to query.
+ * @param selection (Optional) Filter used in the query.
+ * @param selectionArgs (Optional) Selection arguments used in the query.
+ * @return The value of the _data column, which is typically a file path.
+ * @source http://stackoverflow.com/a/20559175
+ */
+public static String getDataColumn(Context context, Uri uri, String selection,
+                                   String[] selectionArgs) {
+
+    Cursor cursor = null;
+    final String column = "_data";
+    final String[] projection = {
+            column
+    };
+
+    try {
+        cursor = context.getContentResolver().query(uri, projection, selection, selectionArgs,
+                null);
+        if (cursor != null &amp;&amp; cursor.moveToFirst()) {
+            final int column_index = cursor.getColumnIndexOrThrow(column);
+            return cursor.getString(column_index);
+        }
+    } finally {
+        if (cursor != null)
+            cursor.close();
+    }
+    return null;
+}
+
+
+/**
+ * @param uri The Uri to check.
+ * @return Whether the Uri authority is ExternalStorageProvider.
+ * @source http://stackoverflow.com/a/20559175
+ */
+public static boolean isExternalStorageDocument(Uri uri) {
+    return "com.android.externalstorage.documents".equals(uri.getAuthority());
+}
+
+/**
+ * @param uri The Uri to check.
+ * @return Whether the Uri authority is DownloadsProvider.
+ * @source http://stackoverflow.com/a/20559175
+ */
+public static boolean isDownloadsDocument(Uri uri) {
+    return "com.android.providers.downloads.documents".equals(uri.getAuthority());
+}
+
+/**
+ * @param uri The Uri to check.
+ * @return Whether the Uri authority is MediaProvider.
+ * @source http://stackoverflow.com/a/20559175
+ */
+public static boolean isMediaDocument(Uri uri) {
+    return "com.android.providers.media.documents".equals(uri.getAuthority());
+}  
+</code></pre>
+
+<p>Lastly, the HTML page needs to trigger that new method of showPicker (specificaly when on A4.4)</p>
+
+<pre><code>&lt;form id="form-upload" method="post" enctype="multipart/form-data"&gt;
+    &lt;input id="fileupload" name="fileupload" type="file" onclick="javascript:prepareForPicker();"/&gt;
+&lt;/form&gt;
+&lt;script type="text/javascript"&gt;
+function getAndroidVersion() {
+    var ua = navigator.userAgent; 
+    var match = ua.match(/Android\s([0-9\.]*)/);
+    return match ? match[1] : false;
+};
+function prepareForPicker(){
+    if(getAndroidVersion().indexOf("4.4") != -1){
+        window.jsi.showPicker();
+        return false;
+    }
+}
+
+function CheckImage(name)
+{
+//Check to see if user wants to save I used some ajax to save the file if necesarry
+}
+&lt;/script&gt;
+</code></pre>

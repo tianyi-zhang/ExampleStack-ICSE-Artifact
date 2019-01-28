@@ -1,0 +1,199 @@
+<p>Well your diagnosis was absolutely spot on:</p>
+
+<blockquote>
+  <p>When you click and just begin to move, the JFrame instantly moves
+  much higher on the screen. The lines in JTextArea, the higher it moves
+  up when you try to move it. I assume that the get*OnScreen() methods
+  are issue because it's all relevant to the JTextArea.</p>
+</blockquote>
+
+<p>So to resolve this use <a href="http://docs.oracle.com/javase/tutorial/uiswing/components/rootpane.html" rel="nofollow"><em>GlassPane</em></a> of <code>JFrame</code> to attach <code>MouseXXXListener</code>s thus we can get correct co-ordinates when dragging, the main problem with this solution is <em>glasspane</em> will consume events that are meant for other components on <code>JFrame</code>, this can be overcome by redispatching the <code>MouseEvent</code>s appropriately):</p>
+
+<ul>
+<li><p>Create <code>JPanel</code> (this <em>glassPane</em>/<code>JPanel</code> will be transparent via <code>setOpaque(false)</code>), attach <code>xxxAdapters</code> here.</p></li>
+<li><p>Create custom listener class to redispacth <code>MouseEvent</code>s to the necessary components (as <em>glasspane</em> will consume all events to the <code>JTextArea</code>/<code>JScollPane</code>)</p></li>
+<li><p>Set <code>JPanel</code> as GlassPane of  your <code>JFrame</code> via <code>JFrame#setGlassPane(..)</code> .</p></li>
+<li><p>set <code>JFrame</code> visible than set <em>glassPane</em> visible via <code>setVisible(true)</code> (this has been a Swing glitch for some time if you set it visible before the frame is visible it wont be shown).</p></li>
+</ul>
+
+<p>Here is your fixed code:</p>
+
+<pre><code>import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Font;
+import java.awt.Point;
+import java.awt.Toolkit;
+import java.awt.event.MouseEvent;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+import javax.swing.event.MouseInputAdapter;
+
+public class Main extends JFrame {
+
+    private JTextArea textArea;
+    private JScrollPane textAreaScroll;
+    private JPanel glassPane;//create variable for glasspane
+
+    public Main() {
+        initComponents();
+        initListeners();
+        for (int i = 0; i &lt; 20; i++) {
+            addLine(i + " Hello");
+        }
+    }
+
+    public void addLine(String line) {
+        textArea.append("\n&gt; " + line);
+        textArea.setCaretPosition(textArea.getDocument().getLength());
+    }
+
+    private void initListeners() {
+        GlassPaneListener gpl = new GlassPaneListener(textAreaScroll.getVerticalScrollBar(), this);
+        //add the adapters/listeners to the glasspane
+        glassPane.addMouseMotionListener(gpl);
+        glassPane.addMouseListener(gpl);
+    }
+
+    private void initComponents() {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (UnsupportedLookAndFeelException | ClassNotFoundException | InstantiationException | IllegalAccessException e) {
+        }
+
+        textAreaScroll = new JScrollPane();
+        textArea = new JTextArea();
+
+        setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
+        setUndecorated(true);
+        setAlwaysOnTop(true);
+        setAutoRequestFocus(false);
+        setBackground(new Color(130, 210, 255, 130));
+        setFocusCycleRoot(false);
+        setFocusable(false);
+        setFocusableWindowState(false);
+        setName("main");
+        setOpacity(0.4f);
+        setResizable(false);
+
+        textAreaScroll.setBorder(null);
+        textAreaScroll.setFocusable(false);
+        textAreaScroll.setRequestFocusEnabled(false);
+
+        textArea.setEditable(false);
+        textArea.setBackground(new Color(0, 0, 0));
+        textArea.setColumns(20);
+        textArea.setFont(new Font("Consolas", 0, 14));
+        textArea.setForeground(new Color(255, 255, 255));
+        textArea.setLineWrap(true);
+        textArea.setRows(5);
+        textArea.setText("&gt; Hello world!\n&gt; another line!");
+        textArea.setBorder(null);
+        textArea.setFocusable(false);
+        textArea.setRequestFocusEnabled(false);
+        textAreaScroll.setViewportView(textArea);
+        textAreaScroll.setPreferredSize(new Dimension(200, 200));
+
+        javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
+        getContentPane().setLayout(layout);
+        layout.setHorizontalGroup(
+                layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                .addComponent(textAreaScroll, javax.swing.GroupLayout.DEFAULT_SIZE, 400, Short.MAX_VALUE));
+        layout.setVerticalGroup(
+                layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                .addComponent(textAreaScroll, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.DEFAULT_SIZE, 214, Short.MAX_VALUE));
+
+        //create and make glasspane not opaque
+        glassPane = new JPanel();
+        glassPane.setOpaque(false);
+
+        //set glasspane as JFrame glassPane
+        setGlassPane(glassPane);
+
+        pack();
+
+        setVisible(true);//set JFrame visible
+
+        //glassPane can only be setVisible after JFrame is visible
+        glassPane.setVisible(true);
+    }
+
+    public static void main(String args[]) {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                new Main();
+            }
+        });
+    }
+}
+
+class GlassPaneListener extends MouseInputAdapter {
+
+    private int posX = 0;
+    private int posY = 0;
+    Toolkit toolkit;
+    private final Container contentPane;
+    private final Component textAreaScroll;
+    private final Component glassPane;
+    private final JFrame frame;
+    private boolean wasClickOnInterestedComponent = false;
+
+    public GlassPaneListener(Component textAreaScroll, JFrame frame) {
+        toolkit = Toolkit.getDefaultToolkit();
+        this.textAreaScroll = textAreaScroll;
+        this.frame = frame;
+        this.glassPane = frame.getGlassPane();
+        this.contentPane = frame.getContentPane();
+    }
+
+    @Override
+    public void mouseDragged(MouseEvent e) {
+        if (!redispatchMouseEvent(e)) {
+            frame.setLocation(e.getXOnScreen() - posX, e.getYOnScreen() - posY);
+        }
+    }
+
+    @Override
+    public void mousePressed(MouseEvent e) {
+        if (!redispatchMouseEvent(e)) {//check if event was redispatched if not its meant for us :)
+            posX = e.getX();
+            posY = e.getY();
+        }
+    }
+
+    @Override
+    public void mouseReleased(MouseEvent me) {
+        wasClickOnInterestedComponent = false;
+    }
+
+    private boolean redispatchMouseEvent(MouseEvent e) {
+        Point glassPanePoint = e.getPoint();
+        Container container = contentPane;
+        Point containerPoint = SwingUtilities.convertPoint(glassPane, glassPanePoint, contentPane);
+
+        // The mouse event is probably over the content pane.
+        // Find out exactly which component it's over.
+        Component component = SwingUtilities.getDeepestComponentAt(container, containerPoint.x,
+                containerPoint.y);
+
+        if ((component != null) &amp;&amp; (component.equals(textAreaScroll)) || wasClickOnInterestedComponent) {
+            wasClickOnInterestedComponent = true;//so that if we drag iur cursor off JScrollBar tghe window wont be moved
+            // Forward events over the scrollbar
+            Point componentPoint = SwingUtilities.convertPoint(glassPane, glassPanePoint, component);
+            component.dispatchEvent(new MouseEvent(component, e.getID(), e.getWhen(), e.getModifiers(),
+                    componentPoint.x, componentPoint.y, e.getClickCount(), e.isPopupTrigger()));
+            return true;//the event was redispatched
+        } else {
+            return false;//event was not redispatched
+        }
+    }
+}
+</code></pre>

@@ -1,0 +1,90 @@
+<p>I have been through and commented the code as best as I can, although I think it is fairly self documenting. 
+Generally this code takes an image from the coordinates plotted by a users touch. it then converts the color space
+and resizes it for spectrum size</p>
+
+<pre><code>    // When a motion event happens (someone touches the device)
+public boolean onTouch(View v, MotionEvent event) {
+    int cols = mRgba.cols(); //get resolution of display
+    int rows = mRgba.rows(); // get resolution of display
+
+    int xOffset = (mOpenCvCameraView.getWidth() - cols) / 2; //get resolution of display
+    int yOffset = (mOpenCvCameraView.getHeight() - rows) / 2; // get resolution of display
+
+    int x = (int)event.getX() - xOffset; // get resolution of display
+    int y = (int)event.getY() - yOffset; //get resolution of display 
+
+        //The place where the screen was touched
+    Log.i(TAG, "Touch image coordinates: (" + x + ", " + y + ")");
+    // ensure it is within the screen.
+    if ((x &lt; 0) || (y &lt; 0) || (x &gt; cols) || (y &gt; rows)) return false;
+
+    Rect touchedRect = new Rect();
+
+    //Ensure it is a multiple of 4
+    touchedRect.x = (x&gt;4) ? x-4 : 0;
+    touchedRect.y = (y&gt;4) ? y-4 : 0;
+
+    // If  x+4 &lt; cols then ?"" else :""
+    touchedRect.width = (x+4 &lt; cols) ? x + 4 - touchedRect.x : cols - touchedRect.x;
+    touchedRect.height = (y+4 &lt; rows) ? y + 4 - touchedRect.y : rows - touchedRect.y;
+
+    create a touched regionmat from the image created from the touches
+    Mat touchedRegionRgba = mRgba.submat(touchedRect);
+
+    //Convert the new mat to HSV colour space
+    Mat touchedRegionHsv = new Mat();
+    Imgproc.cvtColor(touchedRegionRgba, touchedRegionHsv, Imgproc.COLOR_RGB2HSV_FULL);
+
+    // Calculate average color of touched region
+    mBlobColorHsv = Core.sumElems(touchedRegionHsv);
+    int pointCount = touchedRect.width*touchedRect.height;
+    for (int i = 0; i &lt; mBlobColorHsv.val.length; i++)
+        mBlobColorHsv.val[i] /= pointCount;
+
+    //converts scalar to hsv to RGB
+    mBlobColorRgba = converScalarHsv2Rgba(mBlobColorHsv);
+
+    Log.i(TAG, "Touched rgba color: (" + mBlobColorRgba.val[0] + ", " + mBlobColorRgba.val[1] +
+            ", " + mBlobColorRgba.val[2] + ", " + mBlobColorRgba.val[3] + ")");
+
+    mDetector.setHsvColor(mBlobColorHsv);
+
+    // Resize the image to specture size
+    Imgproc.resize(mDetector.getSpectrum(), mSpectrum, SPECTRUM_SIZE);
+
+    mIsColorSelected = true;
+
+    // Release all mats
+    touchedRegionRgba.release();
+    touchedRegionHsv.release();
+
+    return false; // don't need subsequent touch events
+}
+
+public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
+    mRgba = inputFrame.rgba();
+
+    if (mIsColorSelected) {
+        mDetector.process(mRgba);
+        List&lt;MatOfPoint&gt; contours = mDetector.getContours();
+        Log.e(TAG, "Contours count: " + contours.size());
+        Imgproc.drawContours(mRgba, contours, -1, CONTOUR_COLOR);
+
+        Mat colorLabel = mRgba.submat(4, 68, 4, 68);
+        colorLabel.setTo(mBlobColorRgba);
+
+        Mat spectrumLabel = mRgba.submat(4, 4 + mSpectrum.rows(), 70, 70 + mSpectrum.cols());
+        mSpectrum.copyTo(spectrumLabel);
+    }
+
+    return mRgba;
+}
+//final conversion
+    private Scalar converScalarHsv2Rgba(Scalar hsvColor) {
+        Mat pointMatRgba = new Mat();
+        Mat pointMatHsv = new Mat(1, 1, CvType.CV_8UC3, hsvColor);
+        Imgproc.cvtColor(pointMatHsv, pointMatRgba, Imgproc.COLOR_HSV2RGB_FULL, 4);
+
+        return new Scalar(pointMatRgba.get(0, 0));
+    }
+</code></pre>

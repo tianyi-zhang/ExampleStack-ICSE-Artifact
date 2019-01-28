@@ -1,0 +1,102 @@
+<p>In order to get your CPU well below 100% and allow your GUI to remain responsive, you have to throttle back your chart updating rate. A maximum update rate of around 24 frames per second makes sense for a real-time chart; any faster is more or less indistinguishable anyway. If your data is coming in faster than that rate, you just need to buffer it in the background and update your chart in the foreground at your desired update rate. In the following example, I use <a href="https://github.com/timmolter/XChart" rel="nofollow">XChart</a> along with a <code>SwingWorker</code> background thread. The data capture is simulated at a rate of one per every 5 ms and the chart it updated at 24 frames per second. This concept should work with JFreeCharts or any other charting library as well with slight modification. Disclaimer: I'm the lead developer of XChart.</p>
+
+<pre class="lang-java prettyprint-override"><code>import java.util.LinkedList;
+import java.util.List;
+
+import javax.swing.SwingWorker;
+
+import org.knowm.xchart.QuickChart;
+import org.knowm.xchart.SwingWrapper;
+import org.knowm.xchart.XYChart;
+
+/**
+ * Creates a real-time chart using SwingWorker
+ */
+public class SwingWorkerRealTime {
+
+  MySwingWorker mySwingWorker;
+  SwingWrapper&lt;XYChart&gt; sw;
+  XYChart chart;
+
+  public static void main(String[] args) throws Exception {
+
+    SwingWorkerRealTime swingWorkerRealTime = new SwingWorkerRealTime();
+    swingWorkerRealTime.go();
+  }
+
+  private void go() {
+
+    // Create Chart
+    chart = QuickChart.getChart("SwingWorker XChart Real-time Demo", "Time", "Value", "randomWalk", new double[] { 0 }, new double[] { 0 });
+    chart.getStyler().setLegendVisible(false);
+    chart.getStyler().setXAxisTicksVisible(false);
+
+    // Show it
+    sw = new SwingWrapper&lt;XYChart&gt;(chart);
+    sw.displayChart();
+
+    mySwingWorker = new MySwingWorker();
+    mySwingWorker.execute();
+  }
+
+  private class MySwingWorker extends SwingWorker&lt;Boolean, double[]&gt; {
+
+    LinkedList&lt;Double&gt; fifo = new LinkedList&lt;Double&gt;();
+
+    public MySwingWorker() {
+
+      fifo.add(0.0);
+    }
+
+    @Override
+    protected Boolean doInBackground() throws Exception {
+
+      while (!isCancelled()) {
+
+        fifo.add(fifo.get(fifo.size() - 1) + Math.random() - .5);
+        if (fifo.size() &gt; 500) {
+          fifo.removeFirst();
+        }
+
+        double[] array = new double[fifo.size()];
+        for (int i = 0; i &lt; fifo.size(); i++) {
+          array[i] = fifo.get(i);
+        }
+        publish(array);
+
+        try {
+          Thread.sleep(5);
+        } catch (InterruptedException e) {
+          // eat it. caught when interrupt is called
+          System.out.println("MySwingWorker shut down.");
+        }
+
+      }
+
+      return true;
+    }
+
+    @Override
+    protected void process(List&lt;double[]&gt; chunks) {
+
+      System.out.println("number of chunks: " + chunks.size());
+
+      double[] mostRecentDataSet = chunks.get(chunks.size() - 1);
+
+      chart.updateXYSeries("randomWalk", null, mostRecentDataSet, null);
+      sw.repaintChart();
+
+      long start = System.currentTimeMillis();
+      long duration = System.currentTimeMillis() - start;
+      try {
+        Thread.sleep(40 - duration); // 40 ms ==&gt; 25fps
+        // Thread.sleep(400 - duration); // 40 ms ==&gt; 2.5fps
+      } catch (InterruptedException e) {
+      }
+
+    }
+  }
+}
+</code></pre>
+
+<p><a href="http://i.stack.imgur.com/JJQ61.gif" rel="nofollow"><img src="http://i.stack.imgur.com/JJQ61.gif" alt="XChart SwingWorker Realtime Java Chart"></a></p>

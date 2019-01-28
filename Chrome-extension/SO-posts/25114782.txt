@@ -1,0 +1,192 @@
+<p>I'm doing something very similar. I'm doing authentication for a stateless REST backend, so I want the user to authenticate once, then for each subsequent request, the authentication must be transparent. I'm using tokens for this. On login, the user-supplied credentials are used to authenticate and generate a token (although ultimately, we want to use an outside service for obtaining a token). The token is returned as a header. Then the angularjs frontend sends the token on each subsequent REST call. The backend checks the validity of the token and if it's good, then marks 'authenticated' to be true.</p>
+
+<p>Here's my security-context.xml:</p>
+
+<pre><code>&lt;beans:beans xmlns="http://www.springframework.org/schema/security"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xmlns:beans="http://www.springframework.org/schema/beans"
+xmlns:sec="http://www.springframework.org/schema/security"
+xsi:schemaLocation="
+  http://www.springframework.org/schema/security
+  http://www.springframework.org/schema/security/spring-security-3.2.xsd
+  http://www.springframework.org/schema/beans
+  http://www.springframework.org/schema/beans/spring-beans-4.0.xsd"&gt;
+
+&lt;http use-expressions="true" 
+      entry-point-ref="restAuthenticationEntryPoint"
+      create-session="stateless"&gt;
+    &lt;intercept-url pattern="/secured/extreme/**" access="hasRole('ROLE_SUPERVISOR')"/&gt;
+    &lt;intercept-url pattern="/secured/**" access="isAuthenticated()" /&gt;
+    &lt;intercept-url pattern="/j_spring_security_check" requires-channel="https" access="permitAll"/&gt;
+    &lt;intercept-url pattern="/logon.jsp" requires-channel="https" access="permitAll"/&gt;
+    &lt;sec:custom-filter ref="authenticationTokenProcessingFilter" position="FORM_LOGIN_FILTER" /&gt;
+&lt;/http&gt;
+
+&lt;beans:bean id="restAuthenticationEntryPoint" class="com.company.project.authentication.security.RestAuthenticationEntryPoint" /&gt;
+
+&lt;beans:bean id="authenticationTokenProcessingFilter" class="com.company.project.authentication.security.AuthenticationTokenProcessingFilter" &gt;
+    &lt;beans:property name="authenticationManager" ref="authenticationManager" /&gt;
+    &lt;beans:property name="userDetailsServices"&gt; 
+                &lt;beans:list&gt;
+                    &lt;beans:ref bean="inMemoryUserDetailsService" /&gt;
+                    &lt;beans:ref bean="tmpUserDetailsService" /&gt;
+                &lt;/beans:list&gt;
+    &lt;/beans:property&gt;
+
+&lt;/beans:bean&gt;
+
+&lt;beans:bean id="tmpUserDetailsService" class="com.company.project.authentication.security.TokenUserDetailsServiceImpl" /&gt;
+
+&lt;user-service id="inMemoryUserDetailsService"&gt;
+            &lt;user name="temporary" password="temporary" authorities="ROLE_SUPERVISOR" /&gt;
+            &lt;user name="user" password="userPass" authorities="ROLE_USER" /&gt;
+&lt;/user-service&gt;
+
+&lt;authentication-manager alias="authenticationManager"&gt;
+    &lt;!-- Use some hard-coded values for development --&gt;
+    &lt;authentication-provider user-service-ref="inMemoryUserDetailsService" /&gt;
+    &lt;authentication-provider ref='companyLdapProvider' /&gt;
+&lt;/authentication-manager&gt;
+</code></pre>
+
+<p>For the authentication filter, I subclass UsernamePasswordAuthenticationFilter. When it's a login request, then authentication with the authentication provider happens, and then a token is generated. If a token is read from the header, then the token is examined for authentication. Here is my authentication filter (which is still not production-ready, but it works to give you an idea of what you can do):</p>
+
+<pre><code>public class AuthenticationTokenProcessingFilter extends UsernamePasswordAuthenticationFilter {
+//~ Static fields/initializers =====================================================================================
+
+private static final String HEADER_AUTH_TOKEN = "X-Auth-Token";    
+private static final Logger LOGGER = LoggerFactory.getLogger(AuthenticationTokenProcessingFilter.class);
+
+private List&lt;UserDetailsService&gt; userDetailsServices = new ArrayList&lt;UserDetailsService&gt;();
+//~ Constructors ===================================================================================================
+
+public AuthenticationTokenProcessingFilter() {
+    super();
+}
+
+//~ Methods ========================================================================================================
+@Override
+public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException,
+                ServletException {
+    HttpServletRequest request = (HttpServletRequest) req;
+    HttpServletResponse response = (HttpServletResponse) res;
+
+        String authToken = this.extractAuthTokenFromRequest(request);
+        if (authToken == null) {
+            super.doFilter(request,  res,  chain);
+            return;
+        }
+        String userName = TokenUtils.getUserNameFromToken(authToken);
+
+        if (userName != null) {
+
+                UserDetails userDetails = loadUserByUsername(userName);
+
+                if (TokenUtils.validateToken(authToken, userDetails)) {
+
+                        UsernamePasswordAuthenticationToken authentication =
+                                        new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
+        }
+
+        chain.doFilter(request, response);
+}
+
+@Override
+public Authentication attemptAuthentication(HttpServletRequest request, HttpServletResponse response) throws AuthenticationException {
+    if (!request.getMethod().equals("POST")) {
+        throw new AuthenticationServiceException("Authentication method not supported: " + request.getMethod());
+    }
+
+    UsernamePasswordAuthenticationToken authRequest = authenticateWithForm(request, response);
+    // Allow subclasses to set the "details" property
+    setDetails(request, authRequest);
+
+    Authentication authentication = this.getAuthenticationManager().authenticate(authRequest);
+
+    if (authentication.isAuthenticated()) {
+        try {
+            String authToken = TokenUtils.createToken(obtainUsername(request), obtainPassword(request));
+            LOGGER.info("Setting HTTP header {} = {}", HEADER_AUTH_TOKEN, authToken);
+            response.addHeader(HEADER_AUTH_TOKEN, authToken);
+            Collection&lt;? extends GrantedAuthority&gt; authorities = authentication.getAuthorities();                
+            LOGGER.info("authorities = {}", authorities);
+            // Now we should make an in-memory table of the token and userdetails for later use 
+        } catch(Exception e) {
+            LOGGER.warn("Error creating token for authentication. Authorization token head cannot be created.", e);
+        }
+
+    }
+
+    return authentication;
+}
+
+protected UsernamePasswordAuthenticationToken authenticateWithForm(HttpServletRequest request, HttpServletResponse response) throws AuthenticationException {
+    String username = obtainUsername(request);
+    String password = obtainPassword(request);
+
+    if (username == null) {
+        username = "";
+    }
+
+    if (password == null) {
+        password = "";
+    }
+
+    username = username.trim();
+
+    UsernamePasswordAuthenticationToken authRequest = new UsernamePasswordAuthenticationToken(username, password);
+
+    return authRequest;
+}
+
+private String extractAuthTokenFromRequest(HttpServletRequest httpRequest) {
+        /* Get token from header */
+        String authToken = httpRequest.getHeader(HEADER_AUTH_TOKEN);
+
+        /* If token not found get it from request parameter */
+        if (authToken == null) {
+                authToken = httpRequest.getParameter("token");
+        }
+
+        return authToken;
+}
+
+public List&lt;UserDetailsService&gt; getUserDetailsServices() {
+    return userDetailsServices;
+}
+
+public void setUserDetailsService(UserDetailsService userDetailsService) {
+    this.userDetailsServices.add(userDetailsService);
+}
+
+public void setUserDetailsServices(List&lt;UserDetailsService&gt; users) {
+    if (users != null) {
+        this.userDetailsServices.clear();
+        this.userDetailsServices.addAll(users);
+    }
+}
+private UserDetails loadUserByUsername(String username) {
+    UserDetails user = null;
+    List&lt;Exception&gt; exceptions = new ArrayList&lt;Exception&gt;();
+    for (UserDetailsService service: userDetailsServices) {
+        try {
+            user = service.loadUserByUsername(username);
+            break;
+        } catch (Exception e) {
+            LOGGER.warn("Could not load user by username {} with service {}", username, service.getClass().getName());
+            LOGGER.info("Exception is: ",e);
+            exceptions.add(e);
+        }
+    }
+    if (user == null &amp;&amp; !exceptions.isEmpty()) {
+        throw new AuthenticationException(exceptions.get(0));
+    }
+    return user;
+}
+}
+</code></pre>
+
+<p>I'm still working on getting the UserDetailsService refined though. Usually, you can use the authentication provider to get the UserDetails, but since I have a stateless app, when I want to authenticate a token, I have to figure which UserDetailsService to use. I'm doing this with custom code for the moment. </p>

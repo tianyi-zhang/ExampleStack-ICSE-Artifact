@@ -1,0 +1,224 @@
+<p>I believe @fpsColton's answer is correct - I'm just added extra info for clarity.  As requested on linked thread here is the code changes I made on this - note: I only added the parts where I've labelled "DH"</p>
+
+<p>In BOSHConnection:</p>
+
+<pre><code> // DH: function to preserve current api
+public void login(String username, String password, String resource)
+        throws XMPPException {
+    login(username, password, resource, false);         
+
+}
+
+// DH: Most of this is existing login function, but added prebind parameter 
+//     to allow leaving function after all required pre-bind steps done and before 
+//     presence stanza gets sent (sent from attach in XMPP client)
+public void login(String username, String password, String resource, boolean preBind)         
+        throws XMPPException {
+    if (!isConnected()) {
+        throw new IllegalStateException("Not connected to server.");
+    }
+    if (authenticated) {
+        throw new IllegalStateException("Already logged in to server.");
+    }
+    // Do partial version of nameprep on the username.
+    username = username.toLowerCase().trim();
+
+    String response;
+    if (config.isSASLAuthenticationEnabled()
+            &amp;&amp; saslAuthentication.hasNonAnonymousAuthentication()) {
+        // Authenticate using SASL
+        if (password != null) {
+            response = saslAuthentication.authenticate(username, password, resource);
+        } else {
+            response = saslAuthentication.authenticate(username, resource, config.getCallbackHandler());
+        }
+    } else {
+        // Authenticate using Non-SASL
+        response = new NonSASLAuthentication(this).authenticate(username, password, resource);
+    }
+
+    // Indicate that we're now authenticated.
+    authenticated = true;
+    anonymous = false;
+
+    // DH: Prebind only requires connect and authenticate
+    if (preBind) {
+        return;
+    }
+
+    // Set the user.
+    if (response != null) {
+        this.user = response;
+        // Update the serviceName with the one returned by the server
+        config.setServiceName(StringUtils.parseServer(response));
+    } else {
+        this.user = username + "@" + getServiceName();
+        if (resource != null) {
+            this.user += "/" + resource;
+        }
+    }
+
+    // Create the roster if it is not a reconnection.
+    if (this.roster == null) {
+        this.roster = new Roster(this);
+    }
+    if (config.isRosterLoadedAtLogin()) {
+        this.roster.reload();
+    }
+
+    // Set presence to online.
+    if (config.isSendPresence()) {
+        sendPacket(new Presence(Presence.Type.available));
+    }
+
+    // Stores the autentication for future reconnection
+    config.setLoginInfo(username, password, resource);
+
+    // If debugging is enabled, change the the debug window title to include
+    // the
+    // name we are now logged-in as.l
+    if (config.isDebuggerEnabled() &amp;&amp; debugger != null) {
+        debugger.userHasLogged(user);
+    }
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code> // DH
+@Override
+public void disconnect() {
+    client.close();
+}
+</code></pre>
+
+<p>then my Client-side (Web Server) wrapper class - for connecting from within JSP is:</p>
+
+<p>Note: This is proving code rather than production - so there's some stuff in here you may not want.</p>
+
+<pre><code>public class SmackBoshConnector {
+
+private String sessionID = null;
+private String authID = null;
+private Long requestID = 0L;
+private String packetID = null;
+private boolean connected = false;
+
+public boolean connect(String userName, String password, String host, int port, final String xmppService) {
+
+    boolean success = false;
+
+    try {
+
+        Enumeration&lt;SaslClientFactory&gt; saslFacts = Sasl.getSaslClientFactories();
+        if (!saslFacts.hasMoreElements()) {
+            System.out.println("Sasl Provider not pre-loaded"); 
+            int added = Security.addProvider(new com.sun.security.sasl.Provider()); 
+            if (added == -1) {
+                System.out.println("Sasl Provider could not be loaded");
+                System.exit(added);
+            }
+            else {
+                System.out.println("Sasl Provider added"); 
+            }                                                      
+        }
+
+        BOSHConfiguration config = new BOSHConfiguration(false, host, port, "/http-bind/", xmppService);
+        BOSHConnection connection = new BOSHConnection(config);      
+
+        PacketListener sndListener = new PacketListener() {
+
+            @Override
+            public void processPacket(Packet packet) {
+                SmackBoshConnector.this.packetID = packet.getPacketID();
+                System.out.println("Send PacketId["+packetID+"] to["+packet.toXML()+"]");
+            }
+
+        };
+
+        PacketListener rcvListener = new PacketListener() {
+
+            @Override
+            public void processPacket(Packet packet) {
+                SmackBoshConnector.this.packetID = packet.getPacketID();
+                System.out.println("Rcvd PacketId["+packetID+"] to["+packet.toXML()+"]");
+            }
+
+        };
+
+        PacketFilter packetFilter = new PacketFilter() {
+
+            @Override
+            public boolean accept(Packet packet) {
+                return true;
+            }
+        };
+
+        connection.addPacketSendingListener(sndListener, packetFilter);
+        connection.addPacketListener(rcvListener, packetFilter);
+        connection.connect();
+
+        // login with pre-bind only
+        connection.login(userName, password, "", true);                  
+
+        authID = connection.getConnectionID();
+
+        BOSHClient client = connection.getClient();
+
+        sessionID = client.getSid();
+        requestID = client.getRid();
+
+        System.out.println("Connected ["+authID+"] sid["+sessionID+"] rid["+requestID+"]");
+        success = true;
+        connected = true;
+
+        try {
+            Thread.yield();
+            Thread.sleep(500);
+        }
+        catch (InterruptedException e) {
+            // Ignore
+        }
+        finally {
+            connection.disconnect();
+        }
+
+    } catch (XMPPException ex) {
+        Logger.getLogger(SmackBoshConnector.class.getName()).log(Level.SEVERE, null, ex);
+    }
+
+    return success;
+}
+
+public boolean isConnected() {
+    return connected;
+}
+
+public String getSessionID() {
+    return sessionID;
+}
+
+public String getAuthID() {
+    return authID;
+}
+
+public String getRequestIDAsString() {
+    return Long.toString(requestID);
+}
+
+public String getNextRequestIDAsString() {
+    return Long.toString(requestID+1);
+}
+public static void main(String[] args)  {        
+    SmackBoshConnector bc = new SmackBoshConnector();        
+    bc.connect("dazed", "i3ji44mj7k2qt14djct0t5o709", "192.168.2.15", 5280, "my.xmppservice.com");
+ }
+</code></pre>
+
+<p>}</p>
+
+<p>I confess that I'm don't fully remember why I put the Thread.yield and Thread.sleep(1/2 sec) in here - I think - as you can see with added PacketListener - the lower level functions return after sending data and before getting a response back from the server - and if you disconnect before the server has sent it's response then it (also) causes it to clean up the session and things won't work.  However it may be that, as @fpsColton says, this dicsonnect() isn't actually required.  </p>
+
+<p>Edit:  I now remember a bit more about whay I included sleep() and yield().  I noticed that Smack library includes sleep() in several places, including XMPPConnection.shutdown() as per <a href="https://github.com/EnerNOC/smack-xmpp/blob/master/source/org/jivesoftware/smack/XMPPConnection.java" rel="nofollow" title="source">source</a>. Plus in terms of yield() I had problems in my environment (Java in Oracle Database - probably untypical) when it wasn't included - as per <a href="https://community.igniterealtime.org/thread/49522" rel="nofollow">Smack Forum Thread</a>.  </p>
+
+<p>Good luck.</p>

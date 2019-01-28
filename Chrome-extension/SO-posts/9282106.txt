@@ -1,0 +1,119 @@
+<p>Method <code>findClasses</code> from our <code>ClassLoaderUtil</code> might be a good starting point to adapt to your needs.</p>
+
+<pre><code>public class ClassLoaderUtil {
+    /**
+     * Recursive method used to find all classes in a given path (directory or zip file url).  Directories
+     * are searched recursively.  (zip files are
+     * Adapted from http://snippets.dzone.com/posts/show/4831 and extended to support use of JAR files
+     *
+     * @param path   The base directory or url from which to search.
+     * @param packageName The package name for classes found inside the base directory
+     * @param regex       an optional class name pattern.  e.g. .*Test
+     * @return The classes
+     */
+    private static TreeSet&lt;String&gt; findClasses(String path, String packageName, Pattern regex) throws Exception {
+        TreeSet&lt;String&gt; classes = new TreeSet&lt;String&gt;();
+        if (path.startsWith("file:") &amp;&amp; path.contains("!")) {
+            String[] split = path.split("!");
+            URL jar = new URL(split[0]);
+            ZipInputStream zip = new ZipInputStream(jar.openStream());
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (entry.getName().endsWith(".class")) {
+                    String className = entry.getName().replaceAll("[$].*", "").replaceAll("[.]class", "").replace('/', '.');
+                    if (className.startsWith(packageName) &amp;&amp; (regex == null || regex.matcher(className).matches()))
+                        classes.add(className);
+                }
+            }
+        }
+        File dir = new File(path);
+        if (!dir.exists()) {
+            return classes;
+        }
+
+        File[] files = dir.listFiles();
+        for (File file : files) {
+            if (file.isDirectory()) {
+                assert !file.getName().contains(".");
+                classes.addAll(findClasses(file.getAbsolutePath(), packageName + "." + file.getName(), regex));
+            } else if (file.getName().endsWith(".class")) {
+                String className = packageName + '.' + file.getName().substring(0, file.getName().length() - 6);
+                if (regex == null || regex.matcher(className).matches())
+                    classes.add(className);
+            }
+        }
+        return classes;
+    }
+
+    public static &lt;T&gt; List&lt;T&gt; instances(Class&lt;? extends T&gt;[] classList) {
+        List&lt;T&gt; tList = new LinkedList&lt;T&gt;();
+        for(Class&lt;? extends T&gt; tClass : classList) {
+            try {
+                // Only try to instantiate real classes.
+                if(! Modifier.isAbstract(tClass.getModifiers()) &amp;&amp; ! Modifier.isInterface(tClass.getModifiers())) {
+                    tList.add(tClass.newInstance());
+                }
+            } catch (Throwable t) {
+                throw new RuntimeException(t.getMessage(), t);
+            }
+
+        }
+
+        return tList;
+    }
+
+    public static Class[] findByPackage(String packageName, Class isAssignableFrom) {
+        Class[] clazzes = getClassesInPackage(packageName, null);
+
+        if(isAssignableFrom == null) {
+            return clazzes;
+        } else {
+            List&lt;Class&gt; filteredList = new ArrayList&lt;Class&gt;();
+            for(Class clazz : clazzes) {
+                if(isAssignableFrom.isAssignableFrom(clazz))
+                    filteredList.add(clazz);
+            }
+
+            return filteredList.toArray(new Class[0]);
+        }
+    }
+
+    /**
+     * Scans all classes accessible from the context class loader which belong to the given package and subpackages.
+     * Adapted from http://snippets.dzone.com/posts/show/4831 and extended to support use of JAR files
+     *
+     * @param packageName The base package
+     * @param regexFilter an optional class name pattern.
+     * @return The classes
+     */
+    public static Class[] getClassesInPackage(String packageName, String regexFilter) {
+        Pattern regex = null;
+        if (regexFilter != null)
+            regex = Pattern.compile(regexFilter);
+
+        try {
+            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            assert classLoader != null;
+            String path = packageName.replace('.', '/');
+            Enumeration&lt;URL&gt; resources = classLoader.getResources(path);
+            List&lt;String&gt; dirs = new ArrayList&lt;String&gt;();
+            while (resources.hasMoreElements()) {
+                URL resource = resources.nextElement();
+                dirs.add(resource.getFile());
+            }
+            TreeSet&lt;String&gt; classes = new TreeSet&lt;String&gt;();
+            for (String directory : dirs) {
+                classes.addAll(findClasses(directory, packageName, regex));
+            }
+            ArrayList&lt;Class&gt; classList = new ArrayList&lt;Class&gt;();
+            for (String clazz : classes) {
+                classList.add(Class.forName(clazz));
+            }
+                return classList.toArray(new Class[classes.size()]);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+}
+</code></pre>

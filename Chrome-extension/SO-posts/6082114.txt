@@ -1,0 +1,150 @@
+<p>I put whole code from my SMS util. You should have a look at  <em>sendSms</em> function. The util allows you to watch for incoming sms and track sms sent by you ( If you want to do that ).</p>
+
+<p>The next part is to handle location updates. The best way how to do it depends on many things. You can obtain location via LocatinProviders ( GPS, wireless or passive ) or read cell info from TelephonyManager. Below you have some details about them:</p>
+
+<ol>
+<li><p>LocationProvider:</p>
+
+<ul>
+<li>returns geo lat/lon data</li>
+<li>you can not read data if user disabled "Use GPS satellites" and "User wireless networks"</li>
+<li>you will rather not get data if you are in a building ( no GPS signal there ).</li>
+<li>you have to wait very long for the location.</li>
+<li>very good accuracy.</li>
+<li>can drain battery a lot.</li>
+<li>"<a href="http://developer.android.com/reference/android/location/LocationManager.html#PASSIVE_PROVIDER" rel="nofollow">pasive</a>" provider can be a good choice for you.</li>
+</ul></li>
+<li><p>Cells.</p>
+
+<ul>
+<li>returns the neighboring cell information of the device.</li>
+<li>location is not available if your device is not connected to gsm/cdma network ( no sim card ).</li>
+<li>not good accuracy but rather for you purpose will be ok.</li>
+<li>doesn't kill battery so much.</li>
+</ul></li>
+</ol>
+
+<p>Which option is better for you ?</p>
+
+<pre><code>   package android.commons;
+
+    import java.util.ArrayList;
+    import java.util.HashMap;
+    import java.util.Map;
+
+    import android.app.Activity;
+    import android.app.PendingIntent;
+    import android.content.BroadcastReceiver;
+    import android.content.ContentValues;
+    import android.content.Context;
+    import android.content.Intent;
+    import android.content.IntentFilter;
+    import android.net.Uri;
+    import android.os.Bundle;
+    import android.telephony.gsm.SmsManager;
+    import android.telephony.gsm.SmsMessage;
+    import android.util.Log;
+
+    public final class SmsModem extends BroadcastReceiver {
+
+            private static final String SMS_DELIVER_REPORT_ACTION = "android.commons.SMS_DELIVER_REPORT";
+            private static final String SMS_DELIVER_REPORT_TOKEN_EXTRA = "token";
+
+            private static final String TAG = SmsModem.class.getSimpleName();
+            private final Context context;
+            private final SmsManager smsManager;
+            private final SmsModemListener listener;
+
+            private final Map&lt;String, Integer&gt; pendingSMS = new HashMap&lt;String, Integer&gt;();
+
+            public interface SmsModemListener {
+                    public void onSMSSent(String token);
+                    public void onSMSSendError(String token, String errorDetails);
+                    public void onNewSMS(String address, String message);
+            }
+
+            public SmsModem(Context c, SmsModemListener l) {
+                    context = c;
+                    listener = l;
+                    smsManager = SmsManager.getDefault();
+                    final IntentFilter filter = new IntentFilter();
+                    filter.addAction(SMS_DELIVER_REPORT_ACTION);
+                    filter.addAction("android.provider.Telephony.SMS_RECEIVED");
+                    context.registerReceiver(this, filter);         
+            }
+
+            public void sendSms(String address, String message, String token) {             
+                    if ( message != null &amp;&amp; address != null &amp;&amp; token != null) {
+                            final ArrayList&lt;String&gt; parts = smsManager.divideMessage(message);                      
+                            final Intent intent = new Intent(SMS_DELIVER_REPORT_ACTION);
+                            intent.putExtra(SMS_DELIVER_REPORT_TOKEN_EXTRA, token);                                         
+                            final PendingIntent sentIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+                            final ArrayList&lt;PendingIntent&gt; intents = new ArrayList&lt;PendingIntent&gt;();
+                            for ( int i = 0 ; i &lt; parts.size() ; i++ ) {
+                                    intents.add(sentIntent);
+                            }
+                            pendingSMS.put(token, parts.size());
+                            smsManager.sendMultipartTextMessage(address, null, parts, intents, null);
+                    }       
+            }
+
+            public void clear() {
+                    context.unregisterReceiver(this);
+            }
+
+            @Override
+            public void onReceive(Context c, Intent intent) {
+                    final String action = intent.getAction();
+                    if ( action.equalsIgnoreCase("android.provider.Telephony.SMS_RECEIVED")) {
+                            final Bundle bundle = intent.getExtras(); 
+                if (bundle != null) { 
+                        Object[] pdusObj = (Object[]) bundle.get("pdus"); 
+                        final SmsMessage[] messages = new SmsMessage[pdusObj.length]; 
+                        for (int i = 0; i&lt;pdusObj.length; i++) { 
+                            messages[i] = SmsMessage.createFromPdu ((byte[]) pdusObj[i]);
+                            final String address = messages[i].getDisplayOriginatingAddress();
+                            final String message = messages[i].getDisplayMessageBody();
+                            listener.onNewSMS(address, message);
+                        } 
+                    }
+                    } else if ( action.equalsIgnoreCase(SMS_DELIVER_REPORT_ACTION)) {
+                            final int resultCode = getResultCode();
+                            final String token = intent.getStringExtra(SMS_DELIVER_REPORT_TOKEN_EXTRA);
+                            Log.d(TAG, "Deliver report, result code '" + resultCode + "', token '" + token + "'");
+                            if ( resultCode == Activity.RESULT_OK ) {
+                                    if ( pendingSMS.containsKey(token) ) {
+                                            pendingSMS.put(token, pendingSMS.get(token).intValue() - 1);
+                                            if ( pendingSMS.get(token).intValue() == 0 ) {
+                                                    pendingSMS.remove(token);
+                                                    listener.onSMSSent(token);
+                                            }
+                                    }                               
+                            } else {
+                                    if ( pendingSMS.containsKey(token) ) {
+                                            pendingSMS.remove(token);
+                                            listener.onSMSSendError(token, extractError(resultCode, intent));                                       
+                                    }
+                            }
+                    }
+            }
+
+            private String extractError(int resultCode, Intent i) {
+                    switch ( resultCode ) {
+                    case SmsManager.RESULT_ERROR_GENERIC_FAILURE:
+                            if ( i.hasExtra("errorCode") ) {
+                                    return i.getStringExtra("errorCode");
+                            } else {
+                                    return "Unknown error. No 'errorCode' field.";
+                            }
+                    case SmsManager.RESULT_ERROR_NO_SERVICE:
+                            return "No service";                    
+                    case SmsManager.RESULT_ERROR_RADIO_OFF:
+                            return "Radio off";
+                    case SmsManager.RESULT_ERROR_NULL_PDU:
+                            return "PDU null";
+                            default:
+                                    return "really unknown error";
+                    }
+            }
+    }
+</code></pre>

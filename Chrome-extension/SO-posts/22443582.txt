@@ -1,0 +1,261 @@
+<p>It depends on what you really need, if you are planning to show simple notifications, maybe instead of toasts you can use Android notification bar (which is the standard way to show them). For example you can use:</p>
+
+<pre><code>  /**
+     * Show a notification while this service is running.
+     */
+    private void showNotification() {
+        // In this sample, we'll use the same text for the ticker and the expanded notification
+        CharSequence text = getText(R.string.local_service_started);
+
+        NotificationManager mNM;
+        mNM = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        // Set the icon, scrolling text and timestamp
+        Notification notification = new Notification(R.drawable.stat_sample, text,
+                System.currentTimeMillis());
+
+        // The PendingIntent to launch our activity if the user selects this notification
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
+                new Intent(this, LocalServiceActivities.Controller.class), 0);
+
+        // Set the info for the views that show in the notification panel.
+        notification.setLatestEventInfo(this, getText(R.string.local_service_label),
+                       text, contentIntent);
+
+        // Send the notification.
+        mNM.notify(NOTIFICATION, notification);
+    }
+</code></pre>
+
+<p>however, if you just want toasts, you can show them from the service, your problem is that the timertask is being executed in a different thread that the UI thread (where the service is running). to "post" this code to the UI thread you can do it directly with something like this:</p>
+
+<pre><code>Handler handler;
+
+    @Override
+    public void onCreate() {
+        // Handler will get associated with the current thread, 
+        // which is the main thread.
+        handler = new Handler();
+        super.onCreate();
+    }
+
+    private void runOnUiThread(Runnable runnable) {
+        handler.post(runnable);
+    }
+</code></pre>
+
+<p><a href="http://stackoverflow.com/questions/18948251/not-able-to-call-runonuithread-in-a-thread-from-inside-of-a-service">Source</a></p>
+
+<p>And finally if you want fully interaction between service and activities, you have several ways:</p>
+
+<ol>
+<li>Use binders, for simple communications, this is moreless what you need.</li>
+<li>Use a messenger, to more complicated communications.</li>
+<li>If you only need dialogs you are always able to launch new activities in dialog mode.</li>
+<li>AIDL...</li>
+</ol>
+
+<p>Documentation about 1 &amp; 2 <a href="http://developer.android.com/reference/android/app/Service.html#LocalServiceSample" rel="nofollow">here</a> and <a href="http://developer.android.com/guide/components/bound-services.html" rel="nofollow">here</a></p>
+
+<ol>
+<li><p>Binders:
+They let you bind different objects in your application letting them access directly to the object itself and its functions, example from android doc:</p>
+
+<p>public class LocalService extends Service {
+        // Binder given to clients
+        private final IBinder mBinder = new LocalBinder();
+        // Random number generator
+        private final Random mGenerator = new Random();</p>
+
+<pre><code>    /**
+     * Class used for the client Binder.  Because we know this service always
+     * runs in the same process as its clients, we don't need to deal with IPC.
+     */
+    public class LocalBinder extends Binder {
+        LocalService getService() {
+            // Return this instance of LocalService so clients can call public methods
+            return LocalService.this;
+        }
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return mBinder;
+    }
+
+    /** method for clients */
+    public int getRandomNumber() {
+      return mGenerator.nextInt(100);
+    }
+}
+
+public class BindingActivity extends Activity {
+    LocalService mService;
+    boolean mBound = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Bind to LocalService
+        Intent intent = new Intent(this, LocalService.class);
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Unbind from the service
+        if (mBound) {
+            unbindService(mConnection);
+            mBound = false;
+        }
+    }
+
+    /** Called when a button is clicked (the button in the layout file attaches to
+      * this method with the android:onClick attribute) */
+    public void onButtonClick(View v) {
+        if (mBound) {
+            // Call a method from the LocalService.
+            // However, if this call were something that might hang, then this request should
+            // occur in a separate thread to avoid slowing down the activity performance.
+            int num = mService.getRandomNumber();
+            Toast.makeText(this, "number: " + num, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Defines callbacks for service binding, passed to bindService() */
+    private ServiceConnection mConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceConnected(ComponentName className,
+                IBinder service) {
+            // We've bound to LocalService, cast the IBinder and get LocalService instance
+            LocalBinder binder = (LocalBinder) service;
+            mService = binder.getService();
+            mBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName arg0) {
+            mBound = false;
+        }
+    };
+}
+</code></pre></li>
+<li><p>Messenger: 
+More advanced &amp; complicated, in this way you can send messages from one object to another:</p>
+
+<p>public class MessengerService extends Service {
+        /** Command to the service to display a message */
+        static final int MSG_SAY_HELLO = 1;</p>
+
+<pre><code>    /**
+     * Handler of incoming messages from clients.
+     */
+    class IncomingHandler extends Handler {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case MSG_SAY_HELLO:
+                    Toast.makeText(getApplicationContext(), "hello!", Toast.LENGTH_SHORT).show();
+                    break;
+                default:
+                    super.handleMessage(msg);
+            }
+        }
+    }
+
+    /**
+     * Target we publish for clients to send messages to IncomingHandler.
+     */
+    final Messenger mMessenger = new Messenger(new IncomingHandler());
+
+    /**
+     * When binding to the service, we return an interface to our messenger
+     * for sending messages to the service.
+     */
+    @Override
+    public IBinder onBind(Intent intent) {
+        Toast.makeText(getApplicationContext(), "binding", Toast.LENGTH_SHORT).show();
+        return mMessenger.getBinder();
+    }
+}
+
+
+
+ public class ActivityMessenger extends Activity {
+        /** Messenger for communicating with the service. */
+        Messenger mService = null;
+
+        /** Flag indicating whether we have called bind on the service. */
+        boolean mBound;
+
+        /**
+         * Class for interacting with the main interface of the service.
+         */
+        private ServiceConnection mConnection = new ServiceConnection() {
+            public void onServiceConnected(ComponentName className, IBinder service) {
+                // This is called when the connection with the service has been
+                // established, giving us the object we can use to
+                // interact with the service.  We are communicating with the
+                // service using a Messenger, so here we get a client-side
+                // representation of that from the raw IBinder object.
+                mService = new Messenger(service);
+                mBound = true;
+            }
+
+            public void onServiceDisconnected(ComponentName className) {
+                // This is called when the connection with the service has been
+                // unexpectedly disconnected -- that is, its process crashed.
+                mService = null;
+                mBound = false;
+            }
+        };
+
+        public void sayHello(View v) {
+            if (!mBound) return;
+            // Create and send a message to the service, using a supported 'what' value
+            Message msg = Message.obtain(null, MessengerService.MSG_SAY_HELLO, 0, 0);
+            try {
+                mService.send(msg);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.main);
+        }
+
+        @Override
+        protected void onStart() {
+            super.onStart();
+            // Bind to the service
+            bindService(new Intent(this, MessengerService.class), mConnection,
+                Context.BIND_AUTO_CREATE);
+        }
+
+        @Override
+        protected void onStop() {
+            super.onStop();
+            // Unbind from the service
+            if (mBound) {
+                unbindService(mConnection);
+                mBound = false;
+            }
+        }
+    }
+</code></pre></li>
+</ol>
+
+<p>In case you want to show activities as fancy dialogs to show the updates you can use a regular activity with this theme:</p>
+
+<pre><code>&lt;activity android:theme="@android:style/Theme.Dialog" /&gt;
+</code></pre>

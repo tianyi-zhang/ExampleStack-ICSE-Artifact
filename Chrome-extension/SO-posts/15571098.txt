@@ -1,0 +1,198 @@
+<p>try this:BirtEngine.java:</p>
+
+<pre><code>public class BirtEngine {
+    private static IReportEngine birtEngine = null;
+    private static Properties configProps = new Properties();
+    private final static String configFile = "BirtConfig.properties";
+    public static synchronized void initBirtConfig() {
+        loadEngineProps();
+    }
+    public static synchronized IReportEngine getBirtEngine(ServletContext sc) {
+        if (birtEngine == null) 
+        {
+            EngineConfig config = new EngineConfig();
+            if( configProps != null){
+                String logLevel = configProps.getProperty("logLevel");
+                Level level = Level.OFF;
+                if ("SEVERE".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.SEVERE;
+                } else if ("WARNING".equalsIgnoreCase(logLevel))
+                {
+                    level = Level.WARNING;
+                } else if ("INFO".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.INFO;
+                } else if ("CONFIG".equalsIgnoreCase(logLevel))
+                {
+                    level = Level.CONFIG;
+                } else if ("FINE".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.FINE;
+                } else if ("FINER".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.FINER;
+                } else if ("FINEST".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.FINEST;
+                } else if ("OFF".equalsIgnoreCase(logLevel)) 
+                {
+                    level = Level.OFF;
+                }
+
+                config.setLogConfig(configProps.getProperty("logDirectory"), level);
+            }
+
+            config.setEngineHome("");
+            IPlatformContext context = new PlatformServletContext( sc );
+            //IPlatformContext context = new PlatformFileContext();
+            config.setPlatformContext( context );
+            //Create the report engine
+            //birtEngine = new ReportEngine( config );
+            //ReportEngine engine = new ReportEngine( null );
+            try
+            {
+                Platform.startup( config );
+            }
+            catch ( BirtException e )
+            {
+                e.printStackTrace( );
+            }
+            IReportEngineFactory factory = (IReportEngineFactory) Platform
+            .createFactoryObject( IReportEngineFactory.EXTENSION_REPORT_ENGINE_FACTORY );
+            birtEngine = factory.createReportEngine( config );
+        }
+        return birtEngine;
+    }
+    public static synchronized void destroyBirtEngine() {
+        if (birtEngine == null) {
+            return;
+        }       
+        birtEngine.destroy();
+        Platform.shutdown();
+        birtEngine = null;
+    }
+    public Object clone() throws CloneNotSupportedException {
+        throw new CloneNotSupportedException();
+    }
+    private static void loadEngineProps() {
+        try {
+            //Config File must be in classpath
+            ClassLoader cl = Thread.currentThread ().getContextClassLoader();
+            InputStream in = null;
+            in = cl.getResourceAsStream (configFile);
+            configProps.load(in);
+            in.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+</code></pre>
+
+<p>webreport.java:</p>
+
+<pre><code>public class WebReport extends HttpServlet {
+    /**
+     * 
+     */
+    private static final long serialVersionUID = 1L;
+    /**
+     * Constructor of the object.
+     */
+    private IReportEngine birtReportEngine = null;
+    protected static Logger logger = Logger.getLogger( "org.eclipse.birt" );
+    public WebReport() {
+        super();
+    }
+    /**
+     * Destruction of the servlet. &lt;br&gt;
+     */
+    public void destroy() {
+        super.destroy(); 
+        BirtEngine.destroyBirtEngine();
+    }
+    /**
+     * The doGet method of the servlet. &lt;br&gt;
+     *
+     */
+    public void doGet(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        //get report name and launch the engine
+        //resp.setContentType("text/html");
+        //resp.setContentType( "application/pdf" ); 
+        resp.setContentType( "application/msword" ); 
+        //resp.setHeader ("Content-Disposition","inline; filename=test.pdf");   
+        resp.setHeader("Content-disposition","attachment; filename=\"" +"test.doc" +"\"");
+        String reportName = req.getParameter("ReportName");
+        ServletContext sc = req.getSession().getServletContext();
+        this.birtReportEngine = BirtEngine.getBirtEngine(sc);
+        IReportRunnable design;
+        try
+        {
+            //Open report design
+            design = birtReportEngine.openReportDesign( sc.getRealPath("/Reports")+"/"+reportName );
+            //create task to run and render report
+            IRunAndRenderTask task = birtReportEngine.createRunAndRenderTask( design );     
+            task.getAppContext().put(EngineConstants.APPCONTEXT_CLASSLOADER_KEY, WebReport.class.getClassLoader()); 
+            task.getAppContext().put("BIRT_VIEWER_HTTPSERVLET_REQUEST", req );          
+            //set output options
+            //HTMLRenderOption options = new HTMLRenderOption();
+            //options.setOutputFormat(HTMLRenderOption.OUTPUT_FORMAT_HTML);
+            //options.setOutputStream(resp.getOutputStream());
+            //options.setImageHandler(new HTMLServerImageHandler());
+            //options.setBaseImageURL(req.getContextPath()+"/images");
+            //options.setImageDirectory(sc.getRealPath("/images"));
+            /*PDFRenderOption options = new PDFRenderOption();
+            options.setOutputFormat(HTMLRenderOption.OUTPUT_FORMAT_PDF);    
+            options.setOutputStream(resp.getOutputStream());
+            */
+            RenderOption options = new RenderOption();  
+            options.setOutputFormat("doc");
+            options.setOutputStream(resp.getOutputStream());
+            //options.setEnableAgentStyleEngine(true);
+            //options.setEnableInlineStyle(true);
+            task.setRenderOption(options);
+            //run report
+            task.run();
+            task.close();
+        }catch (Exception e){
+        e.printStackTrace();
+            throw new ServletException( e );
+        }
+    }
+    /**
+     * The doPost method of the servlet. &lt;br&gt;
+     *
+     */
+    public void doPost(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        response.setContentType("text/html");
+        PrintWriter out = response.getWriter();
+        out.println("&lt;!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\"&gt;");
+        out.println("&lt;HTML&gt;");
+        out.println("  &lt;HEAD&gt;&lt;TITLE&gt;A Servlet&lt;/TITLE&gt;&lt;/HEAD&gt;");
+        out.println("  &lt;BODY&gt;");
+        out.println(" Post Not Supported");
+        out.println("  &lt;/BODY&gt;");
+        out.println("&lt;/HTML&gt;");
+        out.flush();
+        out.close();
+    }
+    /**
+     * Initialization of the servlet. &lt;br&gt;
+     *
+     * @throws ServletException if an error occure
+     */
+    public void init(ServletConfig sc) throws ServletException {
+        BirtEngine.initBirtConfig();
+        this.birtReportEngine = BirtEngine.getBirtEngine(sc.getServletContext());
+    }
+}
+</code></pre>
+
+<p>birtconfigproperty:</p>
+
+<pre><code>ogDirectory=c:/temp
+logLevel=FINEST
+</code></pre>

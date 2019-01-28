@@ -1,0 +1,171 @@
+<p>I changed the scroll button position without using many other components but simply extends the BasicTabbedPaneUI and hacking its paint() method to adjust the button position.</p>
+
+<p>Here is the code:</p>
+
+<pre><code>public class MyTabbedScrollPane extends JTabbedPane {       
+    public MyTabbedScrollPane ()
+    {
+        super ();
+    }
+
+    public MyTabbedScrollPane ( final int tabPlacement )
+    {
+        super ( tabPlacement );
+    }
+
+    public MyTabbedScrollPane ( final int tabPlacement, final int tabLayoutPolicy )
+    {
+        super ( tabPlacement, tabLayoutPolicy );
+        initialize();
+    }
+
+    public void initialize() {
+        setUI(new MyTabbedPaneUI());
+    }
+
+    private class MyTabbedPaneUI extends BasicTabbedPaneUI {
+        private int leadingTabIndex;
+        private Point tabViewPosition;
+        private Component adjustedButton;
+        private boolean scrollableTabLayoutEnabled() {
+            return tabPane.getTabLayoutPolicy() == SCROLL_TAB_LAYOUT;
+        }
+        /*
+         * Target button and view port utilities
+         */
+        private Component findBackwardButton() {
+            Component[] comps = tabPane.getComponents();
+            for(Component comp:comps) {
+                if(comp instanceof BasicArrowButton) {
+                    int direction = ((BasicArrowButton)comp).getDirection();
+                    if(tabPane.getTabPlacement() == TOP || tabPane.getTabPlacement() == BOTTOM) {
+                        if(direction == WEST) {
+                            return comp;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        private JViewport findViewPort() {
+            Component[] comps = tabPane.getComponents();
+            for(Component comp:comps) {
+                if(comp instanceof JViewport) {
+                    return (JViewport)comp;
+                }
+            }
+            return null;
+        }
+        /*
+         * Override View port controlling (copy from BasicTabbedPaneUI.java)
+         */
+        public void scrollForward(int tabPlacement) {
+            JViewport viewport = findViewPort();
+            Dimension viewSize = viewport.getViewSize();
+            Rectangle viewRect = viewport.getViewRect();
+
+            if (tabPlacement == TOP || tabPlacement == BOTTOM) {
+                if (viewRect.width &gt;= viewSize.width - viewRect.x) {
+                    return; // no room left to scroll
+                }
+            } else { // tabPlacement == LEFT || tabPlacement == RIGHT
+                if (viewRect.height &gt;= viewSize.height - viewRect.y) {
+                    return;
+                }
+            }
+            setLeadingTabIndex(tabPlacement, leadingTabIndex+1);
+        }
+
+        public void scrollBackward(int tabPlacement) {
+            if (leadingTabIndex == 0) {
+                return; // no room left to scroll
+            }
+            setLeadingTabIndex(tabPlacement, leadingTabIndex-1);
+        }
+
+        public void setLeadingTabIndex(int tabPlacement, int index) {
+            JViewport viewport = findViewPort();
+            leadingTabIndex = index;       
+            Dimension viewSize = viewport.getViewSize();
+            Rectangle viewRect = viewport.getViewRect();
+
+            int offsetX = adjustedButton.getWidth()+2;
+
+            switch(tabPlacement) {
+              case TOP:
+              case BOTTOM:
+                tabViewPosition.x = leadingTabIndex == 0? 0-offsetX : rects[leadingTabIndex].x-offsetX;
+
+                if ((viewSize.width - tabViewPosition.x) &lt; viewRect.width) {
+                    // We've scrolled to the end, so adjust the viewport size
+                    // to ensure the view position remains aligned on a tab boundary
+                    Dimension extentSize = new Dimension(viewSize.width - tabViewPosition.x, 
+                                                         viewRect.height);
+                    viewport.setExtentSize(extentSize);
+                }
+                break;
+              case LEFT:
+              case RIGHT:
+                tabViewPosition.y = leadingTabIndex == 0? 0 : rects[leadingTabIndex].y;
+
+                if ((viewSize.height - tabViewPosition.y) &lt; viewRect.height) {
+                // We've scrolled to the end, so adjust the viewport size
+                // to ensure the view position remains aligned on a tab boundary
+                     Dimension extentSize = new Dimension(viewRect.width, 
+                                                          viewSize.height - tabViewPosition.y);
+                     viewport.setExtentSize(extentSize);
+                }
+            }
+            viewport.setViewPosition(tabViewPosition);
+        }
+        /*
+         * UI Rendering
+         */
+        public void paint(final Graphics g, JComponent c) {
+            super.paint(g, c);
+            if(scrollableTabLayoutEnabled()) {
+                if(adjustedButton == null) {
+                    adjustedButton = findBackwardButton();
+                    tabViewPosition = new Point(0-(adjustedButton.getWidth()+2), 0);
+                    Component[] comps = tabPane.getComponents();
+                    for(Component comp:comps) {
+                        if(comp instanceof BasicArrowButton) {
+                            if(comp instanceof BasicArrowButton) {
+                                BasicArrowButton button = (BasicArrowButton)comp;
+                                int direction = button.getDirection();
+                                if(tabPane.getTabPlacement() == TOP || tabPane.getTabPlacement() == BOTTOM) {
+                                    // left align the west button
+                                    if(direction == WEST) {
+                                        button.removeActionListener(button.getActionListeners()[0]);
+                                        button.addActionListener(new ActionListener() {                                         
+                                            @Override
+                                            public void actionPerformed(ActionEvent e) {
+                                                scrollBackward(tabPane.getTabPlacement());
+                                            }
+                                        });
+                                    } else if(direction == EAST) {
+                                        button.removeActionListener(button.getActionListeners()[0]);
+                                        button.addActionListener(new ActionListener() {                                         
+                                            @Override
+                                            public void actionPerformed(ActionEvent e) {
+                                                scrollForward(tabPane.getTabPlacement());
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if(adjustedButton != null &amp;&amp; adjustedButton.isVisible()) {
+                    // move the scroll button
+                    int by = adjustedButton.getY();
+                    adjustedButton.setLocation(0, by);
+                    findViewPort().setViewPosition(tabViewPosition);
+                    return;
+                }
+            }
+        }
+    }
+}
+</code></pre>

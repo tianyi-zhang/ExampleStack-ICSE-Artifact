@@ -1,0 +1,695 @@
+<p>Thank you to @Sheldon for pointing me in the right direction regarding <code>setRetainInstance(true)</code> on a 'headless' fragment. That's the route I took in solving this problem, and now I'd like to paste my code here to hopefully help others. But first:</p>
+
+<h3>Verbal Explanation</h3>
+
+<p>As stated in the Question, a <strong>device orientation change</strong> will destroy the <code>MainActivity extends BaseGameActivity</code>, and with it your game state (ie. your connection to Google Play Services). However, we can put all our GameHelper code into a 'headless' Fragment (a fragment without a UI), with <code>setRetainInstance(true)</code> declared.  Now, when our <code>MainActivity extends FragmentActivity</code> is destroyed on an orientation change, the headless fragment gets stopped, and even detached, but <strong>not destroyed</strong>! (<code>onDestroy()</code> is not called)  When <code>MainActivity</code> is re-created by Android, our headless fragment gets re-attached to it automatically. At this time, in our headless fragment, <code>onCreate()</code> is NOT called. So <code>onCreate()</code> is the place we connect to GameHelper.  We can disconnect from GameHelper in <code>onDestroy()</code> because this will never get called, except when the <strong>Application</strong> finishes (which, at that time, it's ok to kill our connection).</p>
+
+<p>Note: I think <code>GameHeaderFragment.java</code> should probably be broken up into an Abstract class and a game-specific class which inherits from it (but I didn't do that here).</p>
+
+<p>Here's what I came up with (please forgive the areas where my game-specific code interweaves):</p>
+
+<h1>GameHeaderFragment.java</h1>
+
+<pre><code>public class GameHelperFragment extends Fragment implements GameHelperListener, OnInvitationReceivedListener, RoomUpdateListener, RoomStatusUpdateListener, RealTimeMessageReceivedListener {
+
+    protected MainActivity mActivity = null;
+
+    // The game helper object. This class is mainly a wrapper around this object.
+    protected GameHelper mHelper;
+
+    final static int MAX_NUM_PLAYERS = 4;
+
+    // Request codes for the UIs that we show with startActivityForResult:
+    final static int RC_SELECT_PLAYERS = 10000;
+    final static int RC_INVITATION_INBOX = 10001;
+    final static int RC_WAITING_ROOM = 10002;
+
+    // We expose these constants here because we don't want users of this class
+    // to have to know about GameHelper at all.
+    public static final int CLIENT_GAMES = GameHelper.CLIENT_GAMES;
+    public static final int CLIENT_APPSTATE = GameHelper.CLIENT_APPSTATE;
+    public static final int CLIENT_PLUS = GameHelper.CLIENT_PLUS;
+    public static final int CLIENT_ALL = GameHelper.CLIENT_ALL;
+
+    // Requested clients. By default, that's just the games client.
+    protected int mRequestedClients = CLIENT_GAMES;
+
+    protected String mSigningInMessage = "Signing in with Google";
+    protected String mSigningOutMessage = "Signing out";
+
+    // Custom Members
+    String mMyId = "";
+    String mRoomId = "";
+    ArrayList&lt;Participant&gt; mParticipants = null;
+
+    int mCurrentlyPlayingIdx = 0;  // idx into mParticipants
+    boolean mIsMultiplayer = false;
+    boolean mWaitRoomDismissedFromCode = false;
+
+    public interface GameHelperFragmentListener {
+        void onSignInFailed();
+        void onSignInSucceeded();
+        void onInvitationReceived(Invitation invitation);
+        void showMainMenu();
+        void showWaitScreen();
+        void startGame();
+        void participantLeftAtIdx(int idx);
+        void handleRealTimeMessage(RealTimeMessage rtm);
+    }
+
+    GameHelperFragmentListener mListener;
+
+    public GameHelperFragment() {
+        super();
+        Log.d("mab", "GHFrag.Constructor()");
+    }
+
+    /**
+     * Sets the requested clients. The preferred way to set the requested clients is
+     * via the constructor, but this method is available if for some reason your code
+     * cannot do this in the constructor. This must be called before onCreate in order to
+     * have any effect. If called after onCreate, this method is a no-op.
+     *
+     * @param requestedClients A combination of the flags CLIENT_GAMES, CLIENT_PLUS
+     *         and CLIENT_APPSTATE, or CLIENT_ALL to request all available clients.
+     */
+    protected void setRequestedClients(int requestedClients) {
+        mRequestedClients = requestedClients;
+    }
+
+    @Override
+    public void onAttach(Activity activity) {
+        Log.d("mab", this + ": onAttach(" + activity + ")");
+        super.onAttach(activity);
+        mActivity = (MainActivity) activity;
+        mListener = (GameHelperFragmentListener) activity;
+    }
+
+    @Override
+    public void onCreate(Bundle b) {
+        Log.d("mab", this + ": onCreate()");
+        super.onCreate(b);
+        setRetainInstance(true);
+        mHelper = new GameHelper(mActivity);
+        mHelper.setup(this, mRequestedClients);  //'this' =&gt; GameHelperListener
+
+        mHelper.setSigningInMessage(mSigningInMessage);
+        mHelper.setSigningOutMessage(mSigningOutMessage);
+        mHelper.onStart(mActivity);
+
+    }
+
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        return null;  // Headless Fragment
+    }
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+        Log.d("mab", this + ": onActivityCreated()");
+        super.onActivityCreated(savedInstanceState);
+    }
+
+    @Override
+    public void onDestroy() {
+        Log.d("mab", this + ": onDestroy()");
+        super.onDestroy();
+        mHelper.onStop();
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int responseCode, Intent data) {
+        Log.d("mab", this + ": onActivityResult(" + requestCode + ")");
+        super.onActivityResult(requestCode, responseCode, data);
+        mHelper.onActivityResult(requestCode, responseCode, data);
+
+        switch (requestCode) {
+        case RC_SELECT_PLAYERS:
+            // we got the result from the "select players" UI -- ready to create the room
+            handleSelectPlayersResult(responseCode, data);
+            break;
+        case RC_INVITATION_INBOX:
+            // we got the result from the "select invitation" UI (invitation inbox). We're
+            // ready to accept the selected invitation:
+            handleInvitationInboxResult(responseCode, data);
+            break;
+        case RC_WAITING_ROOM:
+            // ignore result if we dismissed the waiting room from code:
+            if (mWaitRoomDismissedFromCode) break;
+
+            // we got the result from the "waiting room" UI.
+            if (responseCode == Activity.RESULT_OK) {
+
+            } else if (responseCode == GamesActivityResultCodes.RESULT_LEFT_ROOM) {
+                // player actively indicated that they want to leave the room
+                leaveRoom();
+            } else if (responseCode == Activity.RESULT_CANCELED) {
+                leaveRoom();
+            }
+
+            break;
+        }
+    }
+
+    // Handle the result of the "Select players UI" we launched when the user clicked the
+    // "Invite friends" button. We react by creating a room with those players.
+    private void handleSelectPlayersResult(int responseCode, Intent data) {
+        if (responseCode != Activity.RESULT_OK) {
+            Log.w("mab", "*** select players UI cancelled, " + responseCode);
+            showMainMenu();
+            return;
+        }
+
+        Log.d("mab", "Select players UI succeeded.");
+
+        // get the invitee list
+        final ArrayList&lt;String&gt; invitees = data.getStringArrayListExtra(GamesClient.EXTRA_PLAYERS);
+        Log.d("mab", "Invitee count: " + invitees.size());
+
+        // get the automatch criteria
+        Bundle autoMatchCriteria = null;
+        int minAutoMatchPlayers = data.getIntExtra(GamesClient.EXTRA_MIN_AUTOMATCH_PLAYERS, 0);
+        int maxAutoMatchPlayers = data.getIntExtra(GamesClient.EXTRA_MAX_AUTOMATCH_PLAYERS, 0);
+        if (minAutoMatchPlayers &gt; 0 || maxAutoMatchPlayers &gt; 0) {
+            autoMatchCriteria = RoomConfig.createAutoMatchCriteria(
+                    minAutoMatchPlayers, maxAutoMatchPlayers, 0);
+            Log.d("mab", "Automatch criteria: " + autoMatchCriteria);
+        }
+
+        // create the room
+        Log.d("mab", "Creating room...");
+        RoomConfig.Builder rtmConfigBuilder = RoomConfig.builder(this);
+        rtmConfigBuilder.addPlayersToInvite(invitees);
+        rtmConfigBuilder.setMessageReceivedListener(this);
+        rtmConfigBuilder.setRoomStatusUpdateListener(this);
+        if (autoMatchCriteria != null) {
+            rtmConfigBuilder.setAutoMatchCriteria(autoMatchCriteria);
+        }
+        showWaitScreen();
+
+        keepScreenOn();
+        getGamesClient().createRoom(rtmConfigBuilder.build());
+        Log.d("mab", "Room configured, waiting for it to be created...");
+    }
+
+    // Handle the result of the invitation inbox UI, where the player can pick an invitation
+    // to accept. We react by accepting the selected invitation, if any.
+    private void handleInvitationInboxResult(int response, Intent data) {
+        if (response != Activity.RESULT_OK) {
+            Log.d("mab", "*** invitation inbox UI cancelled, " + response);
+            showMainMenu();
+            return;
+        }
+
+        Log.d("mab", "Invitation inbox UI succeeded.");
+        Invitation inv = data.getExtras().getParcelable(GamesClient.EXTRA_INVITATION);
+
+        // accept invitation
+        acceptInviteToRoom(inv.getInvitationId());
+    }
+
+    protected GamesClient getGamesClient() {
+        return mHelper.getGamesClient();
+    }
+
+    protected AppStateClient getAppStateClient() {
+        return mHelper.getAppStateClient();
+    }
+
+    protected PlusClient getPlusClient() {
+        return mHelper.getPlusClient();
+    }
+
+    protected boolean isSignedIn() {
+        return mHelper.isSignedIn();
+    }
+
+    protected void beginUserInitiatedSignIn() {
+        mHelper.beginUserInitiatedSignIn();
+    }
+
+    protected void signOut() {
+        mHelper.signOut();
+    }
+
+    protected void showAlert(String title, String message) {
+        mHelper.showAlert(title, message);
+    }
+
+    protected void showAlert(String message) {
+        mHelper.showAlert(message);
+    }
+
+    protected void enableDebugLog(boolean enabled, String tag) {
+        mHelper.enableDebugLog(enabled, tag);
+    }
+
+    protected String getInvitationId() {
+        return mHelper.getInvitationId();
+    }
+
+    protected void reconnectClients(int whichClients) {
+        mHelper.reconnectClients(whichClients);
+    }
+
+    protected String getScopes() {
+        return mHelper.getScopes();
+    }
+
+    protected boolean hasSignInError() {
+        return mHelper.hasSignInError();
+    }
+
+    protected ConnectionResult getSignInError() {
+        return mHelper.getSignInError();
+    }
+
+    protected void setSignInMessages(String signingInMessage, String signingOutMessage) {
+        mSigningInMessage = signingInMessage;
+        mSigningOutMessage = signingOutMessage;
+    }
+
+    public void setRoomId(String rid) {
+        mRoomId = rid;
+    }
+    public String getRoomId() {
+        return mRoomId;
+    }
+
+    @Override
+    public void onRealTimeMessageReceived(RealTimeMessage rtm) {
+        mListener.handleRealTimeMessage(rtm);
+    }
+
+    // Called when we are connected to the room. We're not ready to play yet! (maybe not everybody is connected yet).
+    @Override
+    public void onConnectedToRoom(Room room) {
+
+        Log.d("mab", "onConnectedToRoom.");
+
+        // get room ID, participants and my ID:
+        mRoomId = room.getRoomId();
+        mParticipants = room.getParticipants();
+        mMyId = room.getParticipantId(getGamesClient().getCurrentPlayerId());
+
+        // print out the list of participants (for debug purposes)
+        Log.d("mab", "Room ID: " + mRoomId);
+        Log.d("mab", "My ID " + mMyId);
+        Log.d("mab", "&lt;&lt; CONNECTED TO ROOM&gt;&gt;");
+        Log.d("mab", "  Number of Joined Participants: " + getNumJoinedParticipants());
+    }
+
+    // Called when we get disconnected from the room. We return to the main screen.
+    @Override
+    public void onDisconnectedFromRoom(Room room) {
+        mIsMultiplayer = false;
+        mRoomId = null;
+        showGameError("Disconnected from room");
+    }
+
+
+    @Override
+    public void onJoinedRoom(int statusCode, Room room) {
+        Log.d("mab", "onJoinedRoom(" + statusCode + ")");
+        if (room != null) { Log.d("mab", " roomId: " + room.getRoomId()); }
+        if (statusCode != GamesClient.STATUS_OK) {
+            mIsMultiplayer = false;
+            Log.e("mab", "*** Error: onJoinedRoom, status " + statusCode);
+            showGameError("Joined room unsuccessfully: " + statusCode);
+            return;
+        }
+        mRoomId = room.getRoomId();
+
+        // show the waiting room UI
+        showWaitingRoom(room);
+    }
+
+    // Called when we've successfully left the room (this happens a result of voluntarily leaving
+    // via a call to leaveRoom(). If we get disconnected, we get onDisconnectedFromRoom()).
+    @Override
+    public void onLeftRoom(int statusCode, String roomId) {
+        // we have left the room; return to main screen.
+        Log.d("mab", "onLeftRoom, code " + statusCode);
+
+        mRoomId = null;  //????? right?
+
+        showMainMenu();
+    }
+
+    // Called when room is fully connected.
+    @Override
+    public void onRoomConnected(int statusCode, Room room) {
+        Log.d("mab", "onRoomConnected(" + statusCode + ")");
+        if (room != null) { Log.d("mab", " roomId: " + room.getRoomId()); }
+        if (statusCode != GamesClient.STATUS_OK) {
+            mIsMultiplayer = false;
+            Log.d("mab", "*** Error: onRoomConnected, status " + statusCode);
+            showGameError("Roon connected unsuccessfully: " + statusCode);
+            return;
+        }
+        mRoomId = room.getRoomId();
+
+        mParticipants = room.getParticipants();  // not sure if we need this here again, but shouldn't hurt (or maybe we want this ONLY here)
+        mIsMultiplayer = true;
+
+        // Set 1st player to take a turn
+        mCurrentlyPlayingIdx = 0;
+
+        // Start Game!
+        mListener.startGame();
+
+    }
+
+    // Called when room has been created
+    @Override
+    public void onRoomCreated(int statusCode, Room room) {
+        Log.d("mab", "onRoomCreated(" + statusCode + ")");
+        if (room != null) { Log.d("mab", " roomId: " + room.getRoomId()); }
+        if (statusCode != GamesClient.STATUS_OK) {
+            mIsMultiplayer = false;
+            Log.e("mab", "*** Error: onRoomCreated, status " + statusCode);
+            showGameError("Room not created successfully: " + statusCode);
+            return;
+        }
+        mRoomId = room.getRoomId();
+
+        // show the waiting room UI
+        showWaitingRoom(room);
+    }
+
+    // Called when we get an invitation to play a game. We react by showing that to the user.
+    @Override
+    public void onInvitationReceived(Invitation invitation) {
+        Log.d("mab", "ghFrag.onInvitationReceived()");
+
+        mListener.onInvitationReceived(invitation);
+    }
+
+    @Override
+    public void onSignInFailed() {
+        mListener.onSignInFailed();
+    }
+
+    @Override
+    public void onSignInSucceeded() {
+        // install invitation listener so we get notified if we receive an invitation to play a game.
+        getGamesClient().registerInvitationListener(this);
+
+        if (getInvitationId() != null) {
+            acceptInviteToRoom(getInvitationId());
+            return;
+        }
+
+        mListener.onSignInSucceeded();
+    }
+
+    // Accept the given invitation.
+    void acceptInviteToRoom(String invId) {
+        // accept the invitation
+        Log.d("mab", "Accepting invitation: " + invId);
+        keepScreenOn();
+
+        RoomConfig.Builder roomConfigBuilder = RoomConfig.builder(this);
+        roomConfigBuilder.setInvitationIdToAccept(invId)
+        .setMessageReceivedListener(this)
+        .setRoomStatusUpdateListener(this);
+        showWaitScreen();
+        getGamesClient().joinRoom(roomConfigBuilder.build());
+    }
+
+    // Sets the flag to keep this screen on. It's recommended to do that during the handshake when setting up a game, because if the screen turns off, the game will be cancelled.
+    void keepScreenOn() {
+        getActivity().getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    // Clears the flag that keeps the screen on.
+    void stopKeepingScreenOn() {
+        getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    public void inviteFriends() {
+        // show list of invitable players
+        Intent intent = getGamesClient().getSelectPlayersIntent(1, 3);
+        showWaitScreen();
+        startActivityForResult(intent, RC_SELECT_PLAYERS);
+    }
+
+    // Leave the room.
+    void leaveRoom() {
+        Log.d("mab", "Leaving room.");
+
+        mIsMultiplayer = false;
+        stopKeepingScreenOn();
+        if (mRoomId != null) {
+            getGamesClient().leaveRoom(this, mRoomId);
+            mRoomId = null;
+            showWaitScreen();
+        } else {
+            showMainMenu();
+        }
+    }
+
+    // Show the waiting room UI to track the progress of other players as they enter the
+    // room and get connected.
+    void showWaitingRoom(Room room) {
+        Log.d("mab", "GHFrag.showWaitingRoom()");
+        mWaitRoomDismissedFromCode = false;
+
+        int minPlayers = MAX_NUM_PLAYERS;  // This just means the "Start" menu item will never be enabled (waiting room will exit automatically once everyone has made a decision)
+        Intent i = getGamesClient().getRealTimeWaitingRoomIntent(room, minPlayers);
+
+        // show waiting room UI
+        getActivity().startActivityForResult(i, RC_WAITING_ROOM);
+    }
+
+    // Forcibly dismiss the waiting room UI (this is useful, for example, if we realize the
+    // game needs to start because someone else is starting to play).
+    void dismissWaitingRoom() {
+        mWaitRoomDismissedFromCode = true;
+        getActivity().finishActivity(RC_WAITING_ROOM);  //getActivity() ?????
+    }
+
+    // Show error message about game being cancelled and return to main screen.
+    void showGameError(String msg) {
+        showAlert("Error", "Game Error: " + msg);
+        showMainMenu();
+    }
+
+    private void showMainMenu() {
+        mListener.showMainMenu();
+    }
+
+    private void showWaitScreen() {
+        mListener.showWaitScreen();
+    }
+
+}
+</code></pre>
+
+<h1>MainActivity.java</h1>
+
+<pre><code>public class MainActivity extends FragmentActivity implements MainMenuFragment.Listener, PlayFragment.Listener, GameHelperFragmentListener, AlertDialogFragmentListener {
+
+    public static final String MAIN_MENU_FRAGMENT = "MainMenuFragment";
+    public static final String PLAY_FRAGMENT = "PlayFragment";
+    public static final String WAIT_FRAGMENT = "WaitFragment";
+
+
+    // Fragments
+    MainMenuFragment mMainMenuFragment;
+    PlayFragment mPlayFragment;
+    WaitFragment mWaitFragment;
+    GameHelperFragment gameHelperFragment = null;
+
+    String mIncomingInvitationId = null;
+
+    @SuppressLint("NewApi")
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        Log.d("mab", "MainActivity.onCreate()");
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // Add Headless Fragment (if not already retained)
+        gameHelperFragment = (GameHelperFragment) getSupportFragmentManager().findFragmentByTag("GameHelperFragment"); 
+        if (gameHelperFragment == null) {
+            Log.d("mab", this + ": Existing fragment not found.!!!");
+            gameHelperFragment = new GameHelperFragment();
+            gameHelperFragment.setSignInMessages("Signing in with Google", "Signing out");
+            getSupportFragmentManager().beginTransaction().add(gameHelperFragment, "GameHelperFragment").commit();
+        } else {
+            Log.d("mab", this + ": Existing fragment found.!!!");
+        }
+    }
+
+    @Override
+    public void onSignInFailed() {
+        Log.d("mab", "MainActivity.onSignInFailed()");
+
+        if (mMainMenuFragment != null) {
+            mMainMenuFragment.updateUi();
+        }
+    }
+
+    @Override
+    public void onSignInSucceeded() {
+        Log.d("mab", "MainActivity.onSignInSuccedded()");
+
+        if (mMainMenuFragment != null) {
+            mMainMenuFragment.updateUi();
+        }
+    }
+
+    @Override
+    public void onSignInButtonClicked() {
+        Log.d("mab", "MainActivity.onSignInButtonClicked()");
+        // start the sign-in flow
+        beginUserInitiatedSignIn();
+    }
+
+    @Override
+    public void onSignOutButtonClicked() {
+        Log.d("mab", "MainActivity.onSignOutButtonClicked()");
+        signOut();
+
+        if (mMainMenuFragment != null) {
+            mMainMenuFragment.updateUi();
+        }
+    }
+
+    @Override
+    public void onInvitationReceived(Invitation invitation) {
+        mIncomingInvitationId = invitation.getInvitationId();
+
+        // show accept/decline dialog box here.
+        String dispName = invitation.getInviter().getDisplayName();
+        DialogFragment alertInvitationReceived = AlertDialogFragment.newInstance("Invitation Received", dispName + 
+                " is inviting you to play Yahtzee Blast.", "Accept", "Decline", null);
+        alertInvitationReceived.show(getSupportFragmentManager(), DLG_INVITATION_RECVD);
+
+    }
+
+    @Override
+    protected void onPause() {
+        Log.d("mab", "MainActivity.onPause()");
+        super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        Log.d("mab", "MainActivity.onStop()");
+        super.onStop();
+    }
+
+    @Override
+    protected void onStart() {
+        Log.d("mab", "MainActivity.onStart()");
+        super.onStart();
+    }
+
+
+    @Override
+    protected void onResume() {
+        Log.d("mab", "MainActivity.onResume()");
+        super.onResume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        Log.d("mab", "MainActivity.onDestroy()");
+        super.onDestroy();
+        mHelper = null;
+    }
+
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putString("mIncomingInvitationId", mIncomingInvitationId);  // ? need this ?
+    }
+
+    @Override
+    public void onInviteFriendsClicked() {
+        Log.d("mab", "MainActivity.onInviteFriendsClicked()");
+        gameHelperFragment.inviteFriends();
+    }
+
+    @Override
+    public void onSeeAllInvitationsClicked() {
+        Log.d("mab", "MainActivity.onSeeAllInvitationsClicked()");
+        gameHelperFragment.seeAllInvitations();
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int responseCode, Intent intent) {
+        Log.d("mab", this + ": onActivityResult(requestCode: " + requestCode + ", responseCode: " + responseCode + ")");
+        super.onActivityResult(requestCode, responseCode, intent);
+
+        // Call GameHelper's onActivityResult in case this result pertains to it
+        gameHelperFragment.onActivityResult(requestCode, responseCode, intent);
+    }
+
+    public void onAlertDialogFragmentPositiveClicked(String tag) {
+        Log.d("mab", "MainActivity.onAlertDialogFragmentPositiveClicked(" + tag + ")");
+        if (tag == DLG_INVITATION_RECVD) {
+            gameHelperFragment.acceptInviteToRoom(mIncomingInvitationId);
+        }
+    }
+
+    // Called when we receive a real-time message from the network.
+    public void handleRealTimeMessage(RealTimeMessage rtm) {
+        Log.d(TAG, "MainActivity.onRealTimeMessageReceived()");
+        // Handle it here...
+    }
+
+    // Headless Fragment Functions
+    private void setSignInMessages(String signingInMessage, String signingOutMessage) {
+        gameHelperFragment.setSignInMessages(signingInMessage, signingOutMessage);
+    }
+
+    private GamesClient getGamesClient() {
+        return gameHelperFragment.getGamesClient();
+    }
+
+    private String getInvitationId() {
+        return gameHelperFragment.getInvitationId();
+    }
+
+    private void beginUserInitiatedSignIn() {
+        gameHelperFragment.beginUserInitiatedSignIn();
+    }
+
+    private void signOut() {
+        gameHelperFragment.signOut();
+    }
+
+    private void showAlert(String message) {
+        gameHelperFragment.showAlert(message);
+    }
+
+    private void showAlert(String title, String message) {
+        gameHelperFragment.showAlert(title, message);
+    }
+
+    public GameHelperFragment getGameHelperFragment() {
+        return gameHelperFragment;
+    }
+
+    @Override
+    public void showMainMenu() {
+        switchToFragment(MAIN_MENU_FRAGMENT, false);
+    }
+
+    @Override
+    public void showWaitScreen() {
+        switchToFragment(WAIT_FRAGMENT, false);
+    }
+
+    @Override
+    public void participantLeftAtIdx(int idx) {
+        // Handle here, if there's anything you need to do.
+    }
+
+}
+</code></pre>

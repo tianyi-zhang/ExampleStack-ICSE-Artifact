@@ -1,0 +1,62 @@
+<h1>Updated Answer</h1>
+
+<p>The reason you are getting a 401 is because a basic authentication header is found in the request when the user is registering. This means Spring Security tries to validate the credentials but the user is not yet present so it responds with a 401.</p>
+
+<p>You should</p>
+
+<ul>
+<li>Make the /register endpoint public and provide a controller that registers the user</li>
+<li>Do not include the username/password for registration form in the Authorization header as this will cause Spring Security to try to validate the credentials. Instead include the parameters as JSON or form encoded parameters that your /register controller process</li>
+</ul>
+
+<h1>Original Answer</h1>
+
+<p>After authenticating, Spring Security uses <code>CsrfAuthenticationStrategy</code> to invalidate any CsrfToken's (to ensure that a session fixation attack is not possible). This is what triggers a new CsrfToken to be used.</p>
+
+<p>However, the problem is that <code>csrfTokenRepository</code> is invoked before authentication is performed. This means that when <code>csrfTokenRepository</code> checks to see if the token has changed the result if false (it has not changed yet).</p>
+
+<p>To resolve the issue, you can inject a custom <code>AuthenticationSuccessHandler</code>. For example:</p>
+
+<pre class="lang-java prettyprint-override"><code>public class MyAuthenticationSuccessHandler extends SavedRequestAwareAuthenticationSuccessHandler {
+
+    public void onAuthenticationSuccess(HttpServletRequest request,
+                HttpServletResponse response, Authentication authentication)
+                throws ServletException, IOException {
+        CsrfToken csrf = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+        if (csrf != null) {
+            Cookie cookie = WebUtils.getCookie(request, "XSRF-TOKEN");
+            String token = csrf.getToken();
+            if (cookie == null || token != null &amp;&amp; !token.equals(cookie.getValue())) {
+                cookie = new Cookie("XSRF-TOKEN", token);
+                cookie.setPath("/");
+                response.addCookie(cookie);
+            }
+        }
+        super.onAuthenticationSuccess(request,response,authentication);
+    }
+}
+</code></pre>
+
+<p>Then you can configure it:</p>
+
+<pre class="lang-java prettyprint-override"><code>    protected void configure(HttpSecurity http) throws Exception {
+        http
+            .formLogin()
+                .successHandler(new MyAuthenticationSuccessHandler())
+                .and()
+            .httpBasic().and()
+            .authorizeRequests()
+                .antMatchers("/registration-form").permitAll()
+                .antMatchers("/confirm-email**").permitAll()
+                .antMatchers("/submit-phone").permitAll()
+                .antMatchers("/check-pin").permitAll()
+                .antMatchers("/send-pin").permitAll()
+                .antMatchers("/index.html", "/", "/login", "/message", "/home", "/public*", "/confirm*", "/register*").permitAll()
+                .anyRequest().authenticated()
+                .and()
+            .csrf()
+                .csrfTokenRepository(csrfTokenRepository())
+                .and()
+            .addFilterAfter(csrfHeaderFilter(), CsrfFilter.class);
+    }
+</code></pre>

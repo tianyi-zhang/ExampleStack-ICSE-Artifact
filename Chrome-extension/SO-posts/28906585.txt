@@ -1,0 +1,115 @@
+<p>The default <code>WritableComparator</code> in MapReduce framework would normally handle your numerical ordering if the key was <code>IntWritable</code>. I suspect it's getting a <code>Text</code> key thus resulting in lexicographical ordering in your case. Please have a look at the sample code which uses <code>IntWritable</code> key to emit the values:</p>
+
+<p><strong>1) Mapper Implementaion</strong></p>
+
+<pre><code>package com.stackoverflow.answers.mapreduce;
+
+import java.io.IOException;
+
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+
+public class SourceFileMapper extends Mapper&lt;LongWritable, Text, IntWritable, Text&gt; {
+
+    private static final String DEFAULT_DELIMITER = "\t";
+
+    private IntWritable keyToEmit = new IntWritable();
+    private Text valueToEmit = new Text();
+
+    public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        String line = value.toString();
+        keyToEmit.set(Integer.parseInt(line.split(DEFAULT_DELIMITER)[0]));
+        valueToEmit.set(line.split(DEFAULT_DELIMITER)[1]);
+        context.write(keyToEmit, valueToEmit);
+    }
+
+}
+</code></pre>
+
+<p><strong>2) Reducer Implementation</strong></p>
+
+<pre><code>package com.stackoverflow.answers.mapreduce;
+
+import java.io.IOException;
+
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Reducer;
+
+public class SourceFileReducer extends Reducer&lt;IntWritable, Text, IntWritable, Text&gt; {
+
+    public void reduce(IntWritable key, Iterable&lt;Text&gt; values, Context context) throws IOException,
+            InterruptedException {
+        for (Text value : values) {
+            context.write(key, value);
+        }
+    }
+
+}
+</code></pre>
+
+<p><strong>3) Driver Implementation</strong></p>
+
+<pre><code>package com.stackoverflow.answers.mapreduce;
+
+import java.io.IOException;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+
+public class SourceFileDriver {
+
+    public static void main(String[] args) throws IOException, InterruptedException, ClassNotFoundException {
+
+        Path inputPath = new Path(args[0]);
+        Path outputDir = new Path(args[1]);
+
+        // Create configuration
+        Configuration conf = new Configuration(true);
+
+        // Create job
+        Job job = new Job(conf, "SourceFileDriver");
+        job.setJarByClass(SourceFileDriver.class);
+
+        // Setup MapReduce
+        job.setMapperClass(SourceFileMapper.class);
+        job.setReducerClass(SourceFileReducer.class);
+        job.setNumReduceTasks(1);
+
+        // Specify key / value
+        job.setOutputKeyClass(IntWritable.class);
+        job.setOutputValueClass(Text.class);
+
+        // Input
+        FileInputFormat.addInputPath(job, inputPath);
+        job.setInputFormatClass(TextInputFormat.class);
+
+        // Output
+        FileOutputFormat.setOutputPath(job, outputDir);
+        job.setOutputFormatClass(TextOutputFormat.class);
+
+        // Delete output if exists
+        FileSystem hdfs = FileSystem.get(conf);
+        if (hdfs.exists(outputDir))
+            hdfs.delete(outputDir, true);
+
+        // Execute job
+        int code = job.waitForCompletion(true) ? 0 : 1;
+        System.exit(code);
+
+    }
+
+}
+</code></pre>
+
+<p>Thank you!</p>

@@ -1,0 +1,190 @@
+<p>There's zero documentation so here's some info to help.</p>
+
+<p>1) com.google.android.mms.pdu from source. You need the Pdu utils.</p>
+
+<p>2) You get the notification push from byte array extra of the incoming mms broadcast (intent.getByteArrayExtra("data")).</p>
+
+<p>3) Parse the notification push into a GenericPdu (new PduParser(rawPdu).parse()).</p>
+
+<p>4) You'll need TransactionSettings to communicate with the carrier's wap server. I get the transaction settings after #5 below. I use:</p>
+
+<pre><code>TransactionSettings transactionSettings = new TransactionSettings(mContext, mConnMgr.getNetworkInfo(ConnectivityManager.TYPE_MOBILE_MMS).getExtraInfo());
+</code></pre>
+
+<p>5) Force network comm over wifi. I use the following.</p>
+
+<pre><code>private boolean beginMmsConnectivity() {
+    try {
+        int result = mConnMgr.startUsingNetworkFeature(ConnectivityManager.TYPE_MOBILE, Phone.FEATURE_ENABLE_MMS);
+        NetworkInfo info = mConnMgr.getNetworkInfo(ConnectivityManager.TYPE_MOBILE_MMS);
+        boolean isAvailable = info != null &amp;&amp; info.isConnected() &amp;&amp; result == Phone.APN_ALREADY_ACTIVE &amp;&amp; !Phone.REASON_VOICE_CALL_ENDED.equals(info.getReason());
+        return isAvailable;
+    } catch(Exception e) {
+        return false;
+    }
+}
+</code></pre>
+
+<p>6) You then need to ensure a route to the host.</p>
+
+<pre><code>private static void ensureRouteToHost(ConnectivityManager cm, String url, TransactionSettings settings) throws IOException {
+    int inetAddr;
+    if (settings.isProxySet()) {
+        String proxyAddr = settings.getProxyAddress();
+        inetAddr = lookupHost(proxyAddr);
+        if (inetAddr == -1) {
+            throw new IOException("Cannot establish route for " + url + ": Unknown host");
+        } else {
+            if (!cm.requestRouteToHost(ConnectivityManager.TYPE_MOBILE_MMS, inetAddr))
+                throw new IOException("Cannot establish route to proxy " + inetAddr);
+        }
+    } else {
+        Uri uri = Uri.parse(url);
+        inetAddr = lookupHost(uri.getHost());
+        if (inetAddr == -1) {
+            throw new IOException("Cannot establish route for " + url + ": Unknown host");
+        } else {
+            if (!cm.requestRouteToHost(ConnectivityManager.TYPE_MOBILE_MMS, inetAddr))
+                throw new IOException("Cannot establish route to " + inetAddr + " for " + url);
+        }
+    }
+}
+</code></pre>
+
+<p>Here's the lookupHost method:</p>
+
+<pre><code>private static int lookupHost(String hostname) {
+    InetAddress inetAddress;
+    try {
+        inetAddress = InetAddress.getByName(hostname);
+    } catch (UnknownHostException e) {
+        return -1;
+    }
+    byte[] addrBytes;
+    int addr;
+    addrBytes = inetAddress.getAddress();
+    addr = ((addrBytes[3] &amp; 0xff) &lt;&lt; 24) | ((addrBytes[2] &amp; 0xff) &lt;&lt; 16) | ((addrBytes[1] &amp; 0xff) &lt;&lt; 8) | (addrBytes[0] &amp; 0xff);
+    return addr;
+}
+</code></pre>
+
+<p>I also like to use a reflection based method for improved ensureRouteToHost functionality:</p>
+
+<pre><code>private static void ensureRouteToHostFancy(ConnectivityManager cm, String url, TransactionSettings settings) throws IOException, NoSuchMethodException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
+    Method m = cm.getClass().getMethod("requestRouteToHostAddress", new Class[] { int.class, InetAddress.class });
+    InetAddress inetAddr;
+    if (settings.isProxySet()) {
+        String proxyAddr = settings.getProxyAddress();
+        try {
+            inetAddr = InetAddress.getByName(proxyAddr);
+        } catch (UnknownHostException e) {
+            throw new IOException("Cannot establish route for " + url + ": Unknown proxy " + proxyAddr);
+        }
+        if (!(Boolean) m.invoke(cm, new Object[] { ConnectivityManager.TYPE_MOBILE_MMS, inetAddr }))
+            throw new IOException("Cannot establish route to proxy " + inetAddr);
+    } else {
+        Uri uri = Uri.parse(url);
+        try {
+            inetAddr = InetAddress.getByName(uri.getHost());
+        } catch (UnknownHostException e) {
+            throw new IOException("Cannot establish route for " + url + ": Unknown host");
+        }
+        if (!(Boolean) m.invoke(cm, new Object[] { ConnectivityManager.TYPE_MOBILE_MMS, inetAddr }))
+            throw new IOException("Cannot establish route to " + inetAddr + " for " + url);
+    }
+}
+</code></pre>
+
+<p>7) After ensuring a route to the host you can then need HttpUtls from source. I've heavily modified my implementation using OkHttp for improved communications.</p>
+
+<pre><code>byte[] rawPdu = HttpUtils.httpConnection(mContext, mContentLocation, null, HttpUtils.HTTP_GET_METHOD, mTransactionSettings.isProxySet(), mTransactionSettings.getProxyAddress(), mTransactionSettings.getProxyPort());
+</code></pre>
+
+<p>8) From the resulting byte array use the PduParser to parge the GenericPdu. Then you can extract the body and cast to a MultimediaMessagePdu.</p>
+
+<p>9) Then you can iterate the parts of the PDU.</p>
+
+<p>There are countless things to consider with MMS. One thing that comes to mind is how annoying Slideshows are, so what I do is detect if there are more than 1 parts in the PDU, then I copy the headers and create separate MultimediaMessagePdu of which I save them to the phone's mms content provider separately. Don't forget to copy the headers especially if you are supporting group messaging. Group messaging is another story because the incomging telephone number in the PDU doesn't tell the whole story (MultimediaMessagePdu.mmpdu()). There's more contacts in the header that you extract using the following code.</p>
+
+<pre><code>private HashSet&lt;String&gt; getRecipients(GenericPdu pdu) {
+    PduHeaders header = pdu.getPduHeaders();
+    HashMap&lt;Integer, EncodedStringValue[]&gt; addressMap = new HashMap&lt;Integer, EncodedStringValue[]&gt;(ADDRESS_FIELDS.length);
+    for (int addrType : ADDRESS_FIELDS) {
+        EncodedStringValue[] array = null;
+        if (addrType == PduHeaders.FROM) {
+            EncodedStringValue v = header.getEncodedStringValue(addrType);
+            if (v != null) {
+                array = new EncodedStringValue[1];
+                array[0] = v;
+            }
+        } else {
+            array = header.getEncodedStringValues(addrType);
+        }
+        addressMap.put(addrType, array);
+    }
+    HashSet&lt;String&gt; recipients = new HashSet&lt;String&gt;();
+    loadRecipients(PduHeaders.FROM, recipients, addressMap, false);
+    loadRecipients(PduHeaders.TO, recipients, addressMap, true);
+    return recipients;
+}
+</code></pre>
+
+<p>Here's the load recipients method:</p>
+
+<pre><code>private void loadRecipients(int addressType, HashSet&lt;String&gt; recipients, HashMap&lt;Integer, EncodedStringValue[]&gt; addressMap, boolean excludeMyNumber) {
+    EncodedStringValue[] array = addressMap.get(addressType);
+    if (array == null) {
+        return;
+    }
+    // If the TO recipients is only a single address, then we can skip loadRecipients when
+    // we're excluding our own number because we know that address is our own.
+    if (excludeMyNumber &amp;&amp; array.length == 1) {
+        return;
+    }
+    String myNumber = excludeMyNumber ? mTelephonyManager.getLine1Number() : null;
+    for (EncodedStringValue v : array) {
+        if (v != null) {
+            String number = v.getString();
+            if ((myNumber == null || !PhoneNumberUtils.compare(number, myNumber)) &amp;&amp; !recipients.contains(number)) {
+                // Only add numbers which aren't my own number.
+                recipients.add(number);
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Here's how to iterate the MultimediaMessagePdu parts.</p>
+
+<pre><code>private void processPduAttachments() throws Exception {
+    if (mGenericPdu instanceof MultimediaMessagePdu) {
+        PduBody body = ((MultimediaMessagePdu) mGenericPdu).getBody();
+        if (body != null) {
+            int partsNum = body.getPartsNum();
+            for (int i = 0; i &lt; partsNum; i++) {
+                try {
+                    PduPart part = body.getPart(i);
+                    if (part == null || part.getData() == null || part.getContentType() == null || part.getName() == null)
+                        continue;
+                    String partType = new String(part.getContentType());
+                    String partName = new String(part.getName());
+                    Log.d("Part Name: " + partName);
+                    Log.d("Part Type: " + partType);
+                    if (ContentType.isTextType(partType)) {
+                    } else if (ContentType.isImageType(partType)) {
+                    } else if (ContentType.isVideoType(partType)) {
+                    } else if (ContentType.isAudioType(partType)) {
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    // Bad part shouldn't ruin the party for the other parts
+                }
+            }
+        }
+    } else {
+        Log.d("Not a MultimediaMessagePdu PDU");
+    }
+}
+</code></pre>
+
+<p>There's many more considerations such as animated GIF support, which is entirely possible :) Some carriers support acknowledge reports, and delivery reports too, you can most likely neglect these wap communications unless a user really really wants mms delivery reports.</p>

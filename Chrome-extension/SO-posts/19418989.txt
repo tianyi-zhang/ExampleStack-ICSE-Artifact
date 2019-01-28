@@ -1,0 +1,390 @@
+<p>I was also very inspired by this response.</p>
+
+<p>I am often on projects where I need to do some HTTP, and I may not want to bring in a lot of 3rd party dependencies (which bring in others and so on and so on, etc.)</p>
+
+<p>I started to write my own utilities based on some of this conversation (not any where done):</p>
+
+<pre><code>package org.boon.utils;
+
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.Map;
+
+import static org.boon.utils.IO.read;
+
+public class HTTP {
+</code></pre>
+
+<p>Then there are just a bunch or static methods.</p>
+
+<pre><code>public static String get(
+        final String url) {
+
+    Exceptions.tryIt(() -&gt; {
+        URLConnection connection;
+        connection = doGet(url, null, null, null);
+        return extractResponseString(connection);
+    });
+    return null;
+}
+
+public static String getWithHeaders(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers) {
+    URLConnection connection;
+    try {
+        connection = doGet(url, headers, null, null);
+        return extractResponseString(connection);
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+}
+
+public static String getWithContentType(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers,
+        String contentType) {
+    URLConnection connection;
+    try {
+        connection = doGet(url, headers, contentType, null);
+        return extractResponseString(connection);
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+}
+public static String getWithCharSet(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers,
+        String contentType,
+        String charSet) {
+    URLConnection connection;
+    try {
+        connection = doGet(url, headers, contentType, charSet);
+        return extractResponseString(connection);
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+}
+</code></pre>
+
+<p>Then post...</p>
+
+<pre><code>public static String postBody(
+        final String url,
+        final String body) {
+    URLConnection connection;
+    try {
+        connection = doPost(url, null, "text/plain", null, body);
+        return extractResponseString(connection);
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+}
+
+public static String postBodyWithHeaders(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers,
+        final String body) {
+    URLConnection connection;
+    try {
+        connection = doPost(url, headers, "text/plain", null, body);
+        return extractResponseString(connection);
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+}
+
+
+
+public static String postBodyWithContentType(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers,
+        final String contentType,
+        final String body) {
+
+    URLConnection connection;
+    try {
+        connection = doPost(url, headers, contentType, null, body);
+
+
+        return extractResponseString(connection);
+
+
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+
+
+}
+
+
+public static String postBodyWithCharset(
+        final String url,
+        final Map&lt;String, ? extends Object&gt; headers,
+        final String contentType,
+        final String charSet,
+        final String body) {
+
+    URLConnection connection;
+    try {
+        connection = doPost(url, headers, contentType, charSet, body);
+
+
+        return extractResponseString(connection);
+
+
+    } catch (Exception ex) {
+        Exceptions.handle(ex);
+        return null;
+    }
+
+
+}
+
+private static URLConnection doPost(String url, Map&lt;String, ? extends Object&gt; headers,
+                                    String contentType, String charset, String body
+                                    ) throws IOException {
+    URLConnection connection;/* Handle output. */
+    connection = new URL(url).openConnection();
+    connection.setDoOutput(true);
+    manageContentTypeHeaders(contentType, charset, connection);
+
+    manageHeaders(headers, connection);
+
+
+    IO.write(connection.getOutputStream(), body, IO.CHARSET);
+    return connection;
+}
+
+private static void manageHeaders(Map&lt;String, ? extends Object&gt; headers, URLConnection connection) {
+    if (headers != null) {
+        for (Map.Entry&lt;String, ? extends Object&gt; entry : headers.entrySet()) {
+            connection.setRequestProperty(entry.getKey(), entry.getValue().toString());
+        }
+    }
+}
+
+private static void manageContentTypeHeaders(String contentType, String charset, URLConnection connection) {
+    connection.setRequestProperty("Accept-Charset", charset == null ? IO.CHARSET : charset);
+    if (contentType!=null &amp;&amp; !contentType.isEmpty()) {
+        connection.setRequestProperty("Content-Type", contentType);
+    }
+}
+
+private static URLConnection doGet(String url, Map&lt;String, ? extends Object&gt; headers,
+                                    String contentType, String charset) throws IOException {
+    URLConnection connection;/* Handle output. */
+    connection = new URL(url).openConnection();
+    manageContentTypeHeaders(contentType, charset, connection);
+
+    manageHeaders(headers, connection);
+
+    return connection;
+}
+
+private static String extractResponseString(URLConnection connection) throws IOException {
+/* Handle input. */
+    HttpURLConnection http = (HttpURLConnection)connection;
+    int status = http.getResponseCode();
+    String charset = getCharset(connection.getHeaderField("Content-Type"));
+
+    if (status==200) {
+        return readResponseBody(http, charset);
+    } else {
+        return readErrorResponseBody(http, status, charset);
+    }
+}
+
+private static String readErrorResponseBody(HttpURLConnection http, int status, String charset) {
+    InputStream errorStream = http.getErrorStream();
+    if ( errorStream!=null ) {
+        String error = charset== null ? read( errorStream ) :
+            read( errorStream, charset );
+        throw new RuntimeException("STATUS CODE =" + status + "\n\n" + error);
+    } else {
+        throw new RuntimeException("STATUS CODE =" + status);
+    }
+}
+
+private static String readResponseBody(HttpURLConnection http, String charset) throws IOException {
+    if (charset != null) {
+        return read(http.getInputStream(), charset);
+    } else {
+        return read(http.getInputStream());
+    }
+}
+
+private static String getCharset(String contentType) {
+    if (contentType==null)  {
+        return null;
+    }
+    String charset = null;
+    for (String param : contentType.replace(" ", "").split(";")) {
+        if (param.startsWith("charset=")) {
+            charset = param.split("=", 2)[1];
+            break;
+        }
+    }
+    charset = charset == null ?  IO.CHARSET : charset;
+
+    return charset;
+}
+</code></pre>
+
+<p>Well you get the idea....</p>
+
+<p>Here are the tests:</p>
+
+<pre><code>static class MyHandler implements HttpHandler {
+    public void handle(HttpExchange t) throws IOException {
+
+        InputStream requestBody = t.getRequestBody();
+        String body = IO.read(requestBody);
+        Headers requestHeaders = t.getRequestHeaders();
+        body = body + "\n" + copy(requestHeaders).toString();
+        t.sendResponseHeaders(200, body.length());
+        OutputStream os = t.getResponseBody();
+        os.write(body.getBytes());
+        os.close();
+    }
+}
+
+
+@Test
+public void testHappy() throws Exception {
+
+    HttpServer server = HttpServer.create(new InetSocketAddress(9212), 0);
+    server.createContext("/test", new MyHandler());
+    server.setExecutor(null); // creates a default executor
+    server.start();
+
+    Thread.sleep(10);
+
+
+    Map&lt;String,String&gt; headers = map("foo", "bar", "fun", "sun");
+
+    String response = HTTP.postBodyWithContentType("http://localhost:9212/test", headers, "text/plain", "hi mom");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("hi mom"));
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+
+    response = HTTP.postBodyWithCharset("http://localhost:9212/test", headers, "text/plain", "UTF-8", "hi mom");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("hi mom"));
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+    response = HTTP.postBodyWithHeaders("http://localhost:9212/test", headers, "hi mom");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("hi mom"));
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+
+    response = HTTP.get("http://localhost:9212/test");
+
+    System.out.println(response);
+
+
+    response = HTTP.getWithHeaders("http://localhost:9212/test", headers);
+
+    System.out.println(response);
+
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+
+
+    response = HTTP.getWithContentType("http://localhost:9212/test", headers, "text/plain");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+
+
+    response = HTTP.getWithCharSet("http://localhost:9212/test", headers, "text/plain", "UTF-8");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+    Thread.sleep(10);
+
+    server.stop(0);
+
+
+}
+
+@Test
+public void testPostBody() throws Exception {
+
+    HttpServer server = HttpServer.create(new InetSocketAddress(9220), 0);
+    server.createContext("/test", new MyHandler());
+    server.setExecutor(null); // creates a default executor
+    server.start();
+
+    Thread.sleep(10);
+
+
+    Map&lt;String,String&gt; headers = map("foo", "bar", "fun", "sun");
+
+    String response = HTTP.postBody("http://localhost:9220/test", "hi mom");
+
+    assertTrue(response.contains("hi mom"));
+
+
+    Thread.sleep(10);
+
+    server.stop(0);
+
+
+}
+
+@Test(expected = RuntimeException.class)
+public void testSad() throws Exception {
+
+    HttpServer server = HttpServer.create(new InetSocketAddress(9213), 0);
+    server.createContext("/test", new MyHandler());
+    server.setExecutor(null); // creates a default executor
+    server.start();
+
+    Thread.sleep(10);
+
+
+    Map&lt;String,String&gt; headers = map("foo", "bar", "fun", "sun");
+
+    String response = HTTP.postBodyWithContentType("http://localhost:9213/foo", headers, "text/plain", "hi mom");
+
+    System.out.println(response);
+
+    assertTrue(response.contains("hi mom"));
+    assertTrue(response.contains("Fun=[sun], Foo=[bar]"));
+
+    Thread.sleep(10);
+
+    server.stop(0);
+
+
+}
+</code></pre>
+
+<p>You can find the rest here:</p>
+
+<p><a href="https://github.com/RichardHightower/boon">https://github.com/RichardHightower/boon</a></p>
+
+<p>My goal is to provide the common things one would want to do in a bit more easier way then....</p>

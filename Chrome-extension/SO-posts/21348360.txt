@@ -1,0 +1,326 @@
+<p>So you want multi header row jtable. You have to Group your header.</p>
+
+<p>GroupableHeaderExample.java</p>
+
+<pre><code>public class GroupableHeaderExample extends JFrame {
+
+  GroupableHeaderExample() {
+    super( "Groupable Header Example" );
+
+    DefaultTableModel dm = new DefaultTableModel();
+    dm.setDataVector(new Object[][]{
+      {"119","foo","bar","ja","ko","zh"},
+      {"911","bar","foo","en","fr","pt"}},
+    new Object[]{"SNo.","1","2","Native","2","3"});
+
+    JTable table = new JTable( dm ) {
+      protected JTableHeader createDefaultTableHeader() {
+          return new GroupableTableHeader(columnModel);
+      }
+    };
+
+
+    TableColumnModel cm = table.getColumnModel();
+    ColumnGroup g_name = new ColumnGroup("Name");
+    g_name.add(cm.getColumn(1));
+    g_name.add(cm.getColumn(2));
+    ColumnGroup g_lang = new ColumnGroup("Language");
+    g_lang.add(cm.getColumn(3));
+    ColumnGroup g_other = new ColumnGroup("Others");
+    g_other.add(cm.getColumn(4));
+    g_other.add(cm.getColumn(5));
+    g_lang.add(g_other);
+
+    GroupableTableHeader header = (GroupableTableHeader)table.getTableHeader();
+    header.addColumnGroup(g_name);
+    header.addColumnGroup(g_lang);
+    JScrollPane scroll = new JScrollPane( table );
+    getContentPane().add( scroll );
+    setSize( 400, 120 );   
+  }
+
+  public static void main(String[] args) {
+    GroupableHeaderExample frame = new GroupableHeaderExample();
+    frame.addWindowListener( new WindowAdapter() {
+      public void windowClosing( WindowEvent e ) {
+  System.exit(0);
+      }
+    });
+    frame.setVisible(true);
+  }
+}
+</code></pre>
+
+<p>ColumnGroup.java</p>
+
+<pre><code>public class ColumnGroup {
+
+    protected TableCellRenderer renderer;
+
+    protected List&lt;TableColumn&gt; columns;
+    protected List&lt;ColumnGroup&gt; groups;
+
+    protected String text;
+    protected int margin = 0;
+
+    public ColumnGroup(String text) {
+        this(text, null);
+    }
+
+    public ColumnGroup(String text, TableCellRenderer renderer) {
+        this.text = text;
+        this.renderer = renderer;
+        this.columns = new ArrayList&lt;TableColumn&gt;();
+        this.groups = new ArrayList&lt;ColumnGroup&gt;();
+    }
+
+    public void add(TableColumn column) {
+        columns.add(column);
+    }
+
+    public void add(ColumnGroup group) {
+        groups.add(group);
+    }
+
+    /**
+     * @param column
+     *            TableColumn
+     */
+    public List&lt;ColumnGroup&gt; getColumnGroups(TableColumn column) {
+        if (!contains(column)) {
+            return Collections.emptyList();
+        }
+        List&lt;ColumnGroup&gt; result = new ArrayList&lt;ColumnGroup&gt;();
+        result.add(this);
+        if (columns.contains(column)) {
+            return result;
+        }
+        for (ColumnGroup columnGroup : groups) {
+            result.addAll(columnGroup.getColumnGroups(column));
+        }
+        return result;
+    }
+
+    private boolean contains(TableColumn column) {
+        if (columns.contains(column)) {
+            return true;
+        }
+        for (ColumnGroup group : groups) {
+            if (group.contains(column)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public TableCellRenderer getHeaderRenderer() {
+        return renderer;
+    }
+
+    public void setHeaderRenderer(TableCellRenderer renderer) {
+        this.renderer = renderer;
+    }
+
+    public String getHeaderValue() {
+        return text;
+    }
+
+    public Dimension getSize(JTable table) {
+        TableCellRenderer renderer = this.renderer;
+        if (renderer == null) {
+            renderer = table.getTableHeader().getDefaultRenderer();
+        }
+        Component comp = renderer.getTableCellRendererComponent(table, getHeaderValue() == null || getHeaderValue().trim().isEmpty() ? " "
+                : getHeaderValue(), false, false, -1, -1);
+        int height = comp.getPreferredSize().height;
+        int width = 0;
+        for (ColumnGroup columnGroup : groups) {
+            width += columnGroup.getSize(table).width;
+        }
+        for (TableColumn tableColumn : columns) {
+            width += tableColumn.getWidth();
+            width += margin;
+        }
+        return new Dimension(width, height);
+    }
+
+    public void setColumnMargin(int margin) {
+        this.margin = margin;
+        for (ColumnGroup columnGroup : groups) {
+            columnGroup.setColumnMargin(margin);
+        }
+    }
+
+}
+</code></pre>
+
+<p>GroupableTableHeader.java</p>
+
+<pre><code>@SuppressWarnings("serial")
+public class GroupableTableHeader extends JTableHeader {
+
+    @SuppressWarnings("unused")
+    private static final String uiClassID = "GroupableTableHeaderUI";
+
+    protected List&lt;ColumnGroup&gt; columnGroups = new ArrayList&lt;ColumnGroup&gt;();
+
+    public GroupableTableHeader(TableColumnModel model) {
+        super(model);
+        setUI(new GroupableTableHeaderUI());
+        setReorderingAllowed(false);
+        // setDefaultRenderer(new MultiLineHeaderRenderer());
+    }
+
+    @Override
+    public void updateUI() {
+        setUI(new GroupableTableHeaderUI());
+    }
+
+    @Override
+    public void setReorderingAllowed(boolean b) {
+        super.setReorderingAllowed(false);
+    }
+
+    public void addColumnGroup(ColumnGroup g) {
+        columnGroups.add(g);
+    }
+
+    public List&lt;ColumnGroup&gt; getColumnGroups(TableColumn col) {
+        for (ColumnGroup group : columnGroups) {
+            List&lt;ColumnGroup&gt; groups = group.getColumnGroups(col);
+            if (!groups.isEmpty()) {
+                return groups;
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    public void setColumnMargin() {
+        int columnMargin = getColumnModel().getColumnMargin();
+        for (ColumnGroup group : columnGroups) {
+            group.setColumnMargin(columnMargin);
+        }
+    }
+
+}
+</code></pre>
+
+<p>GroupableTableHeaderUI.java</p>
+
+<pre><code>public class GroupableTableHeaderUI extends BasicTableHeaderUI {
+
+    protected GroupableTableHeader getHeader() {
+        return (GroupableTableHeader) header;
+    }
+
+    @Override
+    public void paint(Graphics g, JComponent c) {
+        Rectangle clipBounds = g.getClipBounds();
+        if (header.getColumnModel().getColumnCount() == 0) {
+            return;
+        }
+        int column = 0;
+        Dimension size = header.getSize();
+        Rectangle cellRect = new Rectangle(0, 0, size.width, size.height);
+        Map&lt;ColumnGroup, Rectangle&gt; groupSizeMap = new HashMap&lt;ColumnGroup, Rectangle&gt;();
+
+        for (Enumeration&lt;TableColumn&gt; enumeration = header.getColumnModel().getColumns(); enumeration.hasMoreElements();) {
+            cellRect.height = size.height;
+            cellRect.y = 0;
+            TableColumn aColumn = enumeration.nextElement();
+            List&lt;ColumnGroup&gt; groups = getHeader().getColumnGroups(aColumn);
+            int groupHeight = 0;
+            for (ColumnGroup group : groups) {
+                Rectangle groupRect = groupSizeMap.get(group);
+                if (groupRect == null) {
+                    groupRect = new Rectangle(cellRect);
+                    Dimension d = group.getSize(header.getTable());
+                    groupRect.width = d.width;
+                    groupRect.height = d.height;
+                    groupSizeMap.put(group, groupRect);
+                }
+                paintCell(g, groupRect, group);
+                groupHeight += groupRect.height;
+                cellRect.height = size.height - groupHeight;
+                cellRect.y = groupHeight;
+            }
+            cellRect.width = aColumn.getWidth();
+            if (cellRect.intersects(clipBounds)) {
+                paintCell(g, cellRect, column);
+            }
+            cellRect.x += cellRect.width;
+            column++;
+        }
+    }
+
+    private void paintCell(Graphics g, Rectangle cellRect, int columnIndex) {
+        TableColumn aColumn = header.getColumnModel().getColumn(columnIndex);
+        TableCellRenderer renderer = aColumn.getHeaderRenderer();
+        if (renderer == null) {
+            renderer = getHeader().getDefaultRenderer();
+        }
+        Component c = renderer.getTableCellRendererComponent(header.getTable(), aColumn.getHeaderValue(), false, false,
+                -1, columnIndex);
+
+        c.setBackground(UIManager.getColor("control"));
+
+        rendererPane.paintComponent(g, c, header, cellRect.x, cellRect.y, cellRect.width, cellRect.height, true);
+    }
+
+    private void paintCell(Graphics g, Rectangle cellRect, ColumnGroup cGroup) {
+        TableCellRenderer renderer = cGroup.getHeaderRenderer();
+        if (renderer == null) {
+            renderer = getHeader().getDefaultRenderer();
+        }
+
+        Component component = renderer.getTableCellRendererComponent(header.getTable(), cGroup.getHeaderValue(), false,
+                false, -1, -1);
+        rendererPane
+                .paintComponent(g, component, header, cellRect.x, cellRect.y, cellRect.width, cellRect.height, true);
+    }
+
+    private int getHeaderHeight() {
+        int headerHeight = 0;
+        TableColumnModel columnModel = header.getColumnModel();
+        for (int column = 0; column &lt; columnModel.getColumnCount(); column++) {
+            TableColumn aColumn = columnModel.getColumn(column);
+            TableCellRenderer renderer = aColumn.getHeaderRenderer();
+            if (renderer == null) {
+                renderer = getHeader().getDefaultRenderer();
+            }
+
+            Component comp = renderer.getTableCellRendererComponent(header.getTable(), aColumn.getHeaderValue(), false,
+                    false, -1, column);
+            int cHeight = comp.getPreferredSize().height;
+            List&lt;ColumnGroup&gt; groups = getHeader().getColumnGroups(aColumn);
+            for (ColumnGroup group : groups) {
+                cHeight += group.getSize(header.getTable()).height;
+            }
+            headerHeight = Math.max(headerHeight, cHeight);
+        }
+        return headerHeight;
+    }
+
+    @Override
+    public Dimension getPreferredSize(JComponent c) {
+        int width = 0;
+        for (Enumeration&lt;TableColumn&gt; enumeration = header.getColumnModel().getColumns(); enumeration.hasMoreElements();) {
+            TableColumn aColumn = enumeration.nextElement();
+            width += aColumn.getPreferredWidth();
+        }
+        return createHeaderSize(width);
+    }
+
+    private Dimension createHeaderSize(int width) {
+        TableColumnModel columnModel = header.getColumnModel();
+        width += columnModel.getColumnMargin() * columnModel.getColumnCount();
+        if (width &gt; Integer.MAX_VALUE) {
+            width = Integer.MAX_VALUE;
+        }
+        return new Dimension(width, getHeaderHeight());
+    }
+
+}
+</code></pre>
+
+<p>You can find this at <a href="http://www.java2s.com/Code/Java/Swing-Components/GroupableGroupHeaderExample.htm" rel="nofollow">Groupable(Group) Header Example</a>.</p>

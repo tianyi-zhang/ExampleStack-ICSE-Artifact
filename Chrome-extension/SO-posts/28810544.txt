@@ -1,0 +1,103 @@
+<p>The solution implemented ended up looking like this:</p>
+
+<p>The general idea was to maintain a map of all the Hibernate sessions that are currently running queries to the HttpSession of the user who initiated them, so that when the user would close the browser we would be able to kill the running queries.</p>
+
+<p>There were two main challenges to overcome here. One was propagating the HTTP session-id from the web tier to the EJB tier without interfering with all the method calls along the way - i.e. not tampering with existing code in the system. The second challenge was to figure out how to cancel the queries once the database had already started returning results and Hibernate was populating objects with the results.</p>
+
+<p>The first problem was overcome based on our realization that all methods being called along the stack were being handled by the same thread. This makes sense, as our application exists all within one container and <a href="http://stackoverflow.com/a/10328626/2992404">does not have any remote calls</a>. Being that that is the case, we created a Servlet Filter that intercepts every call to the application and adds a <code>ThreadLocal</code> variable with the current HTTP session-id. This way the HTTP session-id will be available to each one of the method calls lower down along the line.</p>
+
+<p>The second challenge was a little more sticky. We discovered that the Hibernate method responsible for running the queries and subsequently populating the POJOs was called <code>doQuery</code> and located in the <code>org.hibernate.loader.Loader.java</code> class. (We happen to be using Hibernate 3.5.3, but the same holds true for newer versions of Hibernate.):</p>
+
+<pre><code>private List doQuery(
+        final SessionImplementor session,
+        final QueryParameters queryParameters,
+        final boolean returnProxies) throws SQLException, HibernateException {
+
+    final RowSelection selection = queryParameters.getRowSelection();
+    final int maxRows = hasMaxRows( selection ) ?
+            selection.getMaxRows().intValue() :
+            Integer.MAX_VALUE;
+
+    final int entitySpan = getEntityPersisters().length;
+
+    final ArrayList hydratedObjects = entitySpan == 0 ? null : new ArrayList( entitySpan * 10 );
+    final PreparedStatement st = prepareQueryStatement( queryParameters, false, session );
+    final ResultSet rs = getResultSet( st, queryParameters.hasAutoDiscoverScalarTypes(), queryParameters.isCallable(), selection, session );
+
+    final EntityKey optionalObjectKey = getOptionalObjectKey( queryParameters, session );
+    final LockMode[] lockModesArray = getLockModes( queryParameters.getLockOptions() );
+    final boolean createSubselects = isSubselectLoadingEnabled();
+    final List subselectResultKeys = createSubselects ? new ArrayList() : null;
+    final List results = new ArrayList();
+
+    try {
+
+        handleEmptyCollections( queryParameters.getCollectionKeys(), rs, session );
+
+        EntityKey[] keys = new EntityKey[entitySpan]; //we can reuse it for each row
+
+        if ( log.isTraceEnabled() ) log.trace( "processing result set" );
+
+        int count;
+        for ( count = 0; count &lt; maxRows &amp;&amp; rs.next(); count++ ) {
+
+            if ( log.isTraceEnabled() ) log.debug("result set row: " + count);
+
+            Object result = getRowFromResultSet( 
+                    rs,
+                    session,
+                    queryParameters,
+                    lockModesArray,
+                    optionalObjectKey,
+                    hydratedObjects,
+                    keys,
+                    returnProxies 
+            );
+            results.add( result );
+
+            if ( createSubselects ) {
+                subselectResultKeys.add(keys);
+                keys = new EntityKey[entitySpan]; //can't reuse in this case
+            }
+
+        }
+
+        if ( log.isTraceEnabled() ) {
+            log.trace( "done processing result set (" + count + " rows)" );
+        }
+
+    }
+    finally {
+        session.getBatcher().closeQueryStatement( st, rs );
+    }
+
+    initializeEntitiesAndCollections( hydratedObjects, rs, session, queryParameters.isReadOnly( session ) );
+
+    if ( createSubselects ) createSubselects( subselectResultKeys, queryParameters, session );
+
+    return results; //getResultList(results);
+
+}
+</code></pre>
+
+<p>In this method you can see that first the results are brought from the database in the form of a good old fashioned <code>java.sql.ResultSet</code>, after which it runs in a loop over each set and creates an object from it. Some additional initialization is performed in the <code>initializeEntitiesAndCollections()</code> method called after the loop. After debugging a little, we discovered that the bulk of the performance overhead was in these sections of the method, and not in the part that gets the <code>java.sql.ResultSet</code> from the database, but the <code>cancelQuery</code> method was only effective on the first part. The solution therefore was to add an additional condition to the for loop, to check whether the thread is interrupted like this:</p>
+
+<pre><code>for ( count = 0; count &lt; maxRows &amp;&amp; rs.next() &amp;&amp; !currentThread.isInterrupted(); count++ ) {
+// ...
+}
+</code></pre>
+
+<p>as well as to perform the same check before calling the <code>initializeEntitiesAndCollections()</code> method:</p>
+
+<pre><code>if (!Thread.interrupted()) {
+
+    initializeEntitiesAndCollections(hydratedObjects, rs, session,
+                queryParameters.isReadOnly(session));
+    if (createSubselects) {
+
+        createSubselects(subselectResultKeys, queryParameters, session);
+    }
+}
+</code></pre>
+
+<p>Additionally, by calling the <code>Thread.interrupted()</code> on the second check, the flag is cleared and does not affect the further functioning of the program. Now when a query is to be canceled, the canceling method accesses the Hibernate session and thread stored in a map with the HTTP session-id as the key, calls the <code>cancelQuery</code> method on the session and calls the <code>interrupt</code> method of the thread.</p>

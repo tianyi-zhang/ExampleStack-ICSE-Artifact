@@ -1,0 +1,156 @@
+<p>I managed to get it working converting the YUV data back and forth, after weeks of not finding any answer/getting misled. In <code>ZBarScannerView.java</code> this is how my <code>onPreviewFrame(..)</code> looks like:</p>
+
+<pre><code>@Override
+public void onPreviewFrame(byte[] data, Camera camera) {
+    Camera.Parameters parameters = camera.getParameters();
+    Camera.Size size = parameters.getPreviewSize();
+    int width = size.width;
+    int height = size.height;
+
+    switcher = !switcher;
+
+
+    if(DisplayUtils.getScreenOrientation(getContext()) == Configuration.ORIENTATION_PORTRAIT) {
+        byte[] rotatedData = new byte[data.length];
+        for (int y = 0; y &lt; height; y++) {
+            for (int x = 0; x &lt; width; x++)
+                rotatedData[x * height + height - y - 1] = data[x + y * width];
+        }
+        int tmp = width;
+        width = height;
+        height = tmp;
+        data = rotatedData;
+    }
+
+    Image barcode = new Image(width, height, "Y800");
+
+    if (switcher) {
+        int[] pixels = applyGrayScale(data,width,height);
+        Bitmap bm = Bitmap.createBitmap(pixels,width,height, Bitmap.Config.ARGB_8888);
+        bm = MyUtils.createInvertedBitmap(bm, width, height);
+
+        pixels = new int[width*height];
+        bm.getPixels(pixels, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
+
+        encodeYUV420SP(data, pixels, bm.getWidth(), bm.getHeight());
+    }
+
+
+    barcode.setData(data);
+
+    int result = mScanner.scanImage(barcode);
+
+    if (result != 0) {
+        stopCamera();
+        if(mResultHandler != null) {
+            SymbolSet syms = mScanner.getResults();
+            Result rawResult = new Result();
+            for (Symbol sym : syms) {
+                String symData = sym.getData();
+                if (!TextUtils.isEmpty(symData)) {
+                    rawResult.setContents(symData);
+                    rawResult.setBarcodeFormat(BarcodeFormat.getFormatById(sym.getType()));
+                    break;
+                }
+            }
+            mResultHandler.handleResult(rawResult);
+        }
+    } else {
+        camera.setOneShotPreviewCallback(this);
+    }
+}
+</code></pre>
+
+<p>also add this to the class (gotten from <a href="http://stackoverflow.com/a/13055615/4773911">Here</a>) :</p>
+
+<pre><code>void encodeYUV420SP(byte[] yuv420sp, int[] argb, int width, int height) {
+    final int frameSize = width * height;
+
+    int yIndex = 0;
+    int uvIndex = frameSize;
+
+    int a, R, G, B, Y, U, V;
+    int index = 0;
+    for (int j = 0; j &lt; height; j++) {
+        for (int i = 0; i &lt; width; i++) {
+
+            a = (argb[index] &amp; 0xff000000) &gt;&gt; 24; // a is not used obviously
+            R = (argb[index] &amp; 0xff0000) &gt;&gt; 16;
+            G = (argb[index] &amp; 0xff00) &gt;&gt; 8;
+            B = (argb[index] &amp; 0xff) &gt;&gt; 0;
+
+            // well known RGB to YUV algorithm
+            Y = ((66 * R + 129 * G + 25 * B + 128) &gt;&gt; 8) + 16;
+            U = ((-38 * R - 74 * G + 112 * B + 128) &gt;&gt; 8) + 128;
+            V = ((112 * R - 94 * G - 18 * B + 128) &gt;&gt; 8) + 128;
+
+            // NV21 has a plane of Y and interleaved planes of VU each sampled by a factor of 2
+            //    meaning for every 4 Y pixels there are 1 V and 1 U.  Note the sampling is every other
+            //    pixel AND every other scanline.
+            yuv420sp[yIndex++] = (byte) ((Y &lt; 0) ? 0 : ((Y &gt; 255) ? 255 : Y));
+            if (j % 2 == 0 &amp;&amp; index % 2 == 0) {
+                yuv420sp[uvIndex++] = (byte) ((V &lt; 0) ? 0 : ((V &gt; 255) ? 255 : V));
+                yuv420sp[uvIndex++] = (byte) ((U &lt; 0) ? 0 : ((U &gt; 255) ? 255 : U));
+            }
+
+            index++;
+        }
+    }
+}
+</code></pre>
+
+<p>this takes care of converting the int array back into a byte array after the inversion.</p>
+
+<p>Also I am using these code snippets I got somewhere on stackExchange (it's been too long for me to remember where) with a few small changes, inside an utility class named <code>MyUtils.java</code>:</p>
+
+<pre><code>public class MyUtils {
+
+public static Integer sizeWidth;
+public static Integer sizeHeight;
+
+
+public static Bitmap createInvertedBitmap(Bitmap src, Integer width, Integer height) {
+
+    sizeWidth = width;
+    sizeHeight = height;
+
+    ColorMatrix colorMatrix_Inverted =
+            new ColorMatrix(new float[] {
+                    -1,  0,  0,  0, 255,
+                    0, -1,  0,  0, 255,
+                    0,  0, -1,  0, 255,
+                    0,  0,  0,  1,   0});
+
+    ColorFilter ColorFilter_Sepia = new ColorMatrixColorFilter(
+            colorMatrix_Inverted);
+
+    Bitmap bitmap = Bitmap.createBitmap(sizeWidth, sizeHeight,
+            Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(bitmap);
+
+    Paint paint = new Paint();
+
+    paint.setColorFilter(ColorFilter_Sepia);
+    canvas.drawBitmap(src, 0, 0, paint);
+
+    return bitmap;
+}
+
+
+public static int[] applyGrayScale(byte [] data, int width, int height) {
+    int p;
+    int size = width*height;
+    int[] pixels = new int[size];
+    for(int i = 0; i &lt; size; i++) {
+        p = data[i] &amp; 0xFF;
+        pixels[i] = 0xff000000 | p&lt;&lt;16 | p&lt;&lt;8 | p;
+    }
+    return pixels;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>Finally, add <code>Boolean switcher = true</code> into the class, within the ZBarScannerView class scope. The variable "switcher" is there to switch between checking for inverted or non-inverted codes. </p>
+
+<p>Please ask if you have any trouble, I struggled with this for so long, I feel ya, and answer might need some editing for readability.</p>

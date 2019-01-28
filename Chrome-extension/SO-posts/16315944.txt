@@ -1,0 +1,302 @@
+<p>Create one Class called "DirectionsJSONParser "</p>
+
+<pre><code>public class DirectionsJSONParser {
+
+
+public List&lt;List&lt;HashMap&lt;String,String&gt;&gt;&gt; parse(JSONObject jObject){
+
+    List&lt;List&lt;HashMap&lt;String, String&gt;&gt;&gt; routes = new ArrayList&lt;List&lt;HashMap&lt;String,String&gt;&gt;&gt;() ;
+    JSONArray jRoutes = null;
+    JSONArray jLegs = null;
+    JSONArray jSteps = null;
+
+    try {
+
+        jRoutes = jObject.getJSONArray("routes");
+
+
+        for(int i=0;i&lt;jRoutes.length();i++){
+            jLegs = ( (JSONObject)jRoutes.get(i)).getJSONArray("legs");
+            List path = new ArrayList&lt;HashMap&lt;String, String&gt;&gt;();
+
+
+            for(int j=0;j&lt;jLegs.length();j++){
+                jSteps = ( (JSONObject)jLegs.get(j)).getJSONArray("steps");
+
+
+                for(int k=0;k&lt;jSteps.length();k++){
+                    String polyline = "";
+                    polyline = (String)((JSONObject)((JSONObject)jSteps.get(k)).get("polyline")).get("points");
+                    List&lt;LatLng&gt; list = decodePoly(polyline);
+
+
+                    for(int l=0;l&lt;list.size();l++){
+                        HashMap&lt;String, String&gt; hm = new HashMap&lt;String, String&gt;();
+                        hm.put("lat", Double.toString(((LatLng)list.get(l)).latitude) );
+                        hm.put("lng", Double.toString(((LatLng)list.get(l)).longitude) );
+                        path.add(hm);
+                    }
+                }
+                routes.add(path);
+            }
+        }
+
+    } catch (JSONException e) {
+        e.printStackTrace();
+    }catch (Exception e){
+    }
+    return routes;
+}
+
+private List&lt;LatLng&gt; decodePoly(String encoded) {
+
+    List&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+    int index = 0, len = encoded.length();
+    int lat = 0, lng = 0;
+
+    while (index &lt; len) {
+        int b, shift = 0, result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lat += dlat;
+
+        shift = 0;
+        result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lng += dlng;
+
+        LatLng p = new LatLng((((double) lat / 1E5)),
+                             (((double) lng / 1E5)));
+        poly.add(p);
+    }
+    return poly;
+}}
+</code></pre>
+
+<hr>
+
+<h2>In Main Activity</h2>
+
+<pre><code>public class MainActivity extends FragmentActivity {
+
+GoogleMap map;
+ArrayList&lt;LatLng&gt; markerPoints;
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+
+    // Initializing array List
+    markerPoints = new ArrayList&lt;LatLng&gt;();
+
+    // Getting reference to SupportMapFragment of the activity_main
+    SupportMapFragment fm = (SupportMapFragment)getSupportFragmentManager().findFragmentById(R.id.map);
+
+    // Getting Map for the SupportMapFragment
+    map = fm.getMap();
+
+    map.setMyLocationEnabled(true);
+
+    map.setOnMapClickListener(new OnMapClickListener() {
+
+        @Override
+        public void onMapClick(LatLng point) {
+
+            if(markerPoints.size()&gt;1){
+                markerPoints.clear();
+                map.clear();
+            }
+
+            markerPoints.add(point);
+
+            MarkerOptions options = new MarkerOptions();
+
+            options.position(point);
+
+             if(markerPoints.size()==1){
+                   options.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN));
+            }else if(markerPoints.size()==2){
+                options.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED));
+            }
+
+            map.addMarker(options);
+
+            if(markerPoints.size() &gt;= 2){
+                LatLng origin = markerPoints.get(0);
+                LatLng dest = markerPoints.get(1);
+
+                String url = getDirectionsUrl(origin, dest);
+
+                DownloadTask downloadTask = new DownloadTask();
+
+                downloadTask.execute(url);
+            }
+        }
+    });
+}
+
+private String getDirectionsUrl(LatLng origin,LatLng dest){
+
+    // Origin of route
+    String str_origin = "origin="+origin.latitude+","+origin.longitude;
+
+    // Destination of route
+    String str_dest = "destination="+dest.latitude+","+dest.longitude;
+
+    // Sensor enabled
+    String sensor = "sensor=false";
+
+    // Building the parameters to the web service
+    String parameters = str_origin+"&amp;"+str_dest+"&amp;"+sensor;
+
+    // Output format
+    String output = "json";
+
+    String url = "https://maps.googleapis.com/maps/api/directions/"+output+"?"+parameters;
+
+    return url;
+}
+
+private String downloadUrl(String strUrl) throws IOException{
+    String data = "";
+    InputStream iStream = null;
+    HttpURLConnection urlConnection = null;
+    try{
+        URL url = new URL(strUrl);
+
+        urlConnection = (HttpURLConnection) url.openConnection();
+
+        // Connecting to url
+        urlConnection.connect();
+
+        // Reading data from url
+        iStream = urlConnection.getInputStream();
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(iStream));
+
+        StringBuffer sb  = new StringBuffer();
+
+        String line = "";
+        while( ( line = br.readLine())  != null){
+            sb.append(line);
+        }
+
+        data = sb.toString();
+
+        br.close();
+
+    }catch(Exception e){
+        Log.d("Exception while downloading url", e.toString());
+    }finally{
+        iStream.close();
+        urlConnection.disconnect();
+    }
+    return data;
+}
+
+// Fetches data from url passed
+private class DownloadTask extends AsyncTask&lt;String, Void, String&gt;{
+
+    // Downloading data in non-ui thread
+    @Override
+    protected String doInBackground(String... url) {
+
+        // For storing data from web service
+        String data = "";
+
+        try{
+            // Fetching the data from web service
+            data = downloadUrl(url[0]);
+        }catch(Exception e){
+            Log.d("Background Task",e.toString());
+        }
+        return data;
+    }
+
+    // Executes in UI thread, after the execution of
+    // doInBackground()
+    @Override
+    protected void onPostExecute(String result) {
+        super.onPostExecute(result);
+
+        ParserTask parserTask = new ParserTask();
+
+        // Invokes the thread for parsing the JSON data
+        parserTask.execute(result);
+    }
+}
+
+
+private class ParserTask extends AsyncTask&lt;String, Integer, List&lt;List&lt;HashMap&lt;String,String&gt;&gt;&gt; {
+
+    @Override
+    protected List&lt;List&lt;HashMap&lt;String, String&gt;&gt;&gt; doInBackground(String... jsonData) {
+
+        JSONObject jObject;
+        List&lt;List&lt;HashMap&lt;String, String&gt;&gt;&gt; routes = null;
+
+        try{
+            jObject = new JSONObject(jsonData[0]);
+            DirectionsJSONParser parser = new DirectionsJSONParser();
+
+            // Starts parsing data
+            routes = parser.parse(jObject);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+        return routes;
+    }
+
+    @Override
+    protected void onPostExecute(List&lt;List&lt;HashMap&lt;String, String&gt;&gt;&gt; result) {
+        ArrayList&lt;LatLng&gt; points = null;
+        PolylineOptions lineOptions = null;
+        MarkerOptions markerOptions = new MarkerOptions();
+
+        // Traversing through all the routes
+        for(int i=0;i&lt;result.size();i++){
+            points = new ArrayList&lt;LatLng&gt;();
+            lineOptions = new PolylineOptions();
+
+            // Fetching i-th route
+            List&lt;HashMap&lt;String, String&gt;&gt; path = result.get(i);
+
+            // Fetching all the points in i-th route
+            for(int j=0;j&lt;path.size();j++){
+                HashMap&lt;String,String&gt; point = path.get(j);
+
+                double lat = Double.parseDouble(point.get("lat"));
+                double lng = Double.parseDouble(point.get("lng"));
+                LatLng position = new LatLng(lat, lng);
+
+                points.add(position);
+            }
+
+            // Adding all the points in the route to LineOptions
+            lineOptions.addAll(points);
+            lineOptions.width(2);
+            lineOptions.color(Color.RED);
+        }
+
+        // Drawing polyline in the Google Map for the i-th route
+        map.addPolyline(lineOptions);
+    }
+}
+
+@Override
+public boolean onCreateOptionsMenu(Menu menu) {
+    // Inflate the menu; this adds items to the action bar if it is present.
+    getMenuInflater().inflate(R.menu.main, menu);
+    return true;
+}}
+</code></pre>

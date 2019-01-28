@@ -1,0 +1,292 @@
+<p>Here's an example which plays Flash via the Internet Explorer OCX plug-in, and can even capture screenshots from the Flash object. It needs SWT however.</p>
+
+<p>Edit: Actually, not really. It looks like it does the SWT image conversion later. You can use the BufferedImage with a JComponent or something, just by drawing it.</p>
+
+<pre><code>/**
+ * 
+ */
+package swfexp1;
+
+import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.DirectColorModel;
+import java.awt.image.IndexColorModel;
+import java.awt.image.WritableRaster;
+
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.PaletteData;
+import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.ole.win32.OLE;
+import org.eclipse.swt.ole.win32.OleAutomation;
+import org.eclipse.swt.ole.win32.OleClientSite;
+import org.eclipse.swt.ole.win32.OleFrame;
+import org.eclipse.swt.ole.win32.Variant;
+import org.eclipse.swt.widgets.Canvas;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
+
+import swfexp1.res.ResRoot;
+
+public final class SWFExp1 {
+    private GC canvas, snapGC;
+    private Canvas snapCanvas;
+    private Shell shell;
+    private OleFrame frame;
+    //private OleControlSite oleCSite;
+    private OleClientSite oleClSite;
+    private OleAutomation oleAuto;
+    private Display display;
+    private long lastSnapshotMS = System.currentTimeMillis();
+    private long lastUpdateTimeMS = System.currentTimeMillis();
+
+    private Composite viewComp;
+
+    /**
+     * 
+     */
+    public SWFExp1() {
+        display = Display.getDefault();
+        shell = new Shell(display);
+        shell.setSize(1050, 550);
+
+        GridLayout l = new GridLayout(2, false);
+        shell.setLayout(l);
+
+        canvas = new GC(shell);
+        frame = new OleFrame(shell, SWT.NONE);
+
+        GridData d = new GridData();
+        frame.setLayoutData(d);
+
+        d = new GridData();
+        viewComp = new Composite(shell, SWT.BORDER);
+        viewComp.setLayoutData(d);
+        //viewComp.setBounds(0, 0, 500, 500);
+
+        snapCanvas = new Canvas(viewComp, SWT.NONE);
+        d = new GridData(500, 500);
+        snapCanvas.setLayoutData(d);
+        snapCanvas.setBounds(0, 0, 500, 500);
+        snapGC = new GC(snapCanvas);
+
+        //oleCSite = new OleControlSite(frame, SWT.NONE, "ShockwaveFlash.ShockwaveFlash");
+        oleClSite = new OleClientSite(frame, SWT.NONE, "ShockwaveFlash.ShockwaveFlash");
+        System.out.println("oleclsite: " + oleClSite);
+
+        oleClSite.doVerb(OLE.OLEIVERB_INPLACEACTIVATE);
+        oleClSite.doVerb(OLE.OLEIVERB_SHOW);
+
+        oleClSite.setBounds(0, 0, 500, 500);
+        oleAuto = new OleAutomation(oleClSite);
+
+        shell.setVisible(true);
+        shell.open();
+
+        int[] rgdispid = oleAuto.getIDsOfNames(new String[]{"Play"}); 
+        int playID = rgdispid[0];
+        System.out.println("playID: " + playID);
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"Movie"}); 
+        int moviePropSetID = rgdispid[0];
+        System.out.println("moviePropSetID: " + moviePropSetID);        
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"Stop"}); 
+        int stopID = rgdispid[0];
+        System.out.println("stopID: " + stopID);
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"Back"}); 
+        int backID = rgdispid[0];
+        System.out.println("backID: " + backID);
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"Forward"}); 
+        int forwardID = rgdispid[0];
+        System.out.println("forwardID: " + forwardID);
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"StopPlay"}); 
+        int stopPlayID = rgdispid[0];
+        System.out.println("stopPlayID: " + stopPlayID);
+
+        rgdispid = oleAuto.getIDsOfNames(new String[]{"LoadMovie", "layer", "url"}); 
+        int loadMovieID = rgdispid[0];
+        System.out.println("loadMovieID: " + loadMovieID);
+
+        Variant[] rgvarg = new Variant[2];
+        //String fileName = "file:///C:/Users/Public/blah/cubes.swf";
+        ResRoot r = new ResRoot();
+        String fileName =  r.getClass().getResource("runanim.swf").toString();
+        fileName = fileName.replace("file:/", "file://");
+
+        System.out.println("fname: " + fileName);
+        rgvarg[0] = new Variant(0); // layer
+        rgvarg[1] = new Variant(fileName); // path
+
+        //Variant[] rgvarg2 = new Variant[1];
+        //String fileName2 = "C:\\Users\\Public\\blah\\cubes.swf";
+        //rgvarg2[0] = new Variant(fileName2);
+        //boolean done = oleAuto.setProperty(moviePropSetID, rgvarg[0]);
+
+        //System.out.println("done: " + done);
+
+        Variant pVarResult1 = oleAuto.invoke(loadMovieID, rgvarg);
+        Variant pVarResult2 = oleAuto.invoke(playID);
+
+        System.out.println("pvarr1: " + pVarResult1);
+        //System.out.println("pvarr2: " + pVarResult2);
+    }
+
+    public void run() {
+        while (!shell.isDisposed()) {
+            if (!display.readAndDispatch()) {
+                display.sleep();
+            }
+            lastUpdateTimeMS = System.currentTimeMillis();
+
+            if (lastUpdateTimeMS &gt;= (lastSnapshotMS + 300)) {
+                takeSnap();
+                lastSnapshotMS = lastUpdateTimeMS;
+            }
+        }
+        oleAuto.dispose();
+        display.dispose();
+    }
+
+    /**
+     * Take snapshot and put it in the view
+     */
+    private void takeSnap() {
+        System.out.println("cheese!");
+        Image i = new Image(canvas.getDevice(), 500, 500);
+        canvas.copyArea(i, 0, 0);
+        snapGC.drawImage(i, 0, 0);
+
+        //canvas.copyArea(snapCanvas.get, );
+    }
+
+    /**
+     * @param args
+     */
+    public static void main(String[] args) {
+        SWFExp1 exp1 = new SWFExp1();
+        exp1.run();
+    }
+
+    public static final BufferedImage convertToAWT(ImageData data) {
+        ColorModel colorModel = null;
+        PaletteData palette = data.palette;
+        if (palette.isDirect) {
+            colorModel = new DirectColorModel(data.depth, palette.redMask, palette.greenMask, palette.blueMask);
+            BufferedImage bufferedImage = new BufferedImage(colorModel, colorModel.createCompatibleWritableRaster(data.width, data.height), false, null);
+            WritableRaster raster = bufferedImage.getRaster();
+            int[] pixelArray = new int[3];
+            for (int y = 0; y &lt; data.height; y++) {
+                for (int x = 0; x &lt; data.width; x++) {
+                    int pixel = data.getPixel(x, y);
+                    RGB rgb = palette.getRGB(pixel);
+                    pixelArray[0] = rgb.red;
+                    pixelArray[1] = rgb.green;
+                    pixelArray[2] = rgb.blue;
+                    raster.setPixels(x, y, 1, 1, pixelArray);
+                }
+            }
+            return bufferedImage;
+        }
+
+        // otherwise...     
+        RGB[] rgbs = palette.getRGBs();
+        byte[] red = new byte[rgbs.length];
+        byte[] green = new byte[rgbs.length];
+        byte[] blue = new byte[rgbs.length];
+        for (int i = 0; i &lt; rgbs.length; i++) {
+            RGB rgb = rgbs[i];
+            red[i] = (byte) rgb.red;
+            green[i] = (byte) rgb.green;
+            blue[i] = (byte) rgb.blue;
+        }
+        if (data.transparentPixel != -1) {
+            colorModel = new IndexColorModel(data.depth, rgbs.length, red, green, blue, data.transparentPixel);
+        } else {
+            colorModel = new IndexColorModel(data.depth, rgbs.length, red, green, blue);
+        }
+        BufferedImage bufferedImage = new BufferedImage(colorModel, colorModel.createCompatibleWritableRaster(data.width, data.height), false, null);
+        WritableRaster raster = bufferedImage.getRaster();
+        int[] pixelArray = new int[1];
+        for (int y = 0; y &lt; data.height; y++) {
+            for (int x = 0; x &lt; data.width; x++) {
+                int pixel = data.getPixel(x, y);
+                pixelArray[0] = pixel;
+                raster.setPixel(x, y, pixelArray);
+            }
+        }
+        return bufferedImage;
+    }
+
+    static ImageData convertToSWT(BufferedImage bufferedImage) {
+        if (bufferedImage.getColorModel() instanceof DirectColorModel) {
+            DirectColorModel colorModel = (DirectColorModel) bufferedImage.getColorModel();
+            PaletteData palette = new PaletteData(colorModel.getRedMask(), colorModel.getGreenMask(), colorModel.getBlueMask());
+            ImageData data = new ImageData(bufferedImage.getWidth(), bufferedImage.getHeight(), colorModel.getPixelSize(), palette);
+            WritableRaster raster = bufferedImage.getRaster();
+            int[] pixelArray = new int[3];
+            for (int y = 0; y &lt; data.height; y++) {
+                for (int x = 0; x &lt; data.width; x++) {
+                    raster.getPixel(x, y, pixelArray);
+                    int pixel = palette.getPixel(new RGB(pixelArray[0], pixelArray[1], pixelArray[2]));
+                    data.setPixel(x, y, pixel);
+                }
+            }
+            return data;
+        } else if (bufferedImage.getColorModel() instanceof IndexColorModel) {
+            IndexColorModel colorModel = (IndexColorModel) bufferedImage.getColorModel();
+            int size = colorModel.getMapSize();
+            byte[] reds = new byte[size];
+            byte[] greens = new byte[size];
+            byte[] blues = new byte[size];
+            colorModel.getReds(reds);
+            colorModel.getGreens(greens);
+            colorModel.getBlues(blues);
+            RGB[] rgbs = new RGB[size];
+            for (int i = 0; i &lt; rgbs.length; i++) {
+                rgbs[i] = new RGB(reds[i] &amp; 0xFF, greens[i] &amp; 0xFF, blues[i] &amp; 0xFF);
+            }
+            PaletteData palette = new PaletteData(rgbs);
+            ImageData data = new ImageData(bufferedImage.getWidth(), bufferedImage.getHeight(), colorModel.getPixelSize(), palette);
+            data.transparentPixel = colorModel.getTransparentPixel();
+            WritableRaster raster = bufferedImage.getRaster();
+            int[] pixelArray = new int[1];
+            for (int y = 0; y &lt; data.height; y++) {
+                for (int x = 0; x &lt; data.width; x++) {
+                    raster.getPixel(x, y, pixelArray);
+                    data.setPixel(x, y, pixelArray[0]);
+                }
+            }
+            return data;
+        }
+        return null;
+    }
+
+    public static final ImageData createSampleImage(Display display) {
+        Image image = new Image(display, 100, 100);
+        Rectangle bounds = image.getBounds();
+        GC gc = new GC(image);
+        gc.setBackground(display.getSystemColor(SWT.COLOR_BLUE));
+        gc.fillRectangle(bounds);
+        gc.setBackground(display.getSystemColor(SWT.COLOR_GREEN));
+        gc.fillOval(0, 0, bounds.width, bounds.height);
+        gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
+        gc.drawLine(0, 0, bounds.width, bounds.height);
+        gc.drawLine(bounds.width, 0, 0, bounds.height);
+        gc.dispose();
+        ImageData data = image.getImageData();
+        image.dispose();
+        return data;
+    }
+
+}
+</code></pre>

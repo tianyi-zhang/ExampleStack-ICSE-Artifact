@@ -1,0 +1,173 @@
+<p>After looking through the code, it seems as if it's "lazily initialized", meaning its initialized as soon as its needed, if not already initialized. In this case, whenever any event is posted to it's queue.</p>
+
+<hr>
+
+<p>Here's the full story:</p>
+
+<p>The <code>EventDispatchThread</code> is encapsulated within <code>EventQueue</code>. Each <code>EventQueue</code> has its own EDT:</p>
+
+<pre><code>/**
+ * Just a summary of the class
+ */
+public class EventQueue {
+     private static final int ULTIMATE_PRIORITY = 3;
+     private static final int NUM_PRIORITIES = ULTIMATE_PRIORITY + 1;
+
+     private Queue[] queues = new Queue[NUM_PRIORITIES];
+     private EventQueue nextQueue;
+     private EventQueue previousQueue;
+     private EventDispatchThread dispatchThread;
+}
+</code></pre>
+
+<p>The <code>dispatchThread</code> is initialized using the package-private method <code>initDispatchThread()</code>:</p>
+
+<pre><code>final void initDispatchThread() {
+    pushPopLock.lock();
+    try {
+        if (dispatchThread == null &amp;&amp; !threadGroup.isDestroyed() &amp;&amp; !appContext.isDisposed()) {
+            dispatchThread = AccessController.doPrivileged(
+                new PrivilegedAction&lt;EventDispatchThread&gt;() {
+                    public EventDispatchThread run() {
+                        EventDispatchThread t =
+                            new EventDispatchThread(threadGroup,
+                                                    name,
+                                                    EventQueue.this);
+                        t.setContextClassLoader(classLoader);
+                        t.setPriority(Thread.NORM_PRIORITY + 1);
+                        t.setDaemon(false);
+                        AWTAutoShutdown.getInstance().notifyThreadBusy(t);
+                        return t;
+                    }
+                }
+            );
+            dispatchThread.start();
+        }
+    } finally {
+        pushPopLock.unlock();
+    }
+}
+</code></pre>
+
+<p>After checking for references to this method, there are a 3 places where this method is called:</p>
+
+<ol>
+<li>In the private method <code>EventQueue#wakeup(boolean)</code></li>
+<li>In the private method <code>EventQueue#postEventPrivate(AWTEvent)</code> (which is called by the public method <a href="http://docs.oracle.com/javase/8/docs/api/java/awt/EventQueue.html#postEvent-java.awt.AWTEvent-" rel="nofollow"><code>EventQueue#postEvent(AWTEvent)</code></a>)</li>
+<li>In the package-private method <code>EventQueue#createSecondaryLoop(Conditional, EventFilter, long)</code>.</li>
+</ol>
+
+<p>Before <code>initDispatchThread()</code> is called, <code>dispatchThread</code> is checked make sure it's not already initialized. There are a few ways you can view the entire source code for a class in the JDK (easiest being attaching source); look into these methods if you're <em>REALLY</em> interested.</p>
+
+<p>So now we know <code>EventQueue</code> contains the thread, and the thread is created whenever it's actually needed (an event gets posted). Time to talk about where this queue is located and how things communicate with it.</p>
+
+<p>If you check the code of <code>EventQueue#invokeLater(Runnable)</code> (which is called by it's <code>SwingUtilities</code> counterpart), you'll see that it calls <code>Toolkit.getEventQueue().postEvent(...)</code>. This tells us the queue is located in <code>Toolkit</code>.</p>
+
+<p>Inside the <code>Toolkit</code> class, we can see that it's created (if not already) any time we call for it. It uses reflection to create the object:</p>
+
+<pre><code>public static synchronized Toolkit getDefaultToolkit() {
+    if (toolkit == null) {
+        try {
+            java.lang.Compiler.disable();
+
+            java.security.AccessController.doPrivileged(
+                    new java.security.PrivilegedAction&lt;Void&gt;() {
+                public Void run() {
+                    String nm = null;
+                    Class&lt;?&gt; cls = null;
+                    try {
+                        nm = System.getProperty("awt.toolkit");
+                        try {
+                            cls = Class.forName(nm);
+                        } catch (ClassNotFoundException e) {
+                            ClassLoader cl = ClassLoader.getSystemClassLoader();
+                            if (cl != null) {
+                                try {
+                                    cls = cl.loadClass(nm);
+                                } catch (ClassNotFoundException ee) {
+                                    throw new AWTError("Toolkit not found: " + nm);
+                                }
+                            }
+                        }
+                        if (cls != null) {
+                            toolkit = (Toolkit)cls.newInstance();
+                            if (GraphicsEnvironment.isHeadless()) {
+                                toolkit = new HeadlessToolkit(toolkit);
+                            }
+                        }
+                    } catch (InstantiationException e) {
+                        throw new AWTError("Could not instantiate Toolkit: " + nm);
+                    } catch (IllegalAccessException e) {
+                        throw new AWTError("Could not access Toolkit: " + nm);
+                    }
+                    return null;
+                }
+            });
+            loadAssistiveTechnologies();
+        } finally {
+            // Make sure to always re-enable the JIT.
+            java.lang.Compiler.enable();
+        }
+    }
+    return toolkit;
+}
+</code></pre>
+
+<p>Toolkit is an abstract class. Instead of instantiating an object of this class, we are creating an instance of a subclass of Toolkit: <code>SunToolkit</code>. We will need to know this to see where the queue is created.</p>
+
+<p>Once we have the Toolkit, we can access it's EventQueue using <code>Toolkit#getSystemEventQueue()</code>. This telescopes to the protected abstract method <code>getSystemEventQueueImpl()</code>. We must check out the subclass to see the implementation for this method. In the SunToolkit class, we have:</p>
+
+<pre><code>protected EventQueue getSystemEventQueueImpl() {
+    return getSystemEventQueueImplPP();
+}
+
+// Package private implementation
+static EventQueue getSystemEventQueueImplPP() {
+    return getSystemEventQueueImplPP(AppContext.getAppContext());
+}
+
+public static EventQueue getSystemEventQueueImplPP(AppContext appContext) {
+    EventQueue theEventQueue = (EventQueue) appContext.get(AppContext.EVENT_QUEUE_KEY);
+    return theEventQueue;
+}
+</code></pre>
+
+<p><code>(EventQueue) appContext.get(AppContext.EVENT_QUEUE_KEY)</code> The queue is coming the <code>appContext</code> of the toolkit. Now all we gotta do is find where the queue is added to the app context:</p>
+
+<pre><code>public SunToolkit() {
+    Runnable initEQ = new Runnable() {
+        public void run() {
+            EventQueue eventQueue;
+
+            String eqName = System.getProperty("AWT.EventQueueClass", "java.awt.EventQueue");
+
+            try {
+                eventQueue = (EventQueue) Class.forName(eqName).newInstance();
+            } catch (Exception e) {
+                e.printStackTrace();
+                System.err.println("Failed loading " + eqName + ": " + e);
+                eventQueue = new EventQueue();
+            }
+            AppContext appContext = AppContext.getAppContext();
+            appContext.put(AppContext.EVENT_QUEUE_KEY, eventQueue); //queue added here
+
+            PostEventQueue postEventQueue = new PostEventQueue(eventQueue);
+            appContext.put(POST_EVENT_QUEUE_KEY, postEventQueue);
+        }
+    };
+
+    initEQ.run();
+}
+</code></pre>
+
+<p>So a quick overview:</p>
+
+<ol>
+<li>The EDT is located within EventQueue</li>
+<li>The EventQueue is located within Toolkit</li>
+<li>The queue is created when you create the toolkit</li>
+<li>The toolkit is created either manually (by calling <code>Toolkit.getDefaultToolkit()</code>, or whenever another part of the program (such as a Swing component posting data to the queue) calls on it)</li>
+<li>The EDT is created anytime an event is posted to the queue (and the EDT isnt already running)</li>
+</ol>
+
+<p>Let me know if you have any questions about this</p>

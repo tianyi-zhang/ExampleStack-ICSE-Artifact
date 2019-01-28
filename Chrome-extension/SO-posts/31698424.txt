@@ -1,0 +1,347 @@
+<p>Try the following sample code and modify it as per your requirement(I guess your are loading the image on main UI thread and not caching it, its just a guess). In this code i am downloading and caching the images from the internet :
+Create a Activity class named SomeFragTest </p>
+
+<pre><code>import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import android.app.ActivityManager;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Bitmap.Config;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.PorterDuff.Mode;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentActivity;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.app.FragmentPagerAdapter;
+import android.support.v4.util.LruCache;
+import android.support.v4.view.ViewPager;
+import android.util.Log;
+import android.widget.ImageView;
+public class SomeFragTest extends FragmentActivity{
+private LruCache&lt;String, Bitmap&gt; cache;
+private List&lt;String&gt; strings;
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+super.onCreate(savedInstanceState);
+setContentView(R.layout.activity_layout);
+ViewPager mViewPager = (ViewPager)findViewById(R.id.viewPager);
+
+strings=new ArrayList&lt;String&gt;();
+setData();
+int memClass = ( ( ActivityManager )getSystemService(           Context.ACTIVITY_SERVICE ) ).getMemoryClass();
+int cacheSize = 1024 * 1024 * memClass / 8;
+
+cache=new LruCache&lt;String, Bitmap&gt;(cacheSize){
+    @Override
+    protected int sizeOf(String key, Bitmap value) {
+        return value.getByteCount()/1024;
+    }
+};
+mViewPager.setOffscreenPageLimit(strings.size());
+mViewPager.setAdapter(new MyPageAdapter(getSupportFragmentManager()));
+}
+private void setData()
+{
+for (int i = 1; i &lt;= 10; i++) {
+    strings.add("http://dummyimage.com/600x400/000/0011ff.png&amp;text="+i);
+}
+}
+public void loadBitmap(int position , ImageView imageView) {
+imageView.setImageResource(R.drawable.ic_launcher);
+imageView.setTag(strings.get(position));
+BitmapDownloaderTask task = new BitmapDownloaderTask(imageView);
+task.execute(strings.get(position));
+}
+class MyPageAdapter extends FragmentPagerAdapter
+{
+public MyPageAdapter(FragmentManager fm) {
+    super(fm);
+    // TODO Auto-generated constructor stub
+}
+
+@Override
+public Fragment getItem(int arg0) {
+    Fragment fragment=new ChildFrag();
+    Bundle bundle=new Bundle();
+    bundle.putInt("POS", arg0);
+    fragment.setArguments(bundle);
+    return fragment;
+}
+
+@Override
+public int getCount() {
+    return strings.size();
+}
+
+
+ }
+class BitmapDownloaderTask extends AsyncTask&lt;String, Void, Bitmap&gt; {
+public String url;
+private final WeakReference&lt;ImageView&gt; imageViewReference;
+
+
+public BitmapDownloaderTask(ImageView imageView) {
+    imageViewReference = new WeakReference&lt;ImageView&gt;(imageView);
+
+}
+
+@Override
+// Actual download method, run in the task thread
+protected Bitmap doInBackground(String... params) {
+
+     // params comes from the execute() call: params[0] is the url.
+    url=params[0];
+    if(cache.get(url)!=null){
+        Log.e("FROM ", "CACHE");
+        return cache.get(url);
+    }
+     return downloadBitmap(params[0]);
+}
+private Bitmap downloadBitmap(String url) {
+    Log.e("FROM ", "URL");
+   HttpClient client=new DefaultHttpClient();
+    //final AndroidHttpClient client =     AndroidHttpClient.newInstance("Android");
+    final HttpGet getRequest = new HttpGet(url);
+
+    try {
+        HttpResponse response = client.execute(getRequest);
+        final int statusCode = response.getStatusLine().getStatusCode();
+        if (statusCode != HttpStatus.SC_OK) { 
+            Log.w("ImageDownloader", "Error " + statusCode + " while retrieving bitmap from " + url); 
+            return null;
+        }
+
+        final HttpEntity entity = response.getEntity();
+        if (entity != null) {
+            InputStream inputStream = null;
+            try {
+                inputStream = entity.getContent(); 
+                //final Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
+                return decodeBitmapWithGiveSizeFromResource(inputStream);
+            } finally {
+                if (inputStream != null) {
+                    inputStream.close();  
+                }
+                entity.consumeContent();
+            }
+        }
+    } catch (Exception e) {
+        // Could provide a more explicit error message for IOException or IllegalStateException
+        getRequest.abort();
+        Log.w("ImageDownloader", "Error while retrieving bitmap from " + url);
+        Log.e("ERROR", " " +e.getLocalizedMessage());
+    } finally {
+        if (client != null) {
+            //client.close();
+        }
+    }
+    return null;
+}
+
+/***************/
+private void copy(InputStream inputStream,ByteArrayOutputStream arrayOutputStream)
+{
+
+            byte[] buffer = new byte[1024];
+    int len;
+    try {
+        while ((len = inputStream.read(buffer)) &gt; -1 ) {
+           arrayOutputStream.write(buffer, 0, len);
+        }
+        arrayOutputStream.flush();
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+
+}
+private  Bitmap decodeBitmapWithGiveSizeFromResource(InputStream inputStream) {
+    //BufferedInputStream bufferedInputStream=new BufferedInputStream(inputStream);
+    final BitmapFactory.Options options = new BitmapFactory.Options();
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    copy(inputStream,out);
+   InputStream in2 = new ByteArrayInputStream(out.toByteArray());
+
+    options.inJustDecodeBounds = true;
+
+        BitmapFactory.decodeStream(inputStream, null, options);
+    // Calculate inSampleSize
+    options.inSampleSize = calculateInSampleSize(options);
+
+    // Decode bitmap with inSampleSize set
+    options.inJustDecodeBounds = false;
+    Bitmap bitmap=BitmapFactory.decodeStream(in2,null, options);
+    try {
+        inputStream.close();
+        in2.close();
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+
+    return scaleDown(bitmap,false);
+}
+private  Bitmap scaleDown(Bitmap realImage, boolean filter) {
+
+    Bitmap newBitmap = Bitmap.createScaledBitmap(realImage, 100,
+            100, filter);
+
+    Bitmap output = Bitmap.createBitmap(newBitmap.getWidth(), newBitmap
+            .getHeight(), Config.ARGB_8888);
+    Canvas canvas = new Canvas(output);
+
+    final int color = 0xff424242;
+    final Paint paint = new Paint();
+    final Rect rect = new Rect(0, 0, newBitmap.getWidth(), newBitmap.getHeight());
+    final RectF rectF = new RectF(rect);
+    final float roundPx = 10;
+
+    paint.setAntiAlias(true);
+    canvas.drawARGB(0, 0, 0, 0);
+    paint.setColor(color);
+    canvas.drawRoundRect(rectF, roundPx, roundPx, paint);
+
+    paint.setXfermode(new PorterDuffXfermode(Mode.SRC_IN));
+    canvas.drawBitmap(newBitmap, rect, rect, paint);
+
+    return output;
+}
+private  int calculateInSampleSize(BitmapFactory.Options options) {
+    // Raw height and width of image
+    final int height = options.outHeight;
+    final int width = options.outWidth;
+    int inSampleSize = 1;
+    if (height &gt; 100 || width &gt; 100) {
+
+        final int halfHeight = height / 2;
+        final int halfWidth = width / 2;
+
+        // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+        // height and width larger than the requested height and width.
+        while ((halfHeight / inSampleSize) &gt;100
+                &amp;&amp; (halfWidth / inSampleSize) &gt;100) {
+            inSampleSize *= 2;
+        }
+    }
+
+    return inSampleSize;
+} 
+@Override
+// Once the image is downloaded, associates it to the imageView
+protected void onPostExecute(Bitmap bitmap) {
+    if (isCancelled()) {
+        bitmap = null;
+    }
+
+    if (imageViewReference != null) {
+        cache.put(url, bitmap);
+        ImageView imageView = imageViewReference.get();
+
+   //     BitmapDownloaderTask bitmapDownloaderTask = getBitmapDownloaderTask(imageView);
+        // Change bitmap only if this process is still associated with it
+
+        if (((String)imageView.getTag()).equalsIgnoreCase(url)) {
+            imageView.setImageBitmap(bitmap);
+
+        }
+    }
+}
+   }
+}
+</code></pre>
+
+<p>After this create the xml for it, named activity_layout</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:orientation="vertical" &gt;
+
+&lt;android.support.v4.view.ViewPager
+    android:id="@+id/viewPager"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>Now we have create the Fragment class that we want to inflate in the ViewPager:
+Create a class named ChildFrag as follows </p>
+
+<pre><code>import android.os.Bundle;
+import android.support.annotation.Nullable;
+import android.support.v4.app.Fragment;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+public class ChildFrag extends Fragment {
+private int index;
+private ImageView imageView;
+
+@Override
+@Nullable
+public View onCreateView(LayoutInflater inflater,
+        @Nullable ViewGroup container, @Nullable Bundle savedInstanceState)     {
+    View view = inflater.inflate(R.layout.fragtest, container, false);
+    index = getArguments().getInt("POS");
+    ((TextView) view.findViewById(R.id.textView1)).setText("" + index);
+    imageView = (ImageView) view.findViewById(R.id.imageView1);
+    return view;
+}
+
+@Override
+public void onActivityCreated(@Nullable Bundle savedInstanceState) {
+    super.onActivityCreated(savedInstanceState);
+    ((SomeFragTest) getActivity()).loadBitmap(index, imageView);
+}
+}
+</code></pre>
+
+<p>Now we have create the xml for the fragment as fragtest:</p>
+
+<pre><code> &lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:orientation="vertical" &gt;
+&lt;TextView
+    android:id="@+id/textView1"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="Large Text"
+    android:textAppearance="?android:attr/textAppearanceLarge" /&gt;
+
+&lt;ImageView
+    android:id="@+id/imageView1"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:src="@drawable/ic_launcher" /&gt;
+ &lt;/LinearLayout&gt;
+</code></pre>
+
+<p>Add the following permission in the AndroidManifest.xml</p>
+
+<pre><code> &lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+</code></pre>

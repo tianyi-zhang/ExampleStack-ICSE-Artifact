@@ -1,0 +1,163 @@
+<p>Finally I solve it so:</p>
+
+<p>I create <code>BehaviorSubject</code> in singlton. It receives <code>onError</code> or <code>onNext</code> from <code>Observable</code>, which created by <code>Retrofit</code>. Fragment subscribes to <code>BehaviorSubject</code> and receives its last event with data or error. When I need to refresh data, I recreate <code>BehaviorSubject</code>, re-subscribe to <code>Retrofit</code>'s <code>Observable</code> to receive data or error in singlton and re-subscribe to <code>BehaviorSubject</code> in fragment.</p>
+
+<pre><code>public class SingltonRetrofitNew
+{
+    private static RxJavaCallAdapterFactory rxAdapter = RxJavaCallAdapterFactory.createWithScheduler(Schedulers.io());
+
+    private static Gson gson = new GsonBuilder().create();
+
+    private static Retrofit retrofit = new Retrofit.Builder()
+            .baseUrl(Const.BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .addCallAdapterFactory(rxAdapter)
+            .build();
+
+    private static GetModels apiService = retrofit.create(GetModels.class);
+
+    private static BehaviorSubject&lt;ArrayList&lt;Model&gt;&gt; observableModelsList;
+    private static Observable&lt;ArrayList&lt;Model&gt;&gt; observable = apiService.getModelsList();
+    private static Subscription subscription;
+
+    private SingltonRetrofitNew()
+    {
+    }
+
+    public static void resetObservable()
+    {
+        observableModelsList = BehaviorSubject.create();
+
+        if (subscription != null &amp;&amp; !subscription.isUnsubscribed())
+        {
+            subscription.unsubscribe();
+        }
+        subscription = observable.subscribe(new Subscriber&lt;ArrayList&lt;Model&gt;&gt;()
+        {
+            @Override
+            public void onCompleted()
+            {
+                //do nothing
+            }
+
+            @Override
+            public void onError(Throwable e)
+            {
+                observableModelsList.onError(e);
+            }
+
+            @Override
+            public void onNext(ArrayList&lt;Model&gt; hotels)
+            {
+                observableModelsList.onNext(hotels);
+            }
+        });
+    }
+
+
+    public static Observable&lt;ArrayList&lt;Model&gt;&gt; getModelsObservable()
+    {
+        if (observableModelsList == null)
+        {
+            resetObservable();
+        }
+        return observableModelsList;
+    }
+}
+</code></pre>
+
+<p>Fragment:</p>
+
+<pre><code>public class FragmentsList extends Fragment
+{
+    private static final String TAG = FragmentList.class.getSimpleName();
+    private Subscription subscription;
+    private RecyclerView recyclerView;
+    private ArrayList&lt;Hotel&gt; models = new ArrayList&lt;&gt;();
+    private boolean isLoading;
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState)
+    {
+        View v = inflater.inflate(R.layout.fragment, container, false);
+        //init views
+        recyclerView = (RecyclerView) v.findViewById(R.id.recycler);
+        if (savedInstanceState != null)
+        {
+            models = savedInstanceState.getParcelableArrayList(Const.KEY_MODELS);
+            isLoading = savedInstanceState.getBoolean(Const.KEY_IS_LOADING);
+        }
+
+        if (models.size() == 0 || isLoading)
+        {
+            getModelsList();
+        }
+        //TODO show saved data if is
+
+        return v;
+    }
+
+    @Override
+    public void onDestroy()
+    {
+        super.onDestroy();
+        if (subscription != null &amp;&amp; !subscription.isUnsubscribed())
+        {
+            subscription.unsubscribe();
+        }
+    }
+
+    private void getModelsList()
+    {
+        if (subscription != null &amp;&amp; !subscription.isUnsubscribed())
+        {
+            subscription.unsubscribe();
+        }
+        subscription = SingltonRetrofitNew.getModelsObservable().
+                subscribeOn(Schedulers.io()).
+                observeOn(AndroidSchedulers.mainThread()).
+                subscribe(new Subscriber&lt;ArrayList&lt;Hotel&gt;&gt;()
+                {
+                    @Override
+                    public void onCompleted()
+                    {
+                        Log.d(TAG, "onCompleted");
+                    }
+
+                    @Override
+                    public void onError(Throwable e)
+                    {
+                        Log.d(TAG, "onError", e);
+                        Snackbar.make(recyclerView, R.string.connection_error, Snackbar.LENGTH_SHORT)
+                                .setAction(R.string.try_again, new View.OnClickListener()
+                                {
+                                    @Override
+                                    public void onClick(View v)
+                                    {
+                                        SingltonRetrofitNew.reset();
+                                        getModelsList();
+                                    }
+                                })
+                                .show();
+                    }
+
+                    @Override
+                    public void onNext(ArrayList&lt;Hotel&gt; newModels)
+                    {
+                        models.clear();
+                        models.addAll(newModels);
+                        //TODO show data
+                    }
+                });
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState)
+    {
+        super.onSaveInstanceState(outState);
+        outState.putParcelableArrayList(Const.KEY_MODELS, models);
+        outState.putBoolean(Const.KEY_IS_LOADING, isLoading);
+    }
+}
+</code></pre>

@@ -1,0 +1,222 @@
+<p>How about translates the origin of the graphics context:</p>
+
+<pre><code>//SwingUtilities.paintComponent(g, c, tempDrawPanel, itemCellBounds.x, yD, itemCellBounds.width, itemCellBounds.height);
+//yD = itemCellBounds.y+itemCellBounds.height;
+SwingUtilities.paintComponent(g, c, tempDrawPanel, 0, 0, itemCellBounds.width, itemCellBounds.height);
+g.translate(0, itemCellBounds.height);
+</code></pre>
+
+<p><strong>Edit:</strong></p>
+
+<p>@user3619696: I misunderstood.</p>
+
+<p>I would guess that the "blurred drag image" opacity depend on the Windows desktop theme. So try using translucent <code>JWindow</code> instead of <code>TransferHandler#setDragImage(...)</code>.</p>
+
+<p><img src="http://i.stack.imgur.com/fnExz.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.*;
+import java.awt.datatransfer.*;
+import java.awt.dnd.*;
+import java.awt.image.*;
+import java.util.List;
+import javax.swing.*;
+
+public class BasicTextListDND2 {
+
+    private JList&lt;String&gt; makeList() {
+        DefaultListModel&lt;String&gt; m = new DefaultListModel&lt;String&gt;();
+        for(int i = 0; i&lt;10; i++) {
+            m.addElement("Element "+i);
+        }
+        JList&lt;String&gt; list = new JList&lt;String&gt;(m);
+
+        list.setTransferHandler(new BasicListTransferHandler());
+        list.setDropMode(DropMode.ON_OR_INSERT);
+        list.setDragEnabled(true);
+        list.setCellRenderer(new DefaultListCellRenderer() {
+
+            /**
+             * Comment for &lt;code&gt;serialVersionUID&lt;/code&gt;
+             */
+            private static final long serialVersionUID = 1L;
+
+            /** {@inheritDoc} */
+            public Component getListCellRendererComponent(JList&lt;?&gt; list, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                Component listCellRendererComponent = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (cellHasFocus == false &amp;&amp; isSelected == false) { 
+                    if (index % 2 == 0) {
+                        listCellRendererComponent.setBackground(Color.RED);
+                    } else if (index % 3==0) {
+                        listCellRendererComponent.setBackground(Color.GREEN);
+                    } else {
+                        listCellRendererComponent.setBackground(Color.BLUE);
+                    }
+                }
+                return listCellRendererComponent;
+            }
+
+        });
+        return list;
+    }
+
+    private JTextArea makeTextArea() {
+        JTextArea textArea = new JTextArea("Drag here from JList!");
+        return textArea;
+    }
+
+    public JComponent makeUI() {
+        JPanel panel = new JPanel(new GridLayout(2,1));
+        panel.add(new JScrollPane(makeTextArea()));
+        panel.add(new JScrollPane(makeList()));
+        return panel;
+    }
+
+    private static void createAndShowGUI() {
+        JFrame f = new JFrame("BasicDnD");
+        f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        BasicTextListDND2 app = new BasicTextListDND2();
+        JComponent appContent = app.makeUI();
+        f.setContentPane(appContent);
+        f.setSize(600, 320);
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override 
+            public void run() { 
+                createAndShowGUI(); 
+            }
+        });
+    }
+}
+
+
+/**
+ * 
+ */
+class BasicListTransferHandler extends TransferHandler {
+
+    /**
+     * Comment for &lt;code&gt;serialVersionUID&lt;/code&gt;
+     */
+    private static final long serialVersionUID = 1L;
+
+    private final JLabel label = new JLabel() {
+        @Override public boolean contains(int x, int y) {
+            return false;
+        }
+    };
+    private final JWindow window = new JWindow();
+    public BasicListTransferHandler() {
+        super();
+        window.add(label);
+        //window.setBackground(new Color(0, true));
+        window.setOpacity(.8f);
+        DragSource.getDefaultDragSource().addDragSourceMotionListener(new DragSourceMotionListener() {
+            @Override public void dragMouseMoved(DragSourceDragEvent dsde) {
+                Point pt = dsde.getLocation();
+                pt.translate(10, 10); // offset
+                if (!window.isVisible()) {
+                    window.setVisible(true);
+                }
+                window.setLocation(pt);
+            }
+        });
+    }
+    @Override protected void exportDone(JComponent c, Transferable data, int action) {
+        super.exportDone(c, data, action);
+        window.setVisible(false);
+    }
+
+    @Override 
+    public boolean canImport(TransferHandler.TransferSupport info) {
+        if (!info.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+            return false;
+        }
+        JList.DropLocation dl = (JList.DropLocation)info.getDropLocation();
+        if (dl.getIndex() == -1) {
+            return false;
+        }
+        return true;
+    }
+
+    @Override 
+    public int getSourceActions(JComponent c) {
+        BufferedImage dragImage = makeImageFromString(c);
+        if (dragImage != null) {
+            //setDragImage(dragImage);            
+            //Point mousePosition = c.getMousePosition();
+            //if (mousePosition != null) {
+            //    setDragImageOffset(mousePosition);
+            //}
+            label.setIcon(new ImageIcon(dragImage));
+            window.setLocation(-2000, -2000);
+            window.pack();
+        }
+        return COPY;
+    }
+
+    private final JPanel tempDrawPanel = new JPanel();
+
+    private BufferedImage createDragImage(JList&lt;String&gt; list) {
+        int width = 0;
+        int height = 0;
+        int[] selectedIndices = list.getSelectedIndices();
+        for(int i =0; i&lt;selectedIndices.length; i++){
+            int idx = selectedIndices[i];
+            Rectangle cellBounds = list.getCellBounds(idx, idx);
+            height += cellBounds.height;
+            width = Math.max(width, cellBounds.width); // we want to create a drag image as big as the largest cell
+        }
+        BufferedImage br = null;
+        if (width &gt; 0 &amp;&amp; height &gt; 0) {
+            br = list.getGraphicsConfiguration().createCompatibleImage(width, height, Transparency.TRANSLUCENT);
+        }
+        return br;
+    }
+
+    private BufferedImage makeImageFromString(JComponent src) {
+        JList&lt;String&gt; sourceList = (JList&lt;String&gt;)src;
+        BufferedImage br = createDragImage(sourceList);
+        if (br != null) {
+            int[] selectedIndices = sourceList.getSelectedIndices();
+            int yD = 0;
+            Graphics g = br.getGraphics();
+            try{
+                for(int idx: selectedIndices) {
+                    ListCellRenderer&lt;? super String&gt; cellRenderer = sourceList.getCellRenderer();
+                    String valueAt = sourceList.getModel().getElementAt(idx);
+                    Component c = cellRenderer.getListCellRendererComponent(sourceList, valueAt, idx, false, false);
+                    Rectangle itemCellBounds = sourceList.getCellBounds(idx, idx);
+                    //SwingUtilities.paintComponent(g, c, tempDrawPanel, itemCellBounds.x, itemCellBounds.y + yD, itemCellBounds.width, itemCellBounds.height);
+                    //yD = itemCellBounds.y+itemCellBounds.height;
+                    SwingUtilities.paintComponent(g, c, tempDrawPanel, 0, 0, itemCellBounds.width, itemCellBounds.height);
+                    g.translate(0, itemCellBounds.height);
+                }
+            }finally {
+                g.dispose();
+            }
+            br.coerceData(true);
+        }
+        return br;
+    }
+
+    @Override 
+    protected Transferable createTransferable(JComponent c) {
+        JList&lt;String&gt; list = (JList&lt;String&gt;)c;
+        List&lt;String&gt; selectedValuesList = list.getSelectedValuesList();
+        StringBuffer buff = new StringBuffer();
+        for (int i = 0; i &lt; selectedValuesList.size(); i++) {
+            String val = selectedValuesList.get(i);
+            buff.append(val == null ? "" : val.toString());
+            if (i != selectedValuesList.size()- 1) {
+                buff.append("\n");
+            }
+        }
+        return new StringSelection(buff.toString());
+    }
+}
+</code></pre>

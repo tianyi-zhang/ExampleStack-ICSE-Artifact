@@ -1,0 +1,136 @@
+<p>In the end, this is what I came up with to handle accessing files within referenced jars:</p>
+
+<pre><code>public class ResourceHelper {
+
+    public static File getFile(String resourceOrFile)
+        throws FileNotFoundException {
+    try {
+
+        // jar:file:/home/.../blue.jar!/path/to/file.xml
+        URI uri = getURL(resourceOrFile).toURI();
+        String uriStr = uri.toString();
+        if (uriStr.startsWith("jar")) {
+
+        if (uriStr.endsWith("/")) {
+            throw new UnsupportedOperationException(
+                "cannot unjar directories, only files");
+        }
+
+        String jarPath = uriStr.substring(4, uriStr.indexOf("!"))
+            .replace("file:", "");
+        String filePath = uriStr.substring(uriStr.indexOf("!") + 2);
+
+        JarFile jarFile = new JarFile(jarPath);
+        assert (jarFile.size() &gt; 0) : "no jarFile at " + jarPath;
+
+        Enumeration&lt;JarEntry&gt; entries = jarFile.entries();
+
+        while (entries.hasMoreElements()) {
+
+            JarEntry jarEntry = entries.nextElement();
+            if (jarEntry.toString().equals(filePath)) {
+            InputStream input = jarFile.getInputStream(jarEntry);
+            assert (input != null) : "empty is for " + jarEntry;
+            return tmpFileFromStream(input, filePath);
+            }
+        }
+        assert (false) : "file" + filePath + " not found in " + jarPath;
+        return null;
+        } else {
+        return new File(uri);
+        }
+
+    } catch (URISyntaxException e) {
+        throw new FileNotFoundException(resourceOrFile);
+    } catch (IOException e) {
+        throw new FileNotFoundException(resourceOrFile);
+    }
+    }
+
+    private static File tmpFileFromStream(InputStream is, String filePath)
+        throws IOException {
+
+    String fileName = filePath.substring(filePath.lastIndexOf("/") + 1,
+        filePath.lastIndexOf("."));
+    assert (fileName != null) : "filename cannot be null for " + filePath;
+    String extension = filePath.substring(filePath.lastIndexOf("."));
+    assert (extension != null) : "extension cannot be null for " + filePath;
+
+    File tmpFile = File.createTempFile(fileName, extension);
+    // tempFile.deleteOnExit();
+    assert (tmpFile.exists()) : "could not create tempfile";
+
+    OutputStream out = new FileOutputStream(tmpFile);
+    int read = 0;
+    byte[] bytes = new byte[1024];
+    while ((read = is.read(bytes)) != -1) {
+        out.write(bytes, 0, read);
+    }
+    is.close();
+    out.flush();
+    out.close();
+    assert (tmpFile.length() &gt; 0) : "file empty "
+        + tmpFile.getAbsolutePath();
+    return tmpFile;
+    }
+
+    public static File getTempFile(String resourceOrFile) throws IOException {
+
+    InputStream input = getInputStream(resourceOrFile);
+
+    File tempFile = IOUtils.createTempDir();
+    tempFile.deleteOnExit();
+    FileOutputStream output = new FileOutputStream(tempFile);
+
+    byte[] buffer = new byte[4096];
+    int bytesRead = input.read(buffer);
+    while (bytesRead != -1) {
+        output.write(buffer, 0, bytesRead);
+        bytesRead = input.read(buffer);
+    }
+    output.close();
+    input.close();
+
+    return tempFile;
+    }
+
+    public static InputStream getInputStream(String resourceOrFile)
+        throws FileNotFoundException {
+
+    try {
+        return getURL(resourceOrFile).openStream();
+    } catch (Exception e) {
+        throw new FileNotFoundException(resourceOrFile);
+    }
+    }
+
+    public static URL getURL(String resourceOrFile)
+        throws FileNotFoundException {
+
+    File file = new File(resourceOrFile);
+    // System.out.println("checking file ");
+    // is file
+    if (file.exists()) {
+        // System.out.println("file exists");
+        try {
+        return file.toURI().toURL();
+        } catch (MalformedURLException e) {
+        throw new FileNotFoundException(resourceOrFile);
+        }
+    }
+    // is resource
+    if (!file.exists()) {
+        // System.out.println("file resource");
+        URL url = Thread.class.getResource(resourceOrFile);
+        if (url != null) {
+        return url;
+        }
+        url = Thread.class.getResource("/" + resourceOrFile);
+        if (url != null) {
+        return url;
+        }
+    }
+    throw new FileNotFoundException(resourceOrFile);
+    }
+}
+</code></pre>

@@ -1,0 +1,244 @@
+<p>As of this post, there are no methods that will automatically handle hiding and showing the FloatingActionButton in the Design Support Libraries. I know this because this was my first assignment at work.</p>
+
+<p>The methods you are thinking of are used to animate the FloatingActionButton up and down when a Snackbar is created, and yes, that will work if you are using a CoordinatorLayout.</p>
+
+<p>Here's my code. It's based off of <a href="https://github.com/makovkastar/FloatingActionButton" rel="nofollow">this</a> repo. It has listeners for RecyclerView and AbsListView that handle animating the button automatically. You can either do</p>
+
+<pre><code>button.show();
+</code></pre>
+
+<p>or</p>
+
+<pre><code>button.hide();
+</code></pre>
+
+<p>to hide the button manually, or you can call:</p>
+
+<pre><code>button.attachToListView(listView);
+</code></pre>
+
+<p>and</p>
+
+<pre><code>button.attachToRecyclerView(recyclerView);
+</code></pre>
+
+<p>and it will hide on scroll down and show on scroll up with no further code.</p>
+
+<p>Hope this helps!</p>
+
+<p>AnimatedFloatingActionButton:</p>
+
+<pre><code>public class AnimatedFloatingActionButton extends FloatingActionButton
+{
+    private static final int TRANSLATE_DURATION_MILLIS = 200;
+    private final Interpolator mInterpolator = new AccelerateDecelerateInterpolator();
+    private boolean mVisible;
+
+public AnimatedFloatingActionButton(Context context, AttributeSet attrs)
+{
+    super(context, attrs);
+    Log.i("Abscroll", "mVisible" + mVisible);
+}
+
+public void show() {
+    show(true);
+}
+
+public void hide() {
+    hide(true);
+}
+
+public void show(boolean animate) {
+    toggle(true, animate, false);
+}
+
+public void hide(boolean animate) {
+    toggle(false, animate, false);
+}
+
+private void toggle(final boolean visible, final boolean animate, boolean force) {
+    if (mVisible != visible || force) {
+        mVisible = visible;
+        int height = getHeight();
+        if (height == 0 &amp;&amp; !force) {
+            ViewTreeObserver vto = getViewTreeObserver();
+            if (vto.isAlive()) {
+                vto.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                    @Override
+                    public boolean onPreDraw() {
+                        ViewTreeObserver currentVto = getViewTreeObserver();
+                        if (currentVto.isAlive()) {
+                            currentVto.removeOnPreDrawListener(this);
+                        }
+                        toggle(visible, animate, true);
+                        return true;
+                    }
+                });
+                return;
+            }
+        }
+        int translationY = visible ? 0 : height + getMarginBottom();
+        Log.i("Abscroll", "transY" + translationY);
+        if (animate) {
+            this.animate().setInterpolator(mInterpolator)
+                    .setDuration(TRANSLATE_DURATION_MILLIS)
+                    .translationY(translationY);
+        } else {
+            setTranslationY(translationY);
+        }
+    }
+}
+
+private int getMarginBottom() {
+    int marginBottom = 0;
+    final ViewGroup.LayoutParams layoutParams = getLayoutParams();
+    if (layoutParams instanceof ViewGroup.MarginLayoutParams) {
+        marginBottom = ((ViewGroup.MarginLayoutParams) layoutParams).bottomMargin;
+    }
+    return marginBottom;
+}
+
+public void attachToListView(@NonNull AbsListView listView)
+{
+    listView.setOnScrollListener(new AbsListViewScrollDetector() {
+        @Override
+        void onScrollUp() {
+            hide();
+        }
+
+        @Override
+        void onScrollDown() {
+            show();
+        }
+
+        @Override
+        void setScrollThreshold() {
+            setScrollThreshold(getResources().getDimensionPixelOffset(R.dimen.fab_scroll_threshold));
+        }
+    });
+}
+
+public void attachToRecyclerView(@NonNull RecyclerView recyclerView) {
+    recyclerView.addOnScrollListener(new RecyclerViewScrollDetector() {
+        @Override
+        void onScrollUp() {
+            hide();
+        }
+
+        @Override
+        void onScrollDown() {
+            show();
+        }
+
+        @Override
+        void setScrollThreshold() {
+            setScrollThreshold(getResources().getDimensionPixelOffset(R.dimen.fab_scroll_threshold));
+        }
+    });
+}
+}
+</code></pre>
+
+<p>AbsListViewScrollDetector:</p>
+
+<pre><code>abstract class AbsListViewScrollDetector implements AbsListView.OnScrollListener {
+private int mLastScrollY;
+private int mPreviousFirstVisibleItem;
+private AbsListView mListView;
+private int mScrollThreshold;
+
+abstract void onScrollUp();
+
+abstract void onScrollDown();
+
+abstract void setScrollThreshold();
+
+@Override
+public void onScrollStateChanged(AbsListView view, int scrollState) {
+}
+
+@Override
+public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+    if(totalItemCount == 0) return;
+    if (isSameRow(firstVisibleItem)) {
+        int newScrollY = getTopItemScrollY();
+        boolean isSignificantDelta = Math.abs(mLastScrollY - newScrollY) &gt; mScrollThreshold;
+        Log.i("Abscroll", "mLastScrollY " + mLastScrollY);
+        Log.i("Abscroll", "newScrollY " + newScrollY);
+        if (isSignificantDelta) {
+            Log.i("Abscroll", "sig delta");
+            if (mLastScrollY &gt; newScrollY) {
+                onScrollUp();
+                Log.i("Abscroll", "sig delta up");
+            } else {
+                onScrollDown();
+                Log.i("Abscroll", "sig delta down");
+            }
+        }
+        mLastScrollY = newScrollY;
+    } else {
+        if (firstVisibleItem &gt; mPreviousFirstVisibleItem) {
+            onScrollUp();
+            Log.i("Abscroll", "prev up");
+        } else {
+            onScrollDown();
+            Log.i("Abscroll", "prev down");
+        }
+
+        mLastScrollY = getTopItemScrollY();
+        mPreviousFirstVisibleItem = firstVisibleItem;
+    }
+}
+
+public void setScrollThreshold(int scrollThreshold) {
+    mScrollThreshold = scrollThreshold;
+    Log.i("Abscroll", "LView thresh " + scrollThreshold);
+}
+
+public void setListView(@NonNull AbsListView listView) {
+    mListView = listView;
+}
+
+private boolean isSameRow(int firstVisibleItem) {
+    return firstVisibleItem == mPreviousFirstVisibleItem;
+}
+
+private int getTopItemScrollY() {
+    if (mListView == null || mListView.getChildAt(0) == null) return 0;
+    View topChild = mListView.getChildAt(0);
+    return topChild.getTop();
+}
+}
+</code></pre>
+
+<p>RecyclerViewScrollDetector:</p>
+
+<pre><code>abstract class RecyclerViewScrollDetector extends RecyclerView.OnScrollListener {
+private int mScrollThreshold;
+
+abstract void onScrollUp();
+
+abstract void onScrollDown();
+
+abstract void setScrollThreshold();
+
+@Override
+public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+    boolean isSignificantDelta = Math.abs(dy) &gt; mScrollThreshold;
+    if (isSignificantDelta) {
+        if (dy &gt; 0) {
+            onScrollUp();
+            Log.i("Abscroll", "Rview up");
+        } else {
+            onScrollDown();
+            Log.i("Abscroll", "RView down");
+        }
+    }
+}
+
+public void setScrollThreshold(int scrollThreshold) {
+    mScrollThreshold = scrollThreshold;
+    Log.i("Abscroll", "RView thresh " + scrollThreshold);
+}
+}
+</code></pre>

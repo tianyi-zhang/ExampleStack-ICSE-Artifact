@@ -1,0 +1,113 @@
+<h3>Updated answer</h3>
+
+<blockquote>
+  <p>Is there a way, in an Android app using the Facebook SDK, to check and see if the official Facebook app is NOT signed into the same account the Android app is using, and if that is the case, sign out of the Android app...</p>
+</blockquote>
+
+<p>If I understand this right, you're asking if we can:</p>
+
+<ul>
+<li>From your app, check if the official android app is installed</li>
+<li>if it is installed, check if it is signed into same account as your app</li>
+<li>if the official app is not signed into your account, sign out your app</li>
+</ul>
+
+<p>Short answer: No, but you can, by writing your own Facebook class</p>
+
+<ul>
+<li>Check if the offical FB app isn't installed OR is in logged out state OR is logged into another account.</li>
+<li>If either is the case, force your app to show login dialog.</li>
+</ul>
+
+<p>Long answer:</p>
+
+<p>Single Single On(SSO) is handled in the Facebook class in the Facebook Android SDK. The Facebook class API doesn't have methods that let you access or modify the SSO process.</p>
+
+<p>In the Facebook class, there are four overloaded public authorize methods. Three of them call the fourth:</p>
+
+<pre><code>public void authorize(Activity activity, String[] permissions,
+        int activityCode, final DialogListener listener)
+</code></pre>
+
+<p>Here, the SSO process starts. It checks for SSO like so:</p>
+
+<pre><code> // Prefer single sign-on, where available.
+    if (activityCode &gt;= 0) {
+        singleSignOnStarted = startSingleSignOn(activity, mAppId,
+                permissions, activityCode);
+    }
+    // Otherwise fall back to traditional dialog.
+    if (!singleSignOnStarted) {
+        startDialogAuth(activity, permissions);
+    }
+</code></pre>
+
+<p>The private startSingleSignOn method checks if the official Facebook app can manage the Auth process:</p>
+
+<pre><code>private boolean startSingleSignOn(Activity activity, String applicationId,
+        String[] permissions, int activityCode) {
+    boolean didSucceed = true;
+    Intent intent = new Intent();
+
+    intent.setClassName("com.facebook.katana",
+            "com.facebook.katana.ProxyAuth");
+    intent.putExtra("client_id", applicationId);
+    if (permissions.length &gt; 0) {
+        intent.putExtra("scope", TextUtils.join(",", permissions));
+    }
+
+    // Verify that the application whose package name is
+    // com.facebook.katana.ProxyAuth
+    // has the expected FB app signature.
+    if (!validateActivityIntent(activity, intent)) {
+        return false;
+    }
+
+    mAuthActivity = activity;
+    mAuthPermissions = permissions;
+    mAuthActivityCode = activityCode;
+    try {
+        activity.startActivityForResult(intent, activityCode);
+    } catch (ActivityNotFoundException e) {
+        didSucceed = false;
+    }
+
+    return didSucceed;
+}
+</code></pre>
+
+<p>The method creates an explicit intent for the class ProxyAuth in the package com.facebook.katana, which is the offical Facebook app's package.
+The method then calls validateActivityIntent with the intent as a parameter. It returns true if the service intent resolution happens successfully and the FB signatures match.</p>
+
+<p>We don't have access to the ProxyAuth class source but based on the observed app behaviour you described in your question and comments, it seems that ProxyAuth only completes the auth process if the user is logged in on the official app to the same account as on your app. This means that there is no way to distingush - from your app - between 1) the offical FB app not being installed 2)the official FB app not being in a logged in state, and 3) it being logged into another account.</p>
+
+<p>So you can do this:</p>
+
+<ul>
+<li>check if FB app is not installed OR is not logged in OR is logged into another account.</li>
+<li>If either is the case, log out your app.</li>
+</ul>
+
+<p>But you can't </p>
+
+<ul>
+<li>verify that the official FB is installed AND is in logged out state.</li>
+<li>verify that the official FB app is installed AND is logged into another account.</li>
+</ul>
+
+<p>If what you <em>can</em> do as per above meets your needs to trigger a sign-out, you need to write your own custom Facebook class to add the new logic. The Facebook class in the Facebook Android SDK doesn't extend an abstract class, only Object implicitly, so you need to replicate the Facebook code into your CustomFacebook class and modify it to add code that forces the log-out.</p>
+
+<p>For reference:</p>
+
+<h3>Old answer</h3>
+
+<p>I'm not sure this answers your question but to force a user log-out with the Facebook Android SDK, use the FORCE_DIALOG_AUTH flag when you call authorize() during auth/login, like so:</p>
+
+<pre><code>mFacebook.authorize(this, PERMS, mFacebook.FORCE_DIALOG_AUTH, new LoginDialogListener());
+</code></pre>
+
+<p>where mFacebook is an instance of the SDK's Facebook class, and LoginDialogListener implements DialogListener.</p>
+
+<p>If the user logs out, the login dialog will now appear next time the user wants to login or starts your app. </p>
+
+<p>If you don't set the FORCE_DIALOG_AUTH flag the user will be 'automatically' logged in.</p>

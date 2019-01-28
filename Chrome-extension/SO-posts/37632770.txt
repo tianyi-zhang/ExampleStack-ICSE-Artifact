@@ -1,0 +1,213 @@
+<p>If you are looking for simple Caching for Bitmap in Android, The following implementation will cache in both memory and file. when it load it bitmap resource again(identified by image file name), it will try to search the memory and then file cache for the bitmap.</p>
+
+<p>Usage:</p>
+
+<p>imageLoader.DisplayImage("image_filename_in_resource_folder", imageView);</p>
+
+<pre><code>public class ImageLoader {
+        final int stub_id = R.drawable.ic_thumbnail;
+    private Context mContext;
+    MemoryCache memoryCache = new MemoryCache();
+    FileCache fileCache;
+    ExecutorService executorService;
+    private Map&lt;ImageView, String&gt; imageViews = Collections.synchronizedMap(new WeakHashMap&lt;ImageView, String&gt;());
+
+    public ImageLoader(Context context) {
+        fileCache = new FileCache(context);
+        executorService = Executors.newFixedThreadPool(5);
+        this.mContext = context;
+    }
+
+    public void DisplayImage(String url, ImageView imageView) {
+        imageViews.put(imageView, url);
+        Bitmap bitmap = memoryCache.get(url);
+        if (bitmap != null)
+            imageView.setImageBitmap(bitmap);
+        else {
+            queuePhoto(url, imageView);
+            imageView.setImageResource(stub_id);
+        }
+    }
+
+    private void queuePhoto(String url, ImageView imageView) {
+        PhotoToLoad p = new PhotoToLoad(url, imageView);
+        executorService.submit(new PhotosLoader(p));
+    }
+
+
+
+    //decodes image and scales it to reduce memory consumption
+    protected Bitmap decodeFile(File f) {
+        try {
+            //decode image size
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(new FileInputStream(f), null, o);
+
+            //Find the correct scale value. It should be the power of 2.
+            final int REQUIRED_SIZE = 150;
+            int width_tmp = o.outWidth, height_tmp = o.outHeight;
+            int scale = 1;
+            while (true) {
+                if (width_tmp / 2 &lt; REQUIRED_SIZE || height_tmp / 2 &lt; REQUIRED_SIZE)
+                    break;
+                width_tmp /= 2;
+                height_tmp /= 2;
+                scale *= 2;
+            }
+
+            //decode with inSampleSize
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize = scale;
+            return BitmapFactory.decodeStream(new FileInputStream(f), null, o2);
+        } catch (FileNotFoundException e) {
+        }
+        return null;
+    }
+
+    boolean imageViewReused(PhotoToLoad photoToLoad) {
+        String tag = imageViews.get(photoToLoad.imageView);
+        if (tag == null || !tag.equals(photoToLoad.url))
+            return true;
+        return false;
+    }
+
+    public void clearCache() {
+        memoryCache.clear();
+        fileCache.clear();
+    }
+
+    //Task for the queue
+    private class PhotoToLoad {
+        public String url;
+        public ImageView imageView;
+
+        public PhotoToLoad(String u, ImageView i) {
+            url = u;
+            imageView = i;
+        }
+    }
+
+    Bitmap getBitmap(String imageFileName) {
+        File f = fileCache.getFile(imageFileName);
+
+        //from SD cache
+        Bitmap b = decodeFile(f);
+        if (b != null)
+            return b;
+
+        try {
+            Resources resource = mContext.getResources();
+            int imageId = resource.getIdentifier(imageFileName, "drawable", mContext.getPackageName());
+            Bitmap bitmap = null;
+            InputStream is = resource.openRawResource(imageId);
+            OutputStream os = new FileOutputStream(f);
+            IOUtils.copy(is, os);
+            os.close();
+            bitmap = decodeFile(f);
+            return bitmap;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+    class PhotosLoader implements Runnable {
+        PhotoToLoad photoToLoad;
+
+        PhotosLoader(PhotoToLoad photoToLoad) {
+            this.photoToLoad = photoToLoad;
+        }
+
+        public void run() {
+            if (imageViewReused(photoToLoad))
+                return;
+            Bitmap bmp = getBitmap(photoToLoad.url);
+            memoryCache.put(photoToLoad.url, bmp);
+            if (imageViewReused(photoToLoad))
+                return;
+            BitmapDisplayer bd = new BitmapDisplayer(bmp, photoToLoad);
+            Activity a = (Activity) photoToLoad.imageView.getContext();
+            a.runOnUiThread(bd);
+        }
+    }
+
+    //Used to display bitmap in the UI thread
+    class BitmapDisplayer implements Runnable {
+        Bitmap bitmap;
+        PhotoToLoad photoToLoad;
+
+        public BitmapDisplayer(Bitmap b, PhotoToLoad p) {
+            bitmap = b;
+            photoToLoad = p;
+        }
+
+        public void run() {
+            if (imageViewReused(photoToLoad))
+                return;
+            if (null != bitmap) {
+                photoToLoad.imageView.setImageBitmap(bitmap);
+
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>The class for Memory Cache </p>
+
+<pre><code>public class MemoryCache {
+    private HashMap&lt;String, SoftReference&lt;Bitmap&gt;&gt; cache = new HashMap&lt;String, SoftReference&lt;Bitmap&gt;&gt;();
+
+    public Bitmap get(String id) {
+        if (!cache.containsKey(id))
+            return null;
+        SoftReference&lt;Bitmap&gt; ref = cache.get(id);
+        return ref.get();
+    }
+
+    public void put(String id, Bitmap bitmap) {
+        cache.put(id, new SoftReference&lt;Bitmap&gt;(bitmap));
+    }
+
+    public void clear() {
+        cache.clear();
+    }
+}
+</code></pre>
+
+<p>The class for File Cache </p>
+
+<pre><code>public class FileCache {
+
+    private File cacheDir;
+
+    public FileCache(Context context) {
+        //Find the dir to save cached images
+        if (android.os.Environment.getExternalStorageState().equals(android.os.Environment.MEDIA_MOUNTED))
+            cacheDir = new File(android.os.Environment.getExternalStorageDirectory(), "LazyList");
+        else
+            cacheDir = context.getCacheDir();
+        if (!cacheDir.exists())
+            cacheDir.mkdirs();
+    }
+
+    public File getFile(String url) {
+        //Identify images by hashcode. Not a perfect solution.
+        String filename = String.valueOf(url.hashCode());
+
+        //Another possible solution, using cypto hashing functions like md5
+        //String filename = md5(url);
+        File f = new File(cacheDir, filename);
+        return f;
+
+    }
+
+    public void clear() {
+        File[] files = cacheDir.listFiles();
+        if (files == null)
+            return;
+        for (File f : files)
+            f.delete();
+    }
+
+}
+</code></pre>

@@ -1,0 +1,322 @@
+<p>There's nothing wrong with your cropping logic, the problem is with you paint logic.</p>
+
+<p>Firstly, you should never (okay, rearly) override <code>paint</code> on a top level container (like a <code>JFrame</code>).  There are lots of reasons and you just discovered one of them.</p>
+
+<p>Secondly, you should ALWAYS call <code>super.paintXxx(g)</code>, not doing so is a REALLY bad idea.</p>
+
+<p>To be honest, I've got no idea of what half this code is trying to do (other then double buffering), which wouldn't be required if you used something like <code>JPanel</code></p>
+
+<pre><code>public void paint() {
+    if (area != null &amp;&amp; image != null) {
+        g.clearRect(area.x, area.y, area.width, area.height);
+        g.drawImage(image, 0, 0, null);
+    }
+    if (currentRect != null) {
+        g.setColor(Color.RED);
+        g.drawRect(rectToDraw.x, rectToDraw.y, rectToDraw.width, rectToDraw.height);
+        g.setColor(new Color(255,255,255,150));
+        g.fillRect(rectToDraw.x, rectToDraw.y, rectToDraw.width, rectToDraw.height);
+    }
+}
+
+@Override
+public void paint(Graphics gr) {
+    if (buffer == null &amp;&amp; area != null) {
+        this.buffer = createImage(area.width, area.height);
+        this.g = buffer.getGraphics();
+    }
+    paint();
+    if (buffer != null)
+        gr.drawImage(buffer, 0, 0, this);
+}
+</code></pre>
+
+<p>This doesn't allow for the fact that the frame is actually leaving space for the frames decorations (0x0 is actually the very top left hand corner of the window, not the inner drawing surface)...</p>
+
+<p>So I've taken to you're code and rewritten it...</p>
+
+<pre><code>public class DragNDrop extends JFrame {
+
+    private static final long serialVersionUID = 1872019741456690593L;
+
+    public static void main(String args[]) {
+        new DragNDrop();
+    }
+
+    public DragNDrop() {
+        super("Drop Test");
+        setLayout(new BorderLayout());
+        add(new ImagePane());
+        setSize(300, 300);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setVisible(true);
+    }
+
+    protected class ImagePane extends JPanel implements DropTargetListener {
+
+        private BufferedImage image, origiImage;
+        private Rectangle currentRect;
+        private Rectangle rectToDraw = null;
+
+        public ImagePane() {
+
+            setDropTarget(new DropTarget(getContentPane(), this));
+            CaptureListener listener = new CaptureListener();
+            addMouseListener(listener);
+            addMouseMotionListener(listener);
+
+            setFocusable(true);
+            requestFocusInWindow();
+
+            // Keybindings are better the KeyListeners, as the generally work...
+            InputMap im = getInputMap(WHEN_FOCUSED);
+            ActionMap am = getActionMap();
+
+            im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "Capture");
+            am.put("Capture", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    capture();
+                }
+            });
+
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            // Look how simple this is...
+
+            super.paintComponent(g);
+
+            Graphics2D g2d = (Graphics2D) g;
+            if (image != null) {
+                g2d.drawImage(image, 0, 0, this);
+            }
+
+            if (currentRect != null) {
+                g2d.setColor(Color.RED);
+                g2d.drawRect(rectToDraw.x, rectToDraw.y, rectToDraw.width, rectToDraw.height);
+                g2d.setColor(new Color(255, 255, 255, 150));
+                g2d.fillRect(rectToDraw.x, rectToDraw.y, rectToDraw.width, rectToDraw.height);
+            }
+        }
+
+        public void drop(DropTargetDropEvent dtde) {
+            try {
+                Transferable tr = dtde.getTransferable();
+                DataFlavor[] flavors = tr.getTransferDataFlavors();
+                dtde.acceptDrop(DnDConstants.ACTION_COPY_OR_MOVE);
+                Object list = tr.getTransferData(flavors[0]);
+                list = list.toString().substring(1, list.toString().length() - 1);
+                if (isValidImage(list)) {
+                    Image droppedImage = Toolkit.getDefaultToolkit().getImage(list.toString());
+                    image = toBufferedImage(droppedImage);
+                    origiImage = toBufferedImage(droppedImage);
+                    if (droppedImage != null) {
+                        setSize(image.getWidth(), image.getHeight());
+                        dtde.dropComplete(true);
+                        // This is a bad idea, apart from KeyListeners are just a bad idea,
+                        // Each time you drop a new image, your registering a new key listener :P
+//                        addKeyListener(new KeyListener() {
+//                            @Override
+//                            public void keyTyped(KeyEvent e) {
+//                            }
+//
+//                            @Override
+//                            public void keyReleased(KeyEvent e) {
+//                                if (e.getKeyCode() == 10) {
+//                                    capture();
+//                                }
+//                            }
+//
+//                            @Override
+//                            public void keyPressed(KeyEvent e) {
+//                            }
+//                        });
+                        return;
+                    }
+                }
+                dtde.rejectDrop();
+            } catch (Exception e) {
+                dtde.rejectDrop();
+            }
+        }
+
+        public boolean isValidImage(Object list) {
+            System.out.println(list.toString());
+            for (String string : ImageIO.getReaderFormatNames()) {
+                if (list.toString().contains(string)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public BufferedImage toBufferedImage(Image image) {
+            if (image instanceof BufferedImage) {
+                return (BufferedImage) image;
+            }
+            image = new ImageIcon(image).getImage();
+            boolean hasAlpha = hasAlpha(image);
+            BufferedImage bimage = null;
+            GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+            int transparency = Transparency.OPAQUE;
+            if (hasAlpha == true) {
+                transparency = Transparency.BITMASK;
+            }
+            GraphicsDevice gs = ge.getDefaultScreenDevice();
+            GraphicsConfiguration gc = gs.getDefaultConfiguration();
+            bimage = gc.createCompatibleImage(image.getWidth(null), image.getHeight(null), transparency);
+            if (bimage == null) {
+                int type = BufferedImage.TYPE_INT_RGB;
+                if (hasAlpha == true) {
+                    type = BufferedImage.TYPE_INT_ARGB;
+                }
+                bimage = new BufferedImage(image.getWidth(null), image.getHeight(null), type);
+            }
+            Graphics g = bimage.createGraphics();
+            g.drawImage(image, 0, 0, null);
+            g.dispose();
+            return bimage;
+        }
+
+        public boolean hasAlpha(Image image) {
+            if (image instanceof BufferedImage) {
+                return ((BufferedImage) image).getColorModel().hasAlpha();
+            }
+            PixelGrabber pg = new PixelGrabber(image, 0, 0, 1, 1, false);
+            try {
+                pg.grabPixels();
+            } catch (InterruptedException e) {
+            }
+            return pg.getColorModel().hasAlpha();
+        }
+
+        private void updateRectangle(int compWidth, int compHeight) {
+            int x = currentRect.x;
+            int y = currentRect.y;
+            int width = currentRect.width;
+            int height = currentRect.height;
+            if (width &lt; 0) {
+                width = 0 - width;
+                x = x - width + 1;
+                if (x &lt; 0) {
+                    width += x;
+                    x = 0;
+                }
+            }
+            if (height &lt; 0) {
+                height = 0 - height;
+                y = y - height + 1;
+                if (y &lt; 0) {
+                    height += y;
+                    y = 0;
+                }
+            }
+            if ((x + width) &gt; compWidth) {
+                width = compWidth - x;
+            }
+            if ((y + height) &gt; compHeight) {
+                height = compHeight - y;
+            }
+            if (rectToDraw != null) {
+                rectToDraw.setBounds(x, y, width, height);
+            } else {
+                rectToDraw = new Rectangle(x, y, width, height);
+            }
+        }
+
+        public void capture() {
+            BufferedImage croppedImage = origiImage.getSubimage(rectToDraw.x, rectToDraw.y, rectToDraw.width, rectToDraw.height);
+            setSize(rectToDraw.width, rectToDraw.height);
+            image = croppedImage;
+
+            currentRect = null;
+
+            repaint();
+        }
+
+        public void upload(BufferedImage image) {
+          // Sorry, you can uncomment this can't you
+//        String IMGUR_POST_URI = "http://api.imgur.com/2/upload.xml";
+//        String IMGUR_API_KEY = "b84e430b4a65d16a6955358141f21a61";
+//        String readLine = null;
+//        try {
+//            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+//            ImageIO.write(image, "png", outputStream);
+//            URL url = new URL(IMGUR_POST_URI);
+//
+//            String data = URLEncoder.encode("image", "UTF-8") + "=" + URLEncoder.encode(Base64.encodeBase64String(outputStream.toByteArray()).toString(), "UTF-8") + "&amp;" + URLEncoder.encode("key", "UTF-8") + "=" + URLEncoder.encode(IMGUR_API_KEY, "UTF-8");
+//
+//            URLConnection urlConnection = url.openConnection();
+//            urlConnection.setDoOutput(true);
+//            OutputStreamWriter wr = new OutputStreamWriter(urlConnection.getOutputStream());
+//            wr.write(data);
+//            wr.flush();
+//            // Get the response
+//            InputStream inputStream;
+//            if (((HttpURLConnection) urlConnection).getResponseCode() == 400) {
+//                inputStream = ((HttpURLConnection) urlConnection).getErrorStream();
+//            } else {
+//                inputStream = urlConnection.getInputStream();
+//            }
+//            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+//            String line;
+//            while ((line = reader.readLine()) != null) {
+//                readLine = line;
+//            }
+//            wr.close();
+//            reader.close();
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//        }
+//        //Prints the url link of the image uploaded
+//        System.out.println(readLine.substring(readLine.indexOf("&lt;original&gt;") + 10, readLine.indexOf("&lt;/original&gt;")));
+        }
+
+        public void dragEnter(DropTargetDragEvent dtde) {
+        }
+
+        public void dragExit(DropTargetEvent dte) {
+        }
+
+        public void dragOver(DropTargetDragEvent dtde) {
+        }
+
+        public void dropActionChanged(DropTargetDragEvent dtde) {
+        }
+
+        protected class CaptureListener extends MouseInputAdapter {
+
+            public void mouseDragged(MouseEvent e) {
+                updateSize(e);
+            }
+
+            public void mousePressed(MouseEvent e) {
+
+                requestFocusInWindow();
+
+                int x = e.getX();
+                int y = e.getY();
+                currentRect = new Rectangle(x, y, 0, 0);
+                updateRectangle(getWidth(), getHeight());
+                repaint();
+            }
+
+            public void mouseReleased(MouseEvent e) {
+                updateSize(e);
+            }
+
+            public void updateSize(MouseEvent e) {
+                if (currentRect != null) {
+                    currentRect.setSize(e.getX() - currentRect.x, e.getY() - currentRect.y);
+                    updateRectangle(getWidth(), getHeight());
+                    repaint();
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Now it works...</p>

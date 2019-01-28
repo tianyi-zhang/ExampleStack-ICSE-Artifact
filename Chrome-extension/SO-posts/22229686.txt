@@ -1,0 +1,200 @@
+<p>The process involves the following stages:</p>
+
+<ol>
+<li>Get a snapshot of the whole drawer layout.</li>
+<li>Crop it to the exact size of your menu.</li>
+<li>Downscale it quite a bit (a factor of 8 is pretty good).</li>
+<li>Blur that image.</li>
+<li>Have a custom view that displays part of an image right behind of where your menu will appear.</li>
+<li>As you slide the drawer show a larger part of that image.</li>
+</ol>
+
+<p>Here's a code sample (it's all done in the BlurActionBarDrawerToggle and the BlurAndDimView):</p>
+
+<pre><code>public class BlurActionBarDrawerToggle extends ActionBarDrawerToggle {
+
+    private static final int DOWNSAMPLING = 8;
+
+    private final DrawerLayout drawerLayout;
+    private final BlurAndDimView blurrer;
+    private Bitmap drawerSnapshot;
+    private final ColorDrawable imageBackgroundDrawable;
+
+    public BlurActionBarDrawerToggle(Activity activity, DrawerLayout drawerLayout, int drawerImageRes, int openDrawerContentDescRes, int closeDrawerContentDescRes, BlurAndDimView blurrer) {
+        super(activity, drawerLayout, drawerImageRes, openDrawerContentDescRes, closeDrawerContentDescRes);
+
+        //this should be roughly the same color as your window background
+        imageBackgroundDrawable = new ColorDrawable(activity.getResources().getColor(R.color.dark_blue_2));
+        this.drawerLayout = drawerLayout;
+        this.blurrer = blurrer;
+    }
+
+    @Override
+    public void onDrawerSlide(final View drawerView, final float slideOffset) {
+        super.onDrawerSlide(drawerView, slideOffset);
+        if (slideOffset &gt; 0.0f) {
+            setBlurAlpha(slideOffset);
+        } else {
+            clearBlurImage();
+        }
+    }
+
+    @Override
+    public void onDrawerClosed(View view) {
+        clearBlurImage();
+    }
+
+    private void setBlurAlpha(float slideOffset) {
+        if (!blurrer.hasImage()) {
+            setBlurImage();
+        }
+        blurrer.handleScroll(slideOffset);
+    }
+
+    public void setBlurImage() {
+        blurrer.setVisibility(View.VISIBLE);
+        drawerSnapshot = drawViewToBitmap(drawerSnapshot, drawerLayout, DOWNSAMPLING, imageBackgroundDrawable);
+        blurrer.setImage(drawerSnapshot, DOWNSAMPLING);
+    }
+
+    public void clearBlurImage() {
+        blurrer.clearImage();
+        blurrer.setVisibility(View.INVISIBLE);
+    }
+
+    private Bitmap drawViewToBitmap(Bitmap dest, View view, int downSampling, Drawable background) {
+        float scale = 1f / downSampling;
+        int viewWidth = view.getWidth();
+        int viewHeight = view.getHeight();
+        int bmpWidth = (int) (viewWidth * scale);
+        int bmpHeight = (int) (viewHeight * scale);
+        if (dest == null || dest.getWidth() != bmpWidth || dest.getHeight() != bmpHeight) {
+            dest = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888);
+        }
+        Canvas c = new Canvas(dest);
+        background.setBounds(new Rect(0, 0, viewWidth, viewHeight));
+        background.draw(c);
+        if (downSampling &gt; 1) {
+            c.scale(scale, scale);
+        }
+
+        view.draw(c);
+        view.layout(0, 0, viewWidth, viewHeight);
+        return dest;
+    }
+}
+</code></pre>
+
+<p>The BlurAndDim view Blurs the part below the menu, and dims the rest (you can tweak the numbers to get the exact effect that you want):</p>
+
+<pre><code>public class BlurAndDimView extends View {
+
+    private static final int BLUR_RADIUS = 4;
+    private static final int BLUE_ALPHA = 178;
+    private static final int MAX_DIM_ALPHA = 127;
+    private Paint bitmapPaint;
+    private Paint dimPaint;
+    private Paint blueSemiTransparentPaint;
+    private int menuWidth;
+    private int titleHeight;
+
+    private Bitmap image;
+    private Rect rectDst;
+    private Rect rectSrc;
+    private int downSampling;
+    private Rect rectRest;
+
+    public BlurAndDimView(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        postConstruct();
+    }
+
+    public BlurAndDimView(Context context, AttributeSet attrs) {
+        this(context, attrs, 0);
+        postConstruct();
+    }
+
+    public BlurAndDimView(Context context) {
+        this(context, null);
+        postConstruct();
+    }
+
+    private void postConstruct() {
+        bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+        dimPaint = new Paint();
+        blueSemiTransparentPaint = new Paint();
+        //You might want to also have a semitransparent overlay over your blurred image, since you can't control what's behind your menu.
+        blueSemiTransparentPaint.setColor(getResources().getColor(R.color.dark_blue));
+        blueSemiTransparentPaint.setAlpha(BLUE_ALPHA);
+        menuWidth = getResources().getDimensionPixelSize(R.dimen.browse_menu_width);
+    }
+}
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (image != null) {
+            canvas.drawBitmap(image, rectSrc, rectDst, bitmapPaint);
+            canvas.drawRect(rectDst, blueSemiTransparentPaint);
+            canvas.drawRect(rectRest, dimPaint);
+        }
+    }
+
+    public void handleScroll(float xOffset) {
+        if(image != null) {
+            rectSrc.right = (int) (image.getWidth() * xOffset);
+            rectDst.right = rectSrc.right * downSampling;
+            rectRest.left = rectDst.right;
+            dimPaint.setAlpha((int) (xOffset * MAX_DIM_ALPHA));
+            invalidate();
+        }
+    }
+
+    public void setImage(Bitmap bmp, int downSampling) {
+        Bitmap cropped = Bitmap.createBitmap(bmp, 0, 0, menuWidth / downSampling, getHeight() / downSampling);
+        this.image = Blur.blur(getContext(), cropped, BLUR_RADIUS);
+        rectSrc = new Rect(0, 0, bmp.getWidth(), bmp.getHeight());
+        rectDst = new Rect(0, 0, menuWidth, getHeight());
+        rectRest = new Rect(menuWidth, 0, getWidth(), getHeight());
+        this.downSampling = downSampling;
+        invalidate();
+    }
+
+    public boolean hasImage() {
+        return image != null;
+    }
+
+    public void clearImage() {
+        image = null;
+    }
+}
+</code></pre>
+
+<p>For a good blur algorithm (that uses Renderscript where possible), you can use <a href="https://github.com/PomepuyN/BlurEffectForAndroidDesign/blob/master/BlurEffect/src/com/npi/blureffect/Blur.java">this</a>.</p>
+
+<p>The Layout would be something like this:</p>
+
+<pre><code>&lt;android.support.v4.widget.DrawerLayout
+    android:id="@+id/drawer_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" &gt;
+
+    &lt;android.support.v4.widget.ViewPager
+        android:id="@+id/pager"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" /&gt;
+
+    &lt;com.bla.bla.BlurAndDimView
+        android:id="@+id/blurrer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="?android:attr/actionBarSize"
+        android:visibility="invisible" /&gt;
+
+    &lt;ListView
+        android:id="@+id/menu_list"
+        android:layout_width="@dimen/browse_menu_width"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:choiceMode="singleChoice" /&gt;
+&lt;/android.support.v4.widget.DrawerLayout&gt;
+</code></pre>

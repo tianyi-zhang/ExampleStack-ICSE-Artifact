@@ -1,0 +1,42 @@
+<p>Did some google-ing and found the source for Gson's EnumTypeAdapter and the related AdapterFactory here: <a href="https://code.google.com/p/google-gson/source/browse/trunk/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java#717" rel="nofollow">https://code.google.com/p/google-gson/source/browse/trunk/gson/src/main/java/com/google/gson/internal/bind/TypeAdapters.java#717</a></p>
+
+<p>From the looks of it, I would, in fact, have to check for the @SerializedName attribute manually, but it looks pretty simple to do. I'm planning on copying-over both the adapter and adapter factory (almost line-for-line) and modifying the default value of <code>name</code> (line 724) to include the full class name. </p>
+
+<p>The resulting TypeAdapter would look something like this...</p>
+
+<pre><code>private static final class EnumTypeAdapter&lt;T extends Enum&lt;T&gt;&gt; extends TypeAdapter&lt;T&gt; {
+    private final Map&lt;String, T&gt; nameToConstant = new HashMap&lt;String, T&gt;();
+    private final Map&lt;T, String&gt; constantToName = new HashMap&lt;T, String&gt;();
+
+    public EnumTypeAdapter(Class&lt;T&gt; classOfT) {
+      try {
+        String classPrefix = classOfT.getName() + ".";
+        for (T constant : classOfT.getEnumConstants()) {
+          String name = constant.name();
+          SerializedName annotation = classOfT.getField(name).getAnnotation(SerializedName.class);
+          if (annotation != null) {
+            name = annotation.value();
+          } else {
+            name = classPrefix + name;
+          }
+          nameToConstant.put(name, constant);
+          constantToName.put(constant, name);
+        }
+      } catch (NoSuchFieldException e) {
+        throw new AssertionError();
+      }
+    }
+
+    public T read(JsonReader in) throws IOException {
+      if (in.peek() == JsonToken.NULL) {
+        in.nextNull();
+        return null;
+      }
+      return nameToConstant.get(in.nextString());
+    }
+
+    public void write(JsonWriter out, T value) throws IOException {
+      out.value(value == null ? null : constantToName.get(value));
+    }
+}
+</code></pre>

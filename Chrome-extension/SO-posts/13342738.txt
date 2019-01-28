@@ -1,0 +1,506 @@
+<p>Based on the previous answers and personnal experience, here is the code I use to monitor CPU use. The code of this class is written in pure Java.</p>
+
+<pre><code>import java.io.IOException;
+import java.io.RandomAccessFile;
+
+/**
+ * Utilities available only on Linux Operating System.
+ * 
+ * &lt;p&gt;
+ * A typical use is to assign a thread to CPU monitoring:
+ * &lt;/p&gt;
+ * 
+ * &lt;pre&gt;
+ * &amp;#064;Override
+ * public void run() {
+ *  while (CpuUtil.monitorCpu) {
+ * 
+ *      LinuxUtils linuxUtils = new LinuxUtils();
+ * 
+ *      int pid = android.os.Process.myPid();
+ *      String cpuStat1 = linuxUtils.readSystemStat();
+ *      String pidStat1 = linuxUtils.readProcessStat(pid);
+ * 
+ *      try {
+ *          Thread.sleep(CPU_WINDOW);
+ *      } catch (Exception e) {
+ *      }
+ * 
+ *      String cpuStat2 = linuxUtils.readSystemStat();
+ *      String pidStat2 = linuxUtils.readProcessStat(pid);
+ * 
+ *      float cpu = linuxUtils.getSystemCpuUsage(cpuStat1, cpuStat2);
+ *      if (cpu &amp;gt;= 0.0f) {
+ *          _printLine(mOutput, &amp;quot;total&amp;quot;, Float.toString(cpu));
+ *      }
+ * 
+ *      String[] toks = cpuStat1.split(&amp;quot; &amp;quot;);
+ *      long cpu1 = linuxUtils.getSystemUptime(toks);
+ * 
+ *      toks = cpuStat2.split(&amp;quot; &amp;quot;);
+ *      long cpu2 = linuxUtils.getSystemUptime(toks);
+ * 
+ *      cpu = linuxUtils.getProcessCpuUsage(pidStat1, pidStat2, cpu2 - cpu1);
+ *      if (cpu &amp;gt;= 0.0f) {
+ *          _printLine(mOutput, &amp;quot;&amp;quot; + pid, Float.toString(cpu));
+ *      }
+ * 
+ *      try {
+ *          synchronized (this) {
+ *              wait(CPU_REFRESH_RATE);
+ *          }
+ *      } catch (InterruptedException e) {
+ *          e.printStackTrace();
+ *          return;
+ *      }
+ *  }
+ * 
+ *  Log.i(&amp;quot;THREAD CPU&amp;quot;, &amp;quot;Finishing&amp;quot;);
+ * }
+ * &lt;/pre&gt;
+ */
+public final class LinuxUtils {
+
+    // Warning: there appears to be an issue with the column index with android linux:
+    // it was observed that on most present devices there are actually
+    // two spaces between the 'cpu' of the first column and the value of 
+    // the next column with data. The thing is the index of the idle 
+    // column should have been 4 and the first column with data should have index 1. 
+    // The indexes defined below are coping with the double space situation.
+    // If your file contains only one space then use index 1 and 4 instead of 2 and 5.
+    // A better way to deal with this problem may be to use a split method 
+    // not preserving blanks or compute an offset and add it to the indexes 1 and 4.
+
+    private static final int FIRST_SYS_CPU_COLUMN_INDEX = 2;
+
+    private static final int IDLE_SYS_CPU_COLUMN_INDEX = 5;
+
+    /** Return the first line of /proc/stat or null if failed. */
+    public String readSystemStat() {
+
+        RandomAccessFile reader = null;
+        String load = null;
+
+        try {
+            reader = new RandomAccessFile("/proc/stat", "r");
+            load = reader.readLine();
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        } finally {
+            Streams.close(reader);
+        }
+
+        return load;
+    }
+
+    /**
+     * Compute and return the total CPU usage, in percent.
+     * 
+     * @param start
+     *            first content of /proc/stat. Not null.
+     * @param end
+     *            second content of /proc/stat. Not null.
+     * @return 12.7 for a CPU usage of 12.7% or -1 if the value is not
+     *         available.
+     * @see {@link #readSystemStat()}
+     */
+    public float getSystemCpuUsage(String start, String end) {
+        String[] stat = start.split("\\s");
+        long idle1 = getSystemIdleTime(stat);
+        long up1 = getSystemUptime(stat);
+
+        stat = end.split("\\s");
+        long idle2 = getSystemIdleTime(stat);
+        long up2 = getSystemUptime(stat);
+
+        // don't know how it is possible but we should care about zero and
+        // negative values.
+        float cpu = -1f;
+        if (idle1 &gt;= 0 &amp;&amp; up1 &gt;= 0 &amp;&amp; idle2 &gt;= 0 &amp;&amp; up2 &gt;= 0) {
+            if ((up2 + idle2) &gt; (up1 + idle1) &amp;&amp; up2 &gt;= up1) {
+                cpu = (up2 - up1) / (float) ((up2 + idle2) - (up1 + idle1));
+                cpu *= 100.0f;
+            }
+        }
+
+        return cpu;
+    }
+
+    /**
+     * Return the sum of uptimes read from /proc/stat.
+     * 
+     * @param stat
+     *            see {@link #readSystemStat()}
+     */
+    public long getSystemUptime(String[] stat) {
+        /*
+         * (from man/5/proc) /proc/stat kernel/system statistics. Varies with
+         * architecture. Common entries include: cpu 3357 0 4313 1362393
+         * 
+         * The amount of time, measured in units of USER_HZ (1/100ths of a
+         * second on most architectures, use sysconf(_SC_CLK_TCK) to obtain the
+         * right value), that the system spent in user mode, user mode with low
+         * priority (nice), system mode, and the idle task, respectively. The
+         * last value should be USER_HZ times the second entry in the uptime
+         * pseudo-file.
+         * 
+         * In Linux 2.6 this line includes three additional columns: iowait -
+         * time waiting for I/O to complete (since 2.5.41); irq - time servicing
+         * interrupts (since 2.6.0-test4); softirq - time servicing softirqs
+         * (since 2.6.0-test4).
+         * 
+         * Since Linux 2.6.11, there is an eighth column, steal - stolen time,
+         * which is the time spent in other operating systems when running in a
+         * virtualized environment
+         * 
+         * Since Linux 2.6.24, there is a ninth column, guest, which is the time
+         * spent running a virtual CPU for guest operating systems under the
+         * control of the Linux kernel.
+         */
+
+        // with the following algorithm, we should cope with all versions and
+        // probably new ones.
+        long l = 0L;
+
+        for (int i = FIRST_SYS_CPU_COLUMN_INDEX; i &lt; stat.length; i++) {
+            if (i != IDLE_SYS_CPU_COLUMN_INDEX ) { // bypass any idle mode. There is currently only one.
+                try {
+                    l += Long.parseLong(stat[i]);
+                } catch (NumberFormatException ex) {
+                    ex.printStackTrace();
+                    return -1L;
+                }
+            }
+        }
+
+        return l;
+    }
+
+    /**
+     * Return the sum of idle times read from /proc/stat.
+     * 
+     * @param stat
+     *            see {@link #readSystemStat()}
+     */
+    public long getSystemIdleTime(String[] stat) {
+        try {
+            return Long.parseLong(stat[IDLE_SYS_CPU_COLUMN_INDEX]);
+        } catch (NumberFormatException ex) {
+            ex.printStackTrace();
+        }
+
+        return -1L;
+    }
+
+    /** Return the first line of /proc/pid/stat or null if failed. */
+    public String readProcessStat(int pid) {
+
+        RandomAccessFile reader = null;
+        String line = null;
+
+        try {
+            reader = new RandomAccessFile("/proc/" + pid + "/stat", "r");
+            line = reader.readLine();
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        } finally {
+            Streams.close(reader);
+        }
+
+        return line;
+    }
+
+    /**
+     * Compute and return the CPU usage for a process, in percent.
+     * 
+     * &lt;p&gt;
+     * The parameters {@code totalCpuTime} is to be the one for the same period
+     * of time delimited by {@code statStart} and {@code statEnd}.
+     * &lt;/p&gt;
+     * 
+     * @param start
+     *            first content of /proc/pid/stat. Not null.
+     * @param end
+     *            second content of /proc/pid/stat. Not null.
+     * @return the CPU use in percent or -1f if the stats are inverted or on
+     *         error
+     * @param uptime
+     *            sum of user and kernel times for the entire system for the
+     *            same period of time.
+     * @return 12.7 for a cpu usage of 12.7% or -1 if the value is not available
+     *         or an error occurred.
+     * @see {@link #readProcessStat(int)}
+     */
+    public float getProcessCpuUsage(String start, String end, long uptime) {
+
+        String[] stat = start.split("\\s");
+        long up1 = getProcessUptime(stat);
+
+        stat = end.split("\\s");
+        long up2 = getProcessUptime(stat);
+
+        float ret = -1f;
+        if (up1 &gt;= 0 &amp;&amp; up2 &gt;= up1 &amp;&amp; uptime &gt; 0.) {
+            ret = 100.f * (up2 - up1) / (float) uptime;
+        }
+
+        return ret;
+    }
+
+    /**
+     * Decode the fields of the file {@code /proc/pid/stat} and return (utime +
+     * stime)
+     * 
+     * @param stat
+     *            obtained with {@link #readProcessStat(int)}
+     */
+    public long getProcessUptime(String[] stat) {
+        return Long.parseLong(stat[14]) + Long.parseLong(stat[15]);
+    }
+
+    /**
+     * Decode the fields of the file {@code /proc/pid/stat} and return (cutime +
+     * cstime)
+     * 
+     * @param stat
+     *            obtained with {@link #readProcessStat(int)}
+     */
+    public long getProcessIdleTime(String[] stat) {
+        return Long.parseLong(stat[16]) + Long.parseLong(stat[17]);
+    }
+
+    /**
+     * Return the total CPU usage, in percent.
+     * &lt;p&gt;
+     * The call is blocking for the time specified by elapse.
+     * &lt;/p&gt;
+     * 
+     * @param elapse
+     *            the time in milliseconds between reads.
+     * @return 12.7 for a CPU usage of 12.7% or -1 if the value is not
+     *         available.
+     */
+    public float syncGetSystemCpuUsage(long elapse) {
+
+        String stat1 = readSystemStat();
+        if (stat1 == null) {
+            return -1.f;
+        }
+
+        try {
+            Thread.sleep(elapse);
+        } catch (Exception e) {
+        }
+
+        String stat2 = readSystemStat();
+        if (stat2 == null) {
+            return -1.f;
+        }
+
+        return getSystemCpuUsage(stat1, stat2);
+    }
+
+    /**
+     * Return the CPU usage of a process, in percent.
+     * &lt;p&gt;
+     * The call is blocking for the time specified by elapse.
+     * &lt;/p&gt;
+     * 
+     * @param pid
+     * @param elapse
+     *            the time in milliseconds between reads.
+     * @return 6.32 for a CPU usage of 6.32% or -1 if the value is not
+     *         available.
+     */
+    public float syncGetProcessCpuUsage(int pid, long elapse) {
+
+        String pidStat1 = readProcessStat(pid);
+        String totalStat1 = readSystemStat();
+        if (pidStat1 == null || totalStat1 == null) {
+            return -1.f;
+        }
+
+        try {
+            Thread.sleep(elapse);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return -1.f;
+        }
+
+        String pidStat2 = readProcessStat(pid);
+        String totalStat2 = readSystemStat();
+        if (pidStat2 == null || totalStat2 == null) {
+            return -1.f;
+        }
+
+        String[] toks = totalStat1.split("\\s");
+        long cpu1 = getSystemUptime(toks);
+
+        toks = totalStat2.split("\\s");
+        long cpu2 = getSystemUptime(toks);
+
+        return getProcessCpuUsage(pidStat1, pidStat2, cpu2 - cpu1);
+    }
+
+}
+</code></pre>
+
+<p>There are several ways of exploiting this class. You can call either <code>syncGetSystemCpuUsage</code> or <code>syncGetProcessCpuUsage</code> but each is blocking the calling thread. Since a common issue is to monitor the total CPU usage and the CPU use of the current process at the same time, I have designed a class computing both of them. That class contains a dedicated thread. The output management is implementation specific and you need to code your own.</p>
+
+<p>The class can be customized by a few means. The constant <code>CPU_WINDOW</code> defines the depth of a read, i.e. the number of milliseconds between readings and computing of the corresponding CPU load. <code>CPU_REFRESH_RATE</code> is the time between each CPU load measurement. Do not set <code>CPU_REFRESH_RATE</code> to 0 because it will suspend the thread after the first read.</p>
+
+<pre><code>import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+
+import android.app.Application;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.util.Log;
+
+import my.app.LinuxUtils;
+import my.app.Streams;
+import my.app.TestReport;
+import my.app.Utils;
+
+public final class CpuUtil {
+
+    private static final int CPU_WINDOW = 1000;
+
+    private static final int CPU_REFRESH_RATE = 100; // Warning: anything but &gt; 0
+
+    private static HandlerThread handlerThread;
+
+    private static TestReport output;
+
+    static {
+        output = new TestReport();
+        output.setDateFormat(Utils.getDateFormat(Utils.DATE_FORMAT_ENGLISH));
+    }
+
+    private static boolean monitorCpu;
+
+    /**
+     * Construct the class singleton. This method should be called in
+     * {@link Application#onCreate()}
+     * 
+     * @param dir
+     *            the parent directory
+     * @param append
+     *            mode
+     */
+    public static void setOutput(File dir, boolean append) {
+        try {
+            File file = new File(dir, "cpu.txt");
+            output.setOutputStream(new FileOutputStream(file, append));
+            if (!append) {
+                output.println(file.getAbsolutePath());
+                output.newLine(1);
+
+                // print header
+                _printLine(output, "Process", "CPU%");
+
+                output.flush();
+            }
+
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /** Start CPU monitoring */
+    public static boolean startCpuMonitoring() {
+        CpuUtil.monitorCpu = true;
+
+        handlerThread = new HandlerThread("CPU monitoring"); //$NON-NLS-1$
+        handlerThread.start();
+
+        Handler handler = new Handler(handlerThread.getLooper());
+        handler.post(new Runnable() {
+
+            @Override
+            public void run() {
+                while (CpuUtil.monitorCpu) {
+
+                    LinuxUtils linuxUtils = new LinuxUtils();
+
+                    int pid = android.os.Process.myPid();
+                    String cpuStat1 = linuxUtils.readSystemStat();
+                    String pidStat1 = linuxUtils.readProcessStat(pid);
+
+                    try {
+                        Thread.sleep(CPU_WINDOW);
+                    } catch (Exception e) {
+                    }
+
+                    String cpuStat2 = linuxUtils.readSystemStat();
+                    String pidStat2 = linuxUtils.readProcessStat(pid);
+
+                    float cpu = linuxUtils
+                            .getSystemCpuUsage(cpuStat1, cpuStat2);
+                    if (cpu &gt;= 0.0f) {
+                        _printLine(output, "total", Float.toString(cpu));
+                    }
+
+                    String[] toks = cpuStat1.split(" ");
+                    long cpu1 = linuxUtils.getSystemUptime(toks);
+
+                    toks = cpuStat2.split(" ");
+                    long cpu2 = linuxUtils.getSystemUptime(toks);
+
+                    cpu = linuxUtils.getProcessCpuUsage(pidStat1, pidStat2,
+                            cpu2 - cpu1);
+                    if (cpu &gt;= 0.0f) {
+                        _printLine(output, "" + pid, Float.toString(cpu));
+                    }
+
+                    try {
+                        synchronized (this) {
+                            wait(CPU_REFRESH_RATE);
+                        }
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        return;
+                    }
+                }
+
+                Log.i("THREAD CPU", "Finishing");
+            }
+
+        });
+
+        return CpuUtil.monitorCpu;
+    }
+
+    /** Stop CPU monitoring */
+    public static void stopCpuMonitoring() {
+        if (handlerThread != null) {
+            monitorCpu = false;
+            handlerThread.quit();
+            handlerThread = null;
+        }
+    }
+
+    /** Dispose of the object and release the resources allocated for it */
+    public void dispose() {
+
+        monitorCpu = false;
+
+        if (output != null) {
+            OutputStream os = output.getOutputStream();
+            if (os != null) {
+                Streams.close(os);
+                output.setOutputStream(null);
+            }
+
+            output = null;
+        }
+    }
+
+    private static void _printLine(TestReport output, String process, String cpu) {
+        output.stampln(process + ";" + cpu);
+    }
+
+}
+</code></pre>

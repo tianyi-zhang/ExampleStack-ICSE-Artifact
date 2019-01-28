@@ -1,0 +1,331 @@
+<p>I've ended up with a solution that mixes the following knowledge based on experience:</p>
+
+<ul>
+<li>You can add a new <code>Fragment</code> at the tail without problems.</li>
+<li>You cannot readd a <code>Fragment</code> that was previously removed, as it leads to <code>java.lang.IllegalStateException: Can't change tag of fragment</code> sometimes, so you have to clone it.</li>
+<li>For removing a <code>Fragment</code> you have to return <code>PagerAdapter.POSITION_NONE</code> in the method <code>getItemPosition(Object object)</code>, and remove the <code>Fragment</code> from the <code>FragmentManager</code>.</li>
+<li>If you are adding/removing/replacing in other place different than the tail, you have to remove everything from the position you are changing until the end, do the stuff, and then readd the (cloned) <code>Fragment</code>s that you removed.</li>
+</ul>
+
+<p>Here it is a complete <code>FragmentActivity</code> code with a <code>FragmentPagerAdapter</code> that has 3 methods for adding, removing and replacing tabs:</p>
+
+<pre><code>public class TabTestActivity extends FragmentActivity implements
+        ActionBar.TabListener {
+    private SectionsPagerAdapter mSectionsPagerAdapter;
+    private ViewPager mViewPager;
+    private static int tabCount = 0;
+    private static String labelString = null;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        labelString = getString(R.string.title_section);
+        setContentView(R.layout.activity_tab_test);
+        final ActionBar actionBar = getActionBar();
+        actionBar.setNavigationMode(ActionBar.NAVIGATION_MODE_TABS);
+        mSectionsPagerAdapter = new SectionsPagerAdapter(
+                getSupportFragmentManager());
+        mViewPager = (ViewPager) findViewById(R.id.pager);
+        mViewPager.setAdapter(mSectionsPagerAdapter);
+        mViewPager.setOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+                    @Override
+                    public void onPageSelected(final int position) {
+                        (new Handler()).postDelayed(new Runnable() {
+
+                            @Override
+                            public void run() {
+                                actionBar.setSelectedNavigationItem(position);
+                            }
+
+                        }, 1);
+                    }
+                });
+
+        for (int i = 0; i &lt; mSectionsPagerAdapter.getCount(); i++) {
+            actionBar.addTab(actionBar.newTab()
+                    .setText(mSectionsPagerAdapter.getPageTitle(i))
+                    .setTabListener(this));
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.tab_test, menu);
+        return true;
+    }
+
+    public void addNewTab() {
+        int position = (mSectionsPagerAdapter.getCount() &gt; 0 ? mViewPager.getCurrentItem() : 0);
+        mSectionsPagerAdapter.insertFragment(position);
+        mViewPager.setCurrentItem(position, true);
+    }
+
+    public void removeTab() {
+        if (mSectionsPagerAdapter.getCount() &gt; 0) {
+            int position = mViewPager.getCurrentItem();
+            mSectionsPagerAdapter.removeFragment(position);
+        }
+    }
+
+    public void replaceTab() {
+        if (mSectionsPagerAdapter.getCount() &gt; 0) {
+            int position = mViewPager.getCurrentItem();
+            mSectionsPagerAdapter.replaceFragment(position);            
+            mViewPager.setCurrentItem(position, false);
+        }
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+        case R.id.action_add_tab:
+            addNewTab();
+            return true;
+        case R.id.action_remove_tab:
+            removeTab();
+            return true;
+        case R.id.action_replace_tab:
+            replaceTab();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onTabSelected(ActionBar.Tab tab,
+            FragmentTransaction fragmentTransaction) {
+        mViewPager.setCurrentItem(tab.getPosition());
+    }
+
+    @Override
+    public void onTabUnselected(ActionBar.Tab tab,
+            FragmentTransaction fragmentTransaction) {
+    }
+
+    @Override
+    public void onTabReselected(ActionBar.Tab tab,
+            FragmentTransaction fragmentTransaction) {
+    }
+
+    public class SectionsPagerAdapter extends FragmentPagerAdapter {
+
+        private List&lt;Fragment&gt; currentFragments;
+        private FragmentManager fragmentManager;
+
+        public SectionsPagerAdapter(FragmentManager fm) {
+            super(fm);
+            fragmentManager = fm;
+            currentFragments = new ArrayList&lt;Fragment&gt;();
+        }
+
+        public void insertFragment(int position) {
+            // Remove fragments from position
+            List&lt;Fragment&gt; fragmentsToRemove = new ArrayList&lt;Fragment&gt;(currentFragments.subList(position, currentFragments.size()));
+            int i = currentFragments.size() - 1;
+            int j = -1;
+            int k = i;
+            while (i &gt;= position) {
+                currentFragments.remove(i);
+                i--;
+                j++;
+            }
+            notifyDataSetChanged();
+            final ActionBar actionBar = getActionBar();
+            while (k &gt;= position) {
+                actionBar.removeTabAt(k);
+                k--;
+            }
+            android.support.v4.app.FragmentTransaction transaction = fragmentManager.beginTransaction();
+            while (j &gt;= 0) {
+                Fragment fragmentToRemove = fragmentsToRemove.get(j);
+                transaction.detach(fragmentToRemove);
+                transaction.remove(fragmentToRemove);
+                j--;
+            }
+            transaction.commit();
+            fragmentManager.executePendingTransactions();
+            notifyDataSetChanged();
+            // Add new fragment
+            Fragment fragment = new DummySectionFragment();
+            currentFragments.add(position, fragment);
+            notifyDataSetChanged();
+            actionBar.addTab(actionBar.newTab()
+                    .setText(mSectionsPagerAdapter.getPageTitle(position))
+                    .setTabListener(TabTestActivity.this), position);
+            // Readd fragments
+            if (fragmentsToRemove.size() &gt; 0) {
+                i = 1;
+                for (Fragment fragmentToRemove : fragmentsToRemove) {
+                    currentFragments.add(DummySectionFragment.cloneExistingFragment((DummySectionFragment)fragmentToRemove));
+                    notifyDataSetChanged();
+                    actionBar.addTab(actionBar.newTab()
+                            .setText(mSectionsPagerAdapter.getPageTitle(position + i))
+                            .setTabListener(TabTestActivity.this), position + i);
+                    i++;
+                }
+            }
+        }
+
+        public void removeFragment(int position) {
+            // Remove fragments from position
+            List&lt;Fragment&gt; fragmentsToRemove = new ArrayList&lt;Fragment&gt;(currentFragments.subList(position, currentFragments.size()));
+            int i = currentFragments.size() - 1;
+            int j = -1;
+            int k = i;
+            while (i &gt;= position) {
+                currentFragments.remove(i);
+                i--;
+                j++;
+            }
+            notifyDataSetChanged();
+            final ActionBar actionBar = getActionBar();
+            while (k &gt;= position) {
+                actionBar.removeTabAt(k);
+                k--;
+            }
+            android.support.v4.app.FragmentTransaction transaction = fragmentManager.beginTransaction();
+            while (j &gt;= 0) {
+                Fragment fragmentToRemove = fragmentsToRemove.get(j);
+                transaction.detach(fragmentToRemove);
+                transaction.remove(fragmentToRemove);
+                j--;
+            }
+            transaction.commitAllowingStateLoss();
+            fragmentManager.executePendingTransactions();
+            notifyDataSetChanged();
+            // Readd fragments (except one)
+            if (fragmentsToRemove.size() &gt; 1) {
+                i = 0;
+                for (Fragment fragment : fragmentsToRemove.subList(1, fragmentsToRemove.size())) {
+                    currentFragments.add(DummySectionFragment.cloneExistingFragment((DummySectionFragment)fragment));
+                    notifyDataSetChanged();
+                    actionBar.addTab(actionBar.newTab()
+                            .setText(mSectionsPagerAdapter.getPageTitle(position + i))
+                            .setTabListener(TabTestActivity.this), position + i);
+                    i++;
+                }
+            }
+        }
+
+        public void replaceFragment(int position) {
+            // Remove fragments from position
+            List&lt;Fragment&gt; fragmentsToRemove = new ArrayList&lt;Fragment&gt;(currentFragments.subList(position, currentFragments.size()));
+            int i = currentFragments.size() - 1;
+            int j = -1;
+            int k = i;
+            while (i &gt;= position) {
+                currentFragments.remove(i);
+                i--;
+                j++;
+            }
+            notifyDataSetChanged();
+            final ActionBar actionBar = getActionBar();
+            while (k &gt;= position) {
+                actionBar.removeTabAt(k);
+                k--;
+            }
+            android.support.v4.app.FragmentTransaction transaction = fragmentManager.beginTransaction();
+            while (j &gt;= 0) {
+                Fragment fragmentToRemove = fragmentsToRemove.get(j);
+                transaction.detach(fragmentToRemove);
+                transaction.remove(fragmentToRemove);
+                j--;
+            }
+            transaction.commit();
+            fragmentManager.executePendingTransactions();
+            notifyDataSetChanged();
+            // Add new fragment
+            Fragment fragment = new DummySectionFragment();
+            currentFragments.add(position, fragment);
+            notifyDataSetChanged();
+            actionBar.addTab(actionBar.newTab()
+                    .setText(mSectionsPagerAdapter.getPageTitle(position))
+                    .setTabListener(TabTestActivity.this), position);
+            // Readd fragments (except one)
+            if (fragmentsToRemove.size() &gt; 0) {
+                i = 1;
+                for (Fragment fragmentToRemove : fragmentsToRemove.subList(1, fragmentsToRemove.size())) {
+                    currentFragments.add(DummySectionFragment.cloneExistingFragment((DummySectionFragment)fragmentToRemove));
+                    notifyDataSetChanged();
+                    actionBar.addTab(actionBar.newTab()
+                            .setText(mSectionsPagerAdapter.getPageTitle(position + i))
+                            .setTabListener(TabTestActivity.this), position + i);
+                    i++;
+                }
+            }
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+            if (currentFragments == null) {
+                currentFragments = new ArrayList&lt;Fragment&gt;();
+            }
+            while (currentFragments.size() &lt;= position) {
+                currentFragments.add(null);
+            }
+            if (currentFragments.get(position) != null) {
+                return currentFragments.get(position);
+            }
+            Fragment fragment = new DummySectionFragment();
+            currentFragments.set(position, fragment);
+            return fragment;
+        }
+
+        @Override
+        public int getCount() {
+            return currentFragments.size();
+        }
+
+        @Override
+        public int getItemPosition(Object object) {
+            int position = currentFragments.indexOf(object);
+            if (position == -1) {
+                return PagerAdapter.POSITION_NONE;
+            }
+            return position;
+        }
+
+        @Override
+        public CharSequence getPageTitle(int position) {
+            return ((DummySectionFragment)getItem(position)).getTitle();
+        }
+    }
+
+    public static class DummySectionFragment extends Fragment {
+        private int sectionNumber;
+
+        public DummySectionFragment() {
+            super();
+            sectionNumber = ++tabCount;
+        }
+
+        public static DummySectionFragment cloneExistingFragment(DummySectionFragment fragment) {
+            DummySectionFragment cloned = new DummySectionFragment();
+            // Hack for avoiding autoincrement
+            --tabCount;
+            cloned.sectionNumber = fragment.getSectionNumber();
+            return cloned;
+        }
+
+        @Override
+        public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                Bundle savedInstanceState) {
+            View rootView = inflater.inflate(R.layout.fragment_tab_test_dummy,
+                    container, false);
+            TextView dummyTextView = (TextView) rootView
+                    .findViewById(R.id.section_label);
+            dummyTextView.setText(String.format(labelString, sectionNumber));
+            return rootView;
+        }
+
+        public int getSectionNumber() {
+            return sectionNumber;
+        }
+
+        public String getTitle() {
+            return String.format(labelString, sectionNumber);
+        }
+    }
+
+}
+</code></pre>

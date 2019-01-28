@@ -1,0 +1,275 @@
+<p>Here's some code I have been using. I edited it because there was a lot of other stuff in here you dont need, so sorry if its a little messy.</p>
+
+<p>Call</p>
+
+<pre>
+<code>
+Wav player = new Wav("sound.wav");
+player.playAudio(player.getBytes());
+</code>
+</pre>
+
+<pre>
+<code>
+
+import java.applet.Applet;
+import java.applet.AudioClip;
+import java.net.URISyntaxException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.io.*;
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import javax.sound.sampled.*;
+
+/**
+ * This class handles the reading, writing, and playing of wav files. It is
+ * also capable of converting the file to its raw byte [] form.
+ *
+ * based on code by Evan Merz
+ */
+public class Wav {
+
+
+    ByteArrayOutputStream byteArrayOutputStream;
+    AudioFormat audioFormat;
+    TargetDataLine targetDataLine;
+    AudioInputStream audioInputStream;
+    SourceDataLine sourceDataLine;
+    float frequency = 8000.0F;  //8000,11025,16000,22050,44100
+    int samplesize = 16;
+    private String myPath;
+    private long myChunkSize;
+    private long mySubChunk1Size;
+    private int myFormat;
+    private long myChannels;
+    private long mySampleRate;
+    private long myByteRate;
+    private int myBlockAlign;
+    private int myBitsPerSample;
+    private long myDataSize;
+    // I made this public so that you can toss whatever you want in here
+    // maybe a recorded buffer, maybe just whatever you want
+    public byte[] myData;
+
+
+
+    public Wav()
+    {
+        myPath = "";
+    }
+
+    // constructor takes a wav path
+    public Wav(String tmpPath) {
+        myPath = tmpPath;
+    }
+
+
+    // get set for the Path property
+    public String getPath()
+    {
+        return myPath;
+    }
+
+    public void setPath(String newPath)
+    {
+        myPath = newPath;
+    }
+
+    // read a wav file into this class
+    public boolean read() {
+        DataInputStream inFile = null;
+        myData = null;
+        byte[] tmpLong = new byte[4];
+        byte[] tmpInt = new byte[2];
+
+        try {
+            inFile = new DataInputStream(new FileInputStream(myPath));
+
+            //System.out.println("Reading wav file...\n"); // for debugging only
+
+            String chunkID = "" + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte();
+
+            inFile.read(tmpLong); // read the ChunkSize
+            myChunkSize = byteArrayToLong(tmpLong);
+
+            String format = "" + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte();
+
+            // print what we've read so far
+            //System.out.println("chunkID:" + chunkID + " chunk1Size:" + myChunkSize + " format:" + format); // for debugging only
+
+
+
+            String subChunk1ID = "" + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte();
+
+            inFile.read(tmpLong); // read the SubChunk1Size
+            mySubChunk1Size = byteArrayToLong(tmpLong);
+
+            inFile.read(tmpInt); // read the audio format.  This should be 1 for PCM
+            myFormat = byteArrayToInt(tmpInt);
+
+            inFile.read(tmpInt); // read the # of channels (1 or 2)
+            myChannels = byteArrayToInt(tmpInt);
+
+            inFile.read(tmpLong); // read the samplerate
+            mySampleRate = byteArrayToLong(tmpLong);
+
+            inFile.read(tmpLong); // read the byterate
+            myByteRate = byteArrayToLong(tmpLong);
+
+            inFile.read(tmpInt); // read the blockalign
+            myBlockAlign = byteArrayToInt(tmpInt);
+
+            inFile.read(tmpInt); // read the bitspersample
+            myBitsPerSample = byteArrayToInt(tmpInt);
+
+            // print what we've read so far
+            //System.out.println("SubChunk1ID:" + subChunk1ID + " SubChunk1Size:" + mySubChunk1Size + " AudioFormat:" + myFormat + " Channels:" + myChannels + " SampleRate:" + mySampleRate);
+
+
+            // read the data chunk header - reading this IS necessary, because not all wav files will have the data chunk here - for now, we're just assuming that the data chunk is here
+            String dataChunkID = "" + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte() + (char) inFile.readByte();
+
+            inFile.read(tmpLong); // read the size of the data
+            myDataSize = byteArrayToLong(tmpLong);
+
+
+            // read the data chunk
+            myData = new byte[(int) myDataSize];
+            inFile.read(myData);
+
+            // close the input stream
+            inFile.close();
+        } catch (Exception e) {
+            return false;
+        }
+
+        return true; // this should probably be something more descriptive
+    }
+
+
+
+    // return a printable summary of the wav file
+    public String getSummary() {
+        //String newline = System.getProperty("line.separator");
+        String newline = "<br>";
+        String summary = "Format: " + myFormat + newline + "Channels: " + myChannels + newline + "SampleRate: " + mySampleRate + newline + "ByteRate: " + myByteRate + newline + "BlockAlign: " + myBlockAlign + newline + "BitsPerSample: " + myBitsPerSample + newline + "DataSize: " + myDataSize + "";
+        return summary;
+    }
+
+    public byte[] getBytes() {
+        read();
+        return myData;
+    }
+
+
+
+    /**
+     * Plays back audio stored in the byte array using an audio format given by
+     * freq, sample rate, ect.
+     * @param data The byte array to play
+     */
+    public void playAudio(byte[] data) {
+        try {
+            byte audioData[] = data;
+            //Get an input stream on the byte array containing the data
+            InputStream byteArrayInputStream = new ByteArrayInputStream(audioData);
+            AudioFormat audioFormat = getAudioFormat();
+            audioInputStream = new AudioInputStream(byteArrayInputStream, audioFormat, audioData.length / audioFormat.getFrameSize());
+            DataLine.Info dataLineInfo = new DataLine.Info(SourceDataLine.class, audioFormat);
+            sourceDataLine = (SourceDataLine) AudioSystem.getLine(dataLineInfo);
+            sourceDataLine.open(audioFormat);
+            sourceDataLine.start();
+
+            //Create a thread to play back the data and start it running.  It will run \
+            //until all the data has been played back.
+            Thread playThread = new Thread(new PlayThread());
+            playThread.start();
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+    }
+
+    /**
+     * This method creates and returns an AudioFormat object for a given set
+     * of format parameters.  If these parameters don't work well for
+     * you, try some of the other allowable parameter values, which
+     * are shown in comments following the declarations.
+     * @return
+     */
+    private AudioFormat getAudioFormat() {
+        float sampleRate = frequency;
+        //8000,11025,16000,22050,44100
+        int sampleSizeInBits = samplesize;
+        //8,16
+        int channels = 1;
+        //1,2
+        boolean signed = true;
+        //true,false
+        boolean bigEndian = false;
+        //true,false
+        //return new AudioFormat( AudioFormat.Encoding.PCM_SIGNED, 8000.0f, 8, 1, 1,
+        //8000.0f, false );
+
+        return new AudioFormat(sampleRate, sampleSizeInBits, channels, signed, bigEndian);
+    }
+
+
+
+// ===========================
+// CONVERT BYTES TO JAVA TYPES
+// ===========================
+    // these two routines convert a byte array to a unsigned short
+    public static int byteArrayToInt(byte[] b) {
+        int start = 0;
+        int low = b[start] & 0xff;
+        int high = b[start + 1] & 0xff;
+        return (int) (high > 8) & 0x000000FF);
+        b[2] = (byte) ((i >> 16) & 0x000000FF);
+        b[3] = (byte) ((i >> 24) & 0x000000FF);
+        return b;
+    }
+
+    // convert a short to a byte array
+    public static byte[] shortToByteArray(short data) {
+        return new byte[]{(byte) (data & 0xff), (byte) ((data >>> 8) & 0xff)};
+    }
+
+    /**
+     * Inner class to play back the data that was saved
+     */
+    class PlayThread extends Thread {
+
+        byte tempBuffer[] = new byte[10000];
+
+        public void run() {
+            try {
+                int cnt;
+                //Keep looping until the input
+                // read method returns -1 for
+                // empty stream.
+                while ((cnt = audioInputStream.read(tempBuffer, 0, tempBuffer.length)) != -1) {
+                    if (cnt > 0) {
+                        //Write data to the internal
+                        // buffer of the data line
+                        // where it will be delivered
+                        // to the speaker.
+                        sourceDataLine.write(tempBuffer, 0, cnt);
+                    }
+                }
+                //Block and wait for internal
+                // buffer of the data line to
+                // empty.
+                sourceDataLine.drain();
+                sourceDataLine.close();
+            } catch (Exception e) {
+                System.out.println(e);
+                System.exit(0);
+            }
+        }
+    }
+}
+
+</code>
+</pre>

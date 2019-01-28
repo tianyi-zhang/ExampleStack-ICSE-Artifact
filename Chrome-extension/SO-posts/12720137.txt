@@ -1,0 +1,239 @@
+<p>Well, I can't tell you what you're doing wrong. But I can tell you how to do what you want to do.</p>
+
+<p>First create a General Helper Functions:</p>
+
+<pre><code>    public static class General {
+    public static void CopyBytes(byte[] dst, int dstOffset, byte[] src) {
+        Buffer.BlockCopy(src, 0, dst, dstOffset, src.Length);
+    }
+}
+
+public static class BitHelper {
+    public static int Read(ref ulong x, int length) {
+        int r = (int)(x &gt;&gt; (64 - length));
+        x &lt;&lt;= length;
+        return r;
+    }
+
+    public static int Read(byte[] bytes, ref int offset, int length) {
+        int startByte = offset / 8;
+        int endByte = (offset + length - 1) / 8;
+        int skipBits = offset % 8;
+        ulong bits = 0;
+        for (int i = 0; i &lt;= Math.Min(endByte - startByte, 7); i++) {
+            bits |= (ulong)bytes[startByte + i] &lt;&lt; (56 - (i * 8));
+        }
+        if (skipBits != 0) Read(ref bits, skipBits);
+        offset += length;
+        return Read(ref bits, length);
+    }
+
+    public static void Write(ref ulong x, int length, int value) {
+        ulong mask = 0xFFFFFFFFFFFFFFFF &gt;&gt; (64 - length);
+        x = (x &lt;&lt; length) | ((ulong)value &amp; mask);
+    }
+
+    public static byte[] CopyBlock(byte[] bytes, int offset, int length) {
+        int startByte = offset / 8;
+        int endByte = (offset + length - 1) / 8;
+        int shiftA = offset % 8;
+        int shiftB = 8 - shiftA;
+        byte[] dst = new byte[(length + 7) / 8];
+        if (shiftA == 0) {
+            Buffer.BlockCopy(bytes, startByte, dst, 0, dst.Length);
+        }
+        else {
+            int i;
+            for (i = 0; i &lt; endByte - startByte; i++) {
+                dst[i] = (byte)((bytes[startByte + i] &lt;&lt; shiftA) | (bytes[startByte + i + 1] &gt;&gt; shiftB));
+            }
+            if (i &lt; dst.Length) {
+                dst[i] = (byte)(bytes[startByte + i] &lt;&lt; shiftA);
+            }
+        }
+        dst[dst.Length - 1] &amp;= (byte)(0xFF &lt;&lt; ((dst.Length * 8) - length));
+        return dst;
+    }
+}
+
+public static class BitConverterBE {
+    public static ulong ToUInt64(byte[] value, int startIndex) {
+        return
+            ((ulong)value[startIndex    ] &lt;&lt; 56) |
+            ((ulong)value[startIndex + 1] &lt;&lt; 48) |
+            ((ulong)value[startIndex + 2] &lt;&lt; 40) |
+            ((ulong)value[startIndex + 3] &lt;&lt; 32) |
+            ((ulong)value[startIndex + 4] &lt;&lt; 24) |
+            ((ulong)value[startIndex + 5] &lt;&lt; 16) |
+            ((ulong)value[startIndex + 6] &lt;&lt;  8) |
+            ((ulong)value[startIndex + 7]      );
+    }
+
+    public static uint ToUInt32(byte[] value, int startIndex) {
+        return
+            ((uint)value[startIndex    ] &lt;&lt; 24) |
+            ((uint)value[startIndex + 1] &lt;&lt; 16) |
+            ((uint)value[startIndex + 2] &lt;&lt;  8) |
+            ((uint)value[startIndex + 3]      );
+    }
+
+    public static ushort ToUInt16(byte[] value, int startIndex) {
+        return (ushort)(
+            (value[startIndex    ] &lt;&lt;  8) |
+            (value[startIndex + 1]      ));
+    }
+
+    public static byte[] GetBytes(ulong value) {
+        byte[] buff = new byte[8];
+        buff[0] = (byte)(value &gt;&gt; 56);
+        buff[1] = (byte)(value &gt;&gt; 48);
+        buff[2] = (byte)(value &gt;&gt; 40);
+        buff[3] = (byte)(value &gt;&gt; 32);
+        buff[4] = (byte)(value &gt;&gt; 24);
+        buff[5] = (byte)(value &gt;&gt; 16);
+        buff[6] = (byte)(value &gt;&gt;  8);
+        buff[7] = (byte)(value      );
+        return buff;
+    }
+
+    public static byte[] GetBytes(uint value) {
+        byte[] buff = new byte[4];
+        buff[0] = (byte)(value &gt;&gt; 24);
+        buff[1] = (byte)(value &gt;&gt; 16);
+        buff[2] = (byte)(value &gt;&gt;  8);
+        buff[3] = (byte)(value      );
+        return buff;
+    }
+
+    public static byte[] GetBytes(ushort value) {
+        byte[] buff = new byte[2];
+        buff[0] = (byte)(value &gt;&gt;  8);
+        buff[1] = (byte)(value      );
+        return buff;
+    }
+}
+
+public static class BitConverterLE {
+    public static byte[] GetBytes(ulong value) {
+        byte[] buff = new byte[8];
+        buff[0] = (byte)(value      );
+        buff[1] = (byte)(value &gt;&gt;  8);
+        buff[2] = (byte)(value &gt;&gt; 16);
+        buff[3] = (byte)(value &gt;&gt; 24);
+        buff[4] = (byte)(value &gt;&gt; 32);
+        buff[5] = (byte)(value &gt;&gt; 40);
+        buff[6] = (byte)(value &gt;&gt; 48);
+        buff[7] = (byte)(value &gt;&gt; 56);
+        return buff;
+    }
+
+    public static byte[] GetBytes(uint value) {
+        byte[] buff = new byte[4];
+        buff[0] = (byte)(value      );
+        buff[1] = (byte)(value &gt;&gt;  8);
+        buff[2] = (byte)(value &gt;&gt; 16);
+        buff[3] = (byte)(value &gt;&gt; 24);
+        return buff;
+    }
+
+    public static byte[] GetBytes(ushort value) {
+        byte[] buff = new byte[2];
+        buff[0] = (byte)(value      );
+        buff[1] = (byte)(value &gt;&gt;  8);
+        return buff;
+    }
+}
+</code></pre>
+
+<p>Now implement Audio Helper Class and Interface:</p>
+
+<pre><code>    interface IAudioWriter
+    {
+    void WriteChunk(byte[] chunk, uint timeStamp);
+    void Finish();
+    string Path { get; }
+}
+
+    class AACWriter : IAudioWriter
+    {
+    string _path;
+    FileStream _fs;
+    int _aacProfile;
+    int _sampleRateIndex;
+    int _channelConfig;
+
+    public AACWriter(string path) {
+        _path = path;
+        _fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, 65536);
+    }
+
+    public void WriteChunk(byte[] chunk, uint timeStamp)
+            {
+        if (chunk.Length &lt; 1) return;
+
+        if (chunk[0] == 0) { // Header
+            if (chunk.Length &lt; 3) return;
+
+            ulong bits = (ulong)BitConverterBE.ToUInt16(chunk, 1) &lt;&lt; 48;
+
+            _aacProfile = BitHelper.Read(ref bits, 5) - 1;
+            _sampleRateIndex = BitHelper.Read(ref bits, 4);
+            _channelConfig = BitHelper.Read(ref bits, 4);
+
+            if ((_aacProfile &lt; 0) || (_aacProfile &gt; 3))
+                throw new Exception("Unsupported AAC profile.");
+            if (_sampleRateIndex &gt; 12)
+                throw new Exception("Invalid AAC sample rate index.");
+            if (_channelConfig &gt; 6)
+                throw new Exception("Invalid AAC channel configuration.");
+        }
+        else { // Audio data
+            int dataSize = chunk.Length - 1;
+            ulong bits = 0;
+
+            // Reference: WriteADTSHeader from FAAC's bitstream.c
+
+            BitHelper.Write(ref bits, 12, 0xFFF);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits,  2, 0);
+            BitHelper.Write(ref bits,  1, 1);
+            BitHelper.Write(ref bits,  2, _aacProfile);
+            BitHelper.Write(ref bits,  4, _sampleRateIndex);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits,  3, _channelConfig);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits,  1, 0);
+            BitHelper.Write(ref bits, 13, 7 + dataSize);
+            BitHelper.Write(ref bits, 11, 0x7FF);
+            BitHelper.Write(ref bits,  2, 0);
+
+            _fs.Write(BitConverterBE.GetBytes(bits), 1, 7);
+            _fs.Write(chunk, 1, dataSize);
+        }
+    }
+
+    public void Finish() {
+        _fs.Close();
+    }
+
+    public string Path {
+        get {
+            return _path;
+        }
+    }
+}
+</code></pre>
+
+<p>Now what you need to do by yourself is, read chunks one by one from the first AAC file and write them, after then, read chunks one by one from the second AAC file and append them to the intermediate file.</p>
+
+<p>Note, the above code is C#, so you'll have to use wrapping to simulate C#'s <code>ref</code> effect, just by replacing:</p>
+
+<pre><code>ref Type variable_name
+</code></pre>
+
+<p>with:</p>
+
+<pre><code>_&lt;Type&gt; variable_name
+</code></pre>

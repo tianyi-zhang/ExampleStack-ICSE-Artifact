@@ -1,0 +1,59 @@
+<p>I've been looking in exactly the same thing. The JLayer code is somewhat messy. Just browsing through it convinced me that the mp3 decoding core was written (or taken from somewhere) and then ported to Java, then an extra -fairly unoptimal- layer was added. In any case. To seek have a look at the code in the player (http://code.google.com/p/jesuifoo/source/browse/trunk/src/javazoom/jlgui/basicplayer/BasicPlayer.java?r=23)</p>
+
+<pre><code>    /**
+     * Skip bytes in the File inputstream. It will skip N frames matching to
+     * bytes, so it will never skip given bytes length exactly.
+     * 
+     * @param bytes
+     * @return value&gt;0 for File and value=0 for URL and InputStream
+     * @throws BasicPlayerException
+     */
+    protected long skipBytes(long bytes) throws BasicPlayerException {
+            long totalSkipped = 0;
+            if (m_dataSource instanceof File) {
+                    log.info("Bytes to skip : " + bytes);
+                    int previousStatus = m_status;
+                    m_status = SEEKING;
+                    long skipped = 0;
+                    try {
+                            synchronized (m_audioInputStream) {
+                                    notifyEvent(BasicPlayerEvent.SEEKING,
+                                                    getEncodedStreamPosition(), -1, null);
+                                    initAudioInputStream();
+                                    if (m_audioInputStream != null) {
+                                            // Loop until bytes are really skipped.
+                                            while (totalSkipped &lt; (bytes - SKIP_INACCURACY_SIZE)) {
+                                                    skipped = m_audioInputStream.skip(bytes
+                                                                    - totalSkipped);
+                                                    if (skipped == 0)
+                                                            break;
+                                                    totalSkipped = totalSkipped + skipped;
+                                                    log.info("Skipped : " + totalSkipped + "/" + bytes);
+                                                    if (totalSkipped == -1)
+                                                            throw new BasicPlayerException(
+                                                                            BasicPlayerException.SKIPNOTSUPPORTED);
+                                            }
+                                    }
+                            }
+                            notifyEvent(BasicPlayerEvent.SEEKED,
+                                            getEncodedStreamPosition(), -1, null);
+                            m_status = OPENED;
+                            if (previousStatus == PLAYING)
+                                    startPlayback();
+                            else if (previousStatus == PAUSED) {
+                                    startPlayback();
+                                    pausePlayback();
+                            }
+                    } catch (IOException e) {
+                            throw new BasicPlayerException(e);
+                    }
+            }
+            return totalSkipped;
+    }
+</code></pre>
+
+<p>This routine illustrates how the bitstream is advanced without decoding.(m_audioInputStream.skip(...)). I don't know though whether it is skipped from the start (there is after all a initAudioStream call before), or from the current playposition.</p>
+
+<p>VBR is no problem since the frames are skipped individually.</p>
+
+<p>With respect to decryption, it shuoldn't matter since this routine skips individual frames as read from the inputstream. If the inputstream supports decoding it should wokr. How fast is of course another question. In that case it might be better to build an index of the mp3 so that you know to what position to jump and decode, but that is a slightly different topic: how to seek in an encrypted stream.</p>

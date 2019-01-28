@@ -1,0 +1,215 @@
+<p>For what it is worth, I have hacked a little proof of concept which is able to</p>
+
+<ul>
+<li>detect added, modified and deleted files in a watched directory,</li>
+<li>displaying unified diffs for each change (also full diffs when files were added/deleted),</li>
+<li>keeping track of successive changes by keeping a shadow copy of the source directory,</li>
+<li>work in a user-defined rhythm (default is 5 seconds) so as not to print too many small diffs in a short period of time, but rather somewhat bigger ones once in a while.</li>
+</ul>
+
+<p>There are several limitations which would be impediments in production environments:</p>
+
+<ul>
+<li>In order to not complicate the sample code more than necessary, subdirectories are copied at the beginning when the shadow directory is created (because I have recycled an existing method to create a deep directory copy), but ignored during runtime. Only files right below the watched directory are being monitored so as to avoid recursion.</li>
+<li>Your requirement not to use external libraries is not met because I really wanted to avoid re-inventing the wheel for unified diff creation.</li>
+<li>This solution's biggest advantage - it is able to detect changes anywhere in a text file, not only at the end of file like <code>tail -f</code> - is also its biggest disadvantage: Whenever a file changes it must be fully shadow-copied because otherwise the program cannot detect the subsequent change. So I would not recommend this solution for very big files.</li>
+</ul>
+
+<p>How to build:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+    &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+    &lt;groupId&gt;de.scrum-master.tools&lt;/groupId&gt;
+    &lt;artifactId&gt;SO_WatchServiceChangeLocationInFile&lt;/artifactId&gt;
+    &lt;version&gt;1.0-SNAPSHOT&lt;/version&gt;
+
+    &lt;properties&gt;
+        &lt;project.build.sourceEncoding&gt;UTF-8&lt;/project.build.sourceEncoding&gt;
+    &lt;/properties&gt;
+
+    &lt;build&gt;
+        &lt;plugins&gt;
+            &lt;plugin&gt;
+                &lt;artifactId&gt;maven-compiler-plugin&lt;/artifactId&gt;
+                &lt;version&gt;3.1&lt;/version&gt;
+                &lt;configuration&gt;
+                    &lt;source&gt;1.7&lt;/source&gt;
+                    &lt;target&gt;1.7&lt;/target&gt;
+                &lt;/configuration&gt;
+            &lt;/plugin&gt;
+        &lt;/plugins&gt;
+    &lt;/build&gt;
+
+    &lt;dependencies&gt;
+        &lt;dependency&gt;
+            &lt;groupId&gt;com.googlecode.java-diff-utils&lt;/groupId&gt;
+            &lt;artifactId&gt;diffutils&lt;/artifactId&gt;
+            &lt;version&gt;1.3.0&lt;/version&gt;
+        &lt;/dependency&gt;
+    &lt;/dependencies&gt;
+&lt;/project&gt;
+</code></pre>
+
+<p>Source code (sorry, a bit lengthy):</p>
+
+<pre><code>package de.scrum_master.app;
+
+import difflib.DiffUtils;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.LinkedList;
+import java.util.List;
+
+import static java.nio.file.StandardWatchEventKinds.*;
+
+public class FileChangeWatcher {
+    public static final String DEFAULT_WATCH_DIR = "watch-dir";
+    public static final String DEFAULT_SHADOW_DIR = "shadow-dir";
+    public static final int DEFAULT_WATCH_INTERVAL = 5;
+
+    private Path watchDir;
+    private Path shadowDir;
+    private int watchInterval;
+    private WatchService watchService;
+
+    public FileChangeWatcher(Path watchDir, Path shadowDir, int watchInterval) throws IOException {
+        this.watchDir = watchDir;
+        this.shadowDir = shadowDir;
+        this.watchInterval = watchInterval;
+        watchService = FileSystems.getDefault().newWatchService();
+    }
+
+    public void run() throws InterruptedException, IOException {
+        prepareShadowDir();
+        watchDir.register(watchService, ENTRY_CREATE, ENTRY_MODIFY, ENTRY_DELETE);
+        while (true) {
+            WatchKey watchKey = watchService.take();
+            for (WatchEvent&lt;?&gt; event : watchKey.pollEvents()) {
+                Path oldFile = shadowDir.resolve((Path) event.context());
+                Path newFile = watchDir.resolve((Path) event.context());
+                List&lt;String&gt; oldContent;
+                List&lt;String&gt; newContent;
+                WatchEvent.Kind&lt;?&gt; eventType = event.kind();
+                if (!(Files.isDirectory(newFile) || Files.isDirectory(oldFile))) {
+                    if (eventType == ENTRY_CREATE) {
+                        if (!Files.isDirectory(newFile))
+                            Files.createFile(oldFile);
+                    } else if (eventType == ENTRY_MODIFY) {
+                        Thread.sleep(200);
+                        oldContent = fileToLines(oldFile);
+                        newContent = fileToLines(newFile);
+                        printUnifiedDiff(newFile, oldFile, oldContent, newContent);
+                        try {
+                            Files.copy(newFile, oldFile, StandardCopyOption.REPLACE_EXISTING);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    } else if (eventType == ENTRY_DELETE) {
+                        try {
+                            oldContent = fileToLines(oldFile);
+                            newContent = new LinkedList&lt;&gt;();
+                            printUnifiedDiff(newFile, oldFile, oldContent, newContent);
+                            Files.deleteIfExists(oldFile);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+            watchKey.reset();
+            Thread.sleep(1000 * watchInterval);
+        }
+    }
+
+    private void prepareShadowDir() throws IOException {
+        recursiveDeleteDir(shadowDir);
+        Runtime.getRuntime().addShutdownHook(
+            new Thread() {
+                @Override
+                public void run() {
+                    try {
+                        System.out.println("Cleaning up shadow directory " + shadowDir);
+                        recursiveDeleteDir(shadowDir);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        );
+        recursiveCopyDir(watchDir, shadowDir);
+    }
+
+    public static void recursiveDeleteDir(Path directory) throws IOException {
+        if (!directory.toFile().exists())
+            return;
+        Files.walkFileTree(directory, new SimpleFileVisitor&lt;Path&gt;() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                Files.delete(dir);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    public static void recursiveCopyDir(final Path sourceDir, final Path targetDir) throws IOException {
+        Files.walkFileTree(sourceDir, new SimpleFileVisitor&lt;Path&gt;() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.copy(file, Paths.get(file.toString().replace(sourceDir.toString(), targetDir.toString())));
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                Files.createDirectories(Paths.get(dir.toString().replace(sourceDir.toString(), targetDir.toString())));
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private static List&lt;String&gt; fileToLines(Path path) throws IOException {
+        List&lt;String&gt; lines = new LinkedList&lt;&gt;();
+        String line;
+        try (BufferedReader reader = new BufferedReader(new FileReader(path.toFile()))) {
+            while ((line = reader.readLine()) != null)
+                lines.add(line);
+        }
+        catch (Exception e) {}
+        return lines;
+    }
+
+    private static void printUnifiedDiff(Path oldPath, Path newPath, List&lt;String&gt; oldContent, List&lt;String&gt; newContent) {
+        List&lt;String&gt; diffLines = DiffUtils.generateUnifiedDiff(
+            newPath.toString(),
+            oldPath.toString(),
+            oldContent,
+            DiffUtils.diff(oldContent, newContent),
+            3
+        );
+        System.out.println();
+        for (String diffLine : diffLines)
+            System.out.println(diffLine);
+    }
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+        String watchDirName = args.length &gt; 0 ? args[0] : DEFAULT_WATCH_DIR;
+        String shadowDirName = args.length &gt; 1 ? args[1] : DEFAULT_SHADOW_DIR;
+        int watchInterval = args.length &gt; 2 ? Integer.getInteger(args[2]) : DEFAULT_WATCH_INTERVAL;
+        new FileChangeWatcher(Paths.get(watchDirName), Paths.get(shadowDirName), watchInterval).run();
+    }
+}
+</code></pre>
+
+<p>I recommend to use the default settings (e.g. use a source directory named "watch-dir") and play around with it for a while, watching the console output as you create and edit some text files in an editor. It helps understand the software's inner mechanics. If something goes wrong, e.g. within one 5 second rhythm a file is created but also quickly deleted again, there is nothing to copy or diff, so the program will just print a stack trace to <code>System.err</code>.</p>

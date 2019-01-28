@@ -1,0 +1,286 @@
+<p>I have never used any library to authenticate users via Twitter. But I have just looked in the UnpackedRequest.OAuth1Request. You can create an instance of this class by filling all parameters. I have written Twitter OAuth Header creator, so you can just use it to fill those parameters or send POST requests directly without a library.<br><br>
+Here all classes what you need:<br><br>
+<em>Signature</em> - to generate an OAuth Signature.</p>
+
+<pre><code>public class Signature {
+    private static final String HMAC_SHA1_ALGORITHM = "HmacSHA1";
+    public static String calculateRFC2104HMAC(String data, String key)
+            throws java.security.SignatureException
+    {
+        String result;
+        try {
+            SecretKeySpec signingKey = new SecretKeySpec(key.getBytes(), HMAC_SHA1_ALGORITHM);
+            Mac mac = Mac.getInstance(HMAC_SHA1_ALGORITHM);
+            mac.init(signingKey);
+            byte[] rawHmac = mac.doFinal(data.getBytes());
+            result = new String(Base64.encodeBase64(rawHmac));
+        } catch (Exception e) {
+            throw new SignatureException("Failed to generate HMAC : " + e.getMessage());
+        }
+        return result;
+    }
+}
+</code></pre>
+
+<p><em>NvpComparator</em> - to sort parameters you need in the header.</p>
+
+<pre><code>public class NvpComparator implements Comparator&lt;NameValuePair&gt; {
+    @Override
+    public int compare(NameValuePair arg0, NameValuePair arg1) {
+        String name0 = arg0.getName();
+        String name1 = arg1.getName();
+        return name0.compareTo(name1);
+    }
+}
+</code></pre>
+
+<p><em>OAuth</em> - for URL encode.</p>
+
+<pre><code>class OAuth{
+...
+    public static String percentEncode(String s) {
+            return URLEncoder.encode(s, "UTF-8")
+                    .replace("+", "%20").replace("*", "%2A")
+                    .replace("%7E", "~");
+    }
+...
+}
+</code></pre>
+
+<p><em>HeaderCreator</em> - to create all needed parameters and generate an OAuth header param.</p>
+
+<pre><code>public class HeaderCreator {
+    private String authorization = "OAuth ";
+    private String oAuthSignature;
+    private String oAuthNonce;
+    private String oAuthTimestamp;
+    private String oAuthConsumerSecret;
+    private String oAuthTokenSecret;
+
+    public String getAuthorization() {
+        return authorization;
+    }
+
+    public String getoAuthSignature() {
+        return oAuthSignature;
+    }
+
+    public String getoAuthNonce() {
+        return oAuthNonce;
+    }
+
+    public String getoAuthTimestamp() {
+        return oAuthTimestamp;
+    }
+
+    public HeaderCreator(){}
+
+    public HeaderCreator(String oAuthConsumerSecret){
+        this.oAuthConsumerSecret = oAuthConsumerSecret;
+    }
+
+    public HeaderCreator(String oAuthConsumerSecret, String oAuthTokenSecret){
+        this(oAuthConsumerSecret);
+        this.oAuthTokenSecret = oAuthTokenSecret;
+    }
+
+    public String getTwitterServerTime() throws IOException, ParseException {
+        HttpsURLConnection con = (HttpsURLConnection)
+                new URL("https://api.twitter.com/oauth/request_token").openConnection();
+        con.setRequestMethod("HEAD");
+        con.getResponseCode();
+        String twitterDate= con.getHeaderField("Date");
+        DateFormat formatter = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.ENGLISH);
+        Date date = formatter.parse(twitterDate);
+        return String.valueOf(date.getTime() / 1000L);
+    }
+
+    public String generatedSignature(String url, String method, List&lt;NameValuePair&gt; allParams,
+                                     boolean withToken) throws SignatureException {
+        oAuthNonce = String.valueOf(System.currentTimeMillis());
+        allParams.add(new BasicNameValuePair("oauth_nonce", oAuthNonce));
+        try {
+            oAuthTimestamp = getTwitterServerTime();
+            allParams.add(new BasicNameValuePair("oauth_timestamp", oAuthTimestamp));
+        }catch (Exception ex){
+            //TODO: Log!!
+        }
+
+        Collections.sort(allParams, new NvpComparator());
+        StringBuffer params = new StringBuffer();
+        for(int i=0;i&lt;allParams.size();i++)
+        {
+            NameValuePair nvp = allParams.get(i);
+            if (i&gt;0) {
+                params.append("&amp;");
+            }
+            params.append(nvp.getName() + "=" + OAuth.percentEncode(nvp.getValue()));
+        }
+        String signatureBaseStringTemplate = "%s&amp;%s&amp;%s";
+        String signatureBaseString =  String.format(signatureBaseStringTemplate,
+                OAuth.percentEncode(method),
+                OAuth.percentEncode(url),
+                OAuth.percentEncode(params.toString()));
+        String compositeKey = OAuth.percentEncode(oAuthConsumerSecret)+"&amp;";
+        if(withToken) compositeKey+=OAuth.percentEncode(oAuthTokenSecret);
+        oAuthSignature =  Signature.calculateRFC2104HMAC(signatureBaseString, compositeKey);
+
+        return oAuthSignature;
+    }
+
+    public String generatedAuthorization(List&lt;NameValuePair&gt; allParams){
+        authorization = "OAuth ";
+        Collections.sort(allParams, new NvpComparator());
+        for(NameValuePair nvm : allParams){
+            authorization+=nvm.getName()+"="+OAuth.percentEncode(nvm.getValue())+", ";
+        }
+        authorization=authorization.substring(0,authorization.length()-2);
+        return authorization;
+    }
+
+}
+</code></pre>
+
+<p><strong>Explain:</strong><br>
+1. getTwitterServerTime<br>
+In oAuthTimestamp you need not your time of server but the time of a Twitter server. You can optimize it saving this param if you always send requests in the certain Twitter server.<br>
+<br>
+2. HeaderCreator.generatedSignature(...)<br>
+url - logically url to twitter API<br>
+method - GET or POST. You must use always "POST"<br>
+allParams - Parameters which you know to generate signature ("param_name", "param_value");<br>
+withToken - if you know oAuthTokenSecret put true. Otherwise false.<br>
+<br>
+3. HeaderCreator.generatedAuthorization(...)<br>
+Use this method after generatedSignature(...) to generate an OAuth header string.<br>
+allParams - it is parameters which you have used in generatedSignature(...) plus: <em>nonce, signature, timestamp</em>. Always use:<br></p>
+
+<pre><code>allParams.add(new BasicNameValuePair("oauth_nonce", headerCreator.getoAuthNonce()));
+allParams.add(new BasicNameValuePair("oauth_signature", headerCreator.getoAuthSignature()));
+allParams.add(new BasicNameValuePair("oauth_timestamp", headerCreator.getoAuthTimestamp()));
+</code></pre>
+
+<p><br>
+Now you can use it to fill <em>UnpackedRequest.OAuth1Request</em> in your library.<br> Also here an example to authenticate user in SpringMVC without the library:<br>
+<em>Requests</em> - to send post requests.</p>
+
+<pre><code>public class Requests {
+    public static String sendPost(String url, String urlParameters, Map&lt;String, String&gt; prop) throws Exception {
+        URL obj = new URL(url);
+        HttpsURLConnection con = (HttpsURLConnection) obj.openConnection();
+
+        con.setRequestMethod("POST");
+        if(prop!=null) {
+            for (Map.Entry&lt;String, String&gt; entry : prop.entrySet()) {
+                con.setRequestProperty(entry.getKey(), entry.getValue());
+            }
+        }
+        con.setDoOutput(true);
+        DataOutputStream wr = new DataOutputStream(con.getOutputStream());
+        wr.writeBytes(urlParameters);
+        wr.flush();
+        wr.close();
+        int responseCode = con.getResponseCode();
+        BufferedReader in;
+        if(responseCode==200) {
+            in = new BufferedReader(
+                    new InputStreamReader(con.getInputStream()));
+        }else{
+            in = new BufferedReader(
+                    new InputStreamReader(con.getErrorStream()));
+        }
+        String inputLine;
+        StringBuffer response = new StringBuffer();
+        while ((inputLine = in.readLine()) != null) {
+            response.append(inputLine);
+        }
+        in.close();
+
+        return response.toString();
+    }
+}
+</code></pre>
+
+<p><em>twAuth(...)</em> - put it in your controller. Execute it when an user want to authenticate in your site via Twitter.</p>
+
+<pre><code>@RequestMapping(value = "/twauth", method = RequestMethod.GET)
+    @ResponseBody
+    public String twAuth(HttpServletResponse response) throws Exception{
+        try {
+            String url = "https://api.twitter.com/oauth/request_token";
+
+            List&lt;NameValuePair&gt; allParams = new ArrayList&lt;NameValuePair&gt;();
+            allParams.add(new BasicNameValuePair("oauth_callback", "http://127.0.0.1:8080/twlogin"));
+            allParams.add(new BasicNameValuePair("oauth_consumer_key", "2YhNLyum1VY10UrWBMqBnatiT"));
+            allParams.add(new BasicNameValuePair("oauth_signature_method", "HMAC-SHA1"));
+            allParams.add(new BasicNameValuePair("oauth_version", "1.0"));
+
+            HeaderCreator headerCreator = new HeaderCreator("RUesRE56vVWzN9VFcfA0jCBz9VkvkAmidXj8d1h2tS5EZDipSL");
+            headerCreator.generatedSignature(url,"POST",allParams,false);
+            allParams.add(new BasicNameValuePair("oauth_nonce", headerCreator.getoAuthNonce()));
+            allParams.add(new BasicNameValuePair("oauth_signature", headerCreator.getoAuthSignature()));
+            allParams.add(new BasicNameValuePair("oauth_timestamp", headerCreator.getoAuthTimestamp()));
+
+            Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+            props.put("Authorization", headerCreator.generatedAuthorization(allParams));
+            String twitterResponse = Requests.sendPost(url,"",props);
+            Integer indOAuthToken = twitterResponse.indexOf("oauth_token");
+            String oAuthToken = twitterResponse.substring(indOAuthToken, twitterResponse.indexOf("&amp;",indOAuthToken));
+
+            response.sendRedirect("https://api.twitter.com/oauth/authenticate?" + oAuthToken);
+        }catch (Exception ex){
+            //TODO: Log
+            throw new Exception();
+        }
+        return "main";
+    }
+</code></pre>
+
+<p><em>twLogin(...)</em> - put it in your controller. It is callback from Twitter.</p>
+
+<pre><code>  @RequestMapping(value = "/twlogin", method = RequestMethod.GET)
+    public String twLogin(@RequestParam("oauth_token") String oauthToken,
+                          @RequestParam("oauth_verifier") String oauthVerifier,
+                          Model model, HttpServletRequest request){
+        try {
+            if(oauthToken==null || oauthToken.equals("") ||
+                    oauthVerifier==null || oauthVerifier.equals(""))
+                return "main";
+
+            String url = "https://api.twitter.com/oauth/access_token";
+
+            List&lt;NameValuePair&gt; allParams = new ArrayList&lt;NameValuePair&gt;();
+            allParams.add(new BasicNameValuePair("oauth_consumer_key", "2YhNLyum1VY10UrWBMqBnatiT"));
+            allParams.add(new BasicNameValuePair("oauth_signature_method", "HMAC-SHA1"));
+            allParams.add(new BasicNameValuePair("oauth_token", oauthToken));
+            allParams.add(new BasicNameValuePair("oauth_version", "1.0"));
+            NameValuePair oAuthVerifier = new BasicNameValuePair("oauth_verifier", oauthVerifier);
+            allParams.add(oAuthVerifier);
+
+            HeaderCreator headerCreator = new HeaderCreator("RUesRE56vVWzN9VFcfA0jCBz9VkvkAmidXj8d1h2tS5EZDipSL");
+            headerCreator.generatedSignature(url,"POST",allParams,false);
+            allParams.add(new BasicNameValuePair("oauth_nonce", headerCreator.getoAuthNonce()));
+            allParams.add(new BasicNameValuePair("oauth_signature", headerCreator.getoAuthSignature()));
+            allParams.add(new BasicNameValuePair("oauth_timestamp", headerCreator.getoAuthTimestamp()));
+            allParams.remove(oAuthVerifier);
+
+            Map&lt;String, String&gt; props = new HashMap&lt;String, String&gt;();
+            props.put("Authorization", headerCreator.generatedAuthorization(allParams));
+
+            String twitterResponse = Requests.sendPost(url,"oauth_verifier="+oauthVerifier,props);
+
+            //Get user id
+
+            Integer startIndexTmp = twitterResponse.indexOf("user_id")+8;
+            Integer endIndexTmp = twitterResponse.indexOf("&amp;",startIndexTmp);
+            if(endIndexTmp&lt;=0) endIndexTmp = twitterResponse.length()-1;
+            Long userId = Long.parseLong(twitterResponse.substring(startIndexTmp, endIndexTmp));
+
+            //Do what do you want...
+
+        }catch (Exception ex){
+            //TODO: Log
+            throw new Exception();
+        }
+    }
+</code></pre>

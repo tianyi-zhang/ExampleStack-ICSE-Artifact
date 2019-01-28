@@ -1,0 +1,102 @@
+<p><strong><em>I'll be emphasizing more on @DavidManpearls answer. I don't have enough reputation to comment on his answer. But, for those getting error on 4.4 upward while trying to use the Image selection can use the code below</em></strong></p>
+
+<p><strong><em>How to launch a single Intent to select images from either the Gallery or the Camera, or any application registered to browse the filesystem.</em></strong></p>
+
+<p>Rather than creating a Dialog with a list of Intent options, it is much better to use Intent.createChooser in order to get access to the graphical icons and short names of the various 'Camera', 'Gallery' and even Third Party filesystem browser apps such as 'Astro', etc.</p>
+
+<p>This describes how to use the standard chooser-intent and add additional intents to that.</p>
+
+<pre><code>private void openImageIntent(){
+
+    // Determine Uri of camera image to save.
+    final File root = new File(Environment.getExternalStorageDirectory() + File.separator + "amfb" + File.separator);
+    root.mkdir();
+    final String fname = "img_" + System.currentTimeMillis() + ".jpg";
+    final File sdImageMainDirectory = new File(root, fname);
+    outputFileUri = Uri.fromFile(sdImageMainDirectory);
+
+    // Camera.
+    final List&lt;Intent&gt; cameraIntents = new ArrayList&lt;Intent&gt;();
+    final Intent captureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    final PackageManager packageManager = getPackageManager();
+    final List&lt;ResolveInfo&gt; listCam = packageManager.queryIntentActivities(captureIntent, 0);
+    for (ResolveInfo res : listCam){
+        final String packageName = res.activityInfo.packageName;
+        final Intent intent = new Intent(captureIntent);
+        intent.setComponent(new ComponentName(res.activityInfo.packageName, res.activityInfo.name));
+        intent.setPackage(packageName);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, outputFileUri);
+        cameraIntents.add(intent);
+    }
+
+    //FileSystem
+    final Intent galleryIntent = new Intent();
+    galleryIntent.setType("image/");
+    galleryIntent.setAction(Intent.ACTION_GET_CONTENT);
+
+    // Chooser of filesystem options.
+    final Intent chooserIntent = Intent.createChooser(galleryIntent, "Select Source");
+    // Add the camera options.
+    chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, cameraIntents.toArray(new Parcelable[]{}));
+    startActivityForResult(chooserIntent, CAMERA_CAPTURE_IMAGE_REQUEST_CODE);
+
+}
+
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    //super.onActivityResult(requestCode, resultCode, data);
+    if (resultCode == RESULT_OK) {
+        if (requestCode == CAMERA_CAPTURE_IMAGE_REQUEST_CODE) {
+            final boolean isCamera;
+            if (data == null) {
+                isCamera = true;
+            } else {
+                final String action = data.getAction();
+                if (action == null) {
+                    isCamera = false;
+                } else {
+                    isCamera = action.equals(MediaStore.ACTION_IMAGE_CAPTURE);
+                }
+            }
+
+            Uri selectedImageUri;
+            if (isCamera) {
+                selectedImageUri = outputFileUri;
+                //Bitmap factory
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                // downsizing image as it throws OutOfMemory Exception for larger
+                // images
+                options.inSampleSize = 8;
+                final Bitmap bitmap = BitmapFactory.decodeFile(selectedImageUri.getPath(), options);
+                preview.setImageBitmap(bitmap);
+            } else {
+                selectedImageUri = data == null ? null : data.getData();
+                Log.d("ImageURI", selectedImageUri.getLastPathSegment());
+                // /Bitmap factory
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                // downsizing image as it throws OutOfMemory Exception for larger
+                // images
+                options.inSampleSize = 8;
+                try {//Using Input Stream to get uri did the trick
+                    InputStream input = getContentResolver().openInputStream(selectedImageUri);
+                    final Bitmap bitmap = BitmapFactory.decodeStream(input);
+                    preview.setImageBitmap(bitmap);
+                } catch (FileNotFoundException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    } else if (resultCode == RESULT_CANCELED){
+        // user cancelled Image capture
+        Toast.makeText(getApplicationContext(),
+                "User cancelled image capture", Toast.LENGTH_SHORT)
+                .show();
+    } else {
+        // failed to capture image
+        Toast.makeText(getApplicationContext(),
+                "Sorry! Failed to capture image", Toast.LENGTH_SHORT)
+                .show();
+    }
+}
+</code></pre>

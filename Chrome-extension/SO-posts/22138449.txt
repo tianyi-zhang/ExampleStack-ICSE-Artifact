@@ -1,0 +1,121 @@
+<p><a href="http://stackoverflow.com/questions/21357100/android-rotation-vector-sensor-error?newreg=d6e19da4953c4261aea95505aef32ae6">The post</a> that you reference actually refers to a bug in a few Samsung devices (Galaxy S4, Galaxy Note 3) - see <a href="https://groups.google.com/forum/#!topic/android-developers/U3N9eL5BcJk" rel="nofollow">this Android Developer list post</a>.  You actually shouldn't have to do any special handling between SDK levels for this code to work on normal devices.  But, alas, fragmentation...</p>
+
+<p><a href="https://src.chromium.org/viewvc/chrome/trunk/src/content/public/android/java/src/org/chromium/content/browser/DeviceMotionAndOrientation.java?pathrev=246398" rel="nofollow">Chromium handles this issue</a> by truncating the array if the size is greater than 4:</p>
+
+<pre><code>if (values.length &gt; 4) {
+    // On some Samsung devices SensorManager.getRotationMatrixFromVector
+    // appears to throw an exception if rotation vector has length &gt; 4.
+    // For the purposes of this class the first 4 values of the
+    // rotation vector are sufficient (see crbug.com/335298 for details).
+    if (mTruncatedRotationVector == null) {
+        mTruncatedRotationVector = new float[4];
+    }
+    System.arraycopy(values, 0, mTruncatedRotationVector, 0, 4);
+        getOrientationFromRotationVector(mTruncatedRotationVector);
+} else {
+    getOrientationFromRotationVector(values);
+}
+</code></pre>
+
+<p>However, I found in my app <a href="https://github.com/barbeau/gpstest" rel="nofollow">GPSTest</a> that this solution didn't seem to work on the Galaxy S3 (see Github issue <a href="https://github.com/barbeau/gpstest/issues/39" rel="nofollow">here</a>).</p>
+
+<p>So, I ended up only truncating the array on devices that throw the <code>IllegalArgumentException</code>.  This also avoids the extra System.arraycopy() unless its absolutely necessary.</p>
+
+<p>Here's the code snippet (that also supports orientation sensors on devices with API levels less than Gingerbread (i.e., prior to when the ROTATION_VECTOR sensor was introduced), and handles remapping the coordinate system for orientation changes), which uses a class member <code>mTruncateVector</code> that is initialized to <code>false</code>:</p>
+
+<pre><code>@TargetApi(Build.VERSION_CODES.GINGERBREAD)
+@Override
+public void onSensorChanged(SensorEvent event) {
+
+    double orientation = Double.NaN;
+    double tilt = Double.NaN;
+
+    switch (event.sensor.getType()) {
+        case Sensor.TYPE_ROTATION_VECTOR:
+            // Modern rotation vector sensors
+            if (!mTruncateVector) {
+                try {
+                    SensorManager.getRotationMatrixFromVector(mRotationMatrix, event.values);
+                } catch (IllegalArgumentException e) {
+                    // On some Samsung devices, an exception is thrown if this vector &gt; 4 (see #39)
+                    // Truncate the array, since we can deal with only the first four values
+                    Log.e(TAG, "Samsung device error? Will truncate vectors - " + e);
+                    mTruncateVector = true;
+                    // Do the truncation here the first time the exception occurs
+                    getRotationMatrixFromTruncatedVector(event.values);
+                }
+            } else {
+                // Truncate the array to avoid the exception on some devices (see #39)
+                getRotationMatrixFromTruncatedVector(event.values);
+            }
+
+            int rot = getWindowManager().getDefaultDisplay().getRotation();
+            switch (rot) {
+                case Surface.ROTATION_0:
+                    // No orientation change, use default coordinate system
+                    SensorManager.getOrientation(mRotationMatrix, mValues);
+                    // Log.d(TAG, "Rotation-0");
+                    break;
+                case Surface.ROTATION_90:
+                    // Log.d(TAG, "Rotation-90");
+                    SensorManager.remapCoordinateSystem(mRotationMatrix, SensorManager.AXIS_Y,
+                            SensorManager.AXIS_MINUS_X, mRemappedMatrix);
+                    SensorManager.getOrientation(mRemappedMatrix, mValues);
+                    break;
+                case Surface.ROTATION_180:
+                    // Log.d(TAG, "Rotation-180");
+                    SensorManager
+                            .remapCoordinateSystem(mRotationMatrix, SensorManager.AXIS_MINUS_X,
+                                    SensorManager.AXIS_MINUS_Y, mRemappedMatrix);
+                    SensorManager.getOrientation(mRemappedMatrix, mValues);
+                    break;
+                case Surface.ROTATION_270:
+                    // Log.d(TAG, "Rotation-270");
+                    SensorManager
+                            .remapCoordinateSystem(mRotationMatrix, SensorManager.AXIS_MINUS_Y,
+                                    SensorManager.AXIS_X, mRemappedMatrix);
+                    SensorManager.getOrientation(mRemappedMatrix, mValues);
+                    break;
+                default:
+                    // This shouldn't happen - assume default orientation
+                    SensorManager.getOrientation(mRotationMatrix, mValues);
+                    // Log.d(TAG, "Rotation-Unknown");
+                    break;
+            }
+            orientation = Math.toDegrees(mValues[0]);  // azimuth
+            tilt = Math.toDegrees(mValues[1]);
+            break;
+        case Sensor.TYPE_ORIENTATION:
+            // Legacy orientation sensors
+            orientation = event.values[0];
+            break;
+        default:
+            // A sensor we're not using, so return
+            return;
+    }
+}
+
+@TargetApi(Build.VERSION_CODES.GINGERBREAD)
+private void getRotationMatrixFromTruncatedVector(float[] vector) {
+    System.arraycopy(vector, 0, mTruncatedRotationVector, 0, 4);
+    SensorManager.getRotationMatrixFromVector(mRotationMatrix, mTruncatedRotationVector);
+}
+</code></pre>
+
+<p>and to register the sensors in <code>onResume()</code>:</p>
+
+<pre><code>    if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.GINGERBREAD) {
+        // Use the modern rotation vector sensors
+        Sensor vectorSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        mSensorManager.registerListener(this, vectorSensor, 16000); // ~60hz
+    } else {
+        // Use the legacy orientation sensors
+        Sensor sensor = mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION);
+        if (sensor != null) {
+            mSensorManager.registerListener(this, sensor,
+                    SensorManager.SENSOR_DELAY_GAME);
+        }
+    }
+</code></pre>
+
+<p>Full implementation is <a href="https://github.com/barbeau/gpstest/blob/master/GPSTest/src/main/java/com/android/gpstest/GpsTestActivity.java#L565" rel="nofollow">here on Github</a>.</p>

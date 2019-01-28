@@ -1,0 +1,126 @@
+<p>You can't linguistically cast a <code>String</code> (a reference type) to an <code>int</code> or a <code>double</code> (a primitive numeric type). You'd have to convert them. Thankfully, there are standard methods to do them for you:</p>
+
+<h3>API links</h3>
+
+<ul>
+<li><a href="http://java.sun.com/javase/6/docs/api/java/lang/Integer.html#parseInt%28java.lang.String%29" rel="nofollow"><code>int Integer.parseInt(String)</code></a></li>
+<li><a href="http://java.sun.com/javase/6/docs/api/java/lang/Double.html#parseDouble%28java.lang.String%29" rel="nofollow"><code>double Double.parseDouble(String)</code></a></li>
+<li><a href="http://java.sun.com/javase/6/docs/api/java/lang/NumberFormatException.html" rel="nofollow"><code>NumberFormatException</code></a> -- this may be thrown by the <code>parseXXX</code></li>
+</ul>
+
+<h3>Note</h3>
+
+<p><a href="http://java.sun.com/javase/6/docs/api/java/lang/Class.html#cast%28java.lang.Object%29" rel="nofollow"><code>T Class&lt;T&gt;.cast(Object)</code></a> does something entirely different. It has to do with generics, reflection, type-tokens, etc.</p>
+
+<hr>
+
+<p>That said, I noticed that you used a raw <code>Map</code> type. Since this looks like a new code, it should be said that you should NOT use raw types in new code. It's possible that you may never need to convert from <code>String</code> to <code>int</code>/<code>double</code> in the first place (or at least do it <strong>BEFORE</strong> you put them into the map).</p>
+
+<p>A <code>Map&lt;String,Number&gt;</code> (or perhaps a <code>Map&lt;String,Double&gt;</code>) would be better, because the map is "type-safe"; you know it maps <code>String</code> to <code>Number</code>, and the compiler would ensure that you're not doing anything to violate this type invariant.</p>
+
+<h3>Related questions</h3>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/2770321/what-is-a-raw-type-and-why-shouldnt-we-use-it">What is a raw type and why shouldn’t we use it?</a></li>
+</ul>
+
+<hr>
+
+<p>Based on OP's comments, it looks like something like this was desired:</p>
+
+<pre><code>import java.util.*;
+public class MapTranslate {
+    static Object interpret(String s) {
+        Scanner sc = new Scanner(s);
+        return
+            sc.hasNextInt() ? sc.nextInt() :
+            sc.hasNextLong() ? sc.nextLong() :
+            sc.hasNextDouble() ? sc.nextDouble() :
+            sc.hasNext() ? sc.next() :
+            s;
+    }
+    public static void main(String[] args) {
+        Map&lt;String,String&gt; map1 = new HashMap&lt;String,String&gt;();
+        map1.put("One", "1");
+        map1.put("PI", "3.141592653589793");
+        map1.put("10^12", "1000000000000");
+        map1.put("Infinity", "oo");
+        map1.put("Blank", "   ");
+
+        Map&lt;String,Object&gt; map2 = new HashMap&lt;String,Object&gt;();
+        for (Map.Entry&lt;String,String&gt; entry : map1.entrySet()) {
+            map2.put(entry.getKey(), interpret(entry.getValue()));
+        }
+
+        for (Map.Entry&lt;String,Object&gt; entry: map2.entrySet()) {
+            System.out.format("%s-&gt;[%s] (%s)%n",
+                entry.getKey(),
+                entry.getValue(),
+                entry.getValue().getClass().getSimpleName()
+            );
+        }
+    }
+}
+</code></pre>
+
+<p>This produces:</p>
+
+<pre><code>PI-&gt;[3.141592653589793] (Double)
+Infinity-&gt;[oo] (String)
+One-&gt;[1] (Integer)
+10^12-&gt;[1000000000000] (Long)
+Blank-&gt;[   ] (String)
+</code></pre>
+
+<p>This is not the most robust (e.g. it doesn't handle <code>null</code> keys/values), but it may be a good starting point. Note that it uses <a href="http://java.sun.com/javase/6/docs/api/java/util/Scanner.html" rel="nofollow"><code>java.util.Scanner</code></a> and its <code>hasXXX</code> methods; this way you don't have to worry about any <code>NumberFormatException</code>.</p>
+
+<p>Without understanding the big picture, though, it's hard to comment whether something like this is even a good idea to begin with.</p>
+
+<h3>Related questions</h3>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/2496239/how-do-i-keep-a-scanner-from-throwing-exceptions-when-the-wrong-type-is-entered">How do I keep a scanner from throwing exceptions when the wrong type is entered? (java)</a></li>
+</ul>
+
+<hr>
+
+<h3>Using reflection</h3>
+
+<p>This seems to also be an aspect of the question; the following should be instructive:</p>
+
+<pre><code>import java.lang.reflect.*;
+
+public class ValueOfString {
+    static &lt;T&gt; T valueOf(Class&lt;T&gt; klazz, String arg) {
+        Exception cause = null;
+        T ret = null;
+        try {
+            ret = klazz.cast(
+                klazz.getDeclaredMethod("valueOf", String.class)
+                .invoke(null, arg)
+            );
+        } catch (NoSuchMethodException e) {
+            cause = e;
+        } catch (IllegalAccessException e) {
+            cause = e;
+        } catch (InvocationTargetException e) {
+            cause = e;
+        }
+        if (cause == null) {
+            return ret;
+        } else {
+            throw new IllegalArgumentException(cause);
+        }
+    }
+    public static void main(String[] args) throws ClassNotFoundException {
+        Integer ii = valueOf(Integer.class, "42"); // no need to cast!
+        System.out.println(ii); // prints "42"
+
+        Object o = valueOf(Class.forName("java.lang.Double"), "3.14159");
+        System.out.println(o);
+        System.out.println(o instanceof Double); // prints "true"       
+    }
+}
+</code></pre>
+
+<p>The above snippet uses type tokens and reflections to invoke <code>static valueOf(String)</code> method. The use of reflection may not be justifiable in this case, however, and it may simply be better to just explicitly check what the desired conversion is, e.g. <code>"java.lang.Integer"</code>, and then invoke <code>Integer.valueOf</code> accordingly.</p>

@@ -1,0 +1,52 @@
+<p>Looks like we need to patch the <code>deserializeView</code> method in MyFaces.  Long story short ObjectInputStream does not use the Thread context ClassLoader (<code>Thread.currentThread().getClassLoader()</code>).  So this kind of "use the right classloader, damn it!" fixing is very pervasive in app servers.  If MyFaces were in the <code>WEB-INF/lib/</code> then this would magically go away because then MyFaces and the class being deserialized would be in the same classloader.  Moving MyFaces is not the right fix, though.  Patching it is better.</p>
+
+<p>When the class doing the deserializing is in a parent classloader and therefore cannot see classes from the numerous child classloaders (one for each webapp), you typically have to do this:</p>
+
+<pre><code>import java.io.*;
+import java.lang.reflect.Proxy;
+
+public class SmarterObjectInputStream extends ObjectInputStream {
+
+    public SmarterObjectInputStream(InputStream in) throws IOException {
+        super(in);
+    }
+
+    protected Class resolveClass(ObjectStreamClass classDesc) throws IOException, ClassNotFoundException {
+        try {
+            return Class.forName(classDesc.getName(), false, getClassloader());
+        } catch (ClassNotFoundException e) {
+            String n = classDesc.getName();
+            if (n.equals("boolean")) return boolean.class;
+            if (n.equals("byte")) return byte.class;
+            if (n.equals("char")) return char.class;
+            if (n.equals("short")) return short.class;
+            if (n.equals("int")) return int.class;
+            if (n.equals("long")) return long.class;
+            if (n.equals("float")) return float.class;
+            if (n.equals("double")) return double.class;
+
+            throw e;
+        }
+    }
+
+    protected Class resolveProxyClass(String[] interfaces) throws IOException, ClassNotFoundException {
+        Class[] cinterfaces = new Class[interfaces.length];
+        for (int i = 0; i &lt; interfaces.length; i++)
+            cinterfaces[i] = getClassloader().loadClass(interfaces[i]);
+
+        try {
+            return Proxy.getProxyClass(getClassloader(), cinterfaces);
+        } catch (IllegalArgumentException e) {
+            throw new ClassNotFoundException(null, e);
+        }
+    }
+
+    private ClassLoader getClassloader() {
+        return Thread.currentThread().getContextClassLoader();
+    }
+}
+</code></pre>
+
+<p>We'll need to give MyFaces this <code>SmarterObjectInputStream</code> and make sure they use it in the <code>deserializeView</code> method.</p>
+
+<p>If you'd like the honors of doing the patching, that'd be fantastic and I'm sure MyFaces would be quite enthused to see TomEE users contributing fixes.  You've had some great contributions so far!</p>

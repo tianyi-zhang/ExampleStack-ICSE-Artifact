@@ -1,0 +1,197 @@
+<p>I made some changes in above code to look for a location fix by both GPS and Network for about 5sec and give me the best known location out of it.</p>
+
+<pre><code>public class LocationService implements LocationListener {
+
+    boolean isGPSEnabled = false;
+
+    boolean isNetworkEnabled = false;
+
+    boolean canGetLocation = false;
+
+    final static long MIN_TIME_INTERVAL = 60 * 1000L;
+
+    Location location;
+
+
+    // The minimum distance to change Updates in meters
+    private static final long MIN_DISTANCE_CHANGE_FOR_UPDATES = 0; // 10
+
+    // The minimum time between updates in milliseconds
+    private static final long MIN_TIME_BW_UPDATES = 1; // 1 minute
+
+    protected LocationManager locationManager;
+
+    private CountDownTimer timer = new CountDownTimer(5 * 1000, 1000) {
+
+        public void onTick(long millisUntilFinished) {
+
+        }
+
+        public void onFinish() {
+            stopUsingGPS();
+        }
+    };
+
+    public LocationService() {
+        super(R.id.gps_service_id);
+    }
+
+
+    public void start() {
+        if (Utils.isNetworkAvailable(context)) {
+
+            try {
+
+
+                timer.start();
+
+
+                locationManager = (LocationManager) context
+                        .getSystemService(Context.LOCATION_SERVICE);
+
+                isGPSEnabled = locationManager
+                        .isProviderEnabled(LocationManager.GPS_PROVIDER);
+
+                isNetworkEnabled = locationManager
+                        .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+                this.canGetLocation = true;
+                if (isNetworkEnabled) {
+                    locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER,
+                            MIN_TIME_BW_UPDATES,
+                            MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                    Log.d("Network", "Network");
+                    if (locationManager != null) {
+                        Location tempLocation = locationManager
+                                .getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (tempLocation != null
+                                &amp;&amp; isBetterLocation(tempLocation,
+                                        location))
+                            location = tempLocation;
+                    }
+                }
+                if (isGPSEnabled) {
+
+                    locationManager.requestSingleUpdate(
+                            LocationManager.GPS_PROVIDER, this, null);
+                    locationManager.requestLocationUpdates(
+                            LocationManager.GPS_PROVIDER, MIN_TIME_BW_UPDATES,
+                            MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                    Log.d("GPS Enabled", "GPS Enabled");
+                    if (locationManager != null) {
+                        Location tempLocation = locationManager
+                                .getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                        if (tempLocation != null
+                                &amp;&amp; isBetterLocation(tempLocation,
+                                        location))
+                            location = tempLocation;
+                    }
+                }
+
+            } catch (Exception e) {
+                onTaskError(e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            onOfflineResponse(requestData);
+        }
+    }
+
+    public void stopUsingGPS() {
+        if (locationManager != null) {
+            locationManager.removeUpdates(LocationService.this);
+        }
+    }
+
+    public boolean canGetLocation() {
+        locationManager = (LocationManager) context
+                .getSystemService(Context.LOCATION_SERVICE);
+        isGPSEnabled = locationManager
+                .isProviderEnabled(LocationManager.GPS_PROVIDER);
+
+        // getting network status
+        isNetworkEnabled = locationManager
+                .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        return isGPSEnabled || isNetworkEnabled;
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+
+        if (location != null
+                &amp;&amp; isBetterLocation(location, this.location)) {
+
+            this.location = location;
+
+        }
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {
+    }
+
+    @Override
+    public void onProviderEnabled(String provider) {
+    }
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+    }
+
+    @Override
+    public Object getResponseObject(Object location) {
+        return location;
+    }
+
+    public static boolean isBetterLocation(Location location,
+            Location currentBestLocation) {
+        if (currentBestLocation == null) {
+            // A new location is always better than no location
+            return true;
+        }
+
+        // Check whether the new location fix is newer or older
+        long timeDelta = location.getTime() - currentBestLocation.getTime();
+        boolean isSignificantlyNewer = timeDelta &gt; MIN_TIME_INTERVAL;
+        boolean isSignificantlyOlder = timeDelta &lt; -MIN_TIME_INTERVAL;
+        boolean isNewer = timeDelta &gt; 0;
+
+        // If it's been more than two minutes since the current location,
+        // use the new location
+        // because the user has likely moved
+        if (isSignificantlyNewer) {
+            return true;
+            // If the new location is more than two minutes older, it must
+            // be worse
+        } else if (isSignificantlyOlder) {
+            return false;
+        }
+
+        // Check whether the new location fix is more or less accurate
+        int accuracyDelta = (int) (location.getAccuracy() - currentBestLocation
+                .getAccuracy());
+        boolean isLessAccurate = accuracyDelta &gt; 0;
+        boolean isMoreAccurate = accuracyDelta &lt; 0;
+        boolean isSignificantlyLessAccurate = accuracyDelta &gt; 200;
+
+        // Check if the old and new location are from the same provider
+        boolean isFromSameProvider = isSameProvider(location.getProvider(),
+                currentBestLocation.getProvider());
+
+        // Determine location quality using a combination of timeliness and
+        // accuracy
+        if (isMoreAccurate) {
+            return true;
+        } else if (isNewer &amp;&amp; !isLessAccurate) {
+            return true;
+        } else if (isNewer &amp;&amp; !isSignificantlyLessAccurate
+                &amp;&amp; isFromSameProvider) {
+            return true;
+        }
+        return false;
+    }
+
+}
+</code></pre>
+
+<p>In the above class, I am registering a location listener for both GPS and network, so an <code>onLocationChanged</code> call back can be called by either or both of them multiple times and we just compare the new location fix with the one we already have and keep the best one.</p>

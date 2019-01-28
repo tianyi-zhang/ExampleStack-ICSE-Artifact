@@ -1,0 +1,164 @@
+<p>Looks like you've found a feature that has been documented in many places, but hadn't been implemented yet. I opened a bug for tracking this issue - lets see what AOSP guys have to say on the subject (<a href="https://code.google.com/p/android/issues/detail?id=176487&amp;thanks=176487&amp;ts=1434069171" rel="nofollow">bug report</a>).</p>
+
+<p>Meanwhile, you can use the following workaround:</p>
+
+<pre><code>Uri uri = ContactsContract.RawContactsEntity.CONTENT_URI;
+
+String[] projection = {
+    Phone._ID,
+    Phone.DELETED,
+    //Phone.LOOKUP_KEY,
+    Phone.NUMBER,
+    Phone.TYPE,
+    Phone.LABEL,
+    Data.MIMETYPE,
+    Data.DISPLAY_NAME_PRIMARY
+};
+
+String selection = Data.MIMETYPE + " = ? AND " + Data.DELETED + " = ?";
+String[] args = {
+    Phone.CONTENT_ITEM_TYPE, "0"
+};
+
+return new CursorLoader(
+this,
+uri,
+projection,
+selection,
+args,
+null);
+</code></pre>
+
+<p>Changes:</p>
+
+<ol>
+<li>Use <a href="http://developer.android.com/reference/android/provider/ContactsContract.RawContactsEntity.html" rel="nofollow">RawContactsEntity's</a> URI</li>
+<li><code>LOOKUP_KEY</code> is not accessible via above URI - you'll have to execute additional query if you absolutely need this column</li>
+<li><code>_ID</code> column will be required if you are going to use the resulting <code>Cursor</code> in <code>CursorAdapter</code>. </li>
+</ol>
+
+<p><strong>Edit: following @MichaelAlanHuff's request I'm posting the parts of code which this answer is based upon</strong></p>
+
+<p>From <code>com.android.providers.contacts.ContactsProvider2#queryLocal()</code> (source code of <a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android-apps/4.3_r1/com/android/providers/contacts/ContactsProvider2.java" rel="nofollow">ContactsProvider2</a>):</p>
+
+<pre><code>protected Cursor queryLocal(final Uri uri, final String[] projection, String selection,
+String[] selectionArgs, String sortOrder, final long directoryId,
+final CancellationSignal cancellationSignal) {
+
+
+    final SQLiteDatabase db = mDbHelper.get().getReadableDatabase();
+
+    SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+    String groupBy = null;
+    String having = null;
+    String limit = getLimit(uri);
+    boolean snippetDeferred = false;
+
+    // The expression used in bundleLetterCountExtras() to get count.
+    String addressBookIndexerCountExpression = null;
+
+    final int match = sUriMatcher.match(uri);
+    switch (match) {
+
+
+        ...
+
+        case DATA:
+        case PROFILE_DATA:
+            {
+                final String usageType = uri.getQueryParameter(DataUsageFeedback.USAGE_TYPE);
+                final int typeInt = getDataUsageFeedbackType(usageType, USAGE_TYPE_ALL);
+                setTablesAndProjectionMapForData(qb, uri, projection, false, typeInt);
+                if (uri.getBooleanQueryParameter(Data.VISIBLE_CONTACTS_ONLY, false)) {
+                    qb.appendWhere(" AND " + Data.CONTACT_ID + " in " + Tables.DEFAULT_DIRECTORY);
+                }
+                break;
+            }
+
+
+            ...
+
+    }
+
+
+
+    qb.setStrict(true);
+
+    // Auto-rewrite SORT_KEY_{PRIMARY, ALTERNATIVE} sort orders.
+    String localizedSortOrder = getLocalizedSortOrder(sortOrder);
+    Cursor cursor = query(db, qb, projection, selection, selectionArgs, localizedSortOrder, groupBy,
+    having, limit, cancellationSignal);
+
+    if (readBooleanQueryParameter(uri, Contacts.EXTRA_ADDRESS_BOOK_INDEX, false)) {
+        bundleFastScrollingIndexExtras(cursor, uri, db, qb, selection,
+        selectionArgs, sortOrder, addressBookIndexerCountExpression,
+        cancellationSignal);
+    }
+    if (snippetDeferred) {
+        cursor = addDeferredSnippetingExtra(cursor);
+    }
+
+    return cursor;
+
+
+}
+</code></pre>
+
+<p>As you can see, there are two additional methods where <a href="http://developer.android.com/reference/android/database/sqlite/SQLiteQueryBuilder.html" rel="nofollow">SQLiteQueryBuilder</a> used to build the query could be changed: <code>setTablesAndProjectionMapForData()</code> and additional <code>query()</code> method.</p>
+
+<p>Source of <code>com.android.providers.contacts.ContactsProvider2#setTablesAndProjectionMapForData()</code>:</p>
+
+<pre><code>private void setTablesAndProjectionMapForData(SQLiteQueryBuilder qb, Uri uri,
+        String[] projection, boolean distinct, boolean addSipLookupColumns, Integer usageType) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(Views.DATA);
+    sb.append(" data");
+
+    appendContactPresenceJoin(sb, projection, RawContacts.CONTACT_ID);
+    appendContactStatusUpdateJoin(sb, projection, ContactsColumns.LAST_STATUS_UPDATE_ID);
+    appendDataPresenceJoin(sb, projection, DataColumns.CONCRETE_ID);
+    appendDataStatusUpdateJoin(sb, projection, DataColumns.CONCRETE_ID);
+
+    appendDataUsageStatJoin(
+            sb, usageType == null ? USAGE_TYPE_ALL : usageType, DataColumns.CONCRETE_ID);
+
+    qb.setTables(sb.toString());
+
+    boolean useDistinct = distinct || !ContactsDatabaseHelper.isInProjection(
+            projection, DISTINCT_DATA_PROHIBITING_COLUMNS);
+    qb.setDistinct(useDistinct);
+
+    final ProjectionMap projectionMap;
+    if (addSipLookupColumns) {
+        projectionMap =
+                useDistinct ? sDistinctDataSipLookupProjectionMap : sDataSipLookupProjectionMap;
+    } else {
+        projectionMap = useDistinct ? sDistinctDataProjectionMap : sDataProjectionMap;
+    }
+
+    qb.setProjectionMap(projectionMap);
+    appendAccountIdFromParameter(qb, uri);
+}
+</code></pre>
+
+<p>Here you see the construction of <code>table</code> argument of the final query using <code>StringBuilder</code> which is being passed to several <code>append*()</code> methods. I'm not going to post their source code, but they really <code>join</code> the tables that appear in methods' names. If <code>rawContacts</code> table would be joined in, I'd expect to see a call to something like <code>appendRawContactJoin()</code> here...</p>
+
+<p>For completeness: the other <code>query()</code> method that I mentioned does not modify <code>table</code> argument:</p>
+
+<pre><code>private Cursor query(final SQLiteDatabase db, SQLiteQueryBuilder qb, String[] projection,
+        String selection, String[] selectionArgs, String sortOrder, String groupBy,
+        String having, String limit, CancellationSignal cancellationSignal) {
+    if (projection != null &amp;&amp; projection.length == 1
+            &amp;&amp; BaseColumns._COUNT.equals(projection[0])) {
+        qb.setProjectionMap(sCountProjectionMap);
+    }
+    final Cursor c = qb.query(db, projection, selection, selectionArgs, groupBy, having,
+            sortOrder, limit, cancellationSignal);
+    if (c != null) {
+        c.setNotificationUri(getContext().getContentResolver(), ContactsContract.AUTHORITY_URI);
+    }
+    return c;
+}
+</code></pre>
+
+<p>The inspection of the above chain of methods led me to the conclusion that there is an officially documented feature which is not implemented.</p>

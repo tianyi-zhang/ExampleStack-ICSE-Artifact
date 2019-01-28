@@ -1,0 +1,118 @@
+<p>The following code is what I use. It has the advantage over the other answer that it doesn't break the parent chain (you can follow <code>getClassLoader().getParent()</code>).  </p>
+
+<p>It also has an advantage over tomcat's WebappClassLoader by not reinventing the wheel and not depending on other objects. It re-uses code from URLClassLoader as much as possible.</p>
+
+<p><del>(it doesn't yet honor the system class loader, but when I get that fixed I'll update the answer)</del></p>
+
+<p>It honors the system class loader (for java.* classes, endorsed dir, etc.). It also works when security is turned on and the classloader doesn't have access to its parent (yes, this situation is weird, but possible).</p>
+
+<pre><code>public class ChildFirstURLClassLoader extends URLClassLoader {
+
+    private ClassLoader system;
+
+    public ChildFirstURLClassLoader(URL[] classpath, ClassLoader parent) {
+        super(classpath, parent);
+        system = getSystemClassLoader();
+    }
+
+    @Override
+    protected synchronized Class&lt;?&gt; loadClass(String name, boolean resolve)
+            throws ClassNotFoundException {
+        // First, check if the class has already been loaded
+        Class&lt;?&gt; c = findLoadedClass(name);
+        if (c == null) {
+            if (system != null) {
+                try {
+                    // checking system: jvm classes, endorsed, cmd classpath, etc.
+                    c = system.loadClass(name);
+                }
+                catch (ClassNotFoundException ignored) {
+                }
+            }
+            if (c == null) {
+                try {
+                    // checking local
+                    c = findClass(name);
+                } catch (ClassNotFoundException e) {
+                    // checking parent
+                    // This call to loadClass may eventually call findClass again, in case the parent doesn't find anything.
+                    c = super.loadClass(name, resolve);
+                }
+            }
+        }
+        if (resolve) {
+            resolveClass(c);
+        }
+        return c;
+    }
+
+    @Override
+    public URL getResource(String name) {
+        URL url = null;
+        if (system != null) {
+            url = system.getResource(name); 
+        }
+        if (url == null) {
+            url = findResource(name);
+            if (url == null) {
+                // This call to getResource may eventually call findResource again, in case the parent doesn't find anything.
+                url = super.getResource(name);
+            }
+        }
+        return url;
+    }
+
+    @Override
+    public Enumeration&lt;URL&gt; getResources(String name) throws IOException {
+        /**
+        * Similar to super, but local resources are enumerated before parent resources
+        */
+        Enumeration&lt;URL&gt; systemUrls = null;
+        if (system != null) {
+            systemUrls = system.getResources(name);
+        }
+        Enumeration&lt;URL&gt; localUrls = findResources(name);
+        Enumeration&lt;URL&gt; parentUrls = null;
+        if (getParent() != null) {
+            parentUrls = getParent().getResources(name);
+        }
+        final List&lt;URL&gt; urls = new ArrayList&lt;URL&gt;();
+        if (systemUrls != null) {
+            while(systemUrls.hasMoreElements()) {
+                urls.add(systemUrls.nextElement());
+            }
+        }
+        if (localUrls != null) {
+            while (localUrls.hasMoreElements()) {
+                urls.add(localUrls.nextElement());
+            }
+        }
+        if (parentUrls != null) {
+            while (parentUrls.hasMoreElements()) {
+                urls.add(parentUrls.nextElement());
+            }
+        }
+        return new Enumeration&lt;URL&gt;() {
+            Iterator&lt;URL&gt; iter = urls.iterator();
+
+            public boolean hasMoreElements() {
+                return iter.hasNext(); 
+            }
+            public URL nextElement() {
+                return iter.next();
+            }
+        };
+    }
+
+    @Override
+    public InputStream getResourceAsStream(String name) {
+        URL url = getResource(name);
+        try {
+            return url != null ? url.openStream() : null;
+        } catch (IOException e) {
+        }
+        return null;
+    }
+
+}
+</code></pre>

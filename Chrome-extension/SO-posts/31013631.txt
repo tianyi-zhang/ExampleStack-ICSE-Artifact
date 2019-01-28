@@ -1,0 +1,107 @@
+<p>I found the answer to my question in the example code of <a href="http://developer.android.com/training/displaying-bitmaps/index.html" rel="nofollow">this Android Developers Training Lesson</a>. </p>
+
+<p>In ImageWorker.java we can find the method that launches the backgroud task thad loads the image:</p>
+
+<pre><code>/**
+ * Load an image specified by the data parameter into an ImageView (override
+ * {@link ImageWorker#processBitmap(Object)} to define the processing logic). A memory and
+ * disk cache will be used if an {@link ImageCache} has been added using
+ * {@link ImageWorker#addImageCache(android.support.v4.app.FragmentManager, ImageCache.ImageCacheParams)}. If the
+ * image is found in the memory cache, it is set immediately, otherwise an {@link AsyncTask}
+ * will be created to asynchronously load the bitmap.
+ *
+ * @param data The URL of the image to download.
+ * @param imageView The ImageView to bind the downloaded image to.
+ */
+public void loadImage(Object data, ImageView imageView) {
+    if (data == null) {
+        return;
+    }
+
+    BitmapDrawable value = null;
+
+    if (mImageCache != null) {
+        value = mImageCache.getBitmapFromMemCache(String.valueOf(data));
+    }
+
+    if (value != null) {
+        // Bitmap found in memory cache
+        imageView.setImageDrawable(value);
+    } else if (cancelPotentialWork(data, imageView)) {
+        //BEGIN_INCLUDE(execute_background_task)
+        final BitmapWorkerTask task = new BitmapWorkerTask(data, imageView);
+        final AsyncDrawable asyncDrawable =
+                new AsyncDrawable(mResources, mLoadingBitmap, task);
+        imageView.setImageDrawable(asyncDrawable);
+
+        // NOTE: This uses a custom version of AsyncTask that has been pulled from the
+        // framework and slightly modified. Refer to the docs at the top of the class
+        // for more info on what was changed.
+        task.executeOnExecutor(AsyncTask.DUAL_THREAD_EXECUTOR);
+        //END_INCLUDE(execute_background_task)
+    }
+}
+</code></pre>
+
+<p>A reference to AsyncTask instance is saved in an AsyncDrawable class:</p>
+
+<pre><code>/**
+ * A custom Drawable that will be attached to the imageView while the work is in progress.
+ * Contains a reference to the actual worker task, so that it can be stopped if a new binding is
+ * required, and makes sure that only the last started worker process can bind its result,
+ * independently of the finish order.
+ */
+private static class AsyncDrawable extends BitmapDrawable {
+    private final WeakReference&lt;BitmapWorkerTask&gt; bitmapWorkerTaskReference;
+
+    public AsyncDrawable(Resources res, Bitmap bitmap, BitmapWorkerTask bitmapWorkerTask) {
+        super(res, bitmap);
+        bitmapWorkerTaskReference =
+            new WeakReference&lt;BitmapWorkerTask&gt;(bitmapWorkerTask);
+    }
+
+    public BitmapWorkerTask getBitmapWorkerTask() {
+        return bitmapWorkerTaskReference.get();
+    }
+}
+</code></pre>
+
+<p>At the end of background activity, the AsyncTask verifies if it is the last to be "attached" to the view it has to update and performs update only if no other task have been "attached" to the view</p>
+
+<pre><code>    /**
+     * Returns the ImageView associated with this task as long as the ImageView's task still
+     * points to this task as well. Returns null otherwise.
+     */
+    private ImageView getAttachedImageView() {
+        final ImageView imageView = imageViewReference.get();
+        final BitmapWorkerTask bitmapWorkerTask = getBitmapWorkerTask(imageView);
+
+        if (this == bitmapWorkerTask) {
+            return imageView;
+        }
+
+        return null;
+    }
+
+
+   /**
+     * Once the image is processed, associates it to the imageView
+     */
+    @Override
+    protected void onPostExecute(BitmapDrawable value) {
+        //BEGIN_INCLUDE(complete_background_work)
+        // if cancel was called on this task or the "exit early" flag is set then we're done
+        if (isCancelled() || mExitTasksEarly) {
+            value = null;
+        }
+
+        final ImageView imageView = getAttachedImageView();
+        if (value != null &amp;&amp; imageView != null) {
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "onPostExecute - setting bitmap");
+            }
+            setImageDrawable(imageView, value);
+        }
+        //END_INCLUDE(complete_background_work)
+    }
+</code></pre>

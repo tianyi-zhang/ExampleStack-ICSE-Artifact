@@ -1,0 +1,304 @@
+<p>My solution uses a slightly different approach since we want to add some custom painting on top of existing components. Therefore, I chose to use <code>GlassPane</code> and do the painting there. This way the highlight could be all you can imagine and its size is not limited to cell size, as it could be with an approach using, for example, a cell renderer.</p>
+
+<p>To run this sample you need to download <a href="http://weblogs.java.net/blog/alexfromsun/archive/2006/09/a_wellbehaved_g.html">the <code>FinalGlassPane</code> from this site</a>. It is required since we use its capability to capture events (which with regular <code>GlassPane</code> would be consumed). It could be avoided all together if you know a different way to capture the event when the drag is finally over. <strong>If you know one please do share.</strong> For me this worked best plus I like to have a <code>GlassPane</code> which can capture events and doesn't consume them all.</p>
+
+<pre><code>import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.dnd.*;
+import java.awt.event.AWTEventListener;
+import java.awt.event.MouseEvent;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
+import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.JTableHeader;
+import javax.swing.table.TableColumn;
+
+public class DNDLinePainterExampleMain extends JFrame {
+
+    public int x = -1;
+    public int y = -1;
+    private boolean isDragged = false;
+    public FinalGlassPane glassPane;
+    private boolean isOutsideTable = false;
+
+    public DNDLinePainterExampleMain() {
+        final JTable mainTable = new JTable(4, 3);
+        mainTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+
+        final JTable rowTable = new RowHeaderTable(mainTable);
+        rowTable.setAutoscrolls(true);
+        rowTable.setDragEnabled(true);
+        rowTable.setTransferHandler(new RowHeaderTransferHandler());
+        rowTable.setDropMode(DropMode.INSERT_ROWS);
+        final JScrollPane scrollPane = new JScrollPane(mainTable);
+        scrollPane.setRowHeaderView(rowTable);
+        scrollPane.setCorner(JScrollPane.UPPER_LEFT_CORNER,
+                rowTable.getTableHeader());
+
+        final JPanel panel = new JPanel();
+
+        DragSourceMotionListener dsml = new DragSourceMotionListener() {
+
+            @Override
+            public void dragMouseMoved(DragSourceDragEvent dsde) {
+                isDragged = true;
+                isOutsideTable = true;
+                Component source = dsde.getDragSourceContext().getComponent();
+                //the coordinates of the drag event in screen coords
+                Point toConvert = new Point(dsde.getX(), dsde.getY());
+                //convert to source coords
+                SwingUtilities.convertPointFromScreen(toConvert, source);
+                int rowMargin = rowTable.getRowMargin();
+                Point toTest = new Point(toConvert.x, toConvert.y);
+                for (int i = 0; i &lt; rowTable.getRowCount(); i++) {
+                    Rectangle bounds = rowTable.getCellRect(i, 0, true);
+                    boolean isIn = bounds.contains(toTest);
+//                    System.out.println("bounds = "+bounds+";  rowMargin = "+rowMargin+";  i = "+i+";  isIn = "+isIn);
+                    if (isIn) {
+                        isOutsideTable = false;
+                        int hHalf = bounds.height / 2;
+                        int hIn = toTest.y - bounds.y;
+                        boolean isTop = false;
+                        if (hIn &lt; hHalf) {
+                            isTop = true;
+                        }
+                        x = bounds.width;
+                        y = bounds.y - rowMargin;
+                        if (!isTop) {
+                            y += bounds.height;
+                        }
+                        //now convert the point to the glass pane coordinates
+                        Point c = SwingUtilities.convertPoint(rowTable, x, y, glassPane);
+                        x = c.x;
+                        y = c.y;
+//                        System.out.println("hIn = "+hIn+";  isTop = "+isTop + "");
+                    }
+                }
+                glassPane.repaint();
+            }
+        };
+        DragSource ds = new DragSource();
+        ds.addDragSourceMotionListener(dsml);
+
+
+        this.setContentPane(panel);
+        panel.add(new JButton("Oi for testing"));
+        panel.add(scrollPane);
+
+
+        DragSource dragSource = DragSource.getDefaultDragSource();
+        dragSource.addDragSourceMotionListener(dsml);
+        glassPane = new FinalGlassPane(this) {
+
+            @Override
+            public void eventDispatched(AWTEvent event) {
+                super.eventDispatched(event);
+                if (event instanceof MouseEvent) {
+                    //after drag is relesed we are back here with mouse entered event
+                    if (isDragged) {
+                        isDragged = false;
+                        repaint();
+                    }
+                }
+            }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g;
+                if (isDragged &amp;&amp; !isOutsideTable) {
+                    g2.setPaint(Color.GREEN);
+                    g2.drawLine(x + 2, y + 1, x + mainTable.getWidth() - 4, y + 1);
+                    g2.drawLine(x, y, x + mainTable.getWidth(), y);
+                    g2.drawLine(x + 2, y - 1, x + mainTable.getWidth() - 4, y - 1);
+                }
+            }
+        };
+        AWTEventListener al = (AWTEventListener) glassPane;
+        Toolkit.getDefaultToolkit().addAWTEventListener(al,
+                AWTEvent.MOUSE_MOTION_EVENT_MASK | AWTEvent.MOUSE_EVENT_MASK);
+
+        this.setGlassPane(glassPane);
+        glassPane.setVisible(true);
+    }
+
+    public static void main(String[] args) {
+        EventQueue.invokeLater(new Runnable() {
+
+            @Override
+            public void run() {
+                JFrame f = new DNDLinePainterExampleMain();
+                f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                f.pack();
+                f.setVisible(true);
+            }
+        });
+    }
+
+
+    /*
+     * Use a JTable as a renderer for row numbers of a given main table. This
+     * table must be added to the row header of the scrollpane that contains the
+     * main table. from:
+     * http://tips4java.wordpress.com/2008/11/18/row-number-table/
+     */
+    public class RowHeaderTable extends JTable implements ChangeListener,
+            PropertyChangeListener {
+
+        private final JTable table;
+
+        public RowHeaderTable(JTable table) {
+            this.table = table;
+            table.addPropertyChangeListener(this);
+
+            setFocusable(false);
+            setAutoCreateColumnsFromModel(false);
+
+            updateRowHeight();
+            updateModel();
+            updateSelectionModel();
+
+            TableColumn column = new TableColumn();
+            column.setHeaderValue("");
+            addColumn(column);
+            column.setCellRenderer(new RowNumberRenderer());
+
+            getColumnModel().getColumn(0).setPreferredWidth(50);
+            setPreferredScrollableViewportSize(getPreferredSize());
+
+            getTableHeader().setReorderingAllowed(false);
+        }
+
+        @Override
+        public void addNotify() {
+            super.addNotify();
+            Component c = getParent();
+            // Keep scrolling of the row table in sync with the main table.
+            if (c instanceof JViewport) {
+                JViewport viewport = (JViewport) c;
+                viewport.addChangeListener(this);
+            }
+        }
+
+        /*
+         * Delegate method to main table
+         */
+        @Override
+        public int getRowCount() {
+            return table.getRowCount();
+        }
+
+        @Override
+        public int getRowHeight(int row) {
+            return table.getRowHeight(row);
+        }
+
+        /*
+         * This table does not use any data from the main TableModel, so just
+         * return a value based on the row parameter.
+         */
+        @Override
+        public Object getValueAt(int row, int column) {
+            return Integer.toString(row + 1);
+        }
+        /*
+         * Don't edit data in the main TableModel by mistake
+         */
+
+        @Override
+        public boolean isCellEditable(int row, int column) {
+            return false;
+        }
+        // implements ChangeListener
+
+        @Override
+        public void stateChanged(ChangeEvent e) {
+            // Keep the scrolling of the row table in sync with main table
+            JViewport viewport = (JViewport) e.getSource();
+            JScrollPane scrollPane = (JScrollPane) viewport.getParent();
+            scrollPane.getVerticalScrollBar().setValue(viewport.getViewPosition().y);
+        }
+        // implements PropertyChangeListener
+
+        @Override
+        public void propertyChange(PropertyChangeEvent e) {
+            // Keep the row table in sync with the main table
+            if ("rowHeight".equals(e.getPropertyName())) {
+                updateRowHeight();
+            }
+
+            if ("selectionModel".equals(e.getPropertyName())) {
+                updateSelectionModel();
+            }
+
+            if ("model".equals(e.getPropertyName())) {
+                updateModel();
+            }
+        }
+
+        private void updateRowHeight() {
+            setRowHeight(table.getRowHeight());
+        }
+
+        private void updateModel() {
+            setModel(table.getModel());
+        }
+
+        private void updateSelectionModel() {
+            setSelectionModel(table.getSelectionModel());
+        }
+        /*
+         * Borrow the renderer from JDK1.4.2 table header
+         */
+
+        private class RowNumberRenderer extends DefaultTableCellRenderer {
+
+            public RowNumberRenderer() {
+                setHorizontalAlignment(JLabel.CENTER);
+            }
+
+            @Override
+            public Component getTableCellRendererComponent(JTable table,
+                    Object value, boolean isSelected, boolean hasFocus, int row,
+                    int column) {
+                if (table != null) {
+                    JTableHeader header = table.getTableHeader();
+
+                    if (header != null) {
+                        setForeground(header.getForeground());
+                        setBackground(header.getBackground());
+                        setFont(header.getFont());
+                    }
+                }
+                if (isSelected) {
+                    setFont(getFont().deriveFont(Font.BOLD));
+                }
+                setText((value == null) ? "" : value.toString());
+                setBorder(UIManager.getBorder("TableHeader.cellBorder"));
+                return this;
+            }
+        }//class RowNumberRenderer
+    }//class RowHeaderTable
+
+    public class RowHeaderTransferHandler extends TransferHandler {
+
+        @Override
+        public int getSourceActions(JComponent c) {
+            return COPY_OR_MOVE;
+        }
+
+        @Override
+        protected Transferable createTransferable(JComponent c) {
+            return new StringSelection(c.getName());
+        }
+
+        @Override
+        public boolean canImport(TransferSupport supp) {
+            return true;
+        }
+    }//class RowHeaderTransferHandler
+}
+</code></pre>

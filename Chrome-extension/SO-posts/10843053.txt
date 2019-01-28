@@ -1,0 +1,100 @@
+<p>You'd have had a better idea of what was going on if you didn't simply swallow up possible <code>Exception</code>s inside your <code>encrypt()</code> routine.  If your function is returning <code>null</code> then clearly an exception happened and you need to know what it was.</p>
+
+<p>In fact, the exception is:</p>
+
+<pre><code>javax.crypto.IllegalBlockSizeException: Input length not multiple of 16 bytes
+    at com.sun.crypto.provider.CipherCore.finalNoPadding(CipherCore.java:854)
+    at com.sun.crypto.provider.CipherCore.doFinal(CipherCore.java:828)
+    at com.sun.crypto.provider.CipherCore.doFinal(CipherCore.java:676)
+    at com.sun.crypto.provider.AESCipher.engineDoFinal(AESCipher.java:313)
+    at javax.crypto.Cipher.doFinal(Cipher.java:2087)
+    at Encryption.encrypt(Encryption.java:20)
+    at Encryption.main(Encryption.java:6)
+</code></pre>
+
+<p>And sure enough, your plaintext is only 11 Java characters long which, in your default encoding, will be 11 bytes.</p>
+
+<p>You need to check what the PHP <code>mcrypt_encrypt</code> function actually does.  Since it works, it is clearly using some padding scheme.  You need to find out which one it is and use it in your Java code.</p>
+
+<p>Ok -- I looked up the man page for <code>mcrypt_encrypt</code>.  It says:</p>
+
+<blockquote>
+  <p>The data that will be encrypted with the given cipher and mode. If the size of the data is not <code>n * blocksize</code>, the data will be padded with <code>\0</code>.</p>
+</blockquote>
+
+<p>So you need to replicate that in Java.  Here's one way:</p>
+
+<pre><code>import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+public class Encryption
+{
+    public static void main(String args[]) throws Exception {
+        System.out.println(encrypt());
+    }
+
+    public static String encrypt() throws Exception {
+        try {
+            String data = "Test string";
+            String key = "1234567812345678";
+            String iv = "1234567812345678";
+
+            Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
+            int blockSize = cipher.getBlockSize();
+
+            // We need to pad with zeros to a multiple of the cipher block size,
+            // so first figure out what the size of the plaintext needs to be.
+            byte[] dataBytes = data.getBytes();
+            int plaintextLength = dataBytes.length;
+            int remainder = plaintextLength % blockSize;
+            if (remainder != 0) {
+                plaintextLength += (blockSize - remainder);
+            }
+
+            // In java, primitive arrays of integer types have all elements
+            // initialized to zero, so no need to explicitly zero any part of
+            // the array.
+            byte[] plaintext = new byte[plaintextLength];
+
+            // Copy our actual data into the beginning of the array.  The
+            // rest of the array is implicitly zero-filled, as desired.
+            System.arraycopy(dataBytes, 0, plaintext, 0, dataBytes.length);
+
+            SecretKeySpec keyspec = new SecretKeySpec(key.getBytes(), "AES");
+            IvParameterSpec ivspec = new IvParameterSpec(iv.getBytes());
+
+            cipher.init(Cipher.ENCRYPT_MODE, keyspec, ivspec);
+            byte[] encrypted = cipher.doFinal(plaintext);
+
+            return new sun.misc.BASE64Encoder().encode(encrypted);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+}
+</code></pre>
+
+<p>And when I run that I get:</p>
+
+<pre><code>iz1qFlQJfs6Ycp+gcc2z4w==
+</code></pre>
+
+<p>which is what your PHP program got.</p>
+
+<hr>
+
+<p><strong>Update (12 June 2016)</strong>:
+As of Java 8, JavaSE finally ships with a documented base64 codec.  So instead of</p>
+
+<pre><code>return new sun.misc.BASE64Encoder().encode(encrypted);
+</code></pre>
+
+<p>you should do something like</p>
+
+<pre><code>return Base64.Encoder.encodeToString(encrypted);
+</code></pre>
+
+<p>Alternatively, use a 3rd-party library (such as <code>commons-codec</code>) for base64 encoding/decoding rather than using an undocumented internal method.</p>

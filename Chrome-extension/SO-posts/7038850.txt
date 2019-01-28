@@ -1,0 +1,174 @@
+<p>I had a quick stab at debugging this problem, and I think this may well be a bug in spring.  In my opinion, the problem stems from the following code in <a href="http://static.springsource.org/spring/docs/3.0.x/api/org/springframework/beans/factory/support/AbstractAutowireCapableBeanFactory.html" rel="nofollow">AbstractAutowireCapableBeanFactory</a></p>
+
+<pre><code>/**
+ * Populate the bean instance in the given BeanWrapper with the property values
+ * from the bean definition.
+ * @param beanName the name of the bean
+ * @param mbd the bean definition for the bean
+ * @param bw BeanWrapper with bean instance
+ */
+protected void populateBean(String beanName, AbstractBeanDefinition mbd, BeanWrapper bw) {
+    PropertyValues pvs = mbd.getPropertyValues();
+
+    if (bw == null) {
+        if (!pvs.isEmpty()) {
+            throw new BeanCreationException(
+                    mbd.getResourceDescription(), beanName, "Cannot apply property values to null instance");
+        }
+        else {
+            // Skip property population phase for null instance.
+            return;
+        }
+    }
+
+    // Give any InstantiationAwareBeanPostProcessors the opportunity to modify the
+    // state of the bean before properties are set. This can be used, for example,
+    // to support styles of field injection.
+    boolean continueWithPropertyPopulation = true;
+
+    if (!mbd.isSynthetic() &amp;&amp; hasInstantiationAwareBeanPostProcessors()) {
+        for (BeanPostProcessor bp : getBeanPostProcessors()) {
+            if (bp instanceof InstantiationAwareBeanPostProcessor) {
+                InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                if (!ibp.postProcessAfterInstantiation(bw.getWrappedInstance(), beanName)) {
+                    continueWithPropertyPopulation = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!continueWithPropertyPopulation) {
+        return;
+    }
+
+    if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_NAME ||
+            mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_TYPE) {
+        MutablePropertyValues newPvs = new MutablePropertyValues(pvs);
+
+        // Add property values based on autowire by name if applicable.
+        if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_NAME) {
+            autowireByName(beanName, mbd, bw, newPvs);
+        }
+
+        // Add property values based on autowire by type if applicable.
+        if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_TYPE) {
+            autowireByType(beanName, mbd, bw, newPvs);
+        }
+
+        pvs = newPvs;
+    }
+
+    boolean hasInstAwareBpps = hasInstantiationAwareBeanPostProcessors();
+    boolean needsDepCheck = (mbd.getDependencyCheck() != RootBeanDefinition.DEPENDENCY_CHECK_NONE);
+
+    if (hasInstAwareBpps || needsDepCheck) {
+        PropertyDescriptor[] filteredPds = filterPropertyDescriptorsForDependencyCheck(bw);
+        if (hasInstAwareBpps) {
+            for (BeanPostProcessor bp : getBeanPostProcessors()) {
+                if (bp instanceof InstantiationAwareBeanPostProcessor) {
+                    InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                    pvs = ibp.postProcessPropertyValues(pvs, filteredPds, bw.getWrappedInstance(), beanName);
+                    if (pvs == null) {
+                        return;
+                    }
+                }
+            }
+        }
+        if (needsDepCheck) {
+            checkDependencies(beanName, mbd, filteredPds, pvs);
+        }
+    }
+
+    applyPropertyValues(beanName, mbd, bw, pvs);
+}
+</code></pre>
+
+<p>Personally I think the order of applying the autowiring and the InstantiationAwareBeanPostProcessor is wrong, as the @Resource annotation would only be applied in the postProcessPropertyValues, so after the autowiring (by which time the autowiring has failed already).</p>
+
+<p>Now I don't know whether there would be an impact in changing the order of invocations, so that @Resource annotations are resolved before autowiring, but this may well be a something to raise as a bug/fix (I used the following way of loading my test application context to fix this issue):</p>
+
+<pre><code>    ApplicationContext ctx = new ClassPathXmlApplicationContext("test/appctx.xml") {
+        protected org.springframework.beans.factory.support.DefaultListableBeanFactory createBeanFactory() {
+            return new DefaultListableBeanFactory(getInternalParentBeanFactory()) {
+                protected void populateBean(String beanName, org.springframework.beans.factory.support.AbstractBeanDefinition mbd, org.springframework.beans.BeanWrapper bw) {
+                    PropertyValues pvs = mbd.getPropertyValues();
+
+                    if (bw == null) {
+                        if (!pvs.isEmpty()) {
+                            throw new BeanCreationException(
+                                    mbd.getResourceDescription(), beanName, "Cannot apply property values to null instance");
+                        }
+                        else {
+                            // Skip property population phase for null instance.
+                            return;
+                        }
+                    }
+
+                    // Give any InstantiationAwareBeanPostProcessors the opportunity to modify the
+                    // state of the bean before properties are set. This can be used, for example,
+                    // to support styles of field injection.
+                    boolean continueWithPropertyPopulation = true;
+
+                    if (!mbd.isSynthetic() &amp;&amp; hasInstantiationAwareBeanPostProcessors()) {
+                        for (BeanPostProcessor bp : getBeanPostProcessors()) {
+                            if (bp instanceof InstantiationAwareBeanPostProcessor) {
+                                InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                                if (!ibp.postProcessAfterInstantiation(bw.getWrappedInstance(), beanName)) {
+                                    continueWithPropertyPopulation = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!continueWithPropertyPopulation) {
+                        return;
+                    }
+
+                    boolean hasInstAwareBpps = hasInstantiationAwareBeanPostProcessors();
+                    boolean needsDepCheck = (mbd.getDependencyCheck() != RootBeanDefinition.DEPENDENCY_CHECK_NONE);
+
+                    if (hasInstAwareBpps || needsDepCheck) {
+                        PropertyDescriptor[] filteredPds = filterPropertyDescriptorsForDependencyCheck(bw);
+                        if (hasInstAwareBpps) {
+                            for (BeanPostProcessor bp : getBeanPostProcessors()) {
+                                if (bp instanceof InstantiationAwareBeanPostProcessor) {
+                                    InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                                    pvs = ibp.postProcessPropertyValues(pvs, filteredPds, bw.getWrappedInstance(), beanName);
+                                    if (pvs == null) {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        if (needsDepCheck) {
+                            checkDependencies(beanName, mbd, filteredPds, pvs);
+                        }
+                    }
+
+                    if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_NAME ||
+                            mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_TYPE) {
+                        MutablePropertyValues newPvs = new MutablePropertyValues(pvs);
+
+                        // Add property values based on autowire by name if applicable.
+                        if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_NAME) {
+                            autowireByName(beanName, mbd, bw, newPvs);
+                        }
+
+                        // Add property values based on autowire by type if applicable.
+                        if (mbd.getResolvedAutowireMode() == RootBeanDefinition.AUTOWIRE_BY_TYPE) {
+                            autowireByType(beanName, mbd, bw, newPvs);
+                        }
+
+                        pvs = newPvs;
+                    }
+
+                    applyPropertyValues(beanName, mbd, bw, pvs);
+                }
+            };
+        }
+    };
+</code></pre>
+
+<p>Hope that helps</p>

@@ -1,0 +1,234 @@
+<p>Probably the best way to do this, is to use an <a href="https://jersey.java.net/documentation/latest/monitoring_tracing.html#d0e15619" rel="nofollow"><code>ApplicationEventListener</code></a>. From there you can listen for the "application finished initializing" event, and get the <code>ResourceModel</code> from the <code>ApplicationEvent</code>. The <code>ResourceModel</code> will have all the initialized <code>Resource</code>s. Then you can traverse the <code>Resource</code> as others have mentioned. Below is an implementation. Some of the implementation has been taken from the <a href="https://github.com/dropwizard/dropwizard/blob/master/dropwizard-jersey/src/main/java/io/dropwizard/jersey/DropwizardResourceConfig.java#L32" rel="nofollow"><code>DropwizardResourceConfig</code></a> implementation.</p>
+
+<pre><code>import com.fasterxml.classmate.ResolvedType;
+import com.fasterxml.classmate.TypeResolver;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TreeSet;
+import org.glassfish.jersey.server.model.Resource;
+import org.glassfish.jersey.server.model.ResourceMethod;
+import org.glassfish.jersey.server.model.ResourceModel;
+import org.glassfish.jersey.server.monitoring.ApplicationEvent;
+import org.glassfish.jersey.server.monitoring.ApplicationEventListener;
+import org.glassfish.jersey.server.monitoring.RequestEvent;
+import org.glassfish.jersey.server.monitoring.RequestEventListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class EndpointLoggingListener implements ApplicationEventListener {
+
+    private static final TypeResolver TYPE_RESOLVER = new TypeResolver();
+
+    private final String applicationPath;
+
+    private boolean withOptions = false;
+    private boolean withWadl = false;
+
+    public EndpointLoggingListener(String applicationPath) {
+        this.applicationPath = applicationPath;
+    }
+
+    @Override
+    public void onEvent(ApplicationEvent event) {
+        if (event.getType() == ApplicationEvent.Type.INITIALIZATION_APP_FINISHED) {
+            final ResourceModel resourceModel = event.getResourceModel();
+            final ResourceLogDetails logDetails = new ResourceLogDetails();
+            resourceModel.getResources().stream().forEach((resource) -&gt; {
+                logDetails.addEndpointLogLines(getLinesFromResource(resource));
+            });
+            logDetails.log();
+        }
+    }
+
+    @Override
+    public RequestEventListener onRequest(RequestEvent requestEvent) {
+        return null;
+    }
+
+    public EndpointLoggingListener withOptions() {
+        this.withOptions = true;
+        return this;
+    }
+
+    public EndpointLoggingListener withWadl() {
+        this.withWadl = true;
+        return this;
+    }
+
+    private Set&lt;EndpointLogLine&gt; getLinesFromResource(Resource resource) {
+        Set&lt;EndpointLogLine&gt; logLines = new HashSet&lt;&gt;();
+        populate(this.applicationPath, false, resource, logLines);
+        return logLines;
+    }
+
+    private void populate(String basePath, Class&lt;?&gt; klass, boolean isLocator,
+            Set&lt;EndpointLogLine&gt; endpointLogLines) {
+        populate(basePath, isLocator, Resource.from(klass), endpointLogLines);
+    }
+
+    private void populate(String basePath, boolean isLocator, Resource resource,
+            Set&lt;EndpointLogLine&gt; endpointLogLines) {
+        if (!isLocator) {
+            basePath = normalizePath(basePath, resource.getPath());
+        }
+
+        for (ResourceMethod method : resource.getResourceMethods()) {
+            if (!withOptions &amp;&amp; method.getHttpMethod().equalsIgnoreCase("OPTIONS")) {
+                continue;
+            }
+            if (!withWadl &amp;&amp; basePath.contains(".wadl")) {
+                continue;
+            }
+            endpointLogLines.add(new EndpointLogLine(method.getHttpMethod(), basePath, null));
+        }
+
+        for (Resource childResource : resource.getChildResources()) {
+            for (ResourceMethod method : childResource.getAllMethods()) {
+                if (method.getType() == ResourceMethod.JaxrsType.RESOURCE_METHOD) {
+                    final String path = normalizePath(basePath, childResource.getPath());
+                    if (!withOptions &amp;&amp; method.getHttpMethod().equalsIgnoreCase("OPTIONS")) {
+                        continue;
+                    }
+                    if (!withWadl &amp;&amp; path.contains(".wadl")) {
+                        continue;
+                    }
+                    endpointLogLines.add(new EndpointLogLine(method.getHttpMethod(), path, null));
+                } else if (method.getType() == ResourceMethod.JaxrsType.SUB_RESOURCE_LOCATOR) {
+                    final String path = normalizePath(basePath, childResource.getPath());
+                    final ResolvedType responseType = TYPE_RESOLVER
+                            .resolve(method.getInvocable().getResponseType());
+                    final Class&lt;?&gt; erasedType = !responseType.getTypeBindings().isEmpty()
+                            ? responseType.getTypeBindings().getBoundType(0).getErasedType()
+                            : responseType.getErasedType();
+                    populate(path, erasedType, true, endpointLogLines);
+                }
+            }
+        }
+    }
+
+    private static String normalizePath(String basePath, String path) {
+        if (path == null) {
+            return basePath;
+        }
+        if (basePath.endsWith("/")) {
+            return path.startsWith("/") ? basePath + path.substring(1) : basePath + path;
+        }
+        return path.startsWith("/") ? basePath + path : basePath + "/" + path;
+    }
+
+    private static class ResourceLogDetails {
+
+        private static final Logger logger = LoggerFactory.getLogger(ResourceLogDetails.class);
+
+        private static final Comparator&lt;EndpointLogLine&gt; COMPARATOR
+                = Comparator.comparing((EndpointLogLine e) -&gt; e.path)
+                .thenComparing((EndpointLogLine e) -&gt; e.httpMethod);
+
+        private final Set&lt;EndpointLogLine&gt; logLines = new TreeSet&lt;&gt;(COMPARATOR);
+
+        private void log() {
+            StringBuilder sb = new StringBuilder("\nAll endpoints for Jersey application\n");
+            logLines.stream().forEach((line) -&gt; {
+                sb.append(line).append("\n");
+            });
+            logger.info(sb.toString());
+        }
+
+        private void addEndpointLogLines(Set&lt;EndpointLogLine&gt; logLines) {
+            this.logLines.addAll(logLines);
+        }
+    }
+
+    private static class EndpointLogLine {
+
+        private static final String DEFAULT_FORMAT = "   %-7s %s";
+        final String httpMethod;
+        final String path;
+        final String format;
+
+        private EndpointLogLine(String httpMethod, String path, String format) {
+            this.httpMethod = httpMethod;
+            this.path = path;
+            this.format = format == null ? DEFAULT_FORMAT : format;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(format, httpMethod, path);
+        }
+    }
+}
+</code></pre>
+
+<p>Then you just need to register the listener with Jersey. You can get the application path from the <code>JerseyProperties</code>. You will need to have set it in the Spring Boot <code>application.properties</code> under the property <code>spring.jersey.applicationPath</code>. This will be the root path, just as if you were to use <code>@ApplicationPath</code> on your <code>ResourceConfig</code> subclass</p>
+
+<pre><code>@Bean
+public ResourceConfig getResourceConfig(JerseyProperties jerseyProperties) {
+    return new JerseyConfig(jerseyProperties);
+}
+...
+public class JerseyConfig extends ResourceConfig {
+
+    public JerseyConfig(JerseyProperties jerseyProperties) {
+        register(HelloResource.class);
+        register(new EndpointLoggingListener(jerseyProperties.getApplicationPath()));
+    }
+}
+</code></pre>
+
+<p>One thing to note, is that the load-on-startup is not set by default on the Jersey servlet. What this means is that that Jersey won't load on startup until the first request. So you will not see the listener triggered until the first request. I have opened <a href="https://github.com/spring-projects/spring-boot/issues/5100" rel="nofollow">an issue</a> to possible get a configuration property, but in the meantime, you have a couple options:</p>
+
+<ol>
+<li><p>Set up Jersey as filter, instead of a servlet. The filter will be loaded on start up. Using Jersey as a filter, for the most post, really doesn't behave any differently. To configure this you just need to add a Spring Boot property in the <code>application.properties</code></p>
+
+<pre><code>spring.jersey.type=filter
+</code></pre></li>
+<li><p>The other option is to override the Jersey <code>ServletRegistrationBean</code> and set its <code>loadOnStartup</code> property. Here is an example configuration. Some of the implementation has been taken straight from the <a href="https://github.com/spring-projects/spring-boot/blob/master/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/jersey/JerseyAutoConfiguration.java#L77" rel="nofollow"><code>JerseyAutoConfiguration</code></a></p>
+
+<pre><code>@SpringBootApplication
+public class JerseyApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(JerseyApplication.class, args);
+    }
+
+    @Bean
+    public ResourceConfig getResourceConfig(JerseyProperties jerseyProperties) {
+        return new JerseyConfig(jerseyProperties);
+    }
+
+    @Bean
+    public ServletRegistrationBean jerseyServletRegistration(
+        JerseyProperties jerseyProperties, ResourceConfig config) {
+        ServletRegistrationBean registration = new ServletRegistrationBean(
+                new ServletContainer(config), 
+                parseApplicationPath(jerseyProperties.getApplicationPath())
+        );
+        addInitParameters(registration, jerseyProperties);
+        registration.setName(JerseyConfig.class.getName());
+        registration.setLoadOnStartup(1);
+        return registration;
+    }
+
+    private static String parseApplicationPath(String applicationPath) {
+        if (!applicationPath.startsWith("/")) {
+            applicationPath = "/" + applicationPath;
+        }
+        return applicationPath.equals("/") ? "/*" : applicationPath + "/*";
+    }
+
+    private void addInitParameters(RegistrationBean registration, JerseyProperties jersey) {
+        for (Entry&lt;String, String&gt; entry : jersey.getInit().entrySet()) {
+            registration.addInitParameter(entry.getKey(), entry.getValue());
+        }
+    }
+}
+</code></pre></li>
+</ol>
+
+<hr>
+
+<h2>UPDATE</h2>
+
+<p>So it looks like Spring Boot is going to <a href="https://github.com/spring-projects/spring-boot/issues/5100#event-606583303" rel="nofollow">add the <code>load-on-startup</code> property</a>, so we don't have to override the Jersey <code>ServletRegistrationBean</code>. Will be added in Boot 1.4.0</p>

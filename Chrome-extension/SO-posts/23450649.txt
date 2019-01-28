@@ -1,0 +1,284 @@
+<p>In your onConnected method you create the new file, but you never put any new content in it. You create the new content in this line:</p>
+
+<pre><code>result = Drive.DriveApi.newContents(mGoogleApiClient).await();
+</code></pre>
+
+<p>Than you get a hold of it's output stream in this line:</p>
+
+<pre><code>OutputStream outputStream = result.getContents().getOutputStream();
+</code></pre>
+
+<p>And than you create an empty byte array output stream in this line:</p>
+
+<pre><code>ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
+</code></pre>
+
+<p>But you never fill this 'bitmapStream' with any content, and worst: you never write it to your content's 'outputStream'.</p>
+
+<p>What you should do next is write your audio file's contents to 'bitmapStream' something like this:</p>
+
+<pre><code>InputStream in = file.getInputStream(/*you need to get the file's path and put it here*/ "some_audio_file.mp3");
+int singleByte;
+while((singleByte = in.read()) != -1){
+   bitmapStream.write(b);
+}
+</code></pre>
+
+<p>Now you'd have your file's content inside 'bitmapStrea' and you can write it to the new content's 'outputStream' like this:</p>
+
+<pre><code>outputStream.write(bitmapStream.toByteArray());
+</code></pre>
+
+<p>Than you do the 'MetadataChangeSet' stuff and you should be fine.</p>
+
+<p>Some advices:
+ 1. It is not a good practice to do I/O operations like file or network activities (or file AND network activities in your case) on the main thread. Better use an AsyncTask to do it in a background thread.</p>
+
+<ol>
+<li>Don't call your ByteArrayOutputStream instance 'bitmapStream' if you use it to upload an audio file.</li>
+</ol>
+
+<p>Here's an example of a class that uses an AsyncTask to upload an image (and guess what I called the ByteArrayOutputStream... right - 'bitmapStream'):</p>
+
+<pre><code>public class TakePhotoActivity extends Activity implements
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
+
+    /**
+     * Request code for auto Google Play Services error resolution.
+     */
+    protected static final int REQUEST_CODE_RESOLUTION = 1;
+    private static final String TAG = "TakePhotoActivity";
+    private static final String KEY_IN_RESOLUTION = "is_in_resolution";
+    private static final int REQUEST_CODE_CREATOR = 2;
+
+    /**
+     * Google API client.
+     */
+    private GoogleApiClient mGoogleApiClient;
+
+    /**
+     * Receives the new file's contents and executes the editor AsyncTask
+     */
+    private ResultCallback&lt;DriveApi.ContentsResult&gt; mSaveFileCallback = new ResultCallback&lt;DriveApi.ContentsResult&gt;() {
+        @Override
+        public void onResult(DriveApi.ContentsResult contentsResult) {
+            EditFileAsyncTask editFileAsyncTask = new EditFileAsyncTask();
+            editFileAsyncTask.execute(contentsResult);
+        }
+    };
+
+    /**
+     * Determines if the client is in a resolution state, and
+     * waiting for resolution intent to return.
+     */
+    private boolean mIsInResolution;
+
+    private Bitmap mBitmapToSave;
+
+    /**
+     * Called when the activity is starting. Restores the activity state.
+     */
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_take_menu_photo);
+
+        if (savedInstanceState != null) {
+            mIsInResolution = savedInstanceState.getBoolean(KEY_IN_RESOLUTION, false);
+        }
+
+        try {
+            InputStream inputStream = getAssets().open("some_image.jpg");
+            mBitmapToSave = BitmapFactory.decodeStream(inputStream);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Called when the Activity is made visible.
+     * A connection to Play Services need to be initiated as
+     * soon as the activity is visible. Registers {@code ConnectionCallbacks}
+     * and {@code OnConnectionFailedListener} on the
+     * activities itself.
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (mGoogleApiClient == null) {
+            mGoogleApiClient = new GoogleApiClient.Builder(this)
+                    .addApi(Drive.API)
+                    .addScope(Drive.SCOPE_FILE)
+                            // Optionally, add additional APIs and scopes if required.
+                    .addConnectionCallbacks(this)
+                    .addOnConnectionFailedListener(this)
+                    .build();
+        }
+        Log.d("test", "connect()");
+        mGoogleApiClient.connect();
+    }
+
+    /**
+     * Called when activity gets invisible. Connection to Play Services needs to
+     * be disconnected as soon as an activity is invisible.
+     */
+    @Override
+    protected void onStop() {
+        if (mGoogleApiClient != null) {
+            mGoogleApiClient.disconnect();
+        }
+        super.onStop();
+    }
+
+    /**
+     * Saves the resolution state.
+     */
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(KEY_IN_RESOLUTION, mIsInResolution);
+    }
+
+    /**
+     * Handles Google Play Services resolution callbacks.
+     */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        switch (requestCode) {
+            case REQUEST_CODE_RESOLUTION:
+                retryConnecting();
+                break;
+        }
+    }
+
+    private void retryConnecting() {
+        mIsInResolution = false;
+        if (!mGoogleApiClient.isConnecting()) {
+            Log.d("test", "connect()");
+            mGoogleApiClient.connect();
+        }
+    }
+
+    /**
+     * Called when {@code mGoogleApiClient} is connected.
+     */
+    @Override
+    public void onConnected(Bundle connectionHint) {
+        Log.i(TAG, "GoogleApiClient connected");
+        // TODO: Start making API requests.
+        if (mBitmapToSave != null) {
+            saveFileToDrive();
+        }
+    }
+
+    /**
+     * Called when {@code mGoogleApiClient} connection is suspended.
+     */
+    @Override
+    public void onConnectionSuspended(int cause) {
+        Log.i(TAG, "GoogleApiClient connection suspended");
+        retryConnecting();
+    }
+
+    /**
+     * Called when {@code mGoogleApiClient} is trying to connect but failed.
+     * Handle {@code result.getResolution()} if there is a resolution
+     * available.
+     */
+    @Override
+    public void onConnectionFailed(ConnectionResult result) {
+        Log.i(TAG, "GoogleApiClient connection failed: " + result.toString());
+        if (!result.hasResolution()) {
+            // Show a localized error dialog.
+            GooglePlayServicesUtil.getErrorDialog(
+                    result.getErrorCode(), this, 0, new OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface dialog) {
+                            retryConnecting();
+                        }
+                    }
+            ).show();
+            return;
+        }
+        // If there is an existing resolution error being displayed or a resolution
+        // activity has started before, do nothing and wait for resolution
+        // progress to be completed.
+        if (mIsInResolution) {
+            return;
+        }
+        mIsInResolution = true;
+        try {
+            result.startResolutionForResult(this, REQUEST_CODE_RESOLUTION);
+        } catch (SendIntentException e) {
+            Log.e(TAG, "Exception while starting resolution activity", e);
+            retryConnecting();
+        }
+    }
+
+    private void saveFileToDrive() {
+        Log.i(TAG, "Creating new contents.");
+        Drive.DriveApi.newContents(mGoogleApiClient).setResultCallback(mSaveFileCallback);
+    }
+
+    private void showMessage(String message) {
+        Log.i(TAG, message);
+//        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    }
+
+    private class EditFileAsyncTask extends AsyncTask&lt;DriveApi.ContentsResult, Void, Boolean&gt; {
+
+        @Override
+        protected Boolean doInBackground(DriveApi.ContentsResult... params) {
+            DriveApi.ContentsResult contentsResult = params[0];
+            if (!contentsResult.getStatus().isSuccess()) {
+                showMessage("Failed to create new contents.");
+                return false;
+            }
+            showMessage("New contents created.");
+            OutputStream outputStream = contentsResult.getContents().getOutputStream();
+            ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
+            mBitmapToSave.compress(Bitmap.CompressFormat.PNG, 100, bitmapStream);
+            try {
+                outputStream.write(bitmapStream.toByteArray());
+            } catch (IOException e) {
+                showMessage("Unable to write file contents.");
+                e.printStackTrace();
+            }
+
+            MetadataChangeSet metadataChangeSet = new MetadataChangeSet.Builder()
+                    .setMimeType("image/jpeg")
+                    .setTitle("some_image.jpg")
+                    .build();
+
+            IntentSender intentSender = Drive.DriveApi
+                    .newCreateFileActivityBuilder()
+                    .setInitialMetadata(metadataChangeSet)
+                    .setInitialContents(contentsResult.getContents())
+                    .build(mGoogleApiClient);
+
+            try {
+                startIntentSenderForResult(intentSender, REQUEST_CODE_CREATOR, null, 0, 0, 0);
+            } catch (SendIntentException e) {
+                showMessage("Failed to launch file chooser.");
+                e.printStackTrace();
+            }
+            return true;
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+            if (!result) {
+                showMessage("Error while editing contents");
+                return;
+            }
+            showMessage("Successfully edited contents");
+        }
+    }
+}
+</code></pre>
+
+<ul>
+<li>By the way, most of the code in this class was auto-generated by Android Studio, because when I created the project I marked the initial class to be a google services class.</li>
+</ul>

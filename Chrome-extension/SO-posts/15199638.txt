@@ -1,0 +1,81 @@
+<p>If your class is extending org.osmdroid.views.overlay.Overlay you have to modify the draw method so it looks somehow like in the code below:</p>
+
+<pre><code>@Override
+protected void draw(final Canvas canvas, final MapView mapView, final boolean shadow) {
+
+       if (shadow) {
+               return;
+       }
+
+       if (this.mPoints.size() &lt; 2) {
+
+        //Do nothing                    
+        return;
+       }
+
+       final Projection pj = mapView.getProjection();
+
+       // precompute new points to the intermediate projection.
+       final int size = this.mPoints.size();
+
+       while (this.mPointsPrecomputed &lt; size) {
+               final Point pt = this.mPoints.get(this.mPointsPrecomputed);
+               pj.toMapPixelsProjected(pt.x, pt.y, pt);
+
+               this.mPointsPrecomputed++;
+       }
+
+       Point screenPoint0 = null; // points on screen
+       Point screenPoint1 = null;
+       Point projectedPoint0; // points from the points list
+       Point projectedPoint1;
+
+       // clipping rectangle in the intermediate projection, to avoid performing projection.
+       final Rect clipBounds = pj.fromPixelsToProjected(pj.getScreenRect());
+
+       mPath.rewind();
+       mPath.setFillType(Path.FillType.EVEN_ODD);
+       projectedPoint0 = this.mPoints.get(size - 1);
+       mLineBounds.set(projectedPoint0.x, projectedPoint0.y, projectedPoint0.x, projectedPoint0.y);
+
+       for (int i = size - 2; i &gt;= 0; i--) {
+               // compute next points
+               projectedPoint1 = this.mPoints.get(i);
+               mLineBounds.union(projectedPoint1.x, projectedPoint1.y);
+
+               if (!Rect.intersects(clipBounds, mLineBounds)) {
+                       // skip this line, move to next point
+                       projectedPoint0 = projectedPoint1;
+                       screenPoint0 = null;
+                       continue;
+               }
+
+               // the starting point may be not calculated, because previous segment was out of clip
+               // bounds
+               if (screenPoint0 == null) {
+                       screenPoint0 = pj.toMapPixelsTranslated(projectedPoint0, this.mTempPoint1);
+                       mPath.moveTo(screenPoint0.x, screenPoint0.y);
+               }
+
+               screenPoint1 = pj.toMapPixelsTranslated(projectedPoint1, this.mTempPoint2);
+
+               // skip this point, too close to previous point
+               if (Math.abs(screenPoint1.x - screenPoint0.x) + Math.abs(screenPoint1.y - screenPoint0.y) &lt;= 1) {
+                       continue;
+               }
+
+               mPath.lineTo(screenPoint1.x, screenPoint1.y);
+
+               // update starting point to next position
+               projectedPoint0 = projectedPoint1;
+               screenPoint0.x = screenPoint1.x;
+               screenPoint0.y = screenPoint1.y;
+               mLineBounds.set(projectedPoint0.x, projectedPoint0.y, projectedPoint0.x, projectedPoint0.y);
+
+       }
+
+       mPath.close();
+       canvas.drawPath(mPath, this.mPaint);
+
+}
+</code></pre>

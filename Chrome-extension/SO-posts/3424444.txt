@@ -1,0 +1,53 @@
+<p>Ok, before you run into bigger problems you should know that SQLite is limited on the ALTER TABLE command, it allows <code>add</code> and <code>rename</code> only no remove/drop which is done with recreation of the table. </p>
+
+<p>You should always have the new table creation query at hand, and use that for upgrade and transfer any existing data. Note: that the onUpgrade methods runs one for your sqlite helper object and you need to handle all the tables in it.</p>
+
+<p>So what is recommended onUpgrade:</p>
+
+<ul>
+<li>beginTransaction</li>
+<li>run a table creation with <code>if not exists</code> (we are doing an upgrade, so the table might not exists yet, it will fail alter and drop)</li>
+<li>put in a list the existing columns <code>List&lt;String&gt; columns = DBUtils.GetColumns(db, TableName);</code></li>
+<li>backup table (<code>ALTER table " + TableName + " RENAME TO 'temp_"                    + TableName</code>)</li>
+<li>create new table (the newest table creation schema)</li>
+<li>get the intersection with the new columns, this time columns taken from the upgraded table (<code>columns.retainAll(DBUtils.GetColumns(db, TableName));</code>)</li>
+<li>restore data (<code>String cols = StringUtils.join(columns, ",");
+            db.execSQL(String.format(
+                    "INSERT INTO %s (%s) SELECT %s from temp_%s",
+                    TableName, cols, cols, TableName));
+</code>)</li>
+<li>remove backup table (<code>DROP table 'temp_" + TableName</code>)</li>
+<li>setTransactionSuccessful</li>
+</ul>
+
+<p>.</p>
+
+<pre><code>public static List&lt;String&gt; GetColumns(SQLiteDatabase db, String tableName) {
+    List&lt;String&gt; ar = null;
+    Cursor c = null;
+    try {
+        c = db.rawQuery("select * from " + tableName + " limit 1", null);
+        if (c != null) {
+            ar = new ArrayList&lt;String&gt;(Arrays.asList(c.getColumnNames()));
+        }
+    } catch (Exception e) {
+        Log.v(tableName, e.getMessage(), e);
+        e.printStackTrace();
+    } finally {
+        if (c != null)
+            c.close();
+    }
+    return ar;
+}
+
+public static String join(List&lt;String&gt; list, String delim) {
+    StringBuilder buf = new StringBuilder();
+    int num = list.size();
+    for (int i = 0; i &lt; num; i++) {
+        if (i != 0)
+            buf.append(delim);
+        buf.append((String) list.get(i));
+    }
+    return buf.toString();
+}
+</code></pre>

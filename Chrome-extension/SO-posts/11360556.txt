@@ -1,0 +1,78 @@
+<p>Ok. Expanding on the answer in the above comment, the full solution is to use a Configurer that takes into account both the runtime classpath AND the urls from the poms dependencies. Code shown below </p>
+
+<pre><code>/**
+ * 
+ * @plexus.component 
+ *                   role="org.codehaus.plexus.component.configurator.ComponentConfigurator"
+ *                   role-hint="include-project-dependencies"
+ * @plexus.requirement role=
+ *                     "org.codehaus.plexus.component.configurator.converters.lookup.ConverterLookup"
+ *                     role-hint="default"
+ * 
+ */
+public class ClassRealmConfigurator extends AbstractComponentConfigurator {
+
+    private final static Logger logger = Logger.getLogger(ClassRealmConfigurator.class.getName());
+
+    public void configureComponent(Object component, PlexusConfiguration configuration, ExpressionEvaluator expressionEvaluator, ClassRealm containerRealm, ConfigurationListener listener) throws ComponentConfigurationException {
+
+        addProjectDependenciesToClassRealm(expressionEvaluator, containerRealm);
+
+        converterLookup.registerConverter(new ClassRealmConverter(containerRealm));
+
+        ObjectWithFieldsConverter converter = new ObjectWithFieldsConverter();
+
+        converter.processConfiguration(converterLookup, component, containerRealm.getClassLoader(), configuration, expressionEvaluator, listener);
+    }
+
+    private void addProjectDependenciesToClassRealm(ExpressionEvaluator expressionEvaluator, ClassRealm containerRealm) throws ComponentConfigurationException {
+        Set&lt;String&gt; runtimeClasspathElements = new HashSet&lt;String&gt;();
+        try {
+            runtimeClasspathElements.addAll((List&lt;String&gt;) expressionEvaluator.evaluate("${project.runtimeClasspathElements}"));
+
+        } catch (ExpressionEvaluationException e) {
+            throw new ComponentConfigurationException("There was a problem evaluating: ${project.runtimeClasspathElements}", e);
+        }
+
+        Collection&lt;URL&gt; urls = buildURLs(runtimeClasspathElements);
+        urls.addAll(buildAritfactDependencies(expressionEvaluator));
+        for (URL url : urls) {
+            containerRealm.addConstituent(url);
+        }
+    }
+
+    private Collection&lt;URL&gt; buildAritfactDependencies(ExpressionEvaluator expressionEvaluator) throws ComponentConfigurationException {
+        MavenProject project;
+        try {
+            project = (MavenProject) expressionEvaluator.evaluate("${project}");
+        } catch (ExpressionEvaluationException e1) {
+            throw new ComponentConfigurationException("There was a problem evaluating: ${project}", e1);
+        }
+        Collection&lt;URL&gt; urls = new ArrayList&lt;URL&gt;();
+        for (Object a : project.getArtifacts()) {
+            try {
+                urls.add(((Artifact) a).getFile().toURI().toURL());
+            } catch (MalformedURLException e) {
+                throw new ComponentConfigurationException("Unable to resolve artifact dependency: " + a, e);
+            }
+        }
+        return urls;
+    }
+
+    private Collection&lt;URL&gt; buildURLs(Set&lt;String&gt; runtimeClasspathElements) throws ComponentConfigurationException {
+
+        List&lt;URL&gt; urls = new ArrayList&lt;URL&gt;(runtimeClasspathElements.size());
+        for (String element : runtimeClasspathElements) {
+            try {
+                final URL url = new File(element).toURI().toURL();
+                urls.add(url);
+            } catch (MalformedURLException e) {
+                throw new ComponentConfigurationException("Unable to access project dependency: " + element, e);
+            }
+        }
+
+        return urls;
+    }
+
+}
+</code></pre>

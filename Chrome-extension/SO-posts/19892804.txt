@@ -1,0 +1,369 @@
+<p>Let me break that down for you. (You can grab it here btw: <a href="http://richardhightower.github.io/site/Boon/Welcome.html" rel="nofollow">http://richardhightower.github.io/site/Boon/Welcome.html</a>)</p>
+
+<p>I added this to boon: </p>
+
+<pre><code>public static String postForm(final String url, final Map&lt;String, ?&gt; headers,
+                                            final Map&lt;String, Object&gt; formData
+)
+</code></pre>
+
+<p>The key here is encoding binary data:</p>
+
+<pre><code>    String response = HTTP.postForm ( "http://localhost:9220/test",
+            Collections.EMPTY_MAP,
+            map("hI", (Object)"hi-mom", "image", new byte[] {1,2,3})
+    );
+
+    boolean ok = true;
+    ok |= response.startsWith ("hI=hi-mom&amp;image=%01%02%03\n") ||
+            die("encoding did not work");
+</code></pre>
+
+<p>The above is a test showing it works as I understand the spec. </p>
+
+<p>The key is that it is turning "image", new byte[] {1,2,3} into image\u0000=%01%02%03.</p>
+
+<p>BTW map is just a utility method that creates a map (listing at bottom).</p>
+
+<p>The http server is just an echo.</p>
+
+<pre><code>    return Exceptions.tryIt(String.class, new Exceptions.TrialWithReturn&lt;String&gt;() {
+        @Override
+        public String tryIt() throws Exception {
+            URLConnection connection;
+            connection = doPostFormData(url, headers, formData);
+            return extractResponseString(connection);
+        }
+    });
+</code></pre>
+
+<p>The magic happens in the doPostFormData:</p>
+
+<pre><code>private static URLConnection doPostFormData(String url, Map&lt;String, ?&gt; headers,
+                                    Map&lt;String, Object&gt; formData
+) throws IOException {
+    HttpURLConnection connection;/* Handle output. */
+
+
+    connection = (HttpURLConnection) new URL(url).openConnection();
+    connection.setConnectTimeout(DEFAULT_TIMEOUT_SECONDS * 1000);
+
+    connection.setDoOutput(true);
+
+    connection.addRequestProperty ( "Content-Type", "application/x-www-form-urlencoded" );
+
+    ByteBuf buf = ByteBuf.create ( 244 );
+
+
+
+    final Set&lt;String&gt; keys = formData.keySet ();
+
+    int index = 0;
+    for ( String key : keys )  {
+
+        Object value = formData.get ( key );
+
+        if (index &gt; 0) {
+            buf.addByte ( '&amp;' );
+        }
+
+
+        buf.addUrlEncoded (  key  );
+        buf.addByte ( '=' );
+
+        if ( ! ( value instanceof byte[] ) ) {
+            buf.addUrlEncoded ( value.toString () );
+        } else {
+            buf.addUrlEncodedByteArray((byte[]) value);
+        }
+        index++;
+    }
+
+
+    manageContentTypeHeaders ( "application/x-www-form-urlencoded",
+            StandardCharsets.UTF_8.name (), connection );
+
+    manageHeaders(headers, connection);
+
+
+    int len = buf.len ();
+    IO.write(connection.getOutputStream(),
+            new String(buf.readForRecycle (), 0, len, StandardCharsets.UTF_8), IO.DEFAULT_CHARSET);
+    return connection;
+}
+</code></pre>
+
+<p>Notice the call to addUrlEncodedByteArray you pass a byte array. 
+Java works fine with URL encoding of strings. I could not find an easy way 
+to encode a byte array so I just wrote it.</p>
+
+<pre><code>public void addUrlEncodedByteArray ( byte[] value ) {
+
+
+
+    final byte[] encoded = new byte [2];
+
+    for (int index = 0; index &lt; value.length; index++) {
+        int i = value[index];
+
+        if ( i &gt;= 'a' &amp;&amp; i &lt;= 'z' ) {
+            this.addByte ( i );
+        } else if ( i &gt;= 'A' &amp;&amp; i &lt;= 'Z' ) {
+            this.addByte ( i );
+        } else if ( i &gt;= '0' &amp;&amp; i &lt;= '9' ) {
+            this.addByte ( i );
+        } else if ( i == '_' || i == '-' || i == '.' || i == '*') {
+            this.addByte ( i );
+        } else if ( i == ' ') {
+            this.addByte ( '+' );
+        } else {
+            encodeByteIntoTwoAsciiCharBytes(i, encoded);
+            this.addByte ( '%' );
+            this.addByte ( encoded [0] );
+            this.addByte ( encoded [1] );
+        }
+
+    }
+}
+</code></pre>
+
+<p>It is not the prettiest. But the unit tests work.
+I am sure you get the gist. It follows the spec and converts accordingly.</p>
+
+<p>All data not in a certain range get encoded with %hexdigit hexdigit.</p>
+
+<p>Then you just have these two methods to finish up the encoding:</p>
+
+<pre><code>/**
+ * Turns a single nibble into an ascii HEX digit.
+ *
+ * @param nibble the nibble to encode.
+ *
+ * @return the encoded nibble (1/2 byte).
+ */
+protected static int encodeNibbleToHexAsciiCharByte( final int nibble ) {
+
+    switch ( nibble ) {
+        case 0x00:
+        case 0x01:
+        case 0x02:
+        case 0x03:
+        case 0x04:
+        case 0x05:
+        case 0x06:
+        case 0x07:
+        case 0x08:
+        case 0x09:
+            return nibble + 0x30; // 0x30('0') - 0x39('9')
+        case 0x0A:
+        case 0x0B:
+        case 0x0C:
+        case 0x0D:
+        case 0x0E:
+        case 0x0F:
+            return nibble + 0x57; // 0x41('a') - 0x46('f')
+        default:
+            die("illegal nibble: " + nibble);
+            return -1;
+    }
+}
+
+
+/**
+ * Turn a single bytes into two hex character representation.
+ *
+ * @param decoded the byte to encode.
+ * @param encoded the array to which each encoded nibbles are now ascii hex representations.
+ */
+public static void encodeByteIntoTwoAsciiCharBytes(final int decoded, final byte[] encoded) {
+
+    Objects.requireNonNull ( encoded );
+
+    boolean ok = true;
+
+
+    ok |= encoded.length == 2 || die("encoded array must be 2");
+
+
+    encoded[0] = (byte) encodeNibbleToHexAsciiCharByte((decoded &gt;&gt; 4) &amp; 0x0F);
+    encoded[1] = (byte) encodeNibbleToHexAsciiCharByte(decoded &amp; 0x0F);
+}
+</code></pre>
+
+<p>That is the important bits. The rest is just dealing with HTTP request / header gak.</p>
+
+<p>Here is manageContentTypeHeaders</p>
+
+<pre><code>    manageContentTypeHeaders ( "application/x-www-form-urlencoded",
+            StandardCharsets.UTF_8.name (), connection );
+
+...
+
+private static void manageContentTypeHeaders(String contentType, String charset, URLConnection connection) {
+    connection.setRequestProperty("Accept-Charset", charset == null ? StandardCharsets.UTF_8.displayName() : charset);
+    if (contentType!=null &amp;&amp; !contentType.isEmpty()) {
+        connection.setRequestProperty("Content-Type", contentType);
+    }
+}
+</code></pre>
+
+<p>Here is manage headers</p>
+
+<pre><code>    manageHeaders(headers, connection);
+
+...
+
+private static void manageHeaders(Map&lt;String, ?&gt; headers, URLConnection connection) {
+    if (headers != null) {
+        for (Map.Entry&lt;String, ?&gt; entry : headers.entrySet()) {
+            connection.setRequestProperty(entry.getKey(), entry.getValue().toString());
+        }
+    }
+}
+</code></pre>
+
+<p>Then we encode the stream to send with UTF_8:</p>
+
+<pre><code>    int len = buf.len ();
+    IO.write(connection.getOutputStream(),
+            new String(buf.readForRecycle (), 0, len, StandardCharsets.UTF_8), IO.DEFAULT_CHARSET);
+</code></pre>
+
+<p>The IO write just does this:
+    IO.write...</p>
+
+<pre><code>public static void write ( OutputStream out, String content, Charset charset ) {
+
+    try ( OutputStream o = out ) {
+        o.write ( content.getBytes ( charset ) );
+    } catch ( Exception ex ) {
+        Exceptions.handle ( ex );
+    }
+
+}
+</code></pre>
+
+<p>ByteBuf is just like a ByteBuffer but easier to use and very fast. I have benchmarks. :)</p>
+
+<p>What did I miss?</p>
+
+<p>Let me know if it works for you.</p>
+
+<p>--Rick</p>
+
+<p>The map function are just utility methods so I can concisely represent a map as I find I use them a lot. It only goes to 9 or ten. Beyond that I have a way to pass a list of entries. </p>
+
+<pre><code>public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    return map;
+}
+
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4, K k5, V v5) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    map.put(k5, v5);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4, K k5, V v5, K k6, V v6) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    map.put(k5, v5);
+    map.put(k6, v6);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4, K k5, V v5, K k6, V v6, K k7, V v7) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    map.put(k5, v5);
+    map.put(k6, v6);
+    map.put(k7, v7);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4, K k5, V v5, K k6, V v6, K k7, V v7, K k8, V v8) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    map.put(k5, v5);
+    map.put(k6, v6);
+    map.put(k7, v7);
+    map.put(k8, v8);
+    return map;
+}
+
+public static &lt;K, V&gt; Map&lt;K, V&gt; map(K k0, V v0, K k1, V v1, K k2, V v2, K k3,
+                                   V v3, K k4, V v4, K k5, V v5, K k6, V v6, K k7, V v7, K k8, V v8,
+                                   K k9, V v9) {
+    Map&lt;K, V&gt; map = new LinkedHashMap&lt;&gt;(10);
+    map.put(k0, v0);
+    map.put(k1, v1);
+    map.put(k2, v2);
+    map.put(k3, v3);
+    map.put(k4, v4);
+    map.put(k5, v5);
+    map.put(k6, v6);
+    map.put(k7, v7);
+    map.put(k8, v8);
+    map.put(k9, v9);
+    return map;
+}
+</code></pre>

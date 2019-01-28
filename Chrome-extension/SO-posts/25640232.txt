@@ -1,0 +1,67 @@
+<p>Wrap your request object to another class before forwarding it to the chain filter.
+That way, you can avoid the used stream problem.</p>
+
+<p>For example you can use this class <a href="http://massimilianosciacco.com/implementing-hmac-authentication-rest-api-spring-security" rel="nofollow">(taken from here)</a>:</p>
+
+<pre><code>public class AuthenticationRequestWrapper extends HttpServletRequestWrapper {
+
+    private final String payload;
+
+    public AuthenticationRequestWrapper (HttpServletRequest request) throws AuthenticationException {
+        super(request);
+
+        // read the original payload into the payload variable
+        StringBuilder stringBuilder = new StringBuilder();
+        BufferedReader bufferedReader = null;
+        try {
+            // read the payload into the StringBuilder
+            InputStream inputStream = request.getInputStream();
+            if (inputStream != null) {
+                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                char[] charBuffer = new char[128];
+                int bytesRead = -1;
+                while ((bytesRead = bufferedReader.read(charBuffer)) &gt; 0) {
+                    stringBuilder.append(charBuffer, 0, bytesRead);
+                }
+            } else {
+                // make an empty string since there is no payload
+                stringBuilder.append("");
+            }
+        } catch (IOException ex) {
+            log.error("Error reading the request payload", ex);
+            throw new AuthenticationException("Error reading the request payload", ex);
+        } finally {
+            if (bufferedReader != null) {
+                try {
+                    bufferedReader.close();
+                } catch (IOException iox) {
+                    // ignore
+                }
+            }
+        }
+        payload = stringBuilder.toString();
+    }
+
+    @Override
+    public ServletInputStream getInputStream () throws IOException {
+        final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(payload.getBytes());
+        ServletInputStream inputStream = new ServletInputStream() {
+            public int read () 
+                throws IOException {
+                return byteArrayInputStream.read();
+            }
+        };
+        return inputStream;
+    }
+}
+</code></pre>
+
+<p>and in your <strong>first</strong> filter, wrap it first:</p>
+
+<pre><code>public void doFilter(ServletRequest req, ServletResponse resp, FilterChain chain) throws IOException, ServletException {
+        // use wrapper to read multiple times the content
+        AuthenticationRequestWrapper request = new AuthenticationRequestWrapper((HttpServletRequest) req);
+        HttpServletResponse response = (HttpServletResponse) resp;
+        chain.doFilter(request,response);
+}
+</code></pre>

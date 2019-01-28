@@ -1,0 +1,374 @@
+<p>So I went with the route of adding my view as an overlay.</p>
+
+<pre class="lang-java prettyprint-override"><code>/**
+ * A Material themed search view that should be overlayed on the Toolbar.
+ */
+public class SearchView extends FrameLayout implements View.onClickListener {
+    // The search input
+    private final EditText mSearchEditText;
+    // The X button to clear the search
+    private final View mClearSearch;
+
+    // Listeners
+    private onSearchListener mOnSearchListener;
+    private onSearchCancelListener;
+
+    /**
+     * Interface definition for a callback to be invoked when a search is submitted.
+     */
+    public interface onSearchListener {
+        void onSearch(String query);
+    }
+
+    /**
+     * Interface definition for a callback to be invoked when a search is canceled.
+     */
+    public interface onSearchCancelListener {
+        onCancelSearch();
+    }
+
+    public SearchView(final Context context) {
+        this(context, null);
+    }
+
+    public SearchView(final Context context, final AttributeSet attrs) {
+        this(context, attrs, -1);
+    }
+
+    public SearchView(final Context context, final AttributeSet attrs, final int defStyle) {
+        super(context, attrs, defStyle);
+
+        final LayoutInflater factory = LayoutInflater.from(context);
+        factory.inflate(R.layout.toolbar_searchview, this);
+
+        mSearchEditText = (EditText)findViewById(R.id.search_field);
+        // Show/Hide the "X" button as text is entered/erased
+        mSearchEditText.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                toggleClearSearchButton(s);
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {}
+        });
+        // Add listeners for "Enter" or "Search" key events
+        mSearchEditText.setOnKeyListener(new OnKeyListener() {
+            @Override
+            public boolean onKey(View v, int keyCode, KeyEvent event) {
+                // Allow "Enter" key on hardware keyboard or "Search" key on soft-input to submit
+                if ((event.getAction() == KeyEvent.ACTION_UP) &amp;&amp;
+                    (keyCode == KeyEvent.KEYCODE_ENTER ||
+                            keyCode == KeyEvent.KEYCODE_SEARCH)) {
+                    final String query = getSearchQuery();
+                    // Do nothing if query is empty
+                    if (!TextUtils.isEmpty(query) &amp;&amp; mOnSearchListener != null) {
+                        mOnSearchListener.onSearch(query);
+                    }
+                    return true;
+                }
+                return false;
+            }
+        });
+
+        findViewById(R.id.cancel_search).setOnClickListener(this);
+        mClearSearch = findViewById(R.id.clear_search);
+        mClearSearch.setOnClickListener(this);
+
+        // Hide this view until we're ready to show it
+        setVisibility(View.GONE);
+        setBackgroundColor(Color.WHITE);
+    }
+
+    /**
+     * Register a callback to be invoked which a search is submitted.
+     *
+     * @param l the callback that will run
+     */
+    public void setOnSearchListener(final onSearchListener l) {
+        mOnSearchListener = l;
+    }
+
+    /**
+     * Register a callback to be invoked which a search is canceled.
+     *
+     * @param l the callback that will run
+     */
+    public void setOnSearchCancelListener(final onSearchCancelListener l) {
+        mOnSearchCancelListener = l;
+    }
+
+    /**
+     * Sets the search query.
+     *
+     * @param query the query
+     */
+    public void setSearchQuery(final String query) {
+        mSearchEditText.setText(query);
+        toggleClearSearchButton(query);
+    }
+
+    /**
+     * Returns the search query or null if none entered.
+     */
+    public String getSearchQuery() {
+        return mSearchEditText.getText() != null ? mSearchEditText.getText().toString() : null;
+    }
+
+    /**
+     * Returns {@code true} if the search view is visible, {@code false} otherwise.
+     */
+    public boolean isSearchViewVisible() {
+        return getVisibility() == View.VISIBLE;
+    }
+
+    // Show the SearchView
+    public void display() {
+        if (isSearchViewVisible()) return;
+
+        setVisibility(View.VISIBLE);
+        setAlpha(0f);
+        animate().alpha(1f)
+            .setDuration(200);
+    }
+
+    // Hide the SearchView
+    public void hide() {
+        if (!isSearchViewVisible()) return;
+
+        clearSearch();
+
+        animate().alpha(0f)
+            .setDuration(200);
+        // Delay hiding view until animation is complete
+        postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                setVisibility(View.GONE);
+            }
+        }, 200);
+    }
+
+    // LayoutParams for this overlay
+    public static WindowManager.LayoutParams getSearchViewLayoutParams(final Activity activity) {
+        final Rect rect = new Rect();
+        final Window window = activity.getWindow();
+        window.getDecorView().getWindowVisibleDisplayFrame(rect);
+        final int statusBarHeight = rect.top;
+
+        final TypedArray actionBarSize = activity.getTheme().obtainStyledAttributes(
+            new int[] {R.attr.actionBarSize});
+        final int actionBarHeight = actionBarSize.getDimensionPixelSize(0, 0);
+        actionBarSize.recycle();
+
+        final WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+            rect.right /* This ensures we don't go under the navigation bar in landscape */,
+            actionBarHeight,
+            WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+            /* Allow touches to views outside of overlay */
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT);
+
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.x = 0;
+        params.y = statusBarHeight;
+        return params;
+    }
+
+    private void toggleClearSearchButton(final CharSequence query) {
+        mClearSearch.setVisibility(!TextUtils.isEmpty(query) ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    private void clearSearch() {
+        mSearchEditText.setText("");
+        mClearSearch.setVisibility(View.INVISIBLE);
+    }
+
+    private void onCancelSearch() {
+        // Default is to hide this view unless an onSearchCancelListener is available
+        if (mOnSearchCancelListener != null) {
+            mOnSearchCancelListener.onCancelSearch();
+        } else {
+            hide();
+        }
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(@NotNull final KeyEvent event) {
+        // Handle "Back" key presses
+        if (event.getAction() == KeyEvent.ACTION_UP &amp;&amp;
+            event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            onCancelSearch();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onClick(View v) {
+        final int id = v.getId();
+        switch (id) {
+            case R.id.cancel_search:
+                onCancelSearch();
+                break;
+            case R.id.clear_search:
+                clearSearch();
+                break;
+        }
+    }
+}
+</code></pre>
+
+<p>Here is the layout</p>
+
+<pre class="lang-xml prettyprint-override"><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="?attr/actionBarSize"&gt;
+
+    &lt;android.support.v7.internal.widget.TintImageView
+        android:id="@+id/cancel_search"
+        android:layout_width="56dp"
+        android:layout_height="match_parent"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/search"
+        android:scaleType="center"
+        android:src="@drawable/abc_ic_ab_back_mtrl_am_alpha" /&gt;
+
+    &lt;EditText
+        android:id="@+id/search_actionbar_query_text"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:background="@android:color/transparent"
+        android:gravity="center_vertical"
+        android:hint="@string/search_hint"
+        android:imeOptions="actionSearch|flagNoExtractUi"
+        android:inputType="text|textNoSuggestions"
+        android:textColor="@color/search_text_color"
+        android:textColorHint="@color/search_hint_text_color"
+        android:singleLine="true"
+        android:textSize="16sp" /&gt;
+
+    &lt;android.support.v7.internal.widget.TintImageView
+        android:id="@+id/clear_search"
+        android:layout_width="56dp"
+        android:layout_height="match_parent"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:scaleType="center"
+        android:src="@drawable/abc_ic_clear_mtrl_alpha"
+        android:visibility="invisible" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>Here is our implementation in an Activity</p>
+
+<pre class="lang-java prettyprint-override"><code>public class SearchActivity extends AppCompatActivity implements SearchView.onSearchListener, View.onClickListener {
+    private static final String BUNDLE_KEY_SEARCH_SHOWN = "key_search_shown";
+    private static final String BUNDLE_KEY_SEARCH_QUERY = "key_search_query";
+
+    // Keep track of whether the SearchView has been added to the window
+    private boolean mSearchViewAdded = false;
+    private SearchView mSearchView;
+    private Toolbar mToolbar;
+    private WindowManager mWindowManager;
+
+    // Bundle passed in to onCreate()
+    private Bundle mSavedInstanceState;
+
+    @Override
+    protected void onCreate(Bundle icicle) {
+        super.onCreate(icicle);
+
+        mSavedInstanceState = icicle;
+
+        mWindowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+
+        // This is just an example so you would need to tie this to your own button. This is here so you can show/hide the SearchView.
+        findViewById(R.id.sample_btn).setOnClickListener(this);
+
+        // You should have added a Toolbar View to your layout already so reference it here by your id you assigned it
+        mToolbar = (Toolbar)findViewById(R.id.toolbar);
+        if (mToolbar != null) {
+            mSearchView = new SearchView(this);
+            mSearchView.setOnSearchListener(this);
+
+            setSupportActionBar(mToolbar);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        if (mToolbar != null) {
+            // Delay adding SearchView until Toolbar has finished loading
+            mToolbar.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!mSearchViewAdded &amp;&amp; mWindowManager != null) {
+                        mWindowManager.addView(mSearchView,
+           SearchView.getSearchViewLayoutParams(SearchActivity.this));
+                        mSearchViewAdded = true;
+
+                        if (mSavedInstanceState != null) {
+                            mSearchView.setSearchQuery(
+                                mSavedInstanceState.getString(BUNDLE_KEY_SEARCH_QUERY));
+
+                            if (mSavedInstanceState.getBoolean(BUNDLE_KEY_SEARCH_SHOWN)) {
+                                mSearchView.display();
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+
+        if (mSearchViewAdded) {
+            try {
+                mWindowManager.removeView(mSearchView);
+            } catch (IllegalArgumentException e) {
+            // Have seen this happen on occasion during orientation change.
+            }
+            mSearchViewAdded = false;
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        if (mSearchView != null) {
+            outState.putBoolean(BUNDLE_KEY_SEARCH_SHOWN, mSearchView.isSearchViewVisible());
+            outState.putString(BUNDLE_KEY_SEARCH_QUERY, mSearchView.getSearchQuery());
+        }
+    }
+
+    @Override
+    public void onClick(View v) {
+        final int id = v.getId();
+        switch (id) {
+            case R.id.sample_btn:
+                if (mSearchView.isSearchVisible()) {
+                    mSearchView.hide();
+                } else {
+                    mSearchView.display();
+                }
+                break;
+        }
+    }
+
+    @Override
+    public void onSearch(final String query) {
+        // Handle search here
+    }
+}
+</code></pre>

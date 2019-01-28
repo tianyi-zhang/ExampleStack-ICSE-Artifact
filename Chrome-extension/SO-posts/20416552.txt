@@ -1,0 +1,512 @@
+<p>I have resolved this issue. Actually we require following java files.<br>
+ 1. OnPictureSavedListener ( interface )
+ 2. CustomCameraActivity which extends Activity implements OnPictureSavedListener 
+ 3. Preview which extends SurfaceView
+ 4. PhotoHandler which implements  android.hardware.Camera.PictureCallback
+ 5. PhotoHelper it contains method to create dir and method to get optimal preview size etc
+and a xml file named activity_custom_camera.xml.
+following permisions are required</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.CAMERA" /&gt;
+    &lt;uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" /&gt;
+    &lt;uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /&gt;
+</code></pre>
+
+<ol>
+<li><p>this is interface OnPictureSavedListener</p>
+
+<p>package ali.customcamera;     </p>
+
+<pre><code>public interface OnPictureSavedListener {
+
+    public void onPictureSaved(String imagePath);
+}
+</code></pre></li>
+</ol>
+
+<p>2: this is CustomCameraActivity class</p>
+
+<pre><code> package ali.customcamera;
+
+
+    import android.app.Activity;
+    import android.content.Intent;
+    import android.os.Bundle;
+    import android.view.View;
+    import android.view.View.OnClickListener;
+    import android.widget.Button;
+
+    public class CustomCameraActivity extends Activity implements
+            OnPictureSavedListener, Preview.Callback {
+        private Preview mPreview;
+        Button btnCapture;
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.activity_custom_camera);
+            mPreview = (Preview) findViewById(R.id.preview);
+            btnCapture = (Button) findViewById(R.id.btnCapture);
+            btnCapture.setOnClickListener(captureClick);
+        }
+
+        OnClickListener captureClick = new OnClickListener() {
+
+
+
+            @Override
+            public void onClick(View v) {
+    //          Progresss.start(CustomCameraActivity.this);
+                PhotoHandler photoHandler = new PhotoHandler(
+                        CustomCameraActivity.this, CustomCameraActivity.this, 0);
+                mPreview.takeScreenshot(photoHandler);
+                btnCapture.setClickable(false);
+            }
+        };
+
+// this is where we get the path of the image saved in sdcard
+        @Override
+        public void onPictureSaved(String imagePath) {
+            // Progresss.stop();
+            btnCapture.setClickable(true);
+            if (imagePath != null &amp;&amp; !imagePath.equals("")){
+                Intent i = getIntent();
+                i.putExtra("imagePath",imagePath );
+                setResult(2500, i);
+                finish();
+            }
+        }
+
+        @Override
+        public void cameraReady() {
+            // TODO Auto-generated method stub
+
+        }
+
+        @Override
+        public void cameraNotAvailable() {
+            // TODO Auto-generated method stub
+
+        }
+
+    }
+</code></pre>
+
+<p>3: this is Preview class</p>
+
+<pre><code>package ali.customcamera;
+
+import java.io.IOException;
+import java.util.List;
+
+import android.app.Activity;
+import android.content.Context;
+import android.hardware.Camera;
+import android.hardware.Camera.Parameters;
+import android.util.AttributeSet;
+import android.view.Display;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.WindowManager;
+
+
+
+
+public class Preview extends SurfaceView implements SurfaceHolder.Callback {
+    private SurfaceHolder mHolder;
+    private Camera mCamera;
+    private Callback mCallback;
+    Activity mActivity;
+    static boolean hasCamera = false;
+    Context context;
+    List&lt;Camera.Size&gt; previewSizes;
+    Camera.Size previewSize;
+    private PhotoHandler photoHandler;
+    private int width;
+    private int height;
+    private boolean configured;
+
+
+    public   Preview(Context context) {
+        super(context);
+        this.context = context;
+        initHolder();
+    }
+
+    public   Preview(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        this.context = context;
+        initHolder();
+    }
+    public   Preview(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        this.context = context;
+        initHolder();
+    }
+    public void setCallback(Callback c) {
+        mCallback = c;
+        mActivity = (Activity) c;
+    }
+
+
+    public interface Callback {
+        public void cameraReady();
+        public void cameraNotAvailable();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void initHolder() {
+        // Install a SurfaceHolder.Callback so we get notified when the
+        // underlying surface is created and destroyed.
+        mHolder = getHolder();
+        mHolder.addCallback(this);
+        mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    }
+
+    public void takeScreenshot(PhotoHandler mPhotoHandler ) {
+
+        try {
+
+            this.photoHandler = mPhotoHandler;
+            photoHandler.setCamDimensions(previewSize.width, previewSize.height);
+            photoHandler.setSurfaceDimensions(width, height);
+            mCamera.takePicture(null, null, null, mPhotoHandler);
+
+        } catch (Exception e) {
+
+            e.getCause();
+        }
+
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+
+        mHolder = holder;
+        initCamera();
+
+    }
+
+    public void initCamera() {
+        if (!hasCamera) {
+            try {
+                mCamera = Camera.open();
+                hasCamera = true;
+            } catch (RuntimeException e) {
+                hasCamera = false;
+                mCallback.cameraNotAvailable();
+                return;
+            }
+            try {
+                mCamera.setPreviewDisplay(mHolder);
+            } catch (IOException exception) {
+                mCamera.release();
+                mCamera = null;
+                hasCamera = false;
+            }
+        }
+    }
+
+
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+
+        width = w;
+        height = h;
+
+        if(!configured){
+            configureCamera();
+        }
+
+        try 
+        {
+            mCamera.startPreview();
+
+        } catch (Exception e) {
+
+        }
+
+    }
+
+    private void configureCamera(){
+
+        Parameters parameters = mCamera.getParameters();
+        previewSizes = parameters.getSupportedPreviewSizes();
+
+        Display display = ((WindowManager)context.getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
+        if(display.getRotation() == Surface.ROTATION_0)
+        {
+            previewSize = PhotoHelper.getOptimalPreviewSize(previewSizes, width, height, true);
+
+            //parameters.setPreviewSize(previewSize.height, previewSize.width);//AQAG
+            parameters.setPreviewSize(previewSize.width, previewSize.height);
+            mCamera.setDisplayOrientation(90);
+        }
+
+        else if(display.getRotation() == Surface.ROTATION_90)
+        {
+            previewSize = PhotoHelper.getOptimalPreviewSize(previewSizes, width, height, false);
+            parameters.setPreviewSize(previewSize.width, previewSize.height);   
+            //parameters.setPreviewSize(previewSize.height, previewSize.width); 
+
+        }
+
+        else if(display.getRotation() == Surface.ROTATION_180)
+        {
+            previewSize = PhotoHelper.getOptimalPreviewSize(previewSizes, width, height, true);
+            //parameters.setPreviewSize(previewSize.height, previewSize.width);   AQAG
+            parameters.setPreviewSize(previewSize.width, previewSize.height);   
+        }
+
+        else if(display.getRotation() == Surface.ROTATION_270)
+        {
+            previewSize = PhotoHelper.getOptimalPreviewSize(previewSizes, width, height, false);
+
+            parameters.setPreviewSize(previewSize.width, previewSize.height);
+            mCamera.setDisplayOrientation(180);
+        }
+
+        mCamera.setParameters(parameters);
+    }
+
+
+
+    public void surfaceDestroyed(SurfaceHolder holder) {
+
+        releaseCamera();
+    }
+
+    public void releaseCamera() {
+        if (hasCamera) {
+            mCamera.stopPreview();
+            mCamera.release();
+            mCamera = null;
+            hasCamera = false;
+        }
+    }
+}
+</code></pre>
+
+<p>4:this is PhotoHandler class</p>
+
+<pre><code>package ali.customcamera;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+
+import android.content.Context;
+import android.hardware.Camera;
+import android.hardware.Camera.PictureCallback;
+import android.util.Log;
+
+
+
+public class PhotoHandler implements PictureCallback {
+
+    private final Context context;
+
+    private OnPictureSavedListener picTakenListener;
+    private int camWidth;
+    private int camHeight;
+    private int surfaceWidth;
+    private int surfaceHeight;
+    private int offset = 0;
+
+
+
+    public PhotoHandler(Context context, OnPictureSavedListener listener, int offset/*, boolean isPortrait*/ ) {
+        this.context = context;
+//      this.topImage = topOverlayImg;
+        this.picTakenListener = listener;
+//      this.isPortrait = isPortrait;
+        this.offset = offset;
+
+    }
+
+    public void setCamDimensions(int width, int height){
+
+        camWidth = width;
+        camHeight = height;
+
+        /*dWidth= width;
+        dHeight = height ;*/
+    }
+
+    public void setSurfaceDimensions(int width, int height){
+
+        surfaceWidth = width;
+        surfaceHeight = height;
+
+
+    }
+
+    @Override
+    public void onPictureTaken(byte[] data, Camera camera) {
+
+        File pictureFile = PhotoHelper.getOutputMediaFile(PhotoHelper.MEDIA_TYPE_IMAGE);
+
+        if (pictureFile == null){
+            return;
+        }
+
+        try {
+
+            //Save camera image to file
+            FileOutputStream fos = new FileOutputStream(pictureFile);
+            int len1 = data.length;
+            fos.write(data,0, len1);
+            fos.close();
+
+
+        } catch (FileNotFoundException e) {
+            Log.d("Camera", "File not found: " + e.getMessage());
+        } catch (IOException e) {
+            Log.d("Camera", "Error accessing file: " + e.getMessage());
+        }
+        camera.startPreview();
+
+        if(picTakenListener!=null){
+            picTakenListener.onPictureSaved(pictureFile.getAbsolutePath());
+        }
+    }
+
+
+
+
+
+
+
+}
+</code></pre>
+
+<p>5: this is PhotoHelper class</p>
+
+<pre><code>package ali.customcamera;
+
+import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.hardware.Camera;
+import android.os.Environment;
+import android.util.Log;
+
+public class PhotoHelper {
+
+    public static final int MEDIA_TYPE_IMAGE = 1;
+    public static final int MEDIA_TYPE_VIDEO = 2;
+//  private static final  String dirName = "CustomCamera";
+    public static File getOutputMediaFile(int type){
+
+        // To be safe, you should check that the SDCard is mounted
+        // using Environment.getExternalStorageState() before doing this.
+
+        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DCIM/*DIRECTORY_PICTURES*/), "CustomCamera");
+        // This location works best if you want the created images to be shared
+        // between applications and persist after your app has been uninstalled.
+
+        // Create the storage directory if it does not exist
+        if (! mediaStorageDir.exists()){
+            if (! mediaStorageDir.mkdirs()){
+                Log.d("MyCameraApp", "failed to create directory");
+                return null;
+            }
+        }
+
+        // Create a media file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        File mediaFile;
+        if (type == MEDIA_TYPE_IMAGE){
+            mediaFile = new File(mediaStorageDir.getPath() + File.separator +
+                    "IMG_"+ timeStamp + ".jpg");
+        } else if(type == MEDIA_TYPE_VIDEO) {
+            mediaFile = new File(mediaStorageDir.getPath() + File.separator +
+                    "VID_"+ timeStamp + ".mp4");
+        } else {
+            return null;
+        }
+
+        return mediaFile;
+    }
+
+    public static Bitmap rotateBitmap90(Bitmap bitMap ){
+        Matrix mat = new Matrix();
+        mat.postRotate(90);
+
+        return Bitmap.createBitmap(bitMap, 0, 0, 
+                bitMap.getWidth(), bitMap.getHeight(), 
+                mat, true);
+    }
+
+
+    public static Camera.Size getOptimalPreviewSize(List&lt;Camera.Size&gt; sizes, int w, int h, boolean isPortrait) {
+        final double ASPECT_TOLERANCE = 0.1;
+
+        double targetRatio;
+
+        if(isPortrait){
+            targetRatio=(double)h / w;
+        }
+        else{
+            targetRatio=(double)w / h;
+        }
+
+        if (sizes == null) return null;
+
+        Camera.Size optimalSize = null;
+        double minDiff = Double.MAX_VALUE;
+
+        int targetHeight = h;
+
+        for (Camera.Size size : sizes) {
+            double ratio = (double) size.width / size.height;
+            if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE) continue;
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+
+        if (optimalSize == null) {
+            minDiff = Double.MAX_VALUE;
+            for (Camera.Size size : sizes) {
+                if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                    optimalSize = size;
+                    minDiff = Math.abs(size.height - targetHeight);
+                }
+            }
+        }
+        return optimalSize;
+    }
+}
+</code></pre>
+
+<p>finally, this is layout file</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" &gt;
+
+    &lt;ali.customcamera.Preview
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" /&gt;
+
+    &lt;Button
+        android:id="@+id/btnCapture"
+        style="?android:attr/buttonStyleSmall"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentRight="true"
+        android:layout_alignParentTop="true"
+        android:text="Capture" /&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>

@@ -1,0 +1,77 @@
+<p>@Boni2k - I have the same issues.  In my case, I have 3 notifying characteristics and a handful of read/write characteristics.</p>
+
+<p>What I did find is that there is some dependency between <code>writeGattDescriptor</code> and <code>readCharacteristic</code>.  <strong>All</strong> of the writeGattDescriptors <strong>must</strong> come first <strong>and</strong> complete before you issue any readCharacteristic calls.</p>
+
+<p>Here is my solution using <code>Queues</code>.  Now I am getting notifications and everything else works fine:</p>
+
+<p>Create two Queues like this:</p>
+
+<pre><code>private Queue&lt;BluetoothGattDescriptor&gt; descriptorWriteQueue = new LinkedList&lt;BluetoothGattDescriptor&gt;();
+private Queue&lt;BluetoothGattCharacteristic&gt; characteristicReadQueue = new LinkedList&lt;BluetoothGattCharacteristic&gt;();
+</code></pre>
+
+<p>Then write all of your descriptors immediately after discovery with this method:</p>
+
+<pre><code>public void writeGattDescriptor(BluetoothGattDescriptor d){
+    //put the descriptor into the write queue
+    descriptorWriteQueue.add(d);
+    //if there is only 1 item in the queue, then write it.  If more than 1, we handle asynchronously in the callback above
+    if(descriptorWriteQueue.size() == 1){   
+        mBluetoothGatt.writeDescriptor(d);      
+    }
+}
+</code></pre>
+
+<p>and this callback:</p>
+
+<pre><code>public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {         
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+            Log.d(TAG, "Callback: Wrote GATT Descriptor successfully.");           
+        }           
+        else{
+            Log.d(TAG, "Callback: Error writing GATT Descriptor: "+ status);
+        }
+        descriptorWriteQueue.remove();  //pop the item that we just finishing writing
+        //if there is more to write, do it!
+        if(descriptorWriteQueue.size() &gt; 0)
+            mBluetoothGatt.writeDescriptor(descriptorWriteQueue.element());
+        else if(readCharacteristicQueue.size() &gt; 0)
+            mBluetoothGatt.readCharacteristic(readQueue.element());
+    };
+</code></pre>
+
+<p>The method for reading a characteristic normally then looks like this:</p>
+
+<pre><code>public void readCharacteristic(String characteristicName) {
+    if (mBluetoothAdapter == null || mBluetoothGatt == null) {
+        Log.w(TAG, "BluetoothAdapter not initialized");
+        return;
+    }
+    BluetoothGattService s = mBluetoothGatt.getService(UUID.fromString(kYourServiceUUIDString));
+    BluetoothGattCharacteristic c = s.getCharacteristic(UUID.fromString(characteristicName));
+    //put the characteristic into the read queue        
+    readCharacteristicQueue.add(c);
+    //if there is only 1 item in the queue, then read it.  If more than 1, we handle asynchronously in the callback above
+    //GIVE PRECEDENCE to descriptor writes.  They must all finish first.
+    if((readCharacteristicQueue.size() == 1) &amp;&amp; (descriptorWriteQueue.size() == 0))
+        mBluetoothGatt.readCharacteristic(c);              
+}
+</code></pre>
+
+<p>and my read callback:</p>
+
+<pre><code>public void onCharacteristicRead(BluetoothGatt gatt,
+                                     BluetoothGattCharacteristic characteristic,
+                                     int status) {
+        readCharacteristicQueue.remove();
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+            broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);                                
+        }
+        else{
+            Log.d(TAG, "onCharacteristicRead error: " + status);
+        }
+
+        if(readCharacteristicQueue.size() &gt; 0)
+            mBluetoothGatt.readCharacteristic(readCharacteristicQueue.element());
+    }
+</code></pre>

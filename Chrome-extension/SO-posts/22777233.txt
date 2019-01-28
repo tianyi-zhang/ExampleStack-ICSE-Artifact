@@ -1,0 +1,295 @@
+<p>For browse from gallery and set image i use this code</p>
+
+<p>in <code>Button click</code></p>
+
+<pre><code>Intent intent = new Intent(Intent.ACTION_PICK,android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI);           
+            startActivityForResult(intent, RESULT_LOAD_IMAGE);
+</code></pre>
+
+<p><code>OnActivityResult</code></p>
+
+<pre><code>@Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == RESULT_LOAD_IMAGE &amp;&amp; resultCode == RESULT_OK &amp;&amp; data != null) {
+            Uri selectedImage = data.getData();
+            String[] filePathColumn = { MediaStore.Images.Media.DATA };
+
+            Cursor cursor = getContentResolver().query(selectedImage,
+                    filePathColumn, null, null, null);
+            cursor.moveToFirst();
+
+            int columnIndex = cursor.getColumnIndex(filePathColumn[0]);
+            picturePath = cursor.getString(columnIndex);
+            cursor.close();
+            new UploadImage().execute();
+        }       
+    }
+</code></pre>
+
+<p>u can post image using <code>multipart entity</code> </p>
+
+<p><code>AsyncTask</code> for upload</p>
+
+<pre><code>private class UploadImage extends AsyncTask&lt;Void, Void, Void&gt; {
+
+
+        private String err_msg;
+
+        @Override
+        protected void onPreExecute() {
+            // TODO Auto-generated method stub
+            super.onPreExecute();
+            progress.setVisibility(View.VISIBLE);
+
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            // TODO Auto-generated method stub
+            super.onPostExecute(result);
+            if(!imageUrl.equalsIgnoreCase("") &amp;&amp; imageUrl != null) {
+                imageLoader.clearCache();
+                ImageLoaderForProfile.DisplayImage(imageUrl, ProfileActivity.this, progress, profileImg, 150);
+            } else if (!err_msg.equalsIgnoreCase("") &amp;&amp; err_msg != null) {
+                Utils.showDialog(ProfileActivity.this, err_msg);
+            }   
+            //String url, Context activity,ProgressBar progress, ImageView imageView,int _imgSize
+            customProgress.dismiss();
+        }
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            // TODO Auto-generated method stub
+
+            HttpClient httpClient = new DefaultHttpClient();
+            try {
+                httpClient.getParams().setParameter(CoreProtocolPNames.PROTOCOL_VERSION, HttpVersion.HTTP_1_1);
+                httpClient.getParams().setParameter("http.socket.timeout", new Integer(90000)); // 90 second 
+                String url = Constants._uploadProfilePicUrl + userId + "/"+accessToken;
+                HttpPost httpPost = new HttpPost(url);          
+                SimpleMultipartEntity mpEntity = new SimpleMultipartEntity();
+                //mpEntity.addPart(task,_data); 
+                if(picturePath!=null &amp;&amp; picturePath.length()&gt;0)
+                {
+                     File vFile = new File(picturePath);
+                     mpEntity.addPart("key_for_upload", picturePath.substring(picturePath.lastIndexOf("/")+1), new FileInputStream(vFile), "image/jpg");
+                }
+                httpPost.setEntity(mpEntity);
+                HttpResponse lResponse = httpClient.execute(httpPost);
+                if (lResponse.getStatusLine().getStatusCode() != HttpStatus.SC_OK) { 
+                    Log.d("UploadService-uploadFile","Response Status line code:"+ lResponse.getStatusLine()); 
+                }else
+                {
+                    rc=lResponse.getStatusLine().getStatusCode();
+                    responseTypeString=rc;
+                }
+                HttpEntity resEntity = lResponse.getEntity(); 
+                if (resEntity == null) { 
+                    Log.i("UploadService-uploadFile", "No Response!"); 
+                } 
+
+                try {
+                    InputStream is   = resEntity.getContent();
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(
+                            is, "iso-8859-1"), 8);
+                    StringBuilder sb = new StringBuilder();
+                    String line = null;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line + "\n");
+                    }
+                    responsData=sb.toString();
+                    if(!responsData.equalsIgnoreCase("")) {
+                        ProfileImgParser.profileImgUrlParsedData(responsData);
+                        if(ProfileImgVO.instance().getGeneralMsgVO().getCode() == 200) {
+                            imageUrl = ProfileImgVO.instance().getProfileImageUrl();
+                        } else {
+                            err_msg = ProfileImgVO.instance().getGeneralMsgVO().getErrorMsg();
+                        }
+                    }
+                    System.out.println("-------response data--------3" + responsData);
+                    is.close();
+
+                    Log.e("JSON", sb.toString());
+                }  catch (SocketTimeoutException ste) {
+                    // TODO Auto-generated catch block
+                    isTimeout = true;
+                    ste.printStackTrace();
+
+                } catch (SocketException ste) {
+                    // TODO Auto-generated catch block
+                    isTimeout = true;
+                    ste.printStackTrace();
+
+                }catch (FileNotFoundException fnf) {
+                    // TODO Auto-generated catch block
+                    isFileNotEx=true;
+                    erroMsg="File not found Exception";
+                    fnf.printStackTrace();
+
+                }catch (Exception e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                } 
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                httpClient.getConnectionManager().shutdown(); 
+            }       
+            return null;
+        }       
+    }
+</code></pre>
+
+<p>Also u need this class</p>
+
+<pre><code>public class SimpleMultipartEntity implements HttpEntity {
+
+    private final static char[] MULTIPART_CHARS = "-_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        .toCharArray();
+
+    private String boundary = null;
+
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    boolean isSetLast = false;
+    boolean isSetFirst = false;
+
+    public SimpleMultipartEntity() {
+        final StringBuffer buf = new StringBuffer();
+        final Random rand = new Random();
+        for (int i = 0; i &lt; 30; i++) {
+            buf.append(MULTIPART_CHARS[rand.nextInt(MULTIPART_CHARS.length)]);
+        }
+        this.boundary = buf.toString();
+
+    }
+
+    public void writeFirstBoundaryIfNeeds(){
+        if(!isSetFirst){
+            try {
+                out.write(("--" + boundary + "\r\n").getBytes());
+            } catch (final IOException e) {
+                Log.e("SimpleMultipartEntity-writeFirstBoundaryIfNeeds", e.getMessage(), e);
+            }
+        }
+        isSetFirst = true;
+    }
+
+    public void writeLastBoundaryIfNeeds() {
+        if(isSetLast){
+            return ;
+        }
+        try {
+            out.write(("\r\n--" + boundary + "--\r\n").getBytes());
+        } catch (final IOException e) {
+            Log.e("SimpleMultipartEntity-writeLastBoundaryIfNeeds", e.getMessage(), e);
+        }
+        isSetLast = true;
+    }
+
+    public void addPart(final String key, final String value) {
+        writeFirstBoundaryIfNeeds();
+        try {
+            out.write(("Content-Disposition: form-data; name=\"" +key+"\"\r\n").getBytes());
+            out.write("Content-Type: text/plain; charset=UTF-8\r\n".getBytes());
+            out.write("Content-Transfer-Encoding: 8bit\r\n\r\n".getBytes());
+            out.write(value.getBytes());
+            out.write(("\r\n--" + boundary + "\r\n").getBytes());
+        } catch (final IOException e) {
+            Log.e("SimpleMultipartEntity-addPart", e.getMessage(), e);
+        }
+    }
+
+    public void addPart(final String key, final String fileName, final InputStream fin){
+        addPart(key, fileName, fin, "application/octet-stream");
+    }
+
+    public void addPart(final String key, final String fileName, final InputStream fin, String type){
+        writeFirstBoundaryIfNeeds();
+        try {
+            type = "Content-Type: "+type+"\r\n";
+            out.write(("Content-Disposition: form-data; name=\""+ key+"\"; filename=\"" + fileName + "\"\r\n").getBytes());
+            out.write(type.getBytes());
+            out.write("Content-Transfer-Encoding: binary\r\n\r\n".getBytes());
+
+            final byte[] tmp = new byte[4096];
+            int l = 0;
+            while ((l = fin.read(tmp)) != -1) {
+                out.write(tmp, 0, l);
+            }
+            out.flush();
+        } catch (final IOException e) {
+            Log.e("SimpleMultipartEntity-addPart", e.getMessage(), e);
+        } finally {
+            try {
+                fin.close();
+            } catch (final IOException e) {
+                Log.e("SimpleMultipartEntity-addPart", e.getMessage(), e);
+            }
+        }
+    }
+
+    public void addPart(final String key, final File value) {
+        try {
+            addPart(key, value.getName(), new FileInputStream(value));
+        } catch (final FileNotFoundException e) {
+            Log.e("SimpleMultipartEntity-addPart", e.getMessage(), e);
+        }
+    }
+
+    //@Override
+    public long getContentLength() {
+        writeLastBoundaryIfNeeds();
+        return out.toByteArray().length;
+    }
+
+    //@Override
+    public Header getContentType() {
+        return new BasicHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    }
+
+    //@Override
+    public boolean isChunked() {
+        return false;
+    }
+
+    //@Override
+    public boolean isRepeatable() {
+        return false;
+    }
+
+    //@Override
+    public boolean isStreaming() {
+        return false;
+    }
+
+    //@Override
+    public void writeTo(final OutputStream outstream) throws IOException {
+        outstream.write(out.toByteArray());
+    }
+
+    //@Override
+    public Header getContentEncoding() {
+        return null;
+    }
+
+    //@Override
+    public void consumeContent() throws IOException,
+    UnsupportedOperationException {
+        if (isStreaming()) {
+            throw new UnsupportedOperationException(
+            "Streaming entity does not implement #consumeContent()");
+        }
+    }
+
+    //@Override
+    public InputStream getContent() throws IOException,
+    UnsupportedOperationException {
+        return new ByteArrayInputStream(out.toByteArray());
+    }
+
+}
+</code></pre>
+
+<p><strong>EDIT:</strong> <a href="http://vikaskanani.wordpress.com/2011/01/11/android-upload-image-or-file-using-http-post-multi-part/" rel="nofollow">how to send file using multipart entity</a> </p>

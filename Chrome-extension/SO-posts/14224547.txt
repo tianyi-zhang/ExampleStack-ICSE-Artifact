@@ -1,0 +1,184 @@
+<p><code>DatePickerCell</code> does not support null values. Overriding <code>render</code> is not enough as <code>NPE</code> is thrown from method <code>onEnterKeyDown</code> when you click on the rendered cell.</p>
+
+<p>You have to implement your own cell with null protection in "onEnterKeyDown" :</p>
+
+<pre><code>if (date != null) {
+    datePicker.setCurrentMonth(date);
+}
+</code></pre>
+
+<p>Complete class :</p>
+
+<pre><code>public class DatePickerCell extends AbstractEditableCell&lt;Date, Date&gt; {
+
+private static final int ESCAPE = 27;
+
+private final DatePicker datePicker;
+private final DateTimeFormat format;
+private int offsetX = 10;
+private int offsetY = 10;
+private Object lastKey;
+private Element lastParent;
+private int lastIndex;
+private int lastColumn;
+private Date lastValue;
+private PopupPanel panel;
+private final SafeHtmlRenderer&lt;String&gt; renderer;
+private ValueUpdater&lt;Date&gt; valueUpdater;
+
+/**
+ * Constructs a new DatePickerCell that uses the date/time format given by
+ * {@link DateTimeFormat#getFullDateFormat}.
+ */
+@SuppressWarnings("deprecation")
+public DatePickerCell() {
+    this(DateTimeFormat.getFullDateFormat(), SimpleSafeHtmlRenderer.getInstance());
+}
+
+/**
+ * Constructs a new DatePickerCell that uses the given date/time format and
+ * a {@link SimpleSafeHtmlRenderer}.
+ * @param format a {@link DateTimeFormat} instance
+ */
+public DatePickerCell(DateTimeFormat format) {
+    this(format, SimpleSafeHtmlRenderer.getInstance());
+}
+
+/**
+ * Constructs a new DatePickerCell that uses the date/time format given by
+ * {@link DateTimeFormat#getFullDateFormat} and the given
+ * {@link SafeHtmlRenderer}.
+ * @param renderer a {@link SafeHtmlRenderer SafeHtmlRenderer&lt;String&gt;}
+ *            instance
+ */
+public DatePickerCell(SafeHtmlRenderer&lt;String&gt; renderer) {
+    this(DateTimeFormat.getFormat(PredefinedFormat.DATE_FULL), renderer);
+}
+
+/**
+ * Constructs a new DatePickerCell that uses the given date/time format and
+ * {@link SafeHtmlRenderer}.
+ * @param format a {@link DateTimeFormat} instance
+ * @param renderer a {@link SafeHtmlRenderer SafeHtmlRenderer&lt;String&gt;}
+ *            instance
+ */
+public DatePickerCell(DateTimeFormat format, SafeHtmlRenderer&lt;String&gt; renderer) {
+    super(CLICK, KEYDOWN);
+    if (format == null) {
+        throw new IllegalArgumentException("format == null");
+    }
+    if (renderer == null) {
+        throw new IllegalArgumentException("renderer == null");
+    }
+    this.format = format;
+    this.renderer = renderer;
+
+    this.datePicker = new DatePicker();
+    this.panel = new PopupPanel(true, true) {
+        @Override
+        protected void onPreviewNativeEvent(NativePreviewEvent event) {
+            if (Event.ONKEYUP == event.getTypeInt()) {
+                if (event.getNativeEvent().getKeyCode() == ESCAPE) {
+                    // Dismiss when escape is pressed
+                    panel.hide();
+                }
+            }
+        }
+    };
+    panel.addCloseHandler(new CloseHandler&lt;PopupPanel&gt;() {
+        public void onClose(CloseEvent&lt;PopupPanel&gt; event) {
+            lastKey = null;
+            lastValue = null;
+            lastIndex = -1;
+            lastColumn = -1;
+            if (lastParent != null &amp;&amp; !event.isAutoClosed()) {
+                // Refocus on the containing cell after the user selects a
+                // value, but
+                // not if the popup is auto closed.
+                lastParent.focus();
+            }
+            lastParent = null;
+        }
+    });
+    panel.add(datePicker);
+
+    // Hide the panel and call valueUpdater.update when a date is selected
+    datePicker.addValueChangeHandler(new ValueChangeHandler&lt;Date&gt;() {
+        public void onValueChange(ValueChangeEvent&lt;Date&gt; event) {
+            // Remember the values before hiding the popup.
+            Element cellParent = lastParent;
+            Date oldValue = lastValue;
+            Object key = lastKey;
+            int index = lastIndex;
+            int column = lastColumn;
+            panel.hide();
+
+            // Update the cell and value updater.
+            Date date = event.getValue();
+            setViewData(key, date);
+            setValue(new Context(index, column, key), cellParent, oldValue);
+            if (valueUpdater != null) {
+                valueUpdater.update(date);
+            }
+        }
+    });
+}
+
+@Override
+public boolean isEditing(Context context, Element parent, Date value) {
+    return lastKey != null &amp;&amp; lastKey.equals(context.getKey());
+}
+
+@Override
+public void onBrowserEvent(Context context, Element parent, Date value, NativeEvent event, ValueUpdater&lt;Date&gt; valueUpdater) {
+    super.onBrowserEvent(context, parent, value, event, valueUpdater);
+    if (CLICK.equals(event.getType())) {
+        onEnterKeyDown(context, parent, value, event, valueUpdater);
+    }
+}
+
+@Override
+public void render(Context context, Date value, SafeHtmlBuilder sb) {
+    // Get the view data.
+    Object key = context.getKey();
+    Date viewData = getViewData(key);
+    if (viewData != null &amp;&amp; viewData.equals(value)) {
+        clearViewData(key);
+        viewData = null;
+    }
+
+    String s = null;
+    if (viewData != null) {
+        s = format.format(viewData);
+    } else if (value != null) {
+        s = format.format(value);
+    }
+    if (s != null) {
+        sb.append(renderer.render(s));
+    }
+}
+
+@Override
+protected void onEnterKeyDown(Context context, Element parent, Date value, NativeEvent event, ValueUpdater&lt;Date&gt; valueUpdater) {
+    this.lastKey = context.getKey();
+    this.lastParent = parent;
+    this.lastValue = value;
+    this.lastIndex = context.getIndex();
+    this.lastColumn = context.getColumn();
+    this.valueUpdater = valueUpdater;
+
+    Date viewData = getViewData(lastKey);
+    Date date = (viewData == null) ? lastValue : viewData;
+    if (date != null) {
+        datePicker.setCurrentMonth(date);
+    }
+    datePicker.setValue(date);
+    panel.setPopupPositionAndShow(new PositionCallback() {
+        public void setPosition(int offsetWidth, int offsetHeight) {
+            panel.setPopupPosition(lastParent.getAbsoluteLeft() + offsetX, lastParent.getAbsoluteTop() + offsetY);
+        }
+    });
+}
+</code></pre>
+
+<p>}</p>

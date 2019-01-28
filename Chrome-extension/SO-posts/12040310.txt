@@ -1,0 +1,115 @@
+<p>This is some code I used to use to load <code>dll</code> or <code>so</code> libraries that are bundled in the jar.</p>
+
+<p>The libraries must be added as resources. We used maven and put them in this hierarchy:</p>
+
+<pre><code>src/main/resources/lib/win-x86/&lt;dlls for 32-bit windows&gt;
+src/main/resources/lib/linux-x86/&lt;so for 32-bit linux&gt;
+src/main/resources/lib/linux-x86_64/&lt;so for 64-bit linux&gt;
+src/main/resources/lib/linux-ia64/&lt;so for 64-bit linux on itanium&gt;
+</code></pre>
+
+<p>The shared libraries will be unpacked to the tmp-directory for the platform and also have a temporary name when unpacked. This is to let several processes load the dll/so without sharing the actual extracted dll/so since the unpacking could overwrite existing ones if having the same name (with very strange behavior on some platforms when the file was replaced).</p>
+
+<p>The file is also set to have <code>deleteOnExit</code> set but that does not work on windows AFAIK.</p>
+
+<p><code>NativeLoader.java</code></p>
+
+<pre><code>public class NativeLoader {
+
+    public static final Logger LOG = Logger.getLogger(NativeLoader.class);
+
+    public NativeLoader() {
+    }
+
+    public void loadLibrary(String library) {
+        try {
+            System.load(saveLibrary(library));
+        } catch (IOException e) {
+            LOG.warn("Could not find library " + library +
+                    " as resource, trying fallback lookup through System.loadLibrary");
+            System.loadLibrary(library);
+        }
+    }
+
+
+    private String getOSSpecificLibraryName(String library, boolean includePath) {
+        String osArch = System.getProperty("os.arch");
+        String osName = System.getProperty("os.name").toLowerCase();
+        String name;
+        String path;
+
+        if (osName.startsWith("win")) {
+            if (osArch.equalsIgnoreCase("x86")) {
+                name = library + ".dll";
+                path = "win-x86/";
+            } else {
+                throw new UnsupportedOperationException("Platform " + osName + ":" + osArch + " not supported");
+            }
+        } else if (osName.startsWith("linux")) {
+            if (osArch.equalsIgnoreCase("amd64")) {
+                name = "lib" + library + ".so";
+                path = "linux-x86_64/";
+            } else if (osArch.equalsIgnoreCase("ia64")) {
+                name = "lib" + library + ".so";
+                path = "linux-ia64/";
+            } else if (osArch.equalsIgnoreCase("i386")) {
+                name = "lib" + library + ".so";
+                path = "linux-x86/";
+            } else {
+                throw new UnsupportedOperationException("Platform " + osName + ":" + osArch + " not supported");
+            }
+        } else {
+            throw new UnsupportedOperationException("Platform " + osName + ":" + osArch + " not supported");
+        }
+
+        return includePath ? path + name : name;
+    }
+
+    private String saveLibrary(String library) throws IOException {
+        InputStream in = null;
+        OutputStream out = null;
+
+        try {
+            String libraryName = getOSSpecificLibraryName(library, true);
+            in = this.getClass().getClassLoader().getResourceAsStream("lib/" + libraryName);
+            String tmpDirName = System.getProperty("java.io.tmpdir");
+            File tmpDir = new File(tmpDirName);
+            if (!tmpDir.exists()) {
+                tmpDir.mkdir();
+            }
+            File file = File.createTempFile(library + "-", ".tmp", tmpDir);
+            // Clean up the file when exiting
+            file.deleteOnExit();
+            out = new FileOutputStream(file);
+
+            int cnt;
+            byte buf[] = new byte[16 * 1024];
+            // copy until done.
+            while ((cnt = in.read(buf)) &gt;= 1) {
+                out.write(buf, 0, cnt);
+            }
+            LOG.info("Saved libfile: " + file.getAbsoluteFile());
+            return file.getAbsolutePath();
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (IOException ignore) {
+                }
+            }
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (IOException ignore) {
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>The libraries are loaded by creating an instance of the <code>NativeLoader</code> and then by calling <code>loadLibrary("thelibrary")</code> without the os-specific prefixes and extensions.</p>
+
+<p>This worked well for us but you will have to add the shared libraries manually to the different resource directories and then build the jar.</p>
+
+<p>I realize that some code in this class may be strange or obsolete but bare in mind that this is code I wrote some years ago and it has been working really well.</p>

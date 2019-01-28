@@ -1,0 +1,81 @@
+<p>I found different solution than solution provided by Mithun.</p>
+
+<p>Application context contains user authentication manager initiated with different authentication providers:</p>
+
+<pre><code>&lt;sec:authentication-manager alias="userAuthenticationManager"&gt;
+    &lt;sec:authentication-provider ref="customerAuthProvider" /&gt;
+    &lt;sec:authentication-provider ref="adminAuthProvider" /&gt;
+&lt;/sec:authentication-manager&gt;
+</code></pre>
+
+<p>where customerAuthProvider and adminAuthProvider are extensions of DaoAuthenticationProvider with different userDetails Service:</p>
+
+<pre><code>&lt;bean id="customerAuthProvider" class="org.example.security.authentication.provider.CustomerAuthenticationProvider"&gt;
+    &lt;property name="userDetailsService" ref="userService" /&gt;
+    &lt;property name="passwordEncoder" ref="passwordEncoder" /&gt;
+&lt;/bean&gt;
+
+&lt;bean id="adminAuthProvider" class="org.example.security.authentication.provider.AdminAuthenticationProvider"&gt;
+    &lt;property name="userDetailsService" ref="otherUserService" /&gt;
+&lt;/bean&gt;
+</code></pre>
+
+<p>All you need to do is to override "supports" method that indicates whether current authentication provider is able to handle specific authentication:</p>
+
+<pre><code>public class CustomerAuthenticationProvider extends DaoAuthenticationProvider {
+
+    @Override
+    public boolean supports ( Class&lt;?&gt; authentication ) {
+        return CustomerUsernamePasswordAuthenticationToken.isAssignableFrom(authentication);
+    }
+}
+
+public class AdminAuthenticationProvider extends DaoAuthenticationProvider {
+
+    @Override
+    public boolean supports ( Class&lt;?&gt; authentication ) {
+        return AdminUsernamePasswordAuthenticationToken.isAssignableFrom(authentication);
+    }
+}
+</code></pre>
+
+<p>At the end you need to extend token granter. In my case I extended ResourceOwnerPasswordTokenGranter which means that it supports "password" grant:</p>
+
+<pre><code>&lt;oauth:authorization-server client-details-service-ref="client-details-service" token-services-ref="tokenServices"&gt;
+    &lt;oauth:refresh-token/&gt;
+    &lt;oauth:custom-grant token-granter-ref="customPasswordTokenGranter"/&gt;
+&lt;/oauth:authorization-server&gt;
+</code></pre>
+
+<p>You can use TokenRequest object to distinguish which Authentication class to instantiate (AdminUsernamePasswordAuthenticationToken or CustomerUsernamePasswordAuthenticationToken)</p>
+
+<pre><code>public class CustomResourceOwnerPasswordTokenGranter extends ResourceOwnerPasswordTokenGranter {
+
+    protected OAuth2Authentication getOAuth2Authentication ( ClientDetails client, TokenRequest tokenRequest ) {
+        Map parameters = tokenRequest.getRequestParameters();
+        String username = (String) parameters.get("username");
+        String password = (String) parameters.get("password");
+
+        String realmName = (String) parameters.get("realm_name");
+
+        Authentication userAuth = createAuthenticationBasedOnRealmName(username, password, realmName);
+        try {
+            userAuth = this.authenticationManager.authenticate(userAuth);
+        } catch ( AccountStatusException ase ) {
+            throw new InvalidGrantException(ase.getMessage());
+        } catch ( BadCredentialsException e ) {
+            throw new InvalidGrantException(e.getMessage());
+        }
+        if ( ( userAuth == null ) || ( ! ( userAuth.isAuthenticated() ) ) ) {
+            throw new InvalidGrantException("Could not authenticate user: " + username);
+        }
+
+        OAuth2Request storedOAuth2Request = getRequestFactory().createOAuth2Request(client, tokenRequest);
+        return new OAuth2Authentication(storedOAuth2Request, userAuth);
+    }
+
+    private Authentication createAuthentication ( String username, String password, String realmName ) throws InvalidGrantException {
+       // TODO: decide basing on realm name
+    }
+}
+</code></pre>

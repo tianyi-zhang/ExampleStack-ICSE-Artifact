@@ -1,0 +1,127 @@
+<h3>Introduction</h3>
+
+<p>You should use <a href="http://docs.oracle.com/javaee/6/api/javax/servlet/http/HttpServlet.html#doGet%28javax.servlet.http.HttpServletRequest,%20javax.servlet.http.HttpServletResponse%29" rel="nofollow"><code>doGet()</code></a> when you want to intercept on <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html#sec9.3" rel="nofollow">HTTP GET requests</a>. You should use <a href="http://docs.oracle.com/javaee/6/api/javax/servlet/http/HttpServlet.html#doPost%28javax.servlet.http.HttpServletRequest,%20javax.servlet.http.HttpServletResponse%29" rel="nofollow"><code>doPost()</code></a> when you want to intercept on <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html#sec9.5" rel="nofollow">HTTP POST requests</a>. That's all. Do not port the one to the other or vice versa (such as in Netbeans' unfortunate auto-generated <code>processRequest()</code> method). This makes no utter sense.</p>
+
+<h3>GET</h3>
+
+<p>Usually, HTTP GET requests are <a href="https://en.wikipedia.org/wiki/Idempotence" rel="nofollow">idempotent</a>. I.e. you get exactly the same result everytime you execute the request (leaving authorization/authentication and the time-sensitive nature of the page —search results, last news, etc— outside consideration). We can talk about a bookmarkable request. Clicking a link, clicking a bookmark, entering raw URL in browser address bar, etcetera will all fire a HTTP GET request. If a Servlet is listening on the URL in question, then its <code>doGet()</code> method will be called. It's usually used to <strong>preprocess</strong> a request. I.e. doing some business stuff before presenting the HTML output from a JSP, such as gathering data for display in a table.</p>
+
+<pre><code>@WebServlet("/products")
+public class ProductsServlet extends HttpServlet {
+
+    @EJB
+    private ProductService productService;
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        List&lt;Product&gt; products = productService.list();
+        request.setAttribute("products", products); // Will be available as ${products} in JSP
+        request.getRequestDispatcher("/WEB-INF/products.jsp").forward(request, response);
+    }
+
+}
+</code></pre>
+
+<pre class="lang-html prettyprint-override"><code>&lt;table&gt;
+    &lt;c:forEach items="${products}" var="product"&gt;
+        &lt;tr&gt;
+            &lt;td&gt;${product.name}&lt;/td&gt;
+            &lt;td&gt;&lt;a href="product?id=${product.id}"&gt;detail&lt;/a&gt;&lt;/td&gt;
+        &lt;/tr&gt;
+    &lt;/c:forEach&gt;
+&lt;/table&gt;
+</code></pre>
+
+<p>Also view/edit detail links as shown in last column above are usually idempotent.</p>
+
+<pre><code>@WebServlet("/product")
+public class ProductServlet extends HttpServlet {
+
+    @EJB
+    private ProductService productService;
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        Product product = productService.find(request.getParameter("id"));
+        request.setAttribute("product", product); // Will be available as ${product} in JSP
+        request.getRequestDispatcher("/WEB-INF/product.jsp").forward(request, response);
+    }
+
+}
+</code></pre>
+
+<pre class="lang-html prettyprint-override"><code>&lt;dl&gt;
+    &lt;dt&gt;ID&lt;/dt&gt;
+    &lt;dd&gt;${product.id}&lt;/dd&gt;
+    &lt;dt&gt;Name&lt;/dt&gt;
+    &lt;dd&gt;${product.name}&lt;/dd&gt;
+    &lt;dt&gt;Description&lt;/dt&gt;
+    &lt;dd&gt;${product.description}&lt;/dd&gt;
+    &lt;dt&gt;Price&lt;/dt&gt;
+    &lt;dd&gt;${product.price}&lt;/dd&gt;
+    &lt;dt&gt;Image&lt;/dt&gt;
+    &lt;dd&gt;&lt;img src="productImage?id=${product.id}" /&gt;&lt;/dd&gt;
+&lt;/dl&gt;
+</code></pre>
+
+<h3>POST</h3>
+
+<p>HTTP POST requests are not idempotent. If the enduser has submitted a POST form on an URL beforehand, which hasn't performed a redirect, then the URL is not necessarily bookmarkable. The submitted form data is not reflected in the URL. Copypasting the URL into a new browser window/tab may not necessarily yield exactly the same result as after the form submit. Such an URL is then not bookmarkable. If a Servlet is listening on the URL in question, then its <code>doPost()</code> will be called. It's usually used to <strong>postprocess</strong> a request. I.e. gathering data from a submitted HTML form and doing some business stuff with it (conversion, validation, saving in DB, etcetera). Finally usually the result is presented as HTML from the forwarded JSP page.</p>
+
+<pre class="lang-html prettyprint-override"><code>&lt;form action="login" method="post"&gt;
+    &lt;input type="text" name="username"&gt;
+    &lt;input type="password" name="password"&gt;
+    &lt;input type="submit" value="login"&gt;
+    &lt;span class="error"&gt;${error}&lt;/span&gt;
+&lt;/form&gt;
+</code></pre>
+
+<p>...which can be used in combination with this piece of Servlet:</p>
+
+<pre><code>@WebServlet("/login")
+public class LoginServlet extends HttpServlet {
+
+    @EJB
+    private UserService userService;
+
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        String username = request.getParameter("username");
+        String password = request.getParameter("password");
+        User user = userService.find(username, password);
+
+        if (user != null) {
+            request.getSession().setAttribute("user", user);
+            response.sendRedirect("home");
+        }
+        else {
+            request.setAttribute("error", "Unknown user, please try again");
+            request.getRequestDispatcher("/login.jsp").forward(request, response);
+        }
+    }
+
+}
+</code></pre>
+
+<p>You see, if the <code>User</code> is found in DB (i.e. username and password are valid), then the <code>User</code> will be put in session scope (i.e. "logged in") and the servlet will redirect to some main page (this example goes to <code>http://example.com/contextname/home</code>), else it will set an error message and forward the request back to the same JSP page so that the message get displayed by <code>${error}</code>.</p>
+
+<p>You can if necessary also "hide" the <code>login.jsp</code> in <code>/WEB-INF/login.jsp</code> so that the users can only access it by the servlet. This keeps the URL clean <code>http://example.com/contextname/login</code>. All you need to do is to add a <code>doGet()</code> to the servlet like this:</p>
+
+<pre><code>protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+    request.getRequestDispatcher("/WEB-INF/login.jsp").forward(request, response);
+}
+</code></pre>
+
+<p><em>(and update the same line in <code>doPost()</code> accordingly)</em></p>
+
+<p>That said, I am not sure if it is just playing around and shooting in the dark, but the code which you posted doesn't look good (such as using <code>compareTo()</code> instead of <code>equals()</code> and digging in the parameternames instead of just using <code>getParameter()</code> and the <code>id</code> and <code>password</code> seems to be declared as servlet instance variables &mdash; which is NOT <a href="http://stackoverflow.com/questions/2183974/difference-between-each-instance-of-servlet-and-each-thread-of-servlet-in-servle/2184147#2184147">threadsafe</a>). So I would strongly recommend to learn a bit more about basic Java SE API using the <a href="http://docs.oracle.com/javase/tutorial/" rel="nofollow">Oracle tutorials</a> (check the chapter "Trails Covering the Basics") and how to use JSP/Servlets the right way using <a href="http://courses.coreservlets.com/Course-Materials/csajsp2.html" rel="nofollow">those tutorials</a>.</p>
+
+<h3>See also:</h3>
+
+<ul>
+<li><a href="http://stackoverflow.com/tags/servlets/info">Our servlets wiki page</a></li>
+</ul>
+
+<hr>
+
+<p><strong>Update</strong>: as per the update of your question (which is pretty major, you should not remove parts of your original question, this would make the answers worthless .. rather <em>add</em> the information in a new block) , it turns out that you're unnecessarily setting form's encoding type to <a href="http://www.faqs.org/rfcs/rfc2388.html" rel="nofollow"><code>multipart/form-data</code></a>. This will send the request parameters in a different composition than the (default) <code>application/x-www-form-urlencoded</code> which sends the request parameters as a query string (e.g. <code>name1=value1&amp;name2=value2&amp;name3=value3</code>). You only need <code>multipart/form-data</code> whenever you have a <code>&lt;input type="file"&gt;</code> element in the form to upload files which may be non-character data (binary data). This is not the case in your case, so just remove it and it will work as expected. If you ever need to upload files, then you'll have to set the encoding type so and parse the request body yourself. Usually you use the <a href="http://commons.apache.org/fileupload" rel="nofollow">Apache Commons FileUpload</a> there for, but if you're already on fresh new Servlet 3.0 API, then you can just use builtin facilities starting with <a href="http://docs.oracle.com/javaee/6/api/javax/servlet/http/HttpServletRequest.html#getPart%28java.lang.String%29" rel="nofollow"><code>HttpServletRequest#getPart()</code></a>. See also this answer for a concrete example: <a href="http://stackoverflow.com/questions/2422468/how-to-upload-files-to-server-using-jsp-servlet/2424824#2424824">How to upload files to server using JSP/Servlet?</a></p>

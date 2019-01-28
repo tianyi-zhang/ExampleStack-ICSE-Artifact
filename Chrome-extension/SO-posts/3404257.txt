@@ -1,0 +1,179 @@
+<p>With <code>Parameterized</code> as a model, I wrote my own custom test runner / suite -- only took about half an hour. It's slightly different from darrenp's <code>LabelledParameterized</code> in that it lets you specify a name explicitly rather than relying on the first parameter's <code>toString()</code>.</p>
+
+<p>It also doesn't use arrays because I hate arrays. :)</p>
+
+<pre><code>public class PolySuite extends Suite {
+
+  // //////////////////////////////
+  // Public helper interfaces
+
+  /**
+   * Annotation for a method which returns a {@link Configuration}
+   * to be injected into the test class constructor
+   */
+  @Retention(RetentionPolicy.RUNTIME)
+  @Target(ElementType.METHOD)
+  public static @interface Config {
+  }
+
+  public static interface Configuration {
+    int size();
+    Object getTestValue(int index);
+    String getTestName(int index);
+  }
+
+  // //////////////////////////////
+  // Fields
+
+  private final List&lt;Runner&gt; runners;
+
+  // //////////////////////////////
+  // Constructor
+
+  /**
+   * Only called reflectively. Do not use programmatically.
+   * @param c the test class
+   * @throws Throwable if something bad happens
+   */
+  public PolySuite(Class&lt;?&gt; c) throws Throwable {
+    super(c, Collections.&lt;Runner&gt;emptyList());
+    TestClass testClass = getTestClass();
+    Class&lt;?&gt; jTestClass = testClass.getJavaClass();
+    Configuration configuration = getConfiguration(testClass);
+    List&lt;Runner&gt; runners = new ArrayList&lt;Runner&gt;();
+    for (int i = 0, size = configuration.size(); i &lt; size; i++) {
+      SingleRunner runner = new SingleRunner(jTestClass, configuration.getTestValue(i), configuration.getTestName(i));
+      runners.add(runner);
+    }
+    this.runners = runners;
+  }
+
+  // //////////////////////////////
+  // Overrides
+
+  @Override
+  protected List&lt;Runner&gt; getChildren() {
+    return runners;
+  }
+
+  // //////////////////////////////
+  // Private
+
+  private Configuration getConfiguration(TestClass testClass) throws Throwable {
+    return (Configuration) getConfigMethod(testClass).invokeExplosively(null);
+  }
+
+  private FrameworkMethod getConfigMethod(TestClass testClass) {
+    List&lt;FrameworkMethod&gt; methods = testClass.getAnnotatedMethods(Config.class);
+    if (methods.isEmpty()) {
+      throw new IllegalStateException("@" + Config.class.getSimpleName() + " method not found");
+    }
+    if (methods.size() &gt; 1) {
+      throw new IllegalStateException("Too many @" + Config.class.getSimpleName() + " methods");
+    }
+    FrameworkMethod method = methods.get(0);
+    int modifiers = method.getMethod().getModifiers();
+    if (!(Modifier.isStatic(modifiers) &amp;&amp; Modifier.isPublic(modifiers))) {
+      throw new IllegalStateException("@" + Config.class.getSimpleName() + " method \"" + method.getName() + "\" must be public static");
+    }
+    return method;
+  }
+
+  // //////////////////////////////
+  // Helper classes
+
+  private static class SingleRunner extends BlockJUnit4ClassRunner {
+
+    private final Object testVal;
+    private final String testName;
+
+    SingleRunner(Class&lt;?&gt; testClass, Object testVal, String testName) throws InitializationError {
+      super(testClass);
+      this.testVal = testVal;
+      this.testName = testName;
+    }
+
+    @Override
+    protected Object createTest() throws Exception {
+      return getTestClass().getOnlyConstructor().newInstance(testVal);
+    }
+
+    @Override
+    protected String getName() {
+      return testName;
+    }
+
+    @Override
+    protected String testName(FrameworkMethod method) {
+      return testName + ": " + method.getName();
+    }
+
+    @Override
+    protected void validateConstructor(List&lt;Throwable&gt; errors) {
+      validateOnlyOneConstructor(errors);
+    }
+
+    @Override
+    protected Statement classBlock(RunNotifier notifier) {
+      return childrenInvoker(notifier);
+    }
+  }
+}
+</code></pre>
+
+<p>And an example:</p>
+
+<pre><code>@RunWith(PolySuite.class)
+public class PolySuiteExample {
+
+  // //////////////////////////////
+  // Fixture
+
+  @Config
+  public static Configuration getConfig() {
+    return new Configuration() {
+      @Override
+      public int size() {
+        return 10;
+      }
+
+      @Override
+      public Integer getTestValue(int index) {
+        return index * 2;
+      }
+
+      @Override
+      public String getTestName(int index) {
+        return "test" + index;
+      }
+    };
+  }
+
+  // //////////////////////////////
+  // Fields
+
+  private final int testVal;
+
+  // //////////////////////////////
+  // Constructor
+
+  public PolySuiteExample(int testVal) {
+    this.testVal = testVal;
+  }
+
+  // //////////////////////////////
+  // Test
+
+  @Ignore
+  @Test
+  public void odd() {
+    assertFalse(testVal % 2 == 0);
+  }
+
+  @Test
+  public void even() {
+    assertTrue(testVal % 2 == 0);
+  }
+
+}
+</code></pre>

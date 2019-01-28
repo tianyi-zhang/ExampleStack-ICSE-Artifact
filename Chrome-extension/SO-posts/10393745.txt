@@ -1,0 +1,101 @@
+<p>The code doesn't support validation of Zip files that contain compressed files.  Replace the doInBackground loop from the validation function in order to make it validate CRC's in Zip files correctly.  Note that you cannot stream video/audio playback from files stored compressed in Zip files.</p>
+
+<pre><code>        @Override
+        protected Boolean doInBackground(Object... params) {
+            for (XAPKFile xf : xAPKS) {
+                String fileName = Helpers.getExpansionAPKFileName(SampleDownloaderActivity.this,
+                        xf.mIsMain, xf.mFileVersion);
+                if (!Helpers.doesFileExist(SampleDownloaderActivity.this, fileName,
+                        xf.mFileSize, false))
+                    return false;
+                fileName = Helpers
+                        .generateSaveFileName(SampleDownloaderActivity.this, fileName);
+                ZipResourceFile zrf;
+                byte[] buf = new byte[1024 * 256];
+                try {
+                    zrf = new ZipResourceFile(fileName);
+                    ZipEntryRO[] entries = zrf.getAllEntries();
+                    /**
+                     * First calculate the total compressed length
+                     */
+                    long totalCompressedLength = 0;
+                    for (ZipEntryRO entry : entries) {
+                        totalCompressedLength += entry.mCompressedLength;
+                    }
+                    float averageVerifySpeed = 0;
+                    long totalBytesRemaining = totalCompressedLength;
+                    long timeRemaining;
+                    /**
+                     * Then calculate a CRC for every file in the
+                     * Zip file, comparing it to what is stored in
+                     * the Zip directory. Note that for compressed
+                     * Zip files we must extract the contents to do
+                     * this comparison.
+                     */
+                    for (ZipEntryRO entry : entries) {
+                        if (-1 != entry.mCRC32) {
+                            long length = entry.mUncompressedLength;
+                            CRC32 crc = new CRC32();
+                            DataInputStream dis = null;
+                            try {
+                                dis = new DataInputStream(
+                                        zrf.getInputStream(entry.mFileName));
+
+                                long startTime = SystemClock.uptimeMillis();
+                                while (length &gt; 0) {
+                                    int seek = (int) (length &gt; buf.length ? buf.length
+                                            : length);
+                                    dis.readFully(buf, 0, seek);
+                                    crc.update(buf, 0, seek);
+                                    length -= seek;
+                                    long currentTime = SystemClock.uptimeMillis();
+                                    long timePassed = currentTime - startTime;
+                                    if (timePassed &gt; 0) {
+                                        float currentSpeedSample = (float) seek
+                                                / (float) timePassed;
+                                        if (0 != averageVerifySpeed) {
+                                            averageVerifySpeed = SMOOTHING_FACTOR
+                                                    * currentSpeedSample
+                                                    + (1 - SMOOTHING_FACTOR)
+                                                    * averageVerifySpeed;
+                                        } else {
+                                            averageVerifySpeed = currentSpeedSample;
+                                        }
+                                        totalBytesRemaining -= seek;
+                                        timeRemaining = (long) (totalBytesRemaining / averageVerifySpeed);
+                                        this.publishProgress(
+                                                new DownloadProgressInfo(
+                                                        totalCompressedLength,
+                                                        totalCompressedLength
+                                                                - totalBytesRemaining,
+                                                        timeRemaining,
+                                                        averageVerifySpeed)
+                                                );
+                                    }
+                                    startTime = currentTime;
+                                    if (mCancelValidation)
+                                        return true;
+                                }
+                                if (crc.getValue() != entry.mCRC32) {
+                                    Log.e(Constants.TAG,
+                                            "CRC does not match for entry: "
+                                                    + entry.mFileName);
+                                    Log.e(Constants.TAG,
+                                            "In file: " + entry.getZipFileName());
+                                    return false;
+                                }
+                            } finally {
+                                if (null != dis) {
+                                    dis.close();
+                                }
+                            }
+                        }
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    return false;
+                }
+            }
+            return true;
+        }
+</code></pre>

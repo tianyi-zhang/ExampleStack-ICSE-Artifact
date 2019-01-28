@@ -1,0 +1,122 @@
+<p>I successfully with following codes:</p>
+
+<pre><code>@Override
+public Response serve(IHTTPSession session) {
+    Map&lt;String, String&gt; headers = session.getHeaders();
+    Map&lt;String, String&gt; parms = session.getParms();
+    Method method = session.getMethod();
+    String uri = session.getUri();
+    Map&lt;String, String&gt; files = new HashMap&lt;&gt;();
+
+    if (Method.POST.equals(method) || Method.PUT.equals(method)) {
+        try {
+            session.parseBody(files);
+        }
+        catch (IOException e) {
+            return getResponse("Internal Error IO Exception: " + e.getMessage());
+        }
+        catch (ResponseException e) {
+            return new Response(e.getStatus(), MIME_PLAINTEXT, e.getMessage());
+        }
+    }
+
+    uri = uri.trim().replace(File.separatorChar, '/');
+    if (uri.indexOf('?') &gt;= 0) {
+        uri = uri.substring(0, uri.indexOf('?'));
+    }
+
+    File f = new File(uri);
+    return serveFile(uri, header, f);
+}
+
+private Response serveFile(String uri, Map&lt;String, String&gt; header, File file) {
+    Response res;
+    String mime = getMimeTypeForFile(uri);
+    try {
+        // Calculate etag
+        String etag = Integer.toHexString((file.getAbsolutePath() +
+                file.lastModified() + "" + file.length()).hashCode());
+
+        // Support (simple) skipping:
+        long startFrom = 0;
+        long endAt = -1;
+        String range = header.get("range");
+        if (range != null) {
+            if (range.startsWith("bytes=")) {
+                range = range.substring("bytes=".length());
+                int minus = range.indexOf('-');
+                try {
+                    if (minus &gt; 0) {
+                        startFrom = Long.parseLong(range.substring(0, minus));
+                        endAt = Long.parseLong(range.substring(minus + 1));
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+
+        // Change return code and add Content-Range header when skipping is requested
+        long fileLen = file.length();
+        if (range != null &amp;&amp; startFrom &gt;= 0) {
+            if (startFrom &gt;= fileLen) {
+                res = createResponse(Response.Status.RANGE_NOT_SATISFIABLE, MIME_PLAINTEXT, "");
+                res.addHeader("Content-Range", "bytes 0-0/" + fileLen);
+                res.addHeader("ETag", etag);
+            } else {
+                if (endAt &lt; 0) {
+                    endAt = fileLen - 1;
+                }
+                long newLen = endAt - startFrom + 1;
+                if (newLen &lt; 0) {
+                    newLen = 0;
+                }
+
+                final long dataLen = newLen;
+                FileInputStream fis = new FileInputStream(file) {
+                    @Override
+                    public int available() throws IOException {
+                        return (int) dataLen;
+                    }
+                };
+                fis.skip(startFrom);
+
+                res = createResponse(Response.Status.PARTIAL_CONTENT, mime, fis);
+                res.addHeader("Content-Length", "" + dataLen);
+                res.addHeader("Content-Range", "bytes " + startFrom + "-" +
+                        endAt + "/" + fileLen);
+                res.addHeader("ETag", etag);
+            }
+        } else {
+            if (etag.equals(header.get("if-none-match")))
+                res = createResponse(Response.Status.NOT_MODIFIED, mime, "");
+            else {
+                res = createResponse(Response.Status.OK, mime, new FileInputStream(file));
+                res.addHeader("Content-Length", "" + fileLen);
+                res.addHeader("ETag", etag);
+            }
+        }
+    } catch (IOException ioe) {
+        res = getResponse("Forbidden: Reading file failed");
+    }
+
+    return (res == null) ? getResponse("Error 404: File not found") : res;
+}
+
+// Announce that the file server accepts partial content requests
+private Response createResponse(Response.Status status, String mimeType, InputStream message) {
+    Response res = new Response(status, mimeType, message);
+    res.addHeader("Accept-Ranges", "bytes");
+    return res;
+}
+
+// Announce that the file server accepts partial content requests
+private Response createResponse(Response.Status status, String mimeType, String message) {
+    Response res = new Response(status, mimeType, message);
+    res.addHeader("Accept-Ranges", "bytes");
+    return res;
+}
+
+private Response getResponse(String message) {
+    return createResponse(Response.Status.OK, "text/plain", message);
+}
+</code></pre>

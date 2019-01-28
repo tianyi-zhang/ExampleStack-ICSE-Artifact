@@ -1,0 +1,105 @@
+<p>I'm still hoping for a better solution than this, but seeing as @aKzenT has confirmed my conclusion that there is not an existing solution for this I wrote one. Its just a simple subclass of AmazonS3Client. I worry it's brittle because I had to copy a lot of code from the method I overrode, but it seems like the most minimal solution. I can confirm that it works fine in my own code base. I posted the code in a <a href="https://gist.github.com/genericallyloud/5221160" rel="nofollow">gist</a>, but for the sake of a complete answer:</p>
+
+<pre><code>import com.amazonaws.AmazonWebServiceRequest;
+import com.amazonaws.HttpMethod;
+import com.amazonaws.Request;
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.handlers.RequestHandler;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.Headers;
+import com.amazonaws.services.s3.internal.S3QueryStringSigner;
+import com.amazonaws.services.s3.internal.ServiceUtils;
+
+import java.util.Date;
+
+/**
+ * This class should be a drop in replacement for AmazonS3Client as long as you use the single credential
+ * constructor. It could probably be modified to add additional constructors if needed, but this is the one we use.
+ * Supporting all of them didn't seem trivial because of some dependencies in the original presignRequest method.
+ *
+ * The only real purpose of this class is to change the behavior of generating presigned URLs. The original version
+ * escaped slashes in the key and this one does not. Pretty url paths are kept intact.
+ *
+ * @author Russell Leggett
+ */
+public class PrettyUrlS3Client extends AmazonS3Client{
+    private AWSCredentials awsCredentials;
+
+    /**
+     * This constructor is the only one provided because it is only one I needed, and it
+     * retains awsCredentials which might be needed in the presignRequest method
+     *
+     * @param awsCredentials
+     */
+    public PrettyUrlS3Client(AWSCredentials awsCredentials) {
+        super(awsCredentials);
+        this.awsCredentials = awsCredentials;
+    }
+
+    /**
+     * WARNING: This method is an override of the AmazonS3Client presignRequest
+     * and copies most of the code. Should be careful of updates to the original.
+     *
+     * @param request
+     * @param methodName
+     * @param bucketName
+     * @param key
+     * @param expiration
+     * @param subResource
+     * @param &lt;T&gt;
+     */
+    @Override
+    protected &lt;T&gt; void presignRequest(Request&lt;T&gt; request, HttpMethod methodName, String bucketName, String key, Date expiration, String subResource) {
+
+        // Run any additional request handlers if present
+        if (requestHandlers != null) {
+            for (RequestHandler requestHandler : requestHandlers) {
+                requestHandler.beforeRequest(request);
+            }
+        }
+        String resourcePath = "/" +
+                ((bucketName != null) ? bucketName + "/" : "") +
+                ((key != null) ? keyToEscapedPath(key)/* CHANGED: this is the primary change */ : "") +
+                ((subResource != null) ? "?" + subResource : "");
+
+        //the request apparently needs the resource path without a starting '/'
+        request.setResourcePath(resourcePath.substring(1));//CHANGED: needed to match the signature with the URL generated from the request
+        AWSCredentials credentials = awsCredentials;
+        AmazonWebServiceRequest originalRequest = request.getOriginalRequest();
+        if (originalRequest != null &amp;&amp; originalRequest.getRequestCredentials() != null) {
+            credentials = originalRequest.getRequestCredentials();
+        }
+
+        new S3QueryStringSigner&lt;T&gt;(methodName.toString(), resourcePath, expiration).sign(request, credentials);
+
+        // The Amazon S3 DevPay token header is a special exception and can be safely moved
+        // from the request's headers into the query string to ensure that it travels along
+        // with the pre-signed URL when it's sent back to Amazon S3.
+        if (request.getHeaders().containsKey(Headers.SECURITY_TOKEN)) {
+            String value = request.getHeaders().get(Headers.SECURITY_TOKEN);
+            request.addParameter(Headers.SECURITY_TOKEN, value);
+            request.getHeaders().remove(Headers.SECURITY_TOKEN);
+        }
+    }
+
+    /**
+     * A simple utility method which url escapes an S3 key, but leaves the
+     * slashes (/) unescaped so they can stay part of the url.
+     * @param key
+     * @return
+     */
+    public static String keyToEscapedPath(String key){
+        String[] keyParts = key.split("/");
+        StringBuilder result = new StringBuilder();
+        for(String part : keyParts){
+            if(result.length()&gt;0){
+                result.append("/");
+            }
+            result.append(ServiceUtils.urlEncode(part));
+        }
+        return result.toString().replaceAll("%7E","~");
+    }
+}
+</code></pre>
+
+<p><em>UPDATE</em> I updated the gist and this code to fix an issue I was having with ~'s. It was occurring even using the standard client, but unescaping the ~ fixed it. See gist for more details/track any further changes I might make.</p>

@@ -1,0 +1,312 @@
+<p>The blurring itself takes a lot of time, even on new devices. Animating the blur would be even worse. RenderScript wouldn't help much either. Your best bet is to cross-fade between a blurred and non-blurred images:</p>
+
+<pre><code>package com.example.simon.crossfadeblur;
+
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.os.Bundle;
+import android.util.AttributeSet;
+import android.util.Log;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+
+public class MainActivity extends Activity {
+
+    public Bitmap blur(Bitmap sentBitmap, int radius) {
+
+        // Stack Blur Algorithm by Mario Klingemann &lt;mario@quasimondo.com&gt;
+
+        Bitmap bitmap = sentBitmap.copy(sentBitmap.getConfig(), true);
+
+        if (radius &lt; 1) {
+            return (null);
+        }
+
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+
+        int[] pix = new int[w * h];
+        Log.e("pix", w + " " + h + " " + pix.length);
+        bitmap.getPixels(pix, 0, w, 0, 0, w, h);
+
+        int wm = w - 1;
+        int hm = h - 1;
+        int wh = w * h;
+        int div = radius + radius + 1;
+
+        int r[] = new int[wh];
+        int g[] = new int[wh];
+        int b[] = new int[wh];
+        int rsum, gsum, bsum, x, y, i, p, yp, yi, yw;
+        int vmin[] = new int[Math.max(w, h)];
+
+        int divsum = (div + 1) &gt;&gt; 1;
+        divsum *= divsum;
+        int dv[] = new int[256 * divsum];
+        for (i = 0; i &lt; 256 * divsum; i++) {
+            dv[i] = (i / divsum);
+        }
+
+        yw = yi = 0;
+
+        int[][] stack = new int[div][3];
+        int stackpointer;
+        int stackstart;
+        int[] sir;
+        int rbs;
+        int r1 = radius + 1;
+        int routsum, goutsum, boutsum;
+        int rinsum, ginsum, binsum;
+
+        for (y = 0; y &lt; h; y++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            for (i = -radius; i &lt;= radius; i++) {
+                p = pix[yi + Math.min(wm, Math.max(i, 0))];
+                sir = stack[i + radius];
+                sir[0] = (p &amp; 0xff0000) &gt;&gt; 16;
+                sir[1] = (p &amp; 0x00ff00) &gt;&gt; 8;
+                sir[2] = (p &amp; 0x0000ff);
+                rbs = r1 - Math.abs(i);
+                rsum += sir[0] * rbs;
+                gsum += sir[1] * rbs;
+                bsum += sir[2] * rbs;
+                if (i &gt; 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+            }
+            stackpointer = radius;
+
+            for (x = 0; x &lt; w; x++) {
+
+                r[yi] = dv[rsum];
+                g[yi] = dv[gsum];
+                b[yi] = dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (y == 0) {
+                    vmin[x] = Math.min(x + radius + 1, wm);
+                }
+                p = pix[yw + vmin[x]];
+
+                sir[0] = (p &amp; 0xff0000) &gt;&gt; 16;
+                sir[1] = (p &amp; 0x00ff00) &gt;&gt; 8;
+                sir[2] = (p &amp; 0x0000ff);
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[(stackpointer) % div];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi++;
+            }
+            yw += w;
+        }
+        for (x = 0; x &lt; w; x++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            yp = -radius * w;
+            for (i = -radius; i &lt;= radius; i++) {
+                yi = Math.max(0, yp) + x;
+
+                sir = stack[i + radius];
+
+                sir[0] = r[yi];
+                sir[1] = g[yi];
+                sir[2] = b[yi];
+
+                rbs = r1 - Math.abs(i);
+
+                rsum += r[yi] * rbs;
+                gsum += g[yi] * rbs;
+                bsum += b[yi] * rbs;
+
+                if (i &gt; 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+
+                if (i &lt; hm) {
+                    yp += w;
+                }
+            }
+            yi = x;
+            stackpointer = radius;
+            for (y = 0; y &lt; h; y++) {
+                // Preserve alpha channel: ( 0xff000000 &amp; pix[yi] )
+                pix[yi] = ( 0xff000000 &amp; pix[yi] ) | ( dv[rsum] &lt;&lt; 16 ) | ( dv[gsum] &lt;&lt; 8 ) | dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (x == 0) {
+                    vmin[y] = Math.min(y + r1, hm) * w;
+                }
+                p = x + vmin[y];
+
+                sir[0] = r[p];
+                sir[1] = g[p];
+                sir[2] = b[p];
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[stackpointer];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi += w;
+            }
+        }
+
+        Log.e("pix", w + " " + h + " " + pix.length);
+        bitmap.setPixels(pix, 0, w, 0, 0, w, h);
+
+        return (bitmap);
+    }
+
+    public class FadeView extends FrameLayout {
+        private long mFadeDelay = 1000;
+        private ImageView mFirst;
+        private ImageView mSecond;
+        private boolean mFirstShowing;
+
+        public FadeView(Context context) {
+            super(context);
+            init(context);
+        }
+
+        public FadeView(Context context, AttributeSet attrs) {
+            super(context, attrs);
+            init(context);
+        }
+
+        public FadeView(Context context, AttributeSet attrs, int defStyle) {
+            super(context, attrs, defStyle);
+            init(context);
+        }
+
+        private void init(Context c){
+            mFirst = new ImageView(c);
+            mSecond = new ImageView(c);
+
+            mFirst.setAlpha(1.0f);
+            mSecond.setAlpha(0.0f);
+
+            mFirstShowing = true;
+
+            addView(mFirst);
+            addView(mSecond);
+        }
+
+        public void setFadeDelay(long fadeDelay) {
+            mFadeDelay = fadeDelay;
+        }
+
+        public void ShowImage(Drawable d){
+            if(mFirstShowing){
+                mSecond.setImageDrawable(d);
+                mSecond.animate().alpha(1.0f).setDuration(mFadeDelay);
+                mFirst.animate().alpha(0.0f).setDuration(mFadeDelay);
+            }else {
+                mFirst.setImageDrawable(d);
+                mSecond.animate().alpha(0.0f).setDuration(mFadeDelay);
+                mFirst.animate().alpha(1.0f).setDuration(mFadeDelay);
+            }
+
+            mFirstShowing = !mFirstShowing;
+        }
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        final FadeView fw = new FadeView(this);
+        setContentView(fw);
+
+        fw.setOnClickListener(new View.OnClickListener() {
+
+            Bitmap bitmap = BitmapFactory.decodeResource(getResources(), R.drawable.image);
+            Bitmap blurredBitmap = blur(bitmap, 100);
+
+            Drawable d1 = new BitmapDrawable(getResources(), blurredBitmap);
+            Drawable d2 = getResources().getDrawable(R.drawable.image);
+            boolean flag;
+
+            @Override
+            public void onClick(View view) {
+                if(flag){
+                    fw.ShowImage(d1);
+                }else {
+                    fw.ShowImage(d2);
+                }
+                flag = !flag;
+            }
+        });
+    }
+
+}
+</code></pre>
+
+<p><strong>Note</strong>: The crossfade code was taken from: <a href="http://stackoverflow.com/questions/18249395/android-crossfade-mutiple-images-in-an-imageview">Source</a> (animates on click)</p>
+
+<p>Another way I can think of of doing this, is to use JQuery and animate the blur inside of a WebView.</p>

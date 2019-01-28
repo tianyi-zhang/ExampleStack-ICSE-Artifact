@@ -1,0 +1,76 @@
+<p>
+The most important question here is <strong>what is the bottleneck in your case</strong>.</p>
+
+<p>If the bottleneck is your <strong>disk IO</strong>, then there isn't much you can do at the software part. Parallelizing the computation will only make things worse, because reading the file from different parts simultaneously will degrade disk performance.</p>
+
+<p>If the bottleneck is <strong>processing power</strong>, and you have multiple CPU cores, then you can take an advantage of starting multiple threads to work on different parts of the file. You can safely create several <code>InputStream</code>s or <code>Reader</code>s to read different parts of the file in parallel (as long as you don't go over your operating system's limit for the number of open files). You could separate the work into tasks and run them in parallel, like in this example:</p>
+
+<pre class="lang-java prettyprint-override"><code>import java.io.*;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class Split {
+    private File file;
+
+    public Split(File file) {
+        this.file = file;
+    }
+
+    // Processes the given portion of the file.
+    // Called simultaneously from several threads.
+    // Use your custom return type as needed, I used String just to give an example.
+    public String processPart(long start, long end)
+        throws Exception
+    {
+        InputStream is = new FileInputStream(file);
+        is.skip(start);
+        // do a computation using the input stream,
+        // checking that we don't read more than (end-start) bytes
+        System.out.println("Computing the part from " + start + " to " + end);
+        Thread.sleep(1000);
+        System.out.println("Finished the part from " + start + " to " + end);
+
+        is.close();
+        return "Some result";
+    }
+
+    // Creates a task that will process the given portion of the file,
+    // when executed.
+    public Callable&lt;String&gt; processPartTask(final long start, final long end) {
+        return new Callable&lt;String&gt;() {
+            public String call()
+                throws Exception
+            {
+                return processPart(start, end);
+            }
+        };
+    }
+
+    // Splits the computation into chunks of the given size,
+    // creates appropriate tasks and runs them using a 
+    // given number of threads.
+    public void processAll(int noOfThreads, int chunkSize)
+        throws Exception
+    {
+        int count = (int)((file.length() + chunkSize - 1) / chunkSize);
+        java.util.List&lt;Callable&lt;String&gt;&gt; tasks = new ArrayList&lt;Callable&lt;String&gt;&gt;(count);
+        for(int i = 0; i &lt; count; i++)
+            tasks.add(processPartTask(i * chunkSize, Math.min(file.length(), (i+1) * chunkSize)));
+        ExecutorService es = Executors.newFixedThreadPool(noOfThreads);
+
+        java.util.List&lt;Future&lt;String&gt;&gt; results = es.invokeAll(tasks);
+        es.shutdown();
+
+        // use the results for something
+        for(Future&lt;String&gt; result : results)
+            System.out.println(result.get());
+    }
+
+    public static void main(String argv[])
+        throws Exception
+    {
+        Split s = new Split(new File(argv[0]));
+        s.processAll(8, 1000);
+    }
+}
+</code></pre>

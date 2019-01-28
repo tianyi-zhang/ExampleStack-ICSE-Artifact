@@ -1,0 +1,547 @@
+<p>+1 to GagandeepBalis comment.</p>
+
+<p>Okay so I found this very cool and decided to look into it more.</p>
+
+<p>I came up with some logic which will be needed for it to work, maybe not the best but...:</p>
+
+<p>1) We need to make our <code>JButton</code>s draggable ( thank you @camickr and his <code>DragLayout</code>) :)</p>
+
+<p>2) When a <code>JButton</code>s is dragged and than dropped i.e on <code>mouseReleased(..)</code> we should check if a our dragged buttons collide with any others</p>
+
+<p>3) we check whether a <code>JButton</code> collides with another by getting the JButton image and counting how many opaque pixels of the <code>JButton</code>, we are dragging, are covering another button.</p>
+
+<p>4) sort the number of collisions and find the highest, this will be used so we can see where to insert the <code>JButton</code> we dragged. i.e it will be inserted by component with the most collisions.</p>
+
+<p>5) sort the <code>ArrayList</code> which holds the buttons to match the changes</p>
+
+<p>6) remove all buttons and re-add them using the Array (and thus they will be re-ordered).</p>
+
+<p>Here is an example (Most code takes place in overridden <code>ComponentMover</code> <code>mouseReleased(..)</code> method):</p>
+
+<p>Before dragging anything:</p>
+
+<p><img src="http://i.stack.imgur.com/tNyLA.png" alt="enter image description here"></p>
+
+<p>after dragging button 4 over button 1 and letting go of mouse button:</p>
+
+<p><img src="http://i.stack.imgur.com/5Dysc.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.Component;
+import java.awt.Cursor;
+import java.awt.Dimension;
+import java.awt.Graphics;
+import java.awt.GraphicsEnvironment;
+import java.awt.GridLayout;
+import java.awt.Insets;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.Window;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.imageio.ImageIO;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+
+public class DragButtons {
+
+    ArrayList&lt;JButton&gt; buttons = new ArrayList&lt;&gt;();
+
+    public DragButtons() {
+        initComponents();
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                new DragButtons();
+            }
+        });
+    }
+
+    private void initComponents() {
+        JFrame frame = new JFrame();
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        final JPanel panel = new JPanel(new GridLayout(2, 2));
+
+        ComponentMover cm = new ComponentMover() {
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                super.mouseReleased(e);
+                HashMap&lt;Integer, JButton&gt; collisions = new HashMap&lt;&gt;();
+                JButton draggedButton = (JButton) e.getSource();
+
+                for (JButton btn : buttons) {//iterate through all buttons and get the number of collsions of each
+                    if (btn != draggedButton) {//dont chck button we were dragging
+                        int col = checkPerPixelCollision(draggedButton, btn);
+                        System.out.println("Button " + btn.getText());
+                        System.out.println(col);
+                        collisions.put(col, btn);
+                    }
+                }
+                //lets get the button which had most collisions
+                int maxCollisions = 0;
+                JButton intersectingButton = null;
+                for (Map.Entry&lt;Integer, JButton&gt; entry : collisions.entrySet()) {
+                    Integer collisionCount = entry.getKey();
+                    JButton button = entry.getValue();
+                    if (collisionCount &gt; maxCollisions) {
+                        maxCollisions = collisionCount;
+                        intersectingButton = button;
+                    }
+                }
+
+                boolean reLayout = false;
+
+                if (maxCollisions &gt; 0) {//check if there was any
+                    System.out.println("Button " + draggedButton.getText() + " is intersecting more of Button " + intersectingButton.getText());
+                    System.out.println("Collisions: " + maxCollisions);
+                    reLayout = true;
+                } else {
+                    System.out.println("No change made");
+                    reLayout = false;
+                }
+
+                ArrayList&lt;JButton&gt; tmpButtons = (ArrayList&lt;JButton&gt;) buttons.clone();//create clone of buttons
+
+                if (reLayout) {//a button as moved and panel needs to be layed out
+                    buttons.clear();//clear old buttons
+
+                    for (JButton b : tmpButtons) {//re-order jbuttons
+                        if (b == intersectingButton) {
+                            buttons.add(draggedButton);
+                        } else if (b == draggedButton) {
+                            buttons.add(intersectingButton);
+                        } else {
+                            buttons.add(b);
+                        }
+                    }
+                    panel.removeAll();//remove all buttons
+                    for (JButton btn : buttons) {//iterate through all buttons and get the number of collsions of each
+                        panel.add(btn);//re-add buttons according to arraylist
+                    }
+                    panel.revalidate();
+                    panel.repaint();
+                    //re-order the Array of buttons to fit
+                    //remove all button and re add them using sorted array
+                }
+
+            }
+        };
+
+        for (int i = 0; i &lt; 4; i++) {
+            JButton b = new JButton(String.valueOf(i + 1));
+            buttons.add(b);
+            panel.add(b);
+            cm.registerComponent(b);
+        }
+
+        frame.add(panel);
+
+        frame.pack();
+        frame.setVisible(true);
+
+    }
+
+    public HashSet&lt;String&gt; getMask(JButton e) {
+        HashSet&lt;String&gt; mask = new HashSet&lt;&gt;();
+        int pixel, a;
+        BufferedImage bi = null;
+        try {
+            bi = componentToImage(e, e.getBounds()); //gets the current image being shown
+        } catch (IOException ex) {
+            Logger.getLogger(DragButtons.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        for (int i = 0; i &lt; bi.getWidth(); i++) { // for every (x,y) component in the given box, 
+            for (int j = 0; j &lt; bi.getHeight(); j++) {
+                pixel = bi.getRGB(i, j); // get the RGB value of the pixel
+                a = (pixel &gt;&gt; 24) &amp; 0xff;
+                if (a != 0) {  // if the alpha is not 0, it must be something other than transparent
+                    mask.add((e.getX() + i) + "," + (e.getY() - j)); // add the absolute x and absolute y coordinates to our set
+                }
+            }
+        }
+        return mask;  //return our set
+    }
+
+    public static BufferedImage componentToImage(Component component, Rectangle region) throws IOException {
+        BufferedImage img = new BufferedImage(component.getWidth(), component.getHeight(), BufferedImage.TYPE_INT_ARGB_PRE);
+        Graphics g = img.getGraphics();
+        g.setColor(component.getForeground());
+        g.setFont(component.getFont());
+        component.paintAll(g);
+        ImageIO.write(img, "png", new File("c:/saved.png"));
+        return img;
+    }
+
+    // Returns true if there is a collision between object a and object b   
+    public int checkPerPixelCollision(JButton b, JButton b2) {
+        // This method detects to see if the images overlap at all. If they do, collision is possible
+        int ax1 = (int) b2.getX();
+        int ay1 = (int) b2.getY();
+
+        int ax2 = ax1 + (int) b2.getWidth();
+        int ay2 = ay1 + (int) b2.getHeight();
+
+        int bx1 = (int) b.getX();
+        int by1 = (int) b.getY();
+
+        int bx2 = bx1 + (int) b.getWidth();
+
+        int by2 = by1 + (int) b.getHeight();
+
+        if (by2 &lt; ay1 || ay2 &lt; by1 || bx2 &lt; ax1 || ax2 &lt; bx1) {
+            return 0; // Collision is impossible.
+        } else { // Collision is possible.
+            // get the masks for both images
+            HashSet&lt;String&gt; maskPlayer1 = getMask(b2);
+            HashSet&lt;String&gt; maskPlayer2 = getMask(b);
+            maskPlayer1.retainAll(maskPlayer2);  // Check to see if any pixels in maskPlayer2 are the same as those in maskPlayer1
+            if (maskPlayer1.size() &gt; 0) {  // if so, than there exists at least one pixel that is the same in both images, thus
+                return maskPlayer1.size();
+            }
+        }
+        return 0;
+    }
+}
+
+class ComponentMover extends MouseAdapter {
+
+    private Insets dragInsets = new Insets(0, 0, 0, 0);
+    private Dimension snapSize = new Dimension(1, 1);
+    private Insets edgeInsets = new Insets(0, 0, 0, 0);
+    private boolean changeCursor = true;
+    private boolean autoLayout = false;
+    private Class destinationClass;
+    private Component destinationComponent;
+    private Component destination;
+    private Component source;
+    private Point pressed;
+    private Point location;
+    private Cursor originalCursor;
+    private boolean autoscrolls;
+    private boolean potentialDrag;
+
+    /**
+     * Constructor for moving individual components. The components must be
+     * regisetered using the registerComponent() method.
+     */
+    public ComponentMover() {
+    }
+
+    /**
+     * Constructor to specify a Class of Component that will be moved when drag
+     * events are generated on a registered child component. The events will be
+     * passed to the first ancestor of this specified class.
+     *
+     * @param destinationClass the Class of the ancestor component
+     * @param component the Components to be registered for forwarding drag
+     * events to the ancestor Component.
+     */
+    public ComponentMover(Class destinationClass, Component... components) {
+        this.destinationClass = destinationClass;
+        registerComponent(components);
+    }
+
+    /**
+     * Constructor to specify a parent component that will be moved when drag
+     * events are generated on a registered child component.
+     *
+     * @param destinationComponent the component drage events should be
+     * forwareded to
+     * @param components the Components to be registered for forwarding drag
+     * events to the parent component to be moved
+     */
+    public ComponentMover(Component destinationComponent, Component... components) {
+        this.destinationComponent = destinationComponent;
+        registerComponent(components);
+    }
+
+    /**
+     * Get the auto layout property
+     *
+     * @return the auto layout property
+     */
+    public boolean isAutoLayout() {
+        return autoLayout;
+    }
+
+    /**
+     * Set the auto layout property
+     *
+     * @param autoLayout when true layout will be invoked on the parent
+     * container
+     */
+    public void setAutoLayout(boolean autoLayout) {
+        this.autoLayout = autoLayout;
+    }
+
+    /**
+     * Get the change cursor property
+     *
+     * @return the change cursor property
+     */
+    public boolean isChangeCursor() {
+        return changeCursor;
+    }
+
+    /**
+     * Set the change cursor property
+     *
+     * @param changeCursor when true the cursor will be changed to the
+     * Cursor.MOVE_CURSOR while the mouse is pressed
+     */
+    public void setChangeCursor(boolean changeCursor) {
+        this.changeCursor = changeCursor;
+    }
+
+    /**
+     * Get the drag insets
+     *
+     * @return the drag insets
+     */
+    public Insets getDragInsets() {
+        return dragInsets;
+    }
+
+    /**
+     * Set the drag insets. The insets specify an area where mouseDragged events
+     * should be ignored and therefore the component will not be moved. This
+     * will prevent these events from being confused with a MouseMotionListener
+     * that supports component resizing.
+     *
+     * @param dragInsets
+     */
+    public void setDragInsets(Insets dragInsets) {
+        this.dragInsets = dragInsets;
+    }
+
+    /**
+     * Get the bounds insets
+     *
+     * @return the bounds insets
+     */
+    public Insets getEdgeInsets() {
+        return edgeInsets;
+    }
+
+    /**
+     * Set the edge insets. The insets specify how close to each edge of the
+     * parent component that the child component can be moved. Positive values
+     * means the component must be contained within the parent. Negative values
+     * means the component can be moved outside the parent.
+     *
+     * @param edgeInsets
+     */
+    public void setEdgeInsets(Insets edgeInsets) {
+        this.edgeInsets = edgeInsets;
+    }
+
+    /**
+     * Remove listeners from the specified component
+     *
+     * @param component the component the listeners are removed from
+     */
+    public void deregisterComponent(Component... components) {
+        for (Component component : components) {
+            component.removeMouseListener(this);
+        }
+    }
+
+    /**
+     * Add the required listeners to the specified component
+     *
+     * @param component the component the listeners are added to
+     */
+    public void registerComponent(Component... components) {
+        for (Component component : components) {
+            component.addMouseListener(this);
+        }
+    }
+
+    /**
+     * Get the snap size
+     *
+     * @return the snap size
+     */
+    public Dimension getSnapSize() {
+        return snapSize;
+    }
+
+    /**
+     * Set the snap size. Forces the component to be snapped to the closest grid
+     * position. Snapping will occur when the mouse is dragged half way.
+     */
+    public void setSnapSize(Dimension snapSize) {
+        if (snapSize.width &lt; 1
+                || snapSize.height &lt; 1) {
+            throw new IllegalArgumentException("Snap sizes must be greater than 0");
+        }
+
+        this.snapSize = snapSize;
+    }
+
+    /**
+     * Setup the variables used to control the moving of the component:
+     *
+     * source - the source component of the mouse event destination - the
+     * component that will ultimately be moved pressed - the Point where the
+     * mouse was pressed in the destination component coordinates.
+     */
+    @Override
+    public void mousePressed(MouseEvent e) {
+        source = e.getComponent();
+        int width = source.getSize().width - dragInsets.left - dragInsets.right;
+        int height = source.getSize().height - dragInsets.top - dragInsets.bottom;
+        Rectangle r = new Rectangle(dragInsets.left, dragInsets.top, width, height);
+
+        if (r.contains(e.getPoint())) {
+            setupForDragging(e);
+        }
+    }
+
+    private void setupForDragging(MouseEvent e) {
+        source.addMouseMotionListener(this);
+        potentialDrag = true;
+
+        //  Determine the component that will ultimately be moved
+
+        if (destinationComponent != null) {
+            destination = destinationComponent;
+        } else if (destinationClass == null) {
+            destination = source;
+        } else //  forward events to destination component
+        {
+            destination = SwingUtilities.getAncestorOfClass(destinationClass, source);
+        }
+
+        pressed = e.getLocationOnScreen();
+        location = destination.getLocation();
+
+        if (changeCursor) {
+            originalCursor = source.getCursor();
+            source.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+        }
+
+        //  Making sure autoscrolls is false will allow for smoother dragging of
+        //  individual components
+
+        if (destination instanceof JComponent) {
+            JComponent jc = (JComponent) destination;
+            autoscrolls = jc.getAutoscrolls();
+            jc.setAutoscrolls(false);
+        }
+    }
+
+    /**
+     * Move the component to its new location. The dragged Point must be in the
+     * destination coordinates.
+     */
+    @Override
+    public void mouseDragged(MouseEvent e) {
+        Point dragged = e.getLocationOnScreen();
+        int dragX = getDragDistance(dragged.x, pressed.x, snapSize.width);
+        int dragY = getDragDistance(dragged.y, pressed.y, snapSize.height);
+
+        int locationX = location.x + dragX;
+        int locationY = location.y + dragY;
+
+        //  Mouse dragged events are not generated for every pixel the mouse
+        //  is moved. Adjust the location to make sure we are still on a
+        //  snap value.
+
+        while (locationX &lt; edgeInsets.left) {
+            locationX += snapSize.width;
+        }
+
+        while (locationY &lt; edgeInsets.top) {
+            locationY += snapSize.height;
+        }
+
+        Dimension d = getBoundingSize(destination);
+
+        while (locationX + destination.getSize().width + edgeInsets.right &gt; d.width) {
+            locationX -= snapSize.width;
+        }
+
+        while (locationY + destination.getSize().height + edgeInsets.bottom &gt; d.height) {
+            locationY -= snapSize.height;
+        }
+
+        //  Adjustments are finished, move the component
+
+        destination.setLocation(locationX, locationY);
+    }
+
+    /*
+     *  Determine how far the mouse has moved from where dragging started
+     *  (Assume drag direction is down and right for positive drag distance)
+     */
+    private int getDragDistance(int larger, int smaller, int snapSize) {
+        int halfway = snapSize / 2;
+        int drag = larger - smaller;
+        drag += (drag &lt; 0) ? -halfway : halfway;
+        drag = (drag / snapSize) * snapSize;
+
+        return drag;
+    }
+
+    /*
+     *  Get the bounds of the parent of the dragged component.
+     */
+    private Dimension getBoundingSize(Component source) {
+        if (source instanceof Window) {
+            GraphicsEnvironment env = GraphicsEnvironment.getLocalGraphicsEnvironment();
+            Rectangle bounds = env.getMaximumWindowBounds();
+            return new Dimension(bounds.width, bounds.height);
+        } else {
+            return source.getParent().getSize();
+        }
+    }
+
+    /**
+     * Restore the original state of the Component
+     */
+    @Override
+    public void mouseReleased(MouseEvent e) {
+        super.mouseReleased(e);
+        if (!potentialDrag) {
+            return;
+        }
+
+        source.removeMouseMotionListener(this);
+        potentialDrag = false;
+
+        if (changeCursor) {
+            source.setCursor(originalCursor);
+        }
+
+        if (destination instanceof JComponent) {
+            ((JComponent) destination).setAutoscrolls(autoscrolls);
+        }
+
+        //  Layout the components on the parent container
+
+        if (autoLayout) {
+            if (destination instanceof JComponent) {
+                ((JComponent) destination).revalidate();
+            } else {
+                destination.revalidate();
+            }
+            destination.repaint();
+        }
+    }
+}
+</code></pre>

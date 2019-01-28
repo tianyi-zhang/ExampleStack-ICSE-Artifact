@@ -1,0 +1,105 @@
+<p>There is a way to use the object layer. Don't give up hope!</p>
+
+<p>One major advantage of this method over using tile properties is the ease with which you can generate fewer, larger bodies for improved efficiency in Box2d. Plus, even better, those bodies can be any shape you want! Rather than dozens of squared-off bodies, my sample level in my game now has just three funny-shaped (read more organic-looking) <code>ChainShape</code>-based bodies.</p>
+
+<p>I <a href="http://gamedev.stackexchange.com/a/70448/41604">answered the same question</a> on GameDev the other day, after a serious hunt deep in the jungles of the Web. The <a href="http://siondream.com/blog/games/populate-your-box2d-world-using-the-libgdx-maps-api/">tutorial</a> I found didn't quite work for me as-is, so a little editing later I came up with this:</p>
+
+<pre><code>public class MapBodyBuilder {
+
+    // The pixels per tile. If your tiles are 16x16, this is set to 16f
+    private static float ppt = 0;
+
+    public static Array&lt;Body&gt; buildShapes(Map map, float pixels, World world) {
+        ppt = pixels;
+        MapObjects objects = map.getLayers().get("Obstacles").getObjects();
+
+        Array&lt;Body&gt; bodies = new Array&lt;Body&gt;();
+
+        for(MapObject object : objects) {
+
+            if (object instanceof TextureMapObject) {
+                continue;
+            }
+
+            Shape shape;
+
+            if (object instanceof RectangleMapObject) {
+                shape = getRectangle((RectangleMapObject)object);
+            }
+            else if (object instanceof PolygonMapObject) {
+                shape = getPolygon((PolygonMapObject)object);
+            }
+            else if (object instanceof PolylineMapObject) {
+                shape = getPolyline((PolylineMapObject)object);
+            }
+            else if (object instanceof CircleMapObject) {
+                shape = getCircle((CircleMapObject)object);
+            }
+            else {
+                continue;
+            }
+
+            BodyDef bd = new BodyDef();
+            bd.type = BodyType.StaticBody;
+            Body body = world.createBody(bd);
+            body.createFixture(shape, 1);
+
+            bodies.add(body);
+
+            shape.dispose();
+        }
+        return bodies;
+    }
+
+    private static PolygonShape getRectangle(RectangleMapObject rectangleObject) {
+        Rectangle rectangle = rectangleObject.getRectangle();
+        PolygonShape polygon = new PolygonShape();
+        Vector2 size = new Vector2((rectangle.x + rectangle.width * 0.5f) / ppt,
+                                   (rectangle.y + rectangle.height * 0.5f ) / ppt);
+        polygon.setAsBox(rectangle.width * 0.5f / ppt,
+                         rectangle.height * 0.5f / ppt,
+                         size,
+                         0.0f);
+        return polygon;
+    }
+
+    private static CircleShape getCircle(CircleMapObject circleObject) {
+        Circle circle = circleObject.getCircle();
+        CircleShape circleShape = new CircleShape();
+        circleShape.setRadius(circle.radius / ppt);
+        circleShape.setPosition(new Vector2(circle.x / ppt, circle.y / ppt));
+        return circleShape;
+    }
+
+    private static PolygonShape getPolygon(PolygonMapObject polygonObject) {
+        PolygonShape polygon = new PolygonShape();
+        float[] vertices = polygonObject.getPolygon().getTransformedVertices();
+
+        float[] worldVertices = new float[vertices.length];
+
+        for (int i = 0; i &lt; vertices.length; ++i) {
+            worldVertices[i] = vertices[i] / ppt;
+        }
+
+        polygon.set(worldVertices);
+        return polygon;
+    }
+
+    private static ChainShape getPolyline(PolylineMapObject polylineObject) {
+        float[] vertices = polylineObject.getPolyline().getTransformedVertices();
+        Vector2[] worldVertices = new Vector2[vertices.length / 2];
+
+        for (int i = 0; i &lt; vertices.length / 2; ++i) {
+            worldVertices[i] = new Vector2();
+            worldVertices[i].x = vertices[i * 2] / ppt;
+            worldVertices[i].y = vertices[i * 2 + 1] / ppt;
+        }
+
+        ChainShape chain = new ChainShape(); 
+        chain.createChain(worldVertices);
+        return chain;
+    }
+}
+</code></pre>
+
+<p>Assuming you've set things up so that the size of your tiles correspond to 1 square metre (1 square unit, if you prefer) in your Box2d <code>World</code>, the static <code>Body</code>s this produces will be exactly where you drew them in <em>Tiled</em>. It was so satisfying to see this up and running, believe you me.</p>

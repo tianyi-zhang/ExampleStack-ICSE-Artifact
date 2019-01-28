@@ -1,0 +1,46 @@
+<p>Both of those request types call <code>HttpHeaderParser.parseCharset</code>, which is able to determine the charset from the headers. However, it requires that the header be <code>Content-Type</code>, not <code>content-type</code>: it is case sensitive. (I'm not sure of the behavior if using the default HurlStack, it's possible this is an implementation detail difference with the OkHttp stack.)</p>
+
+<p>Solution 1: copy the original request type, but manually override the charset</p>
+
+<p>Solution 2: copy the original request type, but force the expected header to exist</p>
+
+<pre><code>import com.android.volley.NetworkResponse;
+import com.android.volley.ParseError;
+import com.android.volley.Response;
+import com.android.volley.Response.ErrorListener;
+import com.android.volley.Response.Listener;
+import com.android.volley.toolbox.HttpHeaderParser;
+import com.android.volley.toolbox.JsonRequest;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.UnsupportedEncodingException;
+
+public class JsonUTF8Request extends JsonRequest&lt;JSONObject&gt; {
+    public JsonUTF8Request(int method, String url, JSONObject jsonRequest,
+                           Listener&lt;JSONObject&gt; listener, ErrorListener errorListener) {
+        super(method, url, (jsonRequest == null) ? null : jsonRequest.toString(), listener,
+                errorListener);
+    }
+
+    @Override
+    protected Response&lt;JSONObject&gt; parseNetworkResponse(NetworkResponse response) {
+        try {
+            // solution 1:
+            String jsonString = new String(response.data, "UTF-8");
+            // solution 2:
+            response.headers.put(HTTP.CONTENT_TYPE,
+                response.headers.get("content-type"));
+            String jsonString = new String(response.data, HttpHeaderParser.parseCharset(response.headers));
+            //
+            return Response.success(new JSONObject(jsonString),
+                    HttpHeaderParser.parseCacheHeaders(response));
+        } catch (UnsupportedEncodingException e) {
+            return Response.error(new ParseError(e));
+        } catch (JSONException je) {
+            return Response.error(new ParseError(je));
+        }
+    }
+}
+</code></pre>

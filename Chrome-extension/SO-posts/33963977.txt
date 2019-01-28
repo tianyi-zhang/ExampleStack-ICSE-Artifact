@@ -1,0 +1,476 @@
+<p>This is a class that compiles <em>entirely</em> in memory.</p>
+
+<p>I've taken (almost) the entirety of this from <a href="http://javapracs.blogspot.de/2011/06/dynamic-in-memory-compilation-using.html" rel="nofollow">http://javapracs.blogspot.de/2011/06/dynamic-in-memory-compilation-using.html</a> by Rekha Kumari (June 2011). Though this version is more than 100 lines shorter and has more features (but no docs:P).</p>
+
+<p><strong>EDIT:</strong> Since I've just gotten 2 upvotes, I want to give back and edit my new version in: It compiles multiple classes at once, the only way to compile classes that depend on each other. If you wonder about the class "CompilerFeedback": I'm currently making a tiny Java <a href="https://i.imgur.com/NoXxgvn.png" rel="nofollow">IDE</a> for coding-games where I needed it. I'm including it here because I assume that you want to <em>do</em> something with this, and the predigestion might help you with that. EDIT: And I realize that some of the code in the CompilerFeedback class is complete crap. I started with the project very recently, but this class I recycled from a years old attempt.</p>
+
+<p><strong>EDIT:</strong> Hello, another upvote! Adding a method that derives the full class name from a class' source code (incl. package name, if it's provided). Very useful for calling the compiler, which does need this information.</p>
+
+<p><strong>EDIT:</strong> Added a MISSING method to the method that determines the full class name. (sorry)</p>
+
+<p>DEMO CLASS:</p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.List;
+
+public class Demo {
+
+    public static void main(final String[] args) {
+
+        final InMemoryCompiler.IMCSourceCode cls1source;
+        final InMemoryCompiler.IMCSourceCode cls2source;
+
+        final StringBuilder sb = new StringBuilder();
+        sb.append("package toast;\n");
+        sb.append("public class DynaClass {\n");
+        sb.append("    public static void main(final String[] args) {");
+        sb.append("        System.out.println(\"Based massively on the work of Rekha Kumari, http://javapracs.blogspot.de/2011/06/dynamic-in-memory-compilation-using.html\");\n");
+        sb.append("        System.out.println(\"This is the main method speaking.\");\n");
+        sb.append("        System.out.println(\"Args: \" + java.util.Arrays.toString(args));\n");
+        sb.append("        final Test test = new Test();\n");
+        sb.append("    }\n");
+        sb.append("    public String toString() {\n");
+        sb.append("        return \"Hello, I am \" + ");
+        sb.append("this.getClass().getSimpleName();\n");
+        sb.append("    }\n");
+        sb.append("}\n");
+        cls1source = new InMemoryCompiler.IMCSourceCode("toast.DynaClass", sb.toString());
+
+        sb.setLength(0);
+        sb.append("package toast;\n");
+        sb.append("public class Test {\n");
+        sb.append("    public Test() {\n");
+        sb.append("        System.out.println(\"class Test constructor reporting in.\");\n");
+        sb.append("        System.out.println(new DynaClass());\n");
+        sb.append("    }\n");
+        sb.append("}\n");
+        cls2source = new InMemoryCompiler.IMCSourceCode("toast.Test", sb.toString());
+
+        final List&lt;InMemoryCompiler.IMCSourceCode&gt; classSources = new ArrayList&lt;&gt;();
+        classSources.add(cls1source);
+        classSources.add(cls2source);
+
+        final InMemoryCompiler uCompiler = new InMemoryCompiler(classSources);
+        final CompilerFeedback compilerFeedback = uCompiler.compile();
+        System.out.println("\n\nCOMPILER FEEDBACK: " + compilerFeedback);
+
+        if (compilerFeedback != null &amp;&amp; compilerFeedback.success) {
+
+            try {
+                System.out.println("\nTOSTRING DEMO:");
+                uCompiler.runToString(cls1source.fullClassName);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            try {
+                System.out.println("\nMAIN DEMO:");
+                uCompiler.runMain(cls1source.fullClassName, new String[] { "test1", "test2" });
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        System.exit(0);
+    }
+}
+</code></pre>
+
+<p>COMPILER CLASS:</p>
+
+<pre><code>import javax.tools.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URI;
+import java.security.SecureClassLoader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * MASSIVELY based on http://javapracs.blogspot.de/2011/06/dynamic-in-memory-compilation-using.html by Rekha Kumari
+ * (June 2011)
+ */
+final public class InMemoryCompiler {
+
+    final public static class IMCSourceCode {
+
+        final public String fullClassName;
+        final public String sourceCode;
+
+        /**
+         * @param fullClassName Full name of the class that will be compiled. If the class should be in some package,
+         *                      fullName should contain it too, for example: "testpackage.DynaClass"
+         * @param sourceCode    the source code
+         */
+        public IMCSourceCode(final String fullClassName, final String sourceCode) {
+
+            this.fullClassName = fullClassName;
+            this.sourceCode = sourceCode;
+        }
+    }
+
+    final public boolean valid;
+
+    final private List&lt;IMCSourceCode&gt; classSourceCodes;
+    final private JavaFileManager fileManager;
+
+    public InMemoryCompiler(final List&lt;IMCSourceCode&gt; classSourceCodes) {
+
+        this.classSourceCodes = classSourceCodes;
+
+        final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            fileManager = null;
+            valid = false;
+            System.err.println("ToolProvider.getSystemJavaCompiler() returned null! This program needs to be run on a system with an installed JDK.");
+            return;
+        }
+        valid = true;
+
+        fileManager = new ForwardingJavaFileManager&lt;JavaFileManager&gt;(compiler.getStandardFileManager(null, null, null)) {
+
+            final private Map&lt;String, ByteArrayOutputStream&gt; byteStreams = new HashMap&lt;&gt;();
+
+            @Override
+            public ClassLoader getClassLoader(final Location location) {
+
+                return new SecureClassLoader() {
+
+                    @Override
+                    protected Class&lt;?&gt; findClass(final String className) throws ClassNotFoundException {
+
+                        final ByteArrayOutputStream bos = byteStreams.get(className);
+                        if (bos == null) {
+                            return null;
+                        }
+                        final byte[] b = bos.toByteArray();
+                        return super.defineClass(className, b, 0, b.length);
+                    }
+                };
+            }
+
+            @Override
+            public JavaFileObject getJavaFileForOutput(final Location location, final String className, final JavaFileObject.Kind kind, final FileObject sibling) throws IOException {
+
+                return new SimpleJavaFileObject(URI.create("string:///" + className.replace('.', '/') + kind.extension), kind) {
+
+                    @Override
+                    public OutputStream openOutputStream() throws IOException {
+
+                        ByteArrayOutputStream bos = byteStreams.get(className);
+                        if (bos == null) {
+                            bos = new ByteArrayOutputStream();
+                            byteStreams.put(className, bos);
+                        }
+                        return bos;
+                    }
+                };
+            }
+        };
+    }
+
+    public CompilerFeedback compile() {
+
+        if (!valid) {
+            return null;
+        }
+        final List&lt;JavaFileObject&gt; files = new ArrayList&lt;&gt;();
+        for (IMCSourceCode classSourceCode : classSourceCodes) {
+            URI uri = null;
+            try {
+                uri = URI.create("string:///" + classSourceCode.fullClassName.replace('.', '/') + JavaFileObject.Kind.SOURCE.extension);
+            } catch (Exception e) {
+                //                e.printStackTrace();
+            }
+            if (uri != null) {
+                final SimpleJavaFileObject sjfo = new SimpleJavaFileObject(uri, JavaFileObject.Kind.SOURCE) {
+
+                    @Override
+                    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+
+                        return classSourceCode.sourceCode;
+                    }
+                };
+                files.add(sjfo);
+            }
+        }
+
+        final DiagnosticCollector&lt;JavaFileObject&gt; diagnostics = new DiagnosticCollector&lt;&gt;();
+
+        final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+
+        if (files.size() &gt; 0) {
+            final JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, diagnostics, null, null, files);
+            return new CompilerFeedback(task.call(), diagnostics);
+        } else {
+            return null;
+        }
+    }
+
+    public void runToString(final String className) throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+
+        if (!valid) {
+            return;
+        }
+        final Class&lt;?&gt; theClass = getCompiledClass(className);
+        final Object instance = theClass.newInstance();
+        System.out.println(instance);
+    }
+
+    public void runMain(final String className, final String[] args) throws IllegalAccessException, ClassNotFoundException, NoSuchMethodException, InvocationTargetException {
+
+        if (!valid) {
+            return;
+        }
+        final Class&lt;?&gt; theClass = getCompiledClass(className);
+        final Method mainMethod = theClass.getDeclaredMethod("main", String[].class);
+        mainMethod.invoke(null, new Object[] { args });
+    }
+
+    public Class&lt;?&gt; getCompiledClass(final String className) throws ClassNotFoundException {
+
+        if (!valid) {
+            throw new IllegalStateException("InMemoryCompiler instance not usable because ToolProvider.getSystemJavaCompiler() returned null: No JDK installed.");
+        }
+        final ClassLoader classLoader = fileManager.getClassLoader(null);
+        final Class&lt;?&gt; ret = classLoader.loadClass(className);
+        if (ret == null) {
+            throw new ClassNotFoundException("Class returned by ClassLoader was null!");
+        }
+        return ret;
+    }
+}
+</code></pre>
+
+<p>COMPILERFEEDBACK CLASS:</p>
+
+<pre><code>import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+final public class CompilerFeedback {
+
+    final public boolean success;
+    final public List&lt;CompilerMessage&gt; messages = new ArrayList&lt;&gt;();
+
+    public CompilerFeedback(final Boolean success, final DiagnosticCollector&lt;JavaFileObject&gt; diagnostics) {
+
+        this.success = success != null &amp;&amp; success;
+        for (Diagnostic&lt;? extends JavaFileObject&gt; diagnostic : diagnostics.getDiagnostics()) {
+            messages.add(new CompilerMessage(diagnostic));
+        }
+    }
+
+    public String toString() {
+
+        final StringBuilder sb = new StringBuilder();
+
+        sb.append("SUCCESS: ").append(success).append('\n');
+        final int iTop = messages.size();
+        for (int i = 0; i &lt; iTop; i++) {
+            sb.append("\n[MESSAGE ").append(i + 1).append(" OF ").append(iTop).append("]\n\n");
+            // sb.append(messages.get(i).toString()).append("\n");
+            // sb.append(messages.get(i).toStringForList()).append("\n");
+            sb.append(messages.get(i).toStringForDebugging()).append("\n");
+        }
+        return sb.toString();
+    }
+
+    final public static class CompilerMessage {
+
+        final public Diagnostic&lt;? extends JavaFileObject&gt; compilerInfo;
+
+        final public String typeOfProblem;
+        final public String typeOfProblem_forDebugging;
+
+        final public String multiLineMessage;
+
+        final public int lineNumber;
+        final public int columnNumber;
+
+        final public int textHighlightPos_lineStart;
+        final public int textHighlightPos_problemStart;
+        final public int textHighlightPos_problemEnd;
+
+        final public String sourceCode;
+        final public String codeOfConcern;
+        final public String codeOfConcernLong;
+
+        CompilerMessage(final Diagnostic&lt;? extends JavaFileObject&gt; diagnostic) {
+
+            final JavaFileObject sourceFileObject = diagnostic.getSource();
+            String sourceCodePreliminary = null;
+            if (sourceFileObject instanceof SimpleJavaFileObject) {
+                final SimpleJavaFileObject simpleSourceFileObject = (SimpleJavaFileObject) sourceFileObject;
+
+                try {
+                    final CharSequence charSequence = simpleSourceFileObject.getCharContent(false);
+                    sourceCodePreliminary = charSequence.toString();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            if (sourceCodePreliminary == null) {
+                sourceCode = "[SOURCE CODE UNAVAILABLE]";
+            } else {
+                sourceCode = sourceCodePreliminary;
+            }
+
+            compilerInfo = diagnostic;
+
+            typeOfProblem = diagnostic.getKind().name();
+            typeOfProblem_forDebugging = "toString() = " + diagnostic.getKind().toString() + "; name() = " + typeOfProblem;
+
+            lineNumber = (int) compilerInfo.getLineNumber();
+            columnNumber = (int) compilerInfo.getColumnNumber();
+
+            final int sourceLen = sourceCode.length();
+            textHighlightPos_lineStart = (int) Math.min(Math.max(0, diagnostic.getStartPosition()), sourceLen);
+            textHighlightPos_problemStart = (int) Math.min(Math.max(0, diagnostic.getPosition()), sourceLen);
+            textHighlightPos_problemEnd = (int) Math.min(Math.max(0, diagnostic.getEndPosition()), sourceLen);
+
+            final StringBuilder reformattedMessage = new StringBuilder();
+            final String message = diagnostic.getMessage(Locale.US);
+            final int messageCutOffPosition = message.indexOf("location:");
+            final String[] messageParts;
+            if (messageCutOffPosition &gt;= 0) {
+                messageParts = message.substring(0, messageCutOffPosition).split("\n");
+            } else {
+                messageParts = message.split("\n");
+            }
+            for (String s : messageParts) {
+                String s2 = s.trim();
+                if (s2.length() &gt; 0) {
+                    boolean lengthChanged;
+                    do {
+                        final int lBeforeReplace = s2.length();
+                        s2 = s2.replace("  ", " ");
+                        lengthChanged = (s2.length() != lBeforeReplace);
+                    } while (lengthChanged);
+                    reformattedMessage.append(s2).append("\n");
+                }
+            }
+
+            codeOfConcern = sourceCode.substring(textHighlightPos_problemStart, textHighlightPos_problemEnd);
+            codeOfConcernLong = sourceCode.substring(textHighlightPos_lineStart, textHighlightPos_problemEnd);
+            if (!codeOfConcern.isEmpty()) {
+                reformattedMessage.append("Code of concern: \"").append(codeOfConcern).append('\"');
+            }
+            multiLineMessage = reformattedMessage.toString();
+        }
+
+        public String toStringForList() {
+
+            if (compilerInfo == null) {
+                return "No compiler!";
+            } else {
+                return compilerInfo.getCode();
+            }
+        }
+
+        public String toStringForDebugging() {
+
+            final StringBuilder ret = new StringBuilder();
+
+            ret.append("Type of problem: ").append(typeOfProblem_forDebugging).append("\n\n");
+            ret.append("Message:\n").append(multiLineMessage).append("\n\n");
+
+            ret.append(compilerInfo.getCode()).append("\n\n");
+
+            ret.append("line number: ").append(lineNumber).append("\n");
+            ret.append("column number: ").append(columnNumber).append("\n");
+
+            ret.append("textHighlightPos_lineStart: ").append(textHighlightPos_lineStart).append("\n");
+            ret.append("textHighlightPos_problemStart: ").append(textHighlightPos_problemStart).append("\n");
+            ret.append("textHighlightPos_problemEnd: ").append(textHighlightPos_problemEnd).append("\n");
+
+            return ret.toString();
+        }
+
+        @Override
+        public String toString() {
+
+            //            return compilerInfo.getMessage(Locale.US);
+            return typeOfProblem + ": " + multiLineMessage + "\n";
+        }
+    }
+}
+</code></pre>
+
+<p>UTILITY METHOD (Not needed for the three classes further up.):</p>
+
+<pre><code>final public static String PREFIX_CLASSNAME = "class ";
+final public static String PREFIX_PACKAGENAME = "package ";
+final public static String CHARSET_JAVAKEYWORDENDERS = " \n[](){}&lt;&gt;;,\"\\/*+-=%!&amp;?@:";
+
+/**
+ * @return e.g. "com.dreamspacepresident.TestClass" if the source's first root level "class" (I'm talking about {}
+ * hierarchy.) is named "TestClass", and if the "package" name is "com.dreamspacepresident". Null is returned if
+ * sourceCode is null or does not provide a class name. (Mind that the parsing is done in a quite crappy way.)
+ */
+public static String deriveFullClassNameFromSource(final String sourceCode) {
+
+    if (sourceCode == null) {
+        return null;
+    }
+    final int firstBr = sourceCode.indexOf('{');
+    if (firstBr &gt;= 0) {
+        // DETERMINE CLASS NAME
+        final int firstClass = sourceCode.indexOf(PREFIX_CLASSNAME);
+        if (firstClass &lt; firstBr) {
+            String className = sourceCode.substring(firstClass + PREFIX_CLASSNAME.length(), firstBr).trim();
+            final int classNameEnd = indexOfAnyOfThese(className, CHARSET_JAVAKEYWORDENDERS);
+            if (classNameEnd &gt;= 0) {
+                className = className.substring(0, classNameEnd);
+            }
+            if (!className.isEmpty()) {
+                // DETERMINE PACKAGE NAME
+                String packageName = null;
+                final int firstPackage = sourceCode.indexOf(PREFIX_PACKAGENAME);
+                if (firstPackage &gt;= 0 &amp;&amp; firstPackage &lt; firstBr &amp;&amp; firstPackage &lt; firstClass) {
+                    packageName = sourceCode.substring(firstPackage + PREFIX_PACKAGENAME.length(), firstBr).trim();
+                    final int packageNameEnd = indexOfAnyOfThese(packageName, CHARSET_JAVAKEYWORDENDERS);
+                    if (packageNameEnd &gt;= 0) {
+                        packageName = packageName.substring(0, packageNameEnd);
+                    }
+                }
+                return (packageName != null &amp;&amp; !packageName.isEmpty() ? packageName + "." : "") + className;
+            }
+        }
+    }
+    return null;
+}
+
+
+/**
+ * Looks for the first occurrence of ANY of the given characters, which is easier than using a bunch of
+ * String.indexOf() calls.
+ *
+ * @return -1 if not found, otherwise the String index of the first hit
+ */
+public static int indexOfAnyOfThese(final String text, final String characters) {
+
+    if (text != null &amp;&amp; !text.isEmpty() &amp;&amp; characters != null &amp;&amp; !characters.isEmpty()) {
+        final int lenT = text.length();
+        final int lenC = characters.length();
+        for (int i = 0; i &lt; lenT; i++) {
+            final char c = text.charAt(i);
+            for (int ii = 0; ii &lt; lenC; ii++) {
+                if (c == characters.charAt(ii)) {
+                    return i;
+                }
+            }
+        }
+    }
+    return -1;
+}
+</code></pre>

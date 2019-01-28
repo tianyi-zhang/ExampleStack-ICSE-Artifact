@@ -1,0 +1,181 @@
+<p>From what I understand from Viagogo public API access documentation, the token you get in the step 1, is the equivalent to a request token in a complete OAuth 1.0a "dance".</p>
+
+<p>So, you should be able to use scribe-java internal classes to get this token without doing it by hand. The only difference is that in scribe, this request sends also a callback url to the OAuth server for the next step of OAuth "dance".</p>
+
+<p>As I can't get a consumer account I can only make assumption here. So let's have 2 scenarios :</p>
+
+<h2>Scenario 1 : Viagogo server tolerate extra parameter (i.e. call back URL)</h2>
+
+<p>so you can go with this code</p>
+
+<pre><code>import org.scribe.builder.api.DefaultApi10a;
+import org.scribe.model.Token;
+
+public class TradeKingAPI extends DefaultApi10a {
+
+    @Override
+    public Verb getRequestTokenVerb()
+    {
+      return Verb.GET;
+    }
+
+    @Override
+    public String getRequestTokenEndpoint() {
+        return "http://api.viagogo.net/Public/SimpleOAuthAccessRequest";
+    }
+
+    @Override
+    public String getAccessTokenEndpoint() {
+        return "none";
+    }
+
+    @Override
+    public String getAuthorizationUrl(Token requestToken) {
+        return "none";
+    }
+}
+</code></pre>
+
+<p>Then your calling code will be :</p>
+
+<pre><code>OAuthService service = new ServiceBuilder()
+                            .provider(TradeKingAPI.class)
+                            .signatureType(QueryString)
+                            .apiKey("My consumer key")
+                            .apiSecret("My secret")
+                            .scope("API.Public")
+                            .build();
+
+Token requestToken = service.getRequestToken();
+
+//make your API calls
+
+OAuthRequest request = new OAuthRequest(Verb.GET,
+                       "http://api.viagogo.net/Public/Event/235");
+service.signRequest(requestToken, request);
+Response response = request.send();
+System.out.println(response.getBody());
+</code></pre>
+
+<p>But as I said, if Viagogo security is a bit strict and it refuses the useless param <code>oauth_callback</code>, you'll need to switch to scenario 2</p>
+
+<h2>Scenario 2 : Build your own OAuthService</h2>
+
+<p>In this scenario you have to create a new <code>OAuthService</code> to avoid dealing with <code>OAuthCallback</code> parameter.</p>
+
+<pre><code>import org.scribe.builder.api.DefaultApi10a;
+import org.scribe.model.*;
+import org.scribe.oauth.OAuth10aServiceImpl;
+
+import java.util.Map;
+
+public class OAuth10aServiceForViagogo extends OAuth10aServiceImpl {
+
+    private OAuthConfig config;
+    private DefaultApi10a api;
+
+    public OAuth10aServiceForViagogo(DefaultApi10a api, OAuthConfig config) {
+        super(api, config);
+
+        this.api = api;
+        this.config = config;
+    }
+
+    private void addOAuthParams(OAuthRequest request, Token token) {
+        request.addOAuthParameter(OAuthConstants.TIMESTAMP, api.getTimestampService().getTimestampInSeconds());
+        request.addOAuthParameter(OAuthConstants.NONCE, api.getTimestampService().getNonce());
+        request.addOAuthParameter(OAuthConstants.CONSUMER_KEY, config.getApiKey());
+        request.addOAuthParameter(OAuthConstants.SIGN_METHOD, api.getSignatureService().getSignatureMethod());
+        request.addOAuthParameter(OAuthConstants.VERSION, getVersion());
+        request.addOAuthParameter(OAuthConstants.SCOPE, config.getScope());
+        request.addOAuthParameter(OAuthConstants.SIGNATURE, getSignature(request, token));
+
+    }
+
+    private String getSignature(OAuthRequest request, Token token) {
+
+        String baseString = api.getBaseStringExtractor().extract(request);
+        String signature = api.getSignatureService().getSignature(baseString, config.getApiSecret(), token.getSecret());
+
+        return signature;
+    }
+
+    private void appendSignature(OAuthRequest request) {
+        for (Map.Entry&lt;String, String&gt; entry : request.getOauthParameters().entrySet()) {
+            request.addQuerystringParameter(entry.getKey(), entry.getValue());
+        }
+    }
+
+    @Override
+    public Token getRequestToken(RequestTuner tuner) {
+        OAuthRequest request = new OAuthRequest(api.getRequestTokenVerb(), api.getRequestTokenEndpoint());
+
+        addOAuthParams(request, OAuthConstants.EMPTY_TOKEN);
+        appendSignature(request);
+
+        Response response = request.send(tuner);
+        String body = response.getBody();
+
+        return api.getRequestTokenExtractor().extract(body);
+    }
+}
+</code></pre>
+
+<p><code>TrakingApi</code> class will be slightly different to create the an <code>OAuth10aServiceForViagogo</code> when calling <code>createService</code> :</p>
+
+<pre><code>import org.scribe.builder.api.DefaultApi10a;
+import org.scribe.model.Token;
+
+public class TradeKingAPI extends DefaultApi10a {
+
+    @override
+    public OAuthService createService(OAuthConfig config)
+    {
+      return new OAuth10aServiceForViagogo(this, config);
+    }
+
+    @Override
+    public Verb getRequestTokenVerb()
+    {
+      return Verb.GET;
+    }
+
+    @Override
+    public String getRequestTokenEndpoint() {
+        return "http://api.viagogo.net/Public/SimpleOAuthAccessRequest";
+    }
+
+    @Override
+    public String getAccessTokenEndpoint() {
+        return "none";
+    }
+
+    @Override
+    public String getAuthorizationUrl(Token requestToken) {
+        return "none";
+    }
+}
+</code></pre>
+
+<p>Then your calling code will be the same :</p>
+
+<pre><code>    OAuthService service = new ServiceBuilder()
+                                .provider(TradeKingAPI.class)
+                                .signatureType(QueryString)
+                                .apiKey("My consumer key")
+                                .apiSecret("My secret")
+                                .scope("API.Public")
+                                .build();
+
+    Token requestToken = service.getRequestToken();
+
+    //make your API calls
+
+    OAuthRequest request = new OAuthRequest(Verb.GET,
+                           "http://api.viagogo.net/Public/Event/235");
+    service.signRequest(requestToken, request);
+    Response response = request.send();
+    System.out.println(response.getBody());
+</code></pre>
+
+<p>I didn't test all this code because I can't access consumer and secret key, but it should be close to what you need.</p>

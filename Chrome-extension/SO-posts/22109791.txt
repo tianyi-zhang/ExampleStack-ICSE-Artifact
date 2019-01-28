@@ -1,0 +1,110 @@
+<p>A very simple way to do this, which is probably quite fast, is to read the entire file into memory (as binary data, not as a hex dump) and then search for the markers.</p>
+
+<p>This has two limitations:</p>
+
+<ul>
+<li>it only handles files up to 2 GiB in length (max size of Java arrays)</li>
+<li>it requires large chunks of memory - it is possible to optimize this by reader smaller chunks but that makes the algorithm more complex</li>
+</ul>
+
+<p>The basic code to do that is like this:</p>
+
+<pre><code>import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+
+public class Png {
+
+    static final String PNG_MARKER_HEX = "abcdef0123456789"; // TODO: replace with real marker
+    static final byte[] PNG_MARKER = hexStringToByteArray(PNG_MARKER_HEX);
+
+    public void splitPngChunks(File file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file.toPath());
+        int offset = KMPMatch.indexOf(bytes, 0, PNG_MARKER);
+        while (offset &gt;= 0) {
+            int nextOffset = KMPMatch.indexOf(bytes, 0, PNG_MARKER);
+            if (nextOffset &lt; 0) {
+                writePngChunk(bytes, offset, bytes.length - offset);
+            } else {
+                writePngChunk(bytes, offset, nextOffset - offset);
+            }
+            offset = nextOffset;
+        }
+    }
+
+    public void writePngChunk(byte[] bytes, int offset, int length) {
+        // TODO: implement - where do you want to write the chunks?
+    }
+}
+</code></pre>
+
+<p>I'm not sure how these PNG chunk markers work exactly, I'm assuming above that they start the section of the data that you're interested in, and that the next marker starts the next section of the data.</p>
+
+<p>There are two things missing in standard Java: code to convert a hex string to a byte array and code to search for a byte array inside another byte array.
+Both can be found in various apache-commons libraries but I'll include that answers the people posted to earlier questions on StackOverflow. You can copy these verbatim into the Png class to make the above code work.</p>
+
+<p><strong><a href="http://stackoverflow.com/questions/140131/convert-a-string-representation-of-a-hex-dump-to-a-byte-array-using-java">Convert a string representation of a hex dump to a byte array using Java?</a></strong></p>
+
+<pre><code>public static byte[] hexStringToByteArray(String s) {
+    int len = s.length();
+    byte[] data = new byte[len / 2];
+    for (int i = 0; i &lt; len; i += 2) {
+        data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) &lt;&lt; 4) + Character.digit(s.charAt(i + 1), 16));
+    }
+    return data;
+}
+</code></pre>
+
+<p><strong><a href="http://stackoverflow.com/questions/1507780/searching-for-a-sequence-of-bytes-in-a-binary-file-with-java">Searching for a sequence of Bytes in a Binary File with Java</a></strong></p>
+
+<pre><code>/**
+ * Knuth-Morris-Pratt Algorithm for Pattern Matching
+ */
+static class KMPMatch {
+    /**
+     * Finds the first occurrence of the pattern in the text.
+     */
+    public static int indexOf(byte[] data, int offset, byte[] pattern) {
+        int[] failure = computeFailure(pattern);
+
+        int j = 0;
+        if (data.length - offset &lt;= 0)
+            return -1;
+
+        for (int i = offset; i &lt; data.length; i++) {
+            while (j &gt; 0 &amp;&amp; pattern[j] != data[i]) {
+                j = failure[j - 1];
+            }
+            if (pattern[j] == data[i]) {
+                j++;
+            }
+            if (j == pattern.length) {
+                return i - pattern.length + 1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Computes the failure function using a boot-strapping process, where the pattern is matched against itself.
+     */
+    private static int[] computeFailure(byte[] pattern) {
+        int[] failure = new int[pattern.length];
+
+        int j = 0;
+        for (int i = 1; i &lt; pattern.length; i++) {
+            while (j &gt; 0 &amp;&amp; pattern[j] != pattern[i]) {
+                j = failure[j - 1];
+            }
+            if (pattern[j] == pattern[i]) {
+                j++;
+            }
+            failure[i] = j;
+        }
+
+        return failure;
+    }
+}
+</code></pre>
+
+<p>I modified this last piece of code to make it possible to start the search at an offset other than zero.</p>

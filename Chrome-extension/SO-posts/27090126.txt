@@ -1,0 +1,257 @@
+<p>You can implement all the required methods yourself. I recently made my own implementation by just copy pasting code from CursorAdapter.</p>
+
+<pre><code>public class MyAdapter extends RecyclerView.Adapter&lt;ViewHolder&gt; {
+
+        protected boolean mDataValid;
+        protected boolean mAutoRequery;
+        protected Cursor mCursor;
+        protected Context mContext;
+        protected int mRowIDColumn;
+        protected ChangeObserver mChangeObserver;
+        protected DataSetObserver mDataSetObserver;
+        protected FilterQueryProvider mFilterQueryProvider;
+        public static final int FLAG_AUTO_REQUERY = 0x01;
+        public static final int FLAG_REGISTER_CONTENT_OBSERVER = 0x02;
+
+        public Cursor getCursor() {
+            return mCursor;
+        }
+
+        //Recommended
+        public MyAdapter(Context context, Cursor c, int flags) {
+            init(context, c, flags);
+        }
+
+        public MyAdapter(Context context, Cursor c) {
+            init(context, c, FLAG_AUTO_REQUERY);
+        }
+
+        public MyAdapter(Context context, Cursor c, boolean autoRequery) {
+            init(context, c, autoRequery ? FLAG_AUTO_REQUERY : FLAG_REGISTER_CONTENT_OBSERVER);
+        }
+
+        void init(Context context, Cursor c, int flags) {
+            if ((flags &amp; FLAG_AUTO_REQUERY) == FLAG_AUTO_REQUERY) {
+                flags |= FLAG_REGISTER_CONTENT_OBSERVER;
+                mAutoRequery = true;
+            } else {
+                mAutoRequery = false;
+            }
+            boolean cursorPresent = c != null;
+            mCursor = c;
+            mDataValid = cursorPresent;
+            mContext = context;
+            mRowIDColumn = cursorPresent ? c.getColumnIndexOrThrow("_id") : -1;
+            if ((flags &amp; FLAG_REGISTER_CONTENT_OBSERVER) == FLAG_REGISTER_CONTENT_OBSERVER) {
+                mChangeObserver = new ChangeObserver();
+                mDataSetObserver = new MyDataSetObserver();
+            } else {
+                mChangeObserver = null;
+                mDataSetObserver = null;
+            }
+
+            if (cursorPresent) {
+                if (mChangeObserver != null) c.registerContentObserver(mChangeObserver);
+                if (mDataSetObserver != null) c.registerDataSetObserver(mDataSetObserver);
+            }
+        }
+
+        // Create new views (invoked by the layout manager)
+        @Override
+        public ViewHolder onCreateViewHolder(final ViewGroup parent,
+                                             int viewType) {
+            // create a new view
+            final View view = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.list_item, parent, false);
+            // set the view's size, margins, paddings and layout parameters
+
+            ViewHolder vh = new ViewHolder(view, mCursor, new ViewHolder.IMyViewHolderClicks() {
+
+                @SuppressLint("NewApi")
+                @Override
+                public void onClick(Cursor cursor) {
+                    Log.e("Item :", cursor.getString(cursor.getColumnIndex(MyDatabaseHelper.MW_NAAM)));
+                    Intent intent = new Intent(TasksListFragment.this.getActivity(), DetailActivity.class);
+                    intent.putExtra(DetailActivity.EXTRA_PARAM_ID, cursor.getLong(cursor.getColumnIndex(MyDatabaseHelper.MW_ID)));
+
+                    ActivityOptions activityOptions = ActivityOptions.makeSceneTransitionAnimation(
+                            TasksListFragment.this.getActivity(),
+
+                            // Now we provide a list of Pair items which contain the view we can transitioning
+                            // from, and the name of the view it is transitioning to, in the launched activity
+                            new Pair&lt;View, String&gt;(
+                                    view.findViewById(R.id.imageview_item),
+                                    DetailActivity.VIEW_NAME_HEADER_IMAGE),
+                            new Pair&lt;View, String&gt;(
+                                    view.findViewById(R.id.textview_name),
+                                    DetailActivity.VIEW_NAME_HEADER_TITLE)
+                    );
+
+                    // Now we can start the Activity, providing the activity options as a bundle
+                    startActivity(intent, activityOptions.toBundle());
+                    // END_INCLUDE(start_activity)
+                }
+            });
+            return vh;
+        }
+
+        // Replace the contents of a view (invoked by the layout manager)
+        @SuppressLint("NewApi")
+        @Override
+        public void onBindViewHolder(ViewHolder holder, int position) {
+            // - get element from your dataset at this position
+            // - replace the contents of the view with that element
+            final Cursor cursor = getItem(position);
+
+            holder.mTextView.setText(cursor.getString(cursor.getColumnIndex(MyDatabaseHelper.MW_NAAM)));
+            holder.mImageView.setTransitionName("grid:image:" + cursor.getLong(cursor.getColumnIndex(MyDatabaseHelper.MW_ID)));
+            holder.mTextView.setTransitionName("grid:name:" + cursor.getLong(cursor.getColumnIndex(MyDatabaseHelper.MW_ID)));
+        }
+
+        //@Override
+        // public View getView(int position, View view, ViewGroup viewGroup) {
+        //     return view;
+        // }
+
+        // Return the size of your dataset (invoked by the layout manager)
+        @Override
+        public int getItemCount() {
+            return getCount();
+        }
+
+        public int getCount() {
+            if (mDataValid &amp;&amp; mCursor != null) {
+                return mCursor.getCount();
+            } else {
+                return 0;
+            }
+        }
+
+        public Cursor getItem(int position) {
+            if (mDataValid &amp;&amp; mCursor != null) {
+                mCursor.moveToPosition(position);
+                return mCursor;
+            } else {
+                return null;
+            }
+        }
+
+        @Override
+        public long getItemId(int position) {
+            if (mDataValid &amp;&amp; mCursor != null) {
+                if (mCursor.moveToPosition(position)) {
+                    return mCursor.getLong(mRowIDColumn);
+                } else {
+                    return 0;
+                }
+            } else {
+                return 0;
+            }
+        }
+
+        public Cursor swapCursor(Cursor newCursor) {
+            if (newCursor == mCursor) {
+                return null;
+            }
+            Cursor oldCursor = mCursor;
+            if (oldCursor != null) {
+                if (mChangeObserver != null) oldCursor.unregisterContentObserver(mChangeObserver);
+                if (mDataSetObserver != null) oldCursor.unregisterDataSetObserver(mDataSetObserver);
+            }
+            mCursor = newCursor;
+            if (newCursor != null) {
+                if (mChangeObserver != null) newCursor.registerContentObserver(mChangeObserver);
+                if (mDataSetObserver != null) newCursor.registerDataSetObserver(mDataSetObserver);
+                mRowIDColumn = newCursor.getColumnIndexOrThrow("_id");
+                mDataValid = true;
+                // notify the observers about the new cursor
+                notifyDataSetChanged();
+            } else {
+                mRowIDColumn = -1;
+                mDataValid = false;
+                // notify the observers about the lack of a data set
+                notifyDataSetInvalidated();
+            }
+            return oldCursor;
+        }
+
+        public void changeCursor(Cursor cursor) {
+            Cursor old = swapCursor(cursor);
+            if (old != null) {
+                old.close();
+            }
+        }
+
+        public CharSequence convertToString(Cursor cursor) {
+            return cursor == null ? "" : cursor.toString();
+        }
+
+        public Cursor runQueryOnBackgroundThread(CharSequence constraint) {
+            if (mFilterQueryProvider != null) {
+                return mFilterQueryProvider.runQuery(constraint);
+            }
+            return mCursor;
+        }
+
+
+        public FilterQueryProvider getFilterQueryProvider() {
+            return mFilterQueryProvider;
+        }
+
+        public void setFilterQueryProvider(FilterQueryProvider filterQueryProvider) {
+            mFilterQueryProvider = filterQueryProvider;
+        }
+
+        protected void onContentChanged() {
+            if (mAutoRequery &amp;&amp; mCursor != null &amp;&amp; !mCursor.isClosed()) {
+                if (false) Log.v("Cursor", "Auto requerying " + mCursor + " due to update");
+                mDataValid = mCursor.requery();
+            }
+        }
+
+        private class ChangeObserver extends ContentObserver {
+            public ChangeObserver() {
+                super(new Handler());
+            }
+
+            @Override
+            public boolean deliverSelfNotifications() {
+                return true;
+            }
+
+            @Override
+            public void onChange(boolean selfChange) {
+                onContentChanged();
+            }
+        }
+
+        private class MyDataSetObserver extends DataSetObserver {
+            @Override
+            public void onChanged() {
+                mDataValid = true;
+                notifyDataSetChanged();
+            }
+
+            @Override
+            public void onInvalidated() {
+                mDataValid = false;
+                notifyDataSetInvalidated();
+            }
+        }
+
+
+        private final DataSetObservable mDataSetObservable = new DataSetObservable();
+
+        public void registerDataSetObserver(DataSetObserver observer) {
+            mDataSetObservable.registerObserver(observer);
+        }
+
+        public void unregisterDataSetObserver(DataSetObserver observer) {
+            mDataSetObservable.unregisterObserver(observer);
+        }
+
+        public void notifyDataSetInvalidated() {
+            mDataSetObservable.notifyInvalidated();
+        }
+    }
+</code></pre>

@@ -1,0 +1,58 @@
+<p>An individual driver can return null for a connect request, the JDBC 4.1 specification says this:</p>
+
+<blockquote>
+  <p>When the DriverManager is trying to establish a connection, it calls that driver’s
+  connect method and passes the driver the URL. If the Driver implementation
+  understands the URL, it will return a Connection object or throw a SQLException
+  if a connection cannot be maded to the database. If the Driver implementation does
+  not understand the URL, it will return null.</p>
+</blockquote>
+
+<p>However, looking at the code of <code>java.sql.DriverManager</code> (in Java 7 Update 13), it will <strong>always</strong> throw an <code>SQLException</code> with message <em>No suitable driver found for &lt;url&gt;</em> when all available drivers have returned <code>null</code> for a <code>connect(url, properties)</code> call:</p>
+
+<pre><code>//  Worker method called by the public getConnection() methods.
+private static Connection getConnection(
+    String url, java.util.Properties info, ClassLoader callerCL) throws SQLException {
+// Removed some classloading stuff for brevity
+    if(url == null) {
+        throw new SQLException("The url cannot be null", "08001");
+    }
+    // Walk through the loaded registeredDrivers attempting to make a connection.
+    // Remember the first exception that gets raised so we can reraise it.
+    SQLException reason = null;
+    for(DriverInfo aDriver : registeredDrivers) {
+        // If the caller does not have permission to load the driver then
+        // skip it.
+        if(isDriverAllowed(aDriver.driver, callerCL)) {
+            try {
+                println("    trying " + aDriver.driver.getClass().getName());
+                Connection con = aDriver.driver.connect(url, info);
+                if (con != null) {
+                    // Success!
+                    println("getConnection returning " + aDriver.driver.getClass().getName());
+                    return (con);
+                }
+            } catch (SQLException ex) {
+                if (reason == null) {
+                    reason = ex;
+                }
+            }
+        } else {
+            println("    skipping: " + aDriver.getClass().getName());
+        }
+    }
+    // if we got here nobody could connect.
+    if (reason != null)    {
+        println("getConnection failed: " + reason);
+        throw reason;
+    }
+    println("getConnection: no suitable driver found for "+ url);
+    throw new SQLException("No suitable driver found for "+ url, "08001");
+}
+</code></pre>
+
+<p>In other words: what you describe cannot happen (at least not in Java 7 Update 13). A quick peek at the Java 5 Update 22 sources shows an almost identical implementation were it simply cannot return null.</p>
+
+<p>More likely you are swallowing an exception and then attempting to use a <code>Connection</code> variable or field that has value null. </p>
+
+<p>Another possibility would be that you are not obtaining the connection with <code>DriverManager.getConnection(url, ...)</code>, but with <code>DriverManager.getDriver(url).connect(...)</code> which can return <code>null</code> because of the rules established above. If that is what you do, it probably points to a bug in the Connector/J driver if you are always using the exact same URL: a driver cannot decide at one point to return a connection for a specific URL and next return null. It should always either return a <code>Connection</code> or throw an <code>SQLException</code> for the same URL.</p>

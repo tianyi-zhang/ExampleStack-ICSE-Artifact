@@ -1,0 +1,53 @@
+<p>I looked up the method createScaledBitmap in the source for the Bitmap class (<a href="http://www.google.com/codesearch/p?hl=en#uX1GffpyOZk/graphics/java/android/graphics/Bitmap.java" rel="nofollow">Link</a>):</p>
+
+<pre><code>public static Bitmap createScaledBitmap(Bitmap src, int dstWidth,
+        int dstHeight, boolean filter) {
+    Matrix m;
+    synchronized (Bitmap.class) {
+        // small pool of just 1 matrix
+        m = sScaleMatrix;
+        sScaleMatrix = null;
+    }
+
+    if (m == null) {
+        m = new Matrix();
+    }
+
+    final int width = src.getWidth();
+    final int height = src.getHeight();
+    final float sx = dstWidth  / (float)width;
+    final float sy = dstHeight / (float)height;
+    m.setScale(sx, sy);
+    Bitmap b = Bitmap.createBitmap(src, 0, 0, width, height, m, filter);
+
+    synchronized (Bitmap.class) {
+        // do we need to check for null? why not just assign everytime?
+        if (sScaleMatrix == null) {
+            sScaleMatrix = m;
+        }
+    }
+
+    return b;
+}
+</code></pre>
+
+<p>And the call to createBitmap() should return your unchanged source bitmap due to this check in the method body:</p>
+
+<pre><code>    if (!source.isMutable() &amp;&amp; x == 0 &amp;&amp; y == 0 &amp;&amp; width == source.getWidth() &amp;&amp;
+            height == source.getHeight() &amp;&amp; (m == null || m.isIdentity())) {
+        return source;
+    }
+</code></pre>
+
+<p>Looking at just this it would seem that your original bitmap is returned, <em>But</em>, if your bitmap happens to be mutable, you effectively skip this check and end up here:</p>
+
+<pre><code>    if (m == null || m.isIdentity()) {
+        bitmap = createBitmap(neww, newh,
+                source.hasAlpha() ? Config.ARGB_8888 : Config.RGB_565);
+        paint = null;   // not needed
+    }
+</code></pre>
+
+<p>As you are not performing any scaling, your matrix will be the identity matrix, and the condition is satisfied. The bitmap created is, as you can see, dependent on the alpha in the source bitmap. If no alpha is present, you end up with a result bitmap with the RGB_565 format rather than the ARGB_8888.</p>
+
+<p>So, to scale and preserve the 32-bit format, your bitmap should either be immutable or use an Alpha channel.</p>

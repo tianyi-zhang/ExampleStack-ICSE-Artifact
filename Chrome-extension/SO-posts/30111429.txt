@@ -1,0 +1,78 @@
+<p>First declare following annotations:</p>
+
+<pre><code>@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface NativeQueryResultEntity {
+}
+
+@Target(ElementType.FIELD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface NativeQueryResultColumn {
+    int index();
+}
+</code></pre>
+
+<p>Then annotate your POJO as follows:</p>
+
+<pre><code>@NativeQueryResultEntity
+public class ClassX {
+    @NativeQueryResultColumn(index=0)
+    private String a;
+
+    @NativeQueryResultColumn(index=1)
+    private String b;
+}
+</code></pre>
+
+<p>Then write annotation processor:</p>
+
+<pre><code>public class NativeQueryResultsMapper {
+
+    private static Logger log = LoggerFactory.getLogger(NativeQueryResultsMapper.class);
+
+    public static &lt;T&gt; List&lt;T&gt; map(List&lt;Object[]&gt; objectArrayList, Class&lt;T&gt; genericType) {
+        List&lt;T&gt; ret = new ArrayList&lt;T&gt;();
+        List&lt;Field&gt; mappingFields = getNativeQueryResultColumnAnnotatedFields(genericType);
+        try {
+            for (Object[] objectArr : objectArrayList) {
+                T t = genericType.newInstance();
+                for (int i = 0; i &lt; objectArr.length; i++) {
+                    BeanUtils.setProperty(t, mappingFields.get(i).getName(), objectArr[i]);
+                }
+                ret.add(t);
+            }
+        } catch (InstantiationException ie) {
+            log.debug("Cannot instantiate: ", ie);
+            ret.clear();
+        } catch (IllegalAccessException iae) {
+            log.debug("Illegal access: ", iae);
+            ret.clear();
+        } catch (InvocationTargetException ite) {
+            log.debug("Cannot invoke method: ", ite);
+            ret.clear();
+        }
+        return ret;
+    }
+
+    // Get ordered list of fields
+    private static &lt;T&gt; List&lt;Field&gt; getNativeQueryResultColumnAnnotatedFields(Class&lt;T&gt; genericType) {
+        Field[] fields = genericType.getDeclaredFields();
+        List&lt;Field&gt; orderedFields = Arrays.asList(new Field[fields.length]);
+        for (int i = 0; i &lt; fields.length; i++) {
+            if (fields[i].isAnnotationPresent(NativeQueryResultColumn.class)) {
+                NativeQueryResultColumn nqrc = fields[i].getAnnotation(NativeQueryResultColumn.class);
+                orderedFields.set(nqrc.index(), fields[i]);
+            }
+        }
+        return orderedFields;
+    }
+}
+</code></pre>
+
+<p>Use above framework as follows:</p>
+
+<pre><code>String sql = "select a,b from x order by a";
+Query q = entityManager.createNativeQuery(sql);
+
+List&lt;ClassX&gt; results = NativeQueryResultsMapper.map(q.getResultList(), ClassX.class);
+</code></pre>

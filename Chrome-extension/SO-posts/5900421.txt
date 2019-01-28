@@ -1,0 +1,108 @@
+<p>I ended up using standard java Thread to load the data from API in the background and created a separate class for loading images in separate threads as well. In case you're wondering it now looks like this, and seem to work fine.</p>
+
+<p>Loading the data:</p>
+
+<pre><code>public void onCreate(...) {
+    //...
+
+    mHandler = new Handler();
+    dialog = ProgressDialog.show(VodsActivity.this, "","Loading. Please wait...", true);
+    getData.start();        
+}
+
+private Thread getData = new Thread() {
+    public void run() {
+        try {
+            loadData();             
+            mHandler.post(showData);
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+};
+
+private Runnable showData = new Runnable() {
+    public void run() {
+        try {
+            displayData();
+            dialog.dismiss();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+};
+</code></pre>
+
+<p>Loading images (in CustomAdapter):</p>
+
+<pre><code>        String imageUrl = imgurl.get(rowData.mId); 
+        final ImageView image = holder.getImage();
+
+        //Reuse downloaded images or download new in separate thread                       
+        image.setTag(imageUrl);
+        Drawable cachedImage = imageLoader.loadDrawable(imageUrl, new ImageCallback() {
+            public void imageLoaded(Drawable imageDrawable, String imageUrl) {
+                ImageView imageViewByTag = (ImageView) image.findViewWithTag(imageUrl);
+                if (imageViewByTag != null) {
+                    imageViewByTag.setImageDrawable(imageDrawable);
+                }
+            }
+        });
+        image.setImageDrawable(cachedImage);
+</code></pre>
+
+<p>ImageLoader class:</p>
+
+<pre><code>public class ImageLoader {
+private HashMap&lt;String, SoftReference&lt;Drawable&gt;&gt; imageCache;
+private static final String TAG = "ImageLoader";
+
+public ImageLoader() {
+    imageCache = new HashMap&lt;String, SoftReference&lt;Drawable&gt;&gt;();
+}
+
+//Loads image from the cache if it exists or launches new thread to download it
+public Drawable loadDrawable(final String imageUrl, final ImageCallback imageCallback) {
+    Log.d(TAG, "loadDrawable(" + imageUrl  + ")");
+    if (imageCache.containsKey(imageUrl)) {
+        SoftReference&lt;Drawable&gt; softReference = imageCache.get(imageUrl);
+        Drawable drawable = softReference.get();
+        if (drawable != null) {
+            return drawable;
+        }
+    }
+    final Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message message) {
+            imageCallback.imageLoaded((Drawable) message.obj, imageUrl);
+        }
+    };
+    new Thread() {
+        @Override
+        public void run() {
+            Drawable drawable = loadImageFromUrl(imageUrl);
+            imageCache.put(imageUrl, new SoftReference&lt;Drawable&gt;(drawable));
+            Message message = handler.obtainMessage(0, drawable);
+            handler.sendMessage(message);
+        }
+    }.start();
+    return null;
+}
+
+//Downloads image from the url
+public static Drawable loadImageFromUrl(String url) {
+    Log.d(TAG, "loadImageFromUrl(" + url  + ")");
+    InputStream inputStream;
+    try {
+        inputStream = new URL(url).openStream();
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+    return Drawable.createFromStream(inputStream, "src");
+}
+
+public interface ImageCallback {
+    public void imageLoaded(Drawable imageDrawable, String imageUrl);
+}
+}
+</code></pre>

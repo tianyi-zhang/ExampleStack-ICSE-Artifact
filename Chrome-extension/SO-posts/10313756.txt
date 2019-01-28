@@ -1,0 +1,344 @@
+<p>Below is an example of the LazyLoader I use. Note I am using SoftReferences for bitmaps, this is now better served by using <code>LruCache</code>.</p>
+
+<p>This will load an image asynchronously from the web / sdcard / memory and create a fade in effect from a placeholder image. </p>
+
+<pre><code>public class ImageLoader {
+
+private static MemoryCacheNew memoryCache=new MemoryCacheNew();
+private static FileCache fileCache;
+
+private static BitmapFactory.Options bitmapOptions;
+
+private static int mInSampleSize;
+
+
+
+public ImageLoader(Context context, int inSampleSize){
+
+
+    fileCache=new FileCache(context);        
+
+    context = null;
+
+    bitmapOptions = new BitmapFactory.Options();
+    bitmapOptions.inSampleSize = mInSampleSize = inSampleSize;
+    bitmapOptions.inPreferredConfig = Config.RGB_565;
+    bitmapOptions.inInputShareable = true;
+    bitmapOptions.inDither = false;
+
+}
+
+final static int PLACEHOLDER_IMAGE = R.drawable.store_placeholder;
+
+public void DisplayImage(String url, ImageView imageView,  boolean checkTags){
+
+    try{
+
+    new AsyncPhotoTask(imageView, url, checkTags).execute();
+
+    }catch(Exception e){
+        e.printStackTrace();
+    }
+
+}
+
+public void DisplayImage(String url, ImageView imageView)
+{
+      DisplayImage(url, imageView, true); 
+
+}
+
+
+private static Bitmap getBitmap(String url) 
+{
+    File f=fileCache.getFile(url);
+
+
+    if(f!= null){
+    //from SD cache
+    Bitmap b = decodeFile(f);
+    if(b!=null)
+        return b;
+    }
+
+    //from web
+    try {
+        Bitmap bitmap=null;
+
+        URL imageUrl;
+
+            imageUrl = new URL(url);
+
+
+        HttpURLConnection conn = (HttpURLConnection)imageUrl.openConnection();
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(30000);
+        InputStream is=conn.getInputStream();
+        OutputStream os = new FileOutputStream(f);
+        Utils.CopyStream(is, os);
+        is.close();
+        os.close();
+        bitmap = decodeFile(f);
+        return bitmap;
+    } catch (Exception ex){
+       ex.printStackTrace();
+       return null;
+    }
+}
+
+//decodes image and scales it to reduce memory consumption
+private static Bitmap decodeFile(File f){
+    try {
+        return BitmapFactory.decodeStream(new FileInputStream(f), null, bitmapOptions);
+
+    } catch (FileNotFoundException e) {
+
+    } catch (OutOfMemoryError err){
+        System.gc();
+    } 
+
+    return null;
+}
+
+
+private static class AsyncPhotoLoad extends AsyncTask&lt;Void, Void, TransitionDrawable&gt;{
+
+    private Bitmap bmp;
+    private ImageView imageView;
+    private String url;
+    private boolean checkTags;
+
+    public AsyncPhotoLoad(ImageView imageView, String url, boolean checkTags
+            ){
+        this.imageView = imageView;
+        this.url = url;
+        this.checkTags = checkTags;
+    }
+
+    @Override
+    protected TransitionDrawable doInBackground(Void... arg0) {
+
+        //check that this is the correct imageview
+
+
+
+        TransitionDrawable transition = null;
+
+        try{
+            if(checkTags){
+            String tag = (String)imageView.getTag();    
+            if(!tag.equals(url))
+                return null;
+            }
+
+        bmp = getBitmap(url);
+
+        if(bmp != null){
+            memoryCache.put(url, bmp, mInSampleSize);    
+
+            Drawable oldDrawable = imageView.getDrawable();
+
+            if(!(oldDrawable instanceof TransitionDrawable)){
+
+                Drawable layers[] = new Drawable[2];                    
+                layers[0] = imageView.getDrawable();
+                layers[1] = new BitmapDrawable(bmp);
+
+               transition = new TransitionDrawable(layers);
+
+            }
+
+
+
+        }
+
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
+        return transition;
+    }
+
+    @Override
+    protected void onPostExecute(TransitionDrawable result) {
+        if(result != null){
+            try{            
+                if(checkTags){                      
+                        String tag = (String)imageView.getTag();    
+                        if(!tag.equals(url)){
+                            return;
+                        }
+                }
+
+                   imageView.setImageDrawable(result);
+                   result.startTransition(300);
+
+
+
+            } catch(Exception e){
+                e.printStackTrace();
+            }
+        } else {
+            if(checkTags){
+            try{
+                String tag = (String)imageView.getTag();    
+                if(!tag.equals(url))
+                    return;
+
+            }catch(Exception e){
+                e.printStackTrace();
+            }
+            }
+
+
+        }
+    }
+
+}
+
+
+
+private static class AsyncPhotoTask extends AsyncTask&lt;Void, Void, Bitmap&gt;{
+
+    private ImageView imageView;
+    private String url;
+    private boolean checkTags;
+
+
+    public AsyncPhotoTask(ImageView imageView, String url, boolean checkTags){
+
+        this.imageView = imageView;
+        this.url = url;
+        this.checkTags = checkTags;
+    } 
+
+
+    @Override
+    protected Bitmap doInBackground(Void... params) {
+        try{
+        if(checkTags)
+            imageView.setTag(url);  
+
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
+        return memoryCache.get(url, mInSampleSize);
+    }
+
+
+    @Override
+    protected void onPostExecute(Bitmap result) {
+        try{
+        if(result!=null &amp;&amp; !result.isRecycled()){
+
+
+            imageView.setImageBitmap(result);   
+        }
+        else
+        {   
+
+            imageView.setImageResource(PLACEHOLDER_IMAGE);            
+            new AsyncPhotoLoad(imageView, url, checkTags).execute();      
+
+        }    
+
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+    }
+
+
+
+}
+
+
+
+
+
+public static void clearCache() {
+    memoryCache.clear();
+    fileCache.clear();
+}
+
+public static void clearMemory(){
+    memoryCache.clear();
+}
+
+public static class MemoryCacheNew {
+    private HashMap&lt;String, CachedBitmap&gt; cache=new HashMap&lt;String, CachedBitmap&gt;();
+
+    public Bitmap get(String id, int sampleSize){
+        if(!cache.containsKey(id))
+            return null;
+
+        if(cache.get(id) == null)
+            return null;
+
+        if(cache.get(id).sampleSize != sampleSize)
+            return null;
+
+        SoftReference&lt;Bitmap&gt; ref = cache.get(id).softBitmap;
+        return ref.get();
+    }
+
+    public void put(String id, Bitmap bitmap, int sampleSize){
+        cache.put(id, new CachedBitmap(bitmap, sampleSize));
+    }
+
+    public void clear() {
+        cache.clear();
+    }
+
+
+
+    private static class CachedBitmap {
+        public SoftReference&lt;Bitmap&gt; softBitmap;
+        public int sampleSize;
+
+        public CachedBitmap(Bitmap bitmap, int sampleSize){
+            this.softBitmap = new SoftReference&lt;Bitmap&gt;(bitmap);
+            this.sampleSize = sampleSize;
+        }
+    }
+}
+
+
+}
+
+
+public class FileCache {
+
+private File cacheDir;
+
+public FileCache(Context context){
+    //Find the dir to save cached images
+    if (android.os.Environment.getExternalStorageState().equals(android.os.Environment.MEDIA_MOUNTED))
+        cacheDir=new File(context.getExternalCacheDir(),Consts.STORE_CACHE);
+    else
+        cacheDir=context.getCacheDir();
+    if(!cacheDir.exists())
+        cacheDir.mkdirs();
+}
+
+public File getFile(String url){
+    //I identify images by hashcode. Not a perfect solution, good for the demo.
+    String filename=String.valueOf(url.hashCode());
+    File f = new File(cacheDir, filename);
+    return f;
+
+}
+
+public void clear(){
+    File[] files=cacheDir.listFiles();
+    for(File f:files)
+        f.delete();
+}
+
+}
+</code></pre>
+
+<p>You call it like this:</p>
+
+<pre><code>imageLoader.DisplayImage(url, holder.image);
+</code></pre>

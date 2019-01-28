@@ -1,0 +1,127 @@
+<p>I have found the solution by myself. The <code>AppBarLayout</code> wrapper for the bottom <code>LinearLayout</code> is redundant. Remove the <code>AppBarLayout</code> wrapper and make the <code>Behavior</code> class extends <code>CoordinatorLayout.Behavior&lt;LinearLayout&gt;</code>. Finally add the behavior to <code>LinearLayout</code>, then the top <code>Toolbar</code> and bottom <code>LinearLayout</code> enter and exit screen on scroll correctly.</p>
+
+<p><strong>The correct activity xml:</strong></p>
+
+<pre><code>&lt;android.support.design.widget.CoordinatorLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:android="http://schemas.android.com/apk/res/android"&gt;
+
+    &lt;android.support.design.widget.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"&gt;
+
+        &lt;android.support.v7.widget.Toolbar
+            android:id="@+id/top_toolbar"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            app:layout_scrollFlags="scroll|enterAlways" /&gt;
+
+    &lt;/android.support.design.widget.AppBarLayout&gt;
+
+    &lt;FrameLayout
+        android:layout_width="fill_parent"
+        android:orientation="vertical"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"
+        android:id="@+id/recycler_view_container"
+        android:layout_height="fill_parent"/&gt;
+
+    &lt;LinearLayout
+        android:id="@+id/bottom_bar"
+        android:layout_width="match_parent"
+        android:orientation="horizontal"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        app:layout_behavior="*THE_FULL_PACKAGE_NAME*.LinearLayoutBehavior "&gt;
+        &lt;!-- child views --&gt;
+    &lt;/LinearLayout&gt;
+
+&lt;/android.support.design.widget.CoordinatorLayout&gt;
+</code></pre>
+
+<p><strong>The correct <code>Behavior</code> class:</strong></p>
+
+<pre><code>public class LinearLayoutBehavior extends CoordinatorLayout.Behavior&lt;LinearLayout&gt; {
+    private static final Interpolator INTERPOLATOR = new FastOutSlowInInterpolator();
+    private boolean mIsAnimatingOut = false;
+
+    public LinearLayoutBehavior(Context context, AttributeSet attrs) {
+        super();
+    }
+
+    @Override
+    public boolean onStartNestedScroll(final CoordinatorLayout coordinatorLayout, final LinearLayout child,
+                                       final View directTargetChild, final View target, final int nestedScrollAxes) {
+        return nestedScrollAxes == ViewCompat.SCROLL_AXIS_VERTICAL
+                || super.onStartNestedScroll(coordinatorLayout, child, directTargetChild, target, nestedScrollAxes);
+    }
+
+    @Override
+    public void onNestedScroll(final CoordinatorLayout coordinatorLayout, final LinearLayout child,
+                               final View target, final int dxConsumed, final int dyConsumed,
+                               final int dxUnconsumed, final int dyUnconsumed) {
+        super.onNestedScroll(coordinatorLayout, child, target, dxConsumed, dyConsumed, dxUnconsumed, dyUnconsumed);
+        if (dyConsumed &gt; 0 &amp;&amp; !this.mIsAnimatingOut &amp;&amp; child.getVisibility() == View.VISIBLE) {
+            // User scrolled down and the FAB is currently visible -&gt; hide the FAB
+            animateOut(child);
+        } else if (dyConsumed &lt; 0 &amp;&amp; child.getVisibility() != View.VISIBLE) {
+            // User scrolled up and the FAB is currently not visible -&gt; show the FAB
+            animateIn(child);
+        }
+    }
+
+    private void animateOut(final LinearLayout linearLayout) {
+        if (Build.VERSION.SDK_INT &gt;= 14) {
+            ViewCompat.animate(linearLayout).translationY(168F).alpha(0.0F).setInterpolator(INTERPOLATOR).withLayer()
+                    .setListener(new ViewPropertyAnimatorListener() {
+                        public void onAnimationStart(View view) {
+                            LinearLayoutBehavior.this.mIsAnimatingOut = true;
+                        }
+
+                        public void onAnimationCancel(View view) {
+                            LinearLayoutBehavior.this.mIsAnimatingOut = false;
+                        }
+
+                        public void onAnimationEnd(View view) {
+                            LinearLayoutBehavior.this.mIsAnimatingOut = false;
+                            view.setVisibility(View.GONE);
+                        }
+                    }).start();
+        } else {
+            Animation anim = AnimationUtils.loadAnimation(linearLayout.getContext(), R.anim.fab_out);
+            anim.setInterpolator(INTERPOLATOR);
+            anim.setDuration(200L);
+            anim.setAnimationListener(new Animation.AnimationListener() {
+                public void onAnimationStart(Animation animation) {
+                    LinearLayoutBehavior.this.mIsAnimatingOut = true;
+                }
+
+                public void onAnimationEnd(Animation animation) {
+                    LinearLayoutBehavior.this.mIsAnimatingOut = false;
+                    linearLayout.setVisibility(View.GONE);
+                }
+
+                @Override
+                public void onAnimationRepeat(final Animation animation) {
+                }
+            });
+            linearLayout.startAnimation(anim);
+        }
+    }
+
+    private void animateIn(LinearLayout linearLayout) {
+        linearLayout.setVisibility(View.VISIBLE);
+        if (Build.VERSION.SDK_INT &gt;= 14) {
+            ViewCompat.animate(linearLayout).translationY(0).scaleX(1.0F).scaleY(1.0F).alpha(1.0F)
+                    .setInterpolator(INTERPOLATOR).withLayer().setListener(null)
+                    .start();
+        } else {
+            Animation anim = AnimationUtils.loadAnimation(linearLayout.getContext(), R.anim.fab_in);
+            anim.setDuration(200L);
+            anim.setInterpolator(INTERPOLATOR);
+            linearLayout.startAnimation(anim);
+        }
+    }
+}
+</code></pre>

@@ -1,0 +1,184 @@
+<p>"Wrong location!" is used when an entity is added to a chunk that it shouldn't be in from its coordinates.  </p>
+
+<p>Here's where (in <code>World.java</code>) the event is fired (well, actually, there are a few other places, but this is the one used by players among other entities):</p>
+
+<pre><code>/**
+ * Called when an entity is spawned in the world. This includes players.
+ */
+public boolean spawnEntityInWorld(Entity p_72838_1_)
+{
+    // do not drop any items while restoring blocksnapshots. Prevents dupes
+    if (!this.isRemote &amp;&amp; (p_72838_1_ == null || (p_72838_1_ instanceof net.minecraft.entity.item.EntityItem &amp;&amp; this.restoringBlockSnapshots))) return false;
+
+    int i = MathHelper.floor_double(p_72838_1_.posX / 16.0D);
+    int j = MathHelper.floor_double(p_72838_1_.posZ / 16.0D);
+    boolean flag = p_72838_1_.forceSpawn;
+
+    if (p_72838_1_ instanceof EntityPlayer)
+    {
+        flag = true;
+    }
+
+    if (!flag &amp;&amp; !this.isChunkLoaded(i, j, true))
+    {
+        return false;
+    }
+    else
+    {
+        if (p_72838_1_ instanceof EntityPlayer)
+        {
+            EntityPlayer entityplayer = (EntityPlayer)p_72838_1_;
+            this.playerEntities.add(entityplayer);
+            this.updateAllPlayersSleepingFlag();
+        }
+
+        if (net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(new net.minecraftforge.event.entity.EntityJoinWorldEvent(p_72838_1_, this)) &amp;&amp; !flag) return false;
+
+        this.getChunkFromChunkCoords(i, j).addEntity(p_72838_1_);
+        this.loadedEntityList.add(p_72838_1_);
+        this.onEntityAdded(p_72838_1_);
+        return true;
+    }
+}
+</code></pre>
+
+<p>Note that <code>i</code> and <code>j</code> (chunk coordinates) aren't changed after updating the player's location.  So when <code>Chunk.addEntity</code> (see below) is called, things don't work:</p>
+
+<pre><code>/**
+ * Adds an entity to the chunk. Args: entity
+ */
+public void addEntity(Entity entityIn)
+{
+    this.hasEntities = true;
+    int i = MathHelper.floor_double(entityIn.posX / 16.0D);
+    int j = MathHelper.floor_double(entityIn.posZ / 16.0D);
+
+    if (i != this.xPosition || j != this.zPosition)
+    {
+        logger.warn("Wrong location! (" + i + ", " + j + ") should be (" + this.xPosition + ", " + this.zPosition + "), " + entityIn, new Object[] {entityIn});
+        entityIn.setDead();
+    }
+
+    // ... rest of the method
+}
+</code></pre>
+
+<p>This kills the player.</p>
+
+<hr>
+
+<p>I'm not entirely sure why it's working the first time.  It'll work whenever you log in in the same chunk as the one you'd be teleported to, so if you log out after you're in the wrong location, you'll log in successfully the next time.</p>
+
+<p>Before I get to a fix, here's a few other things to note:</p>
+
+<ul>
+<li>You don't need to do a null check with instanceof - <code>null</code> will never pass an instanceof test.</li>
+<li>(At least according to CommandTeleport), you need to teleport <code>EntityPlayerMP</code>s differently, using <code>EntityPlayerMP.playerNetServerHandler.setPlayerLocation</code>.</li>
+</ul>
+
+<p>To fix it, you'll need to delay the teleportation by 1 tick.  I'm not sure quite what the canonical forge method for that is, but something like this should work:</p>
+
+<pre><code>List&lt;Entity&gt; playersToTeleport = new ArrayList&lt;Entity&gt;();
+
+@SubscribeEvent
+public void onEntityJoinWorld(EntityJoinWorldEvent event) {
+    if (event.entity instanceof EntityPlayer &amp;&amp; !event.entity.worldObj.isRemote) {
+        playersToTeleport.add(event.entity);
+    }
+}
+
+@SubscribeEvent
+public void teleportEntiesOnWorldTick(TickEvent.WorldTickEvent event) {
+// Make sure that this is the type of tick we want.
+if (event.phase == TickEvent.Phase.START &amp;&amp; event.type == TickEvent.Type.WORLD) {
+        for (Entity entity : playersToTeleport) {
+            if (entity.worldObj == event.world) {
+                if (entity instanceof EntityPlayerMP) {
+                    ((EntityPlayerMP) entity).playerNetServerHandler.setPlayerLocation(145, 73, 145, 0, 0);
+                } else {
+                    entity.setLocationAndAngles(145, 73, 145, 0, 0);
+                }
+            }
+        }
+        playersToTeleport.clear();
+    }
+}
+</code></pre>
+
+<p>If you need to be able to change the position the player will be at rather than always going to those specific coordinates, here's one way of doing so:</p>
+
+<pre><code>@SubscribeEvent
+public void onEntityJoinWorld(EntityJoinWorldEvent event) {
+    if (event.entity instanceof EntityPlayer &amp;&amp; !event.entity.worldObj.isRemote) {
+        queueTeleportNextTick(event.entity, Math.random() * 200 - 100, 73,
+                Math.random() * 200 - 100, 0, 0);
+    }
+}
+
+/**
+ * List of teleports to perform next tick.
+ */
+private List&lt;TeleportInfo&gt; queuedTeleports = new ArrayList&lt;TeleportInfo&gt;();
+
+/**
+ * Stores information about a future teleport.
+ */
+private static class TeleportInfo {
+    public TeleportInfo(Entity entity, double x, double y, double z,
+            float yaw, float pitch) {
+        this.entity = entity;
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.yaw = yaw;
+        this.pitch = pitch;
+    }
+
+    public final Entity entity;
+    public final double x;
+    public final double y;
+    public final double z;
+    public final float yaw;
+    public final float pitch;
+}
+
+/**
+ * Teleport the given entity to the given coordinates on the next game tick.
+ */
+public void queueTeleportNextTick(Entity entity, double x, double y,
+        double z, float yaw, float pitch) {
+    System.out.printf("Preparing to teleport %s to %f, %f, %f%n", entity, x, y, z);
+    queuedTeleports.add(new TeleportInfo(entity, x, y, z, yaw, pitch));
+}
+
+@SubscribeEvent
+public void teleportEntiesOnWorldTick(TickEvent.WorldTickEvent event) {
+    // Make sure that this is the type of tick we want.
+    if (event.phase == TickEvent.Phase.START &amp;&amp; event.type == TickEvent.Type.WORLD) {
+        // Perform each teleport
+        Iterator&lt;TeleportInfo&gt; itr = queuedTeleports.iterator();
+        while (itr.hasNext()) {
+            TeleportInfo info = itr.next();
+            if (info.entity.worldObj == event.world) {
+                System.out.printf("Teleporting %s to %f, %f, %f%n", info.entity, info.x, info.y, info.z);
+                if (info.entity instanceof EntityPlayerMP) {
+                    // EntityPlayerMPs are handled somewhat differently.
+                    ((EntityPlayerMP) info.entity).playerNetServerHandler
+                            .setPlayerLocation(info.x, info.y, info.z,
+                                    info.pitch, info.yaw);
+                } else {
+                    info.entity.setLocationAndAngles(info.x, info.y, info.z,
+                            info.pitch, info.yaw);
+                }
+                itr.remove();
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Also, note that to use <code>TickEvent</code>, you need to register to a separate bus than you'd use with <code>EntityJoinWorldEvent</code>, so to fully register the events used here, you'd do this:</p>
+
+<pre><code>MinecraftForge.EVENT_BUS.register(this);
+FMLCommonHandler.instance().bus().register(this);
+</code></pre>

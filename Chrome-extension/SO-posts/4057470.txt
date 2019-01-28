@@ -1,0 +1,162 @@
+<p>I found this question last night, but there wasn't an answer I was looking for so I made my own. Here it is incase somebody in the future wants it:</p>
+
+<pre><code>/**
+ * - Covert the scheme and host to lowercase (done by java.net.URL)
+ * - Normalize the path (done by java.net.URI)
+ * - Add the port number.
+ * - Remove the fragment (the part after the #).
+ * - Remove trailing slash.
+ * - Sort the query string params.
+ * - Remove some query string params like "utm_*" and "*session*".
+ */
+public class NormalizeURL
+{
+    public static String normalize(final String taintedURL) throws MalformedURLException
+    {
+        final URL url;
+        try
+        {
+            url = new URI(taintedURL).normalize().toURL();
+        }
+        catch (URISyntaxException e) {
+            throw new MalformedURLException(e.getMessage());
+        }
+
+        final String path = url.getPath().replace("/$", "");
+        final SortedMap&lt;String, String&gt; params = createParameterMap(url.getQuery());
+        final int port = url.getPort();
+        final String queryString;
+
+        if (params != null)
+        {
+            // Some params are only relevant for user tracking, so remove the most commons ones.
+            for (Iterator&lt;String&gt; i = params.keySet().iterator(); i.hasNext();)
+            {
+                final String key = i.next();
+                if (key.startsWith("utm_") || key.contains("session"))
+                {
+                    i.remove();
+                }
+            }
+            queryString = "?" + canonicalize(params);
+        }
+        else
+        {
+            queryString = "";
+        }
+
+        return url.getProtocol() + "://" + url.getHost()
+            + (port != -1 &amp;&amp; port != 80 ? ":" + port : "")
+            + path + queryString;
+    }
+
+    /**
+     * Takes a query string, separates the constituent name-value pairs, and
+     * stores them in a SortedMap ordered by lexicographical order.
+     * @return Null if there is no query string.
+     */
+    private static SortedMap&lt;String, String&gt; createParameterMap(final String queryString)
+    {
+        if (queryString == null || queryString.isEmpty())
+        {
+            return null;
+        }
+
+        final String[] pairs = queryString.split("&amp;");
+        final Map&lt;String, String&gt; params = new HashMap&lt;String, String&gt;(pairs.length);
+
+        for (final String pair : pairs)
+        {
+            if (pair.length() &lt; 1)
+            {
+                continue;
+            }
+
+            String[] tokens = pair.split("=", 2);
+            for (int j = 0; j &lt; tokens.length; j++)
+            {
+                try
+                {
+                    tokens[j] = URLDecoder.decode(tokens[j], "UTF-8");
+                }
+                catch (UnsupportedEncodingException ex)
+                {
+                    ex.printStackTrace();
+                }
+            }
+            switch (tokens.length)
+            {
+                case 1:
+                {
+                    if (pair.charAt(0) == '=')
+                    {
+                        params.put("", tokens[0]);
+                    }
+                    else
+                    {
+                        params.put(tokens[0], "");
+                    }
+                    break;
+                }
+                case 2:
+                {
+                    params.put(tokens[0], tokens[1]);
+                    break;
+                }
+            }
+        }
+
+        return new TreeMap&lt;String, String&gt;(params);
+    }
+
+    /**
+     * Canonicalize the query string.
+     *
+     * @param sortedParamMap Parameter name-value pairs in lexicographical order.
+     * @return Canonical form of query string.
+     */
+    private static String canonicalize(final SortedMap&lt;String, String&gt; sortedParamMap)
+    {
+        if (sortedParamMap == null || sortedParamMap.isEmpty())
+        {
+            return "";
+        }
+
+        final StringBuffer sb = new StringBuffer(350);
+        final Iterator&lt;Map.Entry&lt;String, String&gt;&gt; iter = sortedParamMap.entrySet().iterator();
+
+        while (iter.hasNext())
+        {
+            final Map.Entry&lt;String, String&gt; pair = iter.next();
+            sb.append(percentEncodeRfc3986(pair.getKey()));
+            sb.append('=');
+            sb.append(percentEncodeRfc3986(pair.getValue()));
+            if (iter.hasNext())
+            {
+                sb.append('&amp;');
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Percent-encode values according the RFC 3986. The built-in Java URLEncoder does not encode
+     * according to the RFC, so we make the extra replacements.
+     *
+     * @param string Decoded string.
+     * @return Encoded string per RFC 3986.
+     */
+    private static String percentEncodeRfc3986(final String string)
+    {
+        try
+        {
+            return URLEncoder.encode(string, "UTF-8").replace("+", "%20").replace("*", "%2A").replace("%7E", "~");
+        }
+        catch (UnsupportedEncodingException e)
+        {
+            return string;
+        }
+    }
+}
+</code></pre>

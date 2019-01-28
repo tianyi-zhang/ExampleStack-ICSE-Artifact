@@ -1,0 +1,220 @@
+<p><em>Note solution blow has some potential issues and limitation, for revised solution please check this one</em> <a href="http://stackoverflow.com/a/30691092/855843">Adding items to Endless Scroll RecyclerView with ProgressBar at bottom</a></p>
+
+<p>Here is solution I came up recently:
+the idea is to have RecyclerView with 2 type of items one is our usual items the second is progress bar, then we need to listen scroll event and decide are we going to load more and show progressbar or not.
+So from idea to the example code  </p>
+
+<p><strong>progress_item.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:orientation="vertical"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"&gt;
+
+    &lt;ProgressBar
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/progressBar"
+        android:indeterminate="true"
+        style="@android:style/Widget.Holo.ProgressBar"
+        android:layout_gravity="center_horizontal"/&gt;
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>activity_main.xml</strong></p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                xmlns:tools="http://schemas.android.com/tools"
+                xmlns:ring="http://schemas.android.com/apk/res-auto"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                tools:context=".MainActivity"&gt;
+
+    &lt;android.support.v7.widget.RecyclerView
+        android:id="@+id/my_recycler_view"
+        android:scrollbars="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/&gt;
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p><strong>EndlessRecyclerOnScrollListener.java</strong></p>
+
+<pre><code>public abstract class EndlessRecyclerOnScrollListener extends RecyclerView.OnScrollListener {
+    public static String TAG = EndlessRecyclerOnScrollListener.class.getSimpleName();
+
+    private int previousTotal = 0; // The total number of items in the dataset after the last load
+    private boolean loading = true; // True if we are still waiting for the last set of data to load.
+    private int visibleThreshold = 1; // The minimum amount of items to have below your current scroll position before loading more.
+    int firstVisibleItem, visibleItemCount, totalItemCount;
+
+    private int current_page = 1;
+
+    private LinearLayoutManager mLinearLayoutManager;
+
+    public EndlessRecyclerOnScrollListener(LinearLayoutManager linearLayoutManager) {
+        this.mLinearLayoutManager = linearLayoutManager;
+    }
+
+    @Override
+    public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+        super.onScrolled(recyclerView, dx, dy);
+
+        visibleItemCount = recyclerView.getChildCount();
+        totalItemCount = mLinearLayoutManager.getItemCount();
+        firstVisibleItem = mLinearLayoutManager.findFirstVisibleItemPosition();
+
+        if (loading) {
+            if (totalItemCount &gt; previousTotal+1) {
+                loading = false;
+                previousTotal = totalItemCount;
+            }
+        }
+        if (!loading &amp;&amp; (totalItemCount - visibleItemCount) &lt;= (firstVisibleItem + visibleThreshold)) {
+        // End has been reached
+        // Do something
+            current_page++;
+            onLoadMore(current_page);
+            loading = true;
+        }
+    }
+
+    public abstract void onLoadMore(int current_page);
+}
+</code></pre>
+
+<p><strong>MyAdapter.java</strong></p>
+
+<pre><code>public class MyAdapter extends RecyclerView.Adapter&lt;RecyclerView.ViewHolder&gt; {
+    private final int VIEW_ITEM = 1;
+    private final int VIEW_PROG = 0;
+
+    private List&lt;String&gt; mDataset;
+
+    public static class TextViewHolder extends RecyclerView.ViewHolder {
+        public TextView mTextView;
+        public TextViewHolder(View v) {
+            super(v);
+            mTextView = (TextView)v.findViewById(android.R.id.text1);
+        }
+    }
+    public static class ProgressViewHolder extends RecyclerView.ViewHolder {
+        public ProgressBar progressBar;
+        public ProgressViewHolder(View v) {
+            super(v);
+            progressBar = (ProgressBar)v.findViewById(R.id.progressBar);
+        }
+    }
+
+    public MyAdapter(List&lt;String&gt; myDataset) {
+        mDataset = myDataset;
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        return mDataset.get(position)!=null? VIEW_ITEM: VIEW_PROG;
+    }
+
+    @Override
+    public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+        RecyclerView.ViewHolder vh;
+        if(viewType==VIEW_ITEM) {
+            View v = LayoutInflater.from(parent.getContext())
+                    .inflate(android.R.layout.simple_list_item_1, parent, false);
+
+            vh = new TextViewHolder(v);
+        }else {
+            View v = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.progress_item, parent, false);
+
+            vh = new ProgressViewHolder(v);
+        }
+        return vh;
+    }
+
+    @Override
+    public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+        if(holder instanceof TextViewHolder){
+            ((TextViewHolder)holder).mTextView.setText(mDataset.get(position));
+        }else{
+            ((ProgressViewHolder)holder).progressBar.setIndeterminate(true);
+        }
+    }
+
+    @Override
+    public int getItemCount() {
+        return mDataset.size();
+    }
+}
+</code></pre>
+
+<p>and finally <strong>MainActivity.java</strong></p>
+
+<pre><code>package virtoos.com.testapps;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.os.Handler;
+import android.support.v7.widget.LinearLayoutManager;
+import android.support.v7.widget.RecyclerView;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+public class MainActivity extends Activity {
+    private RecyclerView mRecyclerView;
+    private LinearLayoutManager mLayoutManager;
+    private MyAdapter mAdapter;
+    private final List&lt;String&gt; myDataset = new ArrayList&lt;&gt;();
+    private Handler handler;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        handler = new Handler();
+        addItems(20);
+        mRecyclerView = (RecyclerView) findViewById(R.id.my_recycler_view);
+
+        // use this setting to improve performance if you know that changes
+        // in content do not change the layout size of the RecyclerView
+        mRecyclerView.setHasFixedSize(true);
+
+        mLayoutManager = new LinearLayoutManager(this);
+        mRecyclerView.setLayoutManager(mLayoutManager);
+
+        mAdapter = new MyAdapter(myDataset);
+        mRecyclerView.setAdapter(mAdapter);
+
+        //mRecyclerView.setItemAnimator(new DefaultItemAnimator());
+
+        mRecyclerView.setOnScrollListener(new EndlessRecyclerOnScrollListener(mLayoutManager) {
+            @Override
+            public void onLoadMore(int current_page) {
+                //add progress item
+                myDataset.add(null);
+                mAdapter.notifyItemInserted(myDataset.size());
+                handler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        //remove progress item
+                        myDataset.remove(myDataset.size() - 1);
+                        mAdapter.notifyItemRemoved(myDataset.size());
+                        //add items one by one
+                        for (int i = 0; i &lt; 15; i++) {
+                            myDataset.add("Item"+(myDataset.size()+1));
+                            mAdapter.notifyItemInserted(myDataset.size());
+                        }
+                        //or you can add all at once but do not forget to call mAdapter.notifyDataSetChanged();
+                    }
+                }, 2000);
+                System.out.println("load");
+            }
+        });
+
+    }
+}
+</code></pre>

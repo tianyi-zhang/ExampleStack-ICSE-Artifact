@@ -1,0 +1,81 @@
+<p>This is a great question because it isolates something that should be easy but actually requires a lot of code.</p>
+
+<p>To start off, write an abstract <code>TypeAdapterFactory</code> that gives you hooks to modify the outgoing data. This example uses a new API in Gson 2.2 called <code>getDelegateAdapter()</code> that allows you to look up the adapter that Gson would use by default. The delegate adapters are extremely handy if you just want to tweak the standard behavior. And unlike full custom type adapters, they'll stay up-to-date automatically as you add and remove fields.</p>
+
+<pre><code>public abstract class CustomizedTypeAdapterFactory&lt;C&gt;
+    implements TypeAdapterFactory {
+  private final Class&lt;C&gt; customizedClass;
+
+  public CustomizedTypeAdapterFactory(Class&lt;C&gt; customizedClass) {
+    this.customizedClass = customizedClass;
+  }
+
+  @SuppressWarnings("unchecked") // we use a runtime check to guarantee that 'C' and 'T' are equal
+  public final &lt;T&gt; TypeAdapter&lt;T&gt; create(Gson gson, TypeToken&lt;T&gt; type) {
+    return type.getRawType() == customizedClass
+        ? (TypeAdapter&lt;T&gt;) customizeMyClassAdapter(gson, (TypeToken&lt;C&gt;) type)
+        : null;
+  }
+
+  private TypeAdapter&lt;C&gt; customizeMyClassAdapter(Gson gson, TypeToken&lt;C&gt; type) {
+    final TypeAdapter&lt;C&gt; delegate = gson.getDelegateAdapter(this, type);
+    final TypeAdapter&lt;JsonElement&gt; elementAdapter = gson.getAdapter(JsonElement.class);
+    return new TypeAdapter&lt;C&gt;() {
+      @Override public void write(JsonWriter out, C value) throws IOException {
+        JsonElement tree = delegate.toJsonTree(value);
+        beforeWrite(value, tree);
+        elementAdapter.write(out, tree);
+      }
+      @Override public C read(JsonReader in) throws IOException {
+        JsonElement tree = elementAdapter.read(in);
+        afterRead(tree);
+        return delegate.fromJsonTree(tree);
+      }
+    };
+  }
+
+  /**
+   * Override this to muck with {@code toSerialize} before it is written to
+   * the outgoing JSON stream.
+   */
+  protected void beforeWrite(C source, JsonElement toSerialize) {
+  }
+
+  /**
+   * Override this to muck with {@code deserialized} before it parsed into
+   * the application type.
+   */
+  protected void afterRead(JsonElement deserialized) {
+  }
+}
+</code></pre>
+
+<p>The above class uses the default serialization to get a JSON tree (represented by <code>JsonElement</code>), and then calls the hook method <code>beforeWrite()</code> to allow the subclass to customize that tree. Similarly for deserialization with <code>afterRead()</code>.</p>
+
+<p>Next we subclass this for the specific <code>MyClass</code> example. To illustrate I'll add a synthetic property called 'size' to the map when it's serialized. And for symmetry I'll remove it when it's deserialized. In practice this could be any customization.</p>
+
+<pre><code>private class MyClassTypeAdapterFactory extends CustomizedTypeAdapterFactory&lt;MyClass&gt; {
+  private MyClassTypeAdapterFactory() {
+    super(MyClass.class);
+  }
+
+  @Override protected void beforeWrite(MyClass source, JsonElement toSerialize) {
+    JsonObject custom = toSerialize.getAsJsonObject().get("custom").getAsJsonObject();
+    custom.add("size", new JsonPrimitive(custom.entrySet().size()));
+  }
+
+  @Override protected void afterRead(JsonElement deserialized) {
+    JsonObject custom = deserialized.getAsJsonObject().get("custom").getAsJsonObject();
+    custom.remove("size");
+  }
+}
+</code></pre>
+
+<p>Finally put it all together by creating a customized <code>Gson</code> instance that uses the new type adapter:</p>
+
+<pre><code>Gson gson = new GsonBuilder()
+    .registerTypeAdapterFactory(new MyClassTypeAdapterFactory())
+    .create();
+</code></pre>
+
+<p>Gson's new <a href="http://google-gson.googlecode.com/svn/trunk/gson/docs/javadocs/com/google/gson/TypeAdapter.html">TypeAdapter</a> and <a href="http://google-gson.googlecode.com/svn/trunk/gson/docs/javadocs/com/google/gson/TypeAdapterFactory.html">TypeAdapterFactory</a> types are extremely powerful, but they're also abstract and take practice to use effectively. Hopefully you find this example useful!</p>

@@ -1,0 +1,413 @@
+<p>First, I found that the path for the SD card I added to the phone is not /sdcard/ but rather /storage/extSdCard/. Only /storage/extSdCard/ has music files on it.  Both paths, however, are valid paths on my phone.  I suspect that /sdcard/ is the internal storage for the phone.  </p>
+
+<p>The method getExternalStorageDirectory was actually returning a location on the internal SD Card, which is not what I was aiming for.</p>
+
+<p>Second, I found some code that allows the user to browse the folder structure and select a folder. I customized the code to my liking and after some trial and error, got it to work for me.</p>
+
+<p>FileDialog.java:</p>
+
+<pre><code>public class FileDialog extends ListActivity {
+
+    private static final String ITEM_KEY = "key";
+    private static final String ITEM_IMAGE = "image";
+    private static final String ROOT = "/";
+    public static final String START_PATH = "START_PATH";
+    public static final String FORMAT_FILTER = "FORMAT_FILTER";
+    public static final String RESULT_PATH = "RESULT_PATH";
+    public static final String SELECTION_MODE = "SELECTION_MODE";
+    public static final String CAN_SELECT_DIR = "CAN_SELECT_DIR";
+
+    private List&lt;String&gt; path = null;
+    private TextView myPath;
+    private EditText mFileName;
+    private ArrayList&lt;HashMap&lt;String, Object&gt;&gt; mList;
+
+    private Button selectButton;
+
+    private LinearLayout layoutSelect;
+    private LinearLayout layoutCreate;
+    private InputMethodManager inputManager;
+    private String parentPath;
+    private String currentPath = ROOT;
+    private String musicFolderPath = "";
+
+    private int selectionMode = SelectionMode.MODE_CREATE;
+
+    private String[] formatFilter = null;
+
+    private boolean canSelectDir = false;
+
+    private File selectedFile;
+    private HashMap&lt;String, Integer&gt; lastPositions = new HashMap&lt;String, Integer&gt;();
+
+    /**
+     * Sets all inputs and views
+     */
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setResult(RESULT_CANCELED, getIntent());
+
+        setContentView(R.layout.file_dialog_main);
+
+        ActionBar bar = getActionBar();
+        if (bar != null) {
+            bar.setBackgroundDrawable(new ColorDrawable(Color.parseColor("#3F51B5")));  //sets action bar to color primary dark
+        }
+
+        myPath = (TextView) findViewById(R.id.path);
+        mFileName = (EditText) findViewById(R.id.fdEditTextFile);
+
+        inputManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+
+        selectButton = (Button) findViewById(R.id.fdButtonSelect);
+        selectButton.setEnabled(false);
+        selectButton.setOnClickListener(new OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+                if (selectedFile != null) {
+                    musicFolderPath = selectedFile.getPath();
+                    getIntent().putExtra(RESULT_PATH, musicFolderPath);
+                    setResult(RESULT_OK, getIntent());
+                    savePrefs("folder", musicFolderPath);
+                    Toast.makeText(getApplicationContext(), "You select " + selectedFile.getPath(), Toast.LENGTH_LONG).show();
+                    finish();
+                }
+            }
+        });
+
+
+        selectionMode = getIntent().getIntExtra(SELECTION_MODE, SelectionMode.MODE_CREATE);
+
+        formatFilter = getIntent().getStringArrayExtra(FORMAT_FILTER);
+
+        canSelectDir = getIntent().getBooleanExtra(CAN_SELECT_DIR, false);
+
+        if (selectionMode == SelectionMode.MODE_OPEN) {
+            //newButton.setEnabled(false);
+        }
+
+        layoutSelect = (LinearLayout) findViewById(R.id.fdLinearLayoutSelect);
+        layoutCreate = (LinearLayout) findViewById(R.id.fdLinearLayoutCreate);
+        layoutCreate.setVisibility(View.GONE);
+
+        final Button cancelButton = (Button) findViewById(R.id.fdButtonCancel);
+        cancelButton.setOnClickListener(new OnClickListener() {
+
+            @Override
+            public void onClick(View view) {
+                setSelectVisible(view);
+                finish();
+            }
+
+        });
+
+        String startPath = getIntent().getStringExtra(START_PATH);
+        startPath = startPath != null ? startPath : ROOT;
+        if (canSelectDir) {
+            File file = new File(startPath);
+            selectedFile = file;
+            selectButton.setEnabled(true);
+        }
+        getDir(startPath);
+    }
+
+    private void getDir(String dirPath) {
+
+        boolean useAutoSelection = dirPath.length() &lt; currentPath.length();
+
+        Integer position = lastPositions.get(parentPath);
+
+        getDirImpl(dirPath);
+
+        if (position != null &amp;&amp; useAutoSelection) {
+            getListView().setSelection(position);
+        }
+
+    }
+
+    /**
+     * Assembles the structure of files and directories of children provided directory.
+     */
+    private void getDirImpl(final String dirPath) {
+
+        currentPath = dirPath;
+
+        final List&lt;String&gt; item = new ArrayList&lt;String&gt;();
+        path = new ArrayList&lt;String&gt;();
+        mList = new ArrayList&lt;HashMap&lt;String, Object&gt;&gt;();
+
+        File myFile = new File(currentPath);
+        File[] files = myFile.listFiles();
+        if (files == null) {
+            currentPath = ROOT;
+            myFile = new File(currentPath);
+            files = myFile.listFiles();
+        }
+        myPath.setText(getText(R.string.location) + ": " + currentPath);
+
+        if (!currentPath.equals(ROOT)) {
+
+            item.add(ROOT);
+            addItem(ROOT, R.drawable.folder);
+            path.add(ROOT);
+
+            item.add("../");
+            addItem("../", R.drawable.folder);
+            path.add(myFile.getParent());
+            parentPath = myFile.getParent();
+
+        }
+
+        TreeMap&lt;String, String&gt; dirsMap = new TreeMap&lt;String, String&gt;();
+        TreeMap&lt;String, String&gt; dirsPathMap = new TreeMap&lt;String, String&gt;();
+        TreeMap&lt;String, String&gt; filesMap = new TreeMap&lt;String, String&gt;();
+        TreeMap&lt;String, String&gt; filesPathMap = new TreeMap&lt;String, String&gt;();
+        for (File file : files) {
+            if (file.isDirectory()) {
+                String dirName = file.getName();
+                dirsMap.put(dirName, dirName);
+                dirsPathMap.put(dirName, file.getPath());
+            } else {
+                final String fileName = file.getName();
+                final String fileNameLwr = fileName.toLowerCase();
+
+                if (formatFilter != null) {
+                    boolean contains = false;
+                    for (int i = 0; i &lt; formatFilter.length; i++) {
+                        final String formatLower = formatFilter[i].toLowerCase();
+                        if (fileNameLwr.endsWith(formatLower)) {
+                            contains = true;
+                            break;
+                        }
+                    }
+                    if (contains) {
+                        filesMap.put(fileName, fileName);
+                        filesPathMap.put(fileName, file.getPath());
+                    }
+                } else {
+                    filesMap.put(fileName, fileName);
+                    filesPathMap.put(fileName, file.getPath());
+                }
+            }
+        }
+        item.addAll(dirsMap.tailMap("").values());
+        item.addAll(filesMap.tailMap("").values());
+        path.addAll(dirsPathMap.tailMap("").values());
+        path.addAll(filesPathMap.tailMap("").values());
+
+        SimpleAdapter fileList = new SimpleAdapter(this, mList, R.layout.file_dialog_row, new String[] {
+                ITEM_KEY, ITEM_IMAGE }, new int[] { R.id.fdrowtext, R.id.fdrowimage });
+
+        for (String dir : dirsMap.tailMap("").values()) {
+            addItem(dir, R.drawable.folder);
+        }
+
+        for (String file : filesMap.tailMap("").values()) {
+            addItem(file, R.drawable.file);
+        }
+
+        fileList.notifyDataSetChanged();
+
+        setListAdapter(fileList);
+
+    }
+
+    private void addItem(String fileName, int imageId) {
+        HashMap&lt;String, Object&gt; item = new HashMap&lt;String, Object&gt;();
+        item.put(ITEM_KEY, fileName);
+        item.put(ITEM_IMAGE, imageId);
+        mList.add(item);
+    }
+
+    /**
+     * When a list item is clicked 1) If it is a directory, open
+     * children; 2) If you can choose directory, define it as the
+     * path chosen. 3) If file, defined as the path chosen. 4) Active button for selection.
+     */
+    @Override
+    protected void onListItemClick(ListView l, View v, int position, long id) {
+
+        File file = new File(path.get(position));
+
+        setSelectVisible(v);
+
+        if (file.isDirectory()) {
+            selectButton.setEnabled(false);
+            if (file.canRead()) {
+                lastPositions.put(currentPath, position);
+                getDir(path.get(position));
+                if (canSelectDir) {
+                    selectedFile = file;
+                    v.setSelected(true);
+                    selectButton.setEnabled(true);
+                }
+            } else {
+                new AlertDialog.Builder(this).setIcon(R.drawable.icon)
+                        .setTitle("[" + file.getName() + "] " + getText(R.string.cant_read_folder))
+                        .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+
+                            }
+                        }).show();
+            }
+        } else {
+            selectedFile = file;
+            v.setSelected(true);
+            selectButton.setEnabled(true);
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if ((keyCode == KeyEvent.KEYCODE_BACK)) {
+            selectButton.setEnabled(false);
+
+            if (layoutCreate.getVisibility() == View.VISIBLE) {
+                layoutCreate.setVisibility(View.GONE);
+                layoutSelect.setVisibility(View.VISIBLE);
+            } else {
+                if (!currentPath.equals(ROOT)) {
+                    getDir(parentPath);
+                } else {
+                    return super.onKeyDown(keyCode, event);
+                }
+            }
+
+            return true;
+        } else {
+            return super.onKeyDown(keyCode, event);
+        }
+    }
+
+    /**
+     * Sets the CREATE button and visibility
+     */
+    private void setCreateVisible(View v) {
+        layoutCreate.setVisibility(View.VISIBLE);
+        layoutSelect.setVisibility(View.GONE);
+
+        inputManager.hideSoftInputFromWindow(v.getWindowToken(), 0);
+        selectButton.setEnabled(false);
+    }
+
+    /**
+     * Sets the button SELECT and visibility
+     */
+    private void setSelectVisible(View v) {
+        layoutCreate.setVisibility(View.GONE);
+        layoutSelect.setVisibility(View.VISIBLE);
+
+        inputManager.hideSoftInputFromWindow(v.getWindowToken(), 0);
+        selectButton.setEnabled(false);
+    }
+
+    //save prefs
+    public void savePrefs(String key, String value){
+        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putString(key, value);
+        editor.apply();
+    }
+}
+</code></pre>
+
+<p>file_dialog_main.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;RelativeLayout android:id="@+id/relativeLayout01"
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                android:orientation="vertical" android:layout_width="fill_parent"
+                android:layout_height="fill_parent"&gt;
+
+    &lt;LinearLayout android:id="@+id/fdLinearLayoutList"
+                  android:orientation="vertical" android:layout_width="fill_parent"
+                  android:layout_height="wrap_content" android:layout_alignParentBottom="true"&gt;
+
+        &lt;LinearLayout android:id="@+id/fdLinearLayoutSelect"
+                      android:orientation="vertical" android:layout_width="fill_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_alignParentBottom="true"  android:paddingBottom="5dp"&gt;
+
+            &lt;LinearLayout android:orientation="horizontal"
+                          android:layout_width="fill_parent" android:layout_height="fill_parent"
+                          android:layout_marginTop="5dp"&gt;
+                &lt;Button android:id="@+id/fdButtonCancel" android:layout_height="wrap_content"
+                        android:layout_width="0dip" android:layout_weight="1"
+                        android:background="@color/colorPrimaryDark"
+                        android:text="@string/cancel"
+                        android:layout_marginRight="5dp"&gt;&lt;/Button&gt;
+
+                &lt;Button android:id="@+id/fdButtonSelect" android:layout_height="wrap_content"
+                        android:layout_width="0dip" android:layout_weight="1"
+                        android:background="@color/colorPrimaryDark"
+                        android:text="@string/select"&gt;&lt;/Button&gt;
+            &lt;/LinearLayout&gt;
+
+
+        &lt;/LinearLayout&gt;
+
+
+
+        &lt;LinearLayout android:id="@+id/fdLinearLayoutCreate"
+                      android:orientation="vertical" android:layout_width="fill_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_alignParentBottom="true" android:paddingLeft="10dp"
+                      android:paddingRight="10dp" android:paddingBottom="5dp"&gt;
+            &lt;TextView android:id="@+id/textViewFilename" android:text="@string/file_name"
+                      android:layout_width="fill_parent" android:layout_height="wrap_content" /&gt;
+            &lt;EditText android:text="" android:id="@+id/fdEditTextFile"
+                      android:layout_width="fill_parent" android:layout_height="wrap_content"&gt;&lt;/EditText&gt;
+
+
+        &lt;/LinearLayout&gt;
+
+    &lt;/LinearLayout&gt;
+
+    &lt;LinearLayout android:orientation="vertical"
+                  android:layout_width="fill_parent" android:layout_height="fill_parent"
+                  android:layout_above="@+id/fdLinearLayoutList"&gt;
+        &lt;TextView android:id="@+id/path" android:layout_width="fill_parent"
+                  android:layout_height="wrap_content" /&gt;
+        &lt;ListView android:id="@android:id/list" android:layout_width="fill_parent"
+                  android:layout_height="fill_parent" /&gt;
+        &lt;TextView android:id="@android:id/empty"
+                  android:layout_width="fill_parent" android:layout_height="fill_parent"
+                  android:text="@string/no_data" /&gt;
+    &lt;/LinearLayout&gt;
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>file_dialog_row.xml:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+
+&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/list_selector"&gt;
+
+    &lt;ImageView
+        android:id="@+id/fdrowimage"
+        android:layout_width="wrap_content"
+        android:layout_height="35dp"
+        android:layout_alignParentLeft="true"
+        android:paddingLeft="3dp"
+        android:paddingRight="5dp"/&gt;
+
+    &lt;TextView
+        android:id="@+id/fdrowtext"
+        android:layout_width="wrap_content"
+        android:layout_height="65dp"
+        android:layout_alignBottom="@+id/fdrowimage"
+        android:layout_alignTop="@+id/fdrowimage"
+        android:layout_toRightOf="@+id/fdrowimage"
+        android:gravity="center_vertical"
+        android:text="@+id/fdrowtext"
+        android:textSize="23sp"/&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>

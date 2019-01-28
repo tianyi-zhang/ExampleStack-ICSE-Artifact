@@ -1,0 +1,87 @@
+<p>The <code>hexdump</code> of the given char sequence is probably <code>ef bb bf</code>. I said probably, as I had to guess your display encoding.</p>
+
+<p>If that is correct, you are trying to read as ISO-8859-X an UTF-8 encoded file <a href="http://en.wikipedia.org/wiki/Byte_order_mark#UTF-8" rel="nofollow">with BOM prefix</a> . That would be coherent with the fact you didn't see those chars when opening the file with vi/vim. Most if not all UTF-8 aware text editor know how to deal with the BOM.</p>
+
+<p>From Java, you have to skip with it manually (don't know why it works on Windows though). 
+An other option is to save your text file as UTF-8 <em>without</em> BOM.</p>
+
+<p>This has already been discussed. See for example:</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/a/4897993/2363712">http://stackoverflow.com/a/4897993/2363712</a></li>
+<li><a href="http://stackoverflow.com/q/8432584/2363712">How to make notepad to save text in utf-8 without bom?</a></li>
+</ul>
+
+<hr>
+
+<hr>
+
+<p>As this is not really clear, I've made the following experiment: I've created two files, <em>utf-8</em> encoded and containing the string <em>"L'élève va à l'école."</em> The only difference between those two test files is one has a BOM prefix.</p>
+
+<p>Then, based on the code given by the OP and a suggestion by Thomas Mueller, I wrote a very simple Java app to read those files using various encoding. Here is the code:</p>
+
+<pre><code>public class EncodingTest {
+    public static String read(String file, String encoding) throws IOException {
+        StringBuffer fileData = new StringBuffer(1000);
+
+        /* Only difference with OP code */
+        /* I use *explicit* encoding while reading the file */
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(file), encoding)
+                );
+
+        char[] buf = new char[5000];
+        int numRead=0;
+        while((numRead=reader.read(buf)) != -1){
+            String readData = String.valueOf(buf, 0, numRead);
+            fileData.append(readData);
+            buf = new char[1024];
+        }
+        reader.close();
+        return fileData.toString();     
+    }
+
+    public static void main(String[] args) throws IOException {
+        System.out.print(read("UTF-8-BOM-FILE", "UTF-8"));
+        System.out.print(read("UTF-8-FILE", "UTF-8"));
+        System.out.print(read("UTF-8-BOM-FILE", "ISO-8859-15"));
+        System.out.print(read("UTF-8-FILE", "ISO-8859-15"));
+    }
+}
+</code></pre>
+
+<p>When I run this on my Linux system whom console encoding is UTF8, I've obtain the following results:</p>
+
+<pre><code>$ java -cp bin EncodingTest
+L'élève va à l'école.
+L'élève va à l'école.
+ï»¿L'Ã©lÃšve va Ã  l'Ã©cole.
+L'Ã©lÃšve va Ã  l'Ã©cole.
+</code></pre>
+
+<p>Notice how <strong>the third line starts by the exact same sequence as given by the OP</strong>. That is while reading <em>utf8 encoded file with BOM as iso-8859-15</em>.</p>
+
+<p>Surprisingly enough, the first two lines <em>seems</em> to be the same, like if Java had magically remove the BOM. I guess this is what is appending for the OP on Windows.</p>
+
+<p>But, a closer inspection showed that:</p>
+
+<pre><code>$ java -cp bin EncodingTest | hexdump -C
+00000000  ef bb bf 4c 27 c3 a9 6c  c3 a8 76 65 20 76 61 20  |...L'..l..ve va |
+00000010  c3 a0 20 6c 27 c3 a9 63  6f 6c 65 2e 0a 4c 27 c3  |.. l'..cole..L'.|
+00000020  a9 6c c3 a8 76 65 20 76  61 20 c3 a0 20 6c 27 c3  |.l..ve va .. l'.|
+00000030  a9 63 6f 6c 65 2e 0a c3  af c2 bb c2 bf 4c 27 c3  |.cole........L'.|
+00000040  83 c2 a9 6c c3 83 c5 a1  76 65 20 76 61 20 c3 83  |...l....ve va ..|
+00000050  c2 a0 20 6c 27 c3 83 c2  a9 63 6f 6c 65 2e 0a 4c  |.. l'....cole..L|
+00000060  27 c3 83 c2 a9 6c c3 83  c5 a1 76 65 20 76 61 20  |'....l....ve va |
+00000070  c3 83 c2 a0 20 6c 27 c3  83 c2 a9 63 6f 6c 65 2e  |.... l'....cole.|
+00000080  0a                                                |.|
+00000081
+</code></pre>
+
+<p>Please notice the first three bytes: the BOM was send to output -- but my console somehow discarded them. However, from Java program perspective, those bytes where presents -- and I should probably have take care them manually.</p>
+
+<hr>
+
+<p>So, what is the moral of all this? The OP has really <em>two</em> issues: A BOM prefixed UTF8 encoded file. And that file is read as iso-8859-X.</p>
+
+<p><strong>Yuris, in order to fix that, you have to explicitly use the correct encoding in your Java program, <em>and</em> either discard the first 3 bytes <em>or</em> change your data file to remove the BOM.</strong></p>

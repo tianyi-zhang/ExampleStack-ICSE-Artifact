@@ -1,0 +1,326 @@
+<p>I've Got the right code here its working perfect.
+it has been updated to go to the current location as well because I've been messing with it since the fix.</p>
+
+<pre><code>import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Marker;
+import com.google.android.gms.maps.model.MarkerOptions;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import android.app.Dialog;
+import android.location.Criteria;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.support.v4.app.FragmentActivity;
+import android.util.Log;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+
+
+public class GetLocalBus extends FragmentActivity implements LocationListener {
+    private static final String LOG_TAG = "JsOn ErRoR";
+
+    private static final String SERVICE_URL = "";
+
+    protected GoogleMap mapB;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.get_local);
+        setUpMapIfNeeded();
+
+     // Getting Google Play availability status
+        int status = GooglePlayServicesUtil.isGooglePlayServicesAvailable(getBaseContext());
+
+        // Showing status
+        if(status!=ConnectionResult.SUCCESS){ // Google Play Services are not available
+
+            int requestCode = 10;
+            Dialog dialog = GooglePlayServicesUtil.getErrorDialog(status, this, requestCode);
+            dialog.show();
+
+        }else { // Google Play Services are available   
+
+            // Getting reference to the SupportMapFragment of activity_main.xml
+            SupportMapFragment fm = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.mapB);
+
+            // Getting GoogleMap object from the fragment
+            mapB = fm.getMap();
+
+            // Enabling MyLocation Layer of Google Map
+            mapB.setMyLocationEnabled(true); 
+
+
+
+             // Getting LocationManager object from System Service LOCATION_SERVICE
+            LocationManager locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+
+            // Creating a criteria object to retrieve provider
+            Criteria criteria = new Criteria();
+
+            // Getting the name of the best provider
+            String provider = locationManager.getBestProvider(criteria, true);
+
+            // Getting Current Location
+            Location location = locationManager.getLastKnownLocation(provider);
+
+            if(location!=null){
+                    onLocationChanged(location);
+            }
+
+            locationManager.requestLocationUpdates(provider, 20000, 0, this);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        setUpMapIfNeeded();
+    }
+
+    private void setUpMapIfNeeded() {
+        if (mapB == null) {
+            mapB = ((SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.mapB))
+                    .getMap();
+            if (mapB != null) {
+                setUpMap();
+            }
+        }
+    }
+
+    private void setUpMap() {
+
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    retrieveAndAddCities();
+                } catch (IOException e) {
+                    Log.e(LOG_TAG, "Cannot retrive cities", e);
+                    return;
+                }
+            }
+        }).start();
+    }
+
+    protected void retrieveAndAddCities() throws IOException {
+        HttpURLConnection conn = null;
+        final StringBuilder json = new StringBuilder();
+        try {
+            // Connect to the web service
+            URL url = new URL(SERVICE_URL);
+            conn = (HttpURLConnection) url.openConnection();
+            InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+            // Read the JSON data into the StringBuilder
+            int read;
+            char[] buff = new char[1024];
+            while ((read = in.read(buff)) != -1) {
+                json.append(buff, 0, read);
+            }
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Error connecting to service", e);
+            throw new IOException("Error connecting to service", e);
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+
+        // Must run this on the UI thread since it's a UI operation.
+        runOnUiThread(new Runnable() {
+            public void run() {
+                try {
+                    createMarkersFromJson(json.toString());
+                } catch (JSONException e) {
+                    Log.e(LOG_TAG, "Error processing JSON", e);
+                }
+            }
+        });
+    }
+
+    void createMarkersFromJson(String json) throws JSONException {
+
+        JSONArray jsonArray = new JSONArray(json);
+        System.out.print(json);
+        List&lt;Marker&gt; markers = new ArrayList&lt;Marker&gt;();
+
+        for (int i = 0; i &lt; jsonArray.length(); i++) {
+
+            JSONObject jsonObj = jsonArray.getJSONObject(i);
+            System.out.print(jsonObj.getJSONArray("latlng"));
+            Marker marker = mapB.addMarker(new MarkerOptions()
+                .title(jsonObj.getString("business_name"))
+                .position(new LatLng(
+                        jsonObj.getJSONArray("latlng").getDouble(0),
+                        jsonObj.getJSONArray("latlng").getDouble(1)))
+                .icon(BitmapDescriptorFactory.fromResource(R.drawable.graphic_map_icon))
+            );
+            markers.add(marker);
+        }
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+        // Getting latitude of the current location
+        double latitude = location.getLatitude();
+
+        // Getting longitude of the current location
+        double longitude = location.getLongitude();     
+
+        // Creating a LatLng object for the current location
+        LatLng latLng = new LatLng(latitude, longitude);
+
+        // Showing the current location in Google Map
+        mapB.moveCamera(CameraUpdateFactory.newLatLng(latLng));
+
+        // Zoom in the Google Map
+        mapB.animateCamera(CameraUpdateFactory.zoomTo(15));
+
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    public void onProviderEnabled(String provider) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+        // TODO Auto-generated method stub
+
+    }
+}
+</code></pre>
+
+<p>Also here is the PHP</p>
+
+<pre><code>&lt;?php
+
+
+
+
+    if
+    (isset($_GET['lat']) &amp;&amp; isset($_GET['lon'])&amp;&amp; isset($_GET['dist'])){
+
+
+
+    //make a simple database connection
+        $db = new mysqli();
+
+
+
+     $lat = $_GET['lat'];
+
+         $lon = $_GET['lon'];
+
+         $dist = $_GET['dist'];
+
+
+
+
+        $search_sql = "SELECT business_id, business_name, CONCAT_WS(\",\",business_lat, business_lon) AS latlng, ( 3959 * acos( cos( radians(37) ) * cos( radians( " . $lat . " ) ) * cos( radians( " . $lon . " ) - radians(-122) ) + sin( radians(37) ) * sin( radians( " . $lat . " ) ) ) ) AS distance
+
+                        FROM somewhere HAVING distance &lt; " . $dist . " ORDER BY distance LIMIT 0 , 20";
+
+
+
+
+
+
+        $search_results = $db-&gt;query($search_sql);
+
+
+
+        if($search_results-&gt;num_rows){
+
+
+
+     while ($row = $search_results-&gt;fetch_assoc())
+{
+    $return_data[] = array(
+                            'business_name' =&gt; $row['business_name'],
+                            'latlng'        =&gt; explode(',', $row['latlng']),
+                            'business_id'   =&gt; $row['business_id'],
+                            'distance'      =&gt; $row['distance']
+                            );
+}//end while
+
+
+        }
+
+        else{
+
+            $return_data[] = array();
+
+        }//end if
+
+
+
+
+        }else{
+
+
+        $return_data[] = array();
+
+    }
+
+
+
+    $bd_json = json_encode($return_data);
+
+
+
+    $db-&gt;close();
+
+
+
+    echo $bd_json;
+
+
+
+
+
+?&gt;
+</code></pre>
+
+<p>xml layout</p>
+
+<p>
+</p>
+
+<pre><code>    &lt;fragment android:id="@+id/mapB" 
+        android:layout_width="fill_parent" 
+        android:layout_height="250.0dip" 
+        android:layout_alignParentTop="true" 
+        android:layout_centerInParent="true" 
+        class="com.google.android.gms.maps.SupportMapFragment"
+        xmlns:android="http://schemas.android.com/apk/res/android" /&gt;
+
+    &lt;TextView 
+        android:id="@+id/TextView1" 
+        android:layout_width="fill_parent" 
+        android:layout_height="wrap_content" 
+        android:layout_below="@+id/mapB" /&gt;
+&lt;/RelativeLayout&gt;
+</code></pre>

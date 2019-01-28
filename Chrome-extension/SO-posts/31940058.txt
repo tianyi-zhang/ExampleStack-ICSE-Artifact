@@ -1,0 +1,185 @@
+<p><a href="http://stackoverflow.com/a/31867651/253468">@rookiedev is right, there's no <code>load(Bitmap)</code> in Glide</a>, for a reason: acquiring a <code>Bitmap</code> usually takes time and sometimes blocking I/O. So it's not good practice to call <code>imageWithText</code> on the UI thread. <strong>Update</strong>: That being said I proposed <a href="https://github.com/bumptech/glide/issues/122">this feature</a> a while back; and while the hacks are easier to do you can find the "Glide way" below, which I highly recommend.</p>
+
+<p>Glide is designed to be flexible and this problem demonstrates that trait extremely well. The following implementation may seem long, but all pieces have their reason for existence. Given the performance gain, this amount of code to fit your generator into Glide's world is not much. I tried to format it to be short, collapsing irrelevant parts and using static imports to be shorter (see the end for imports).</p>
+
+<p>The code also includes programmatically generated UI so you can just copy-paste all the below code into <code>GlideGeneratedImageListFragment.java</code> and run it; the only external dependency is support lib's <code>RecyclerView</code>.</p>
+
+<pre><code>class GeneratingAdapter extends RecyclerView.Adapter&lt;RecyclerView.ViewHolder&gt; {
+    // See https://docs.google.com/drawings/d/1KyOJkNd5Dlm8_awZpftzW7KtqgNR6GURvuF6RfB210g/edit?usp=sharing
+    //                                  ModelType/A,    DataType/T,     ResourceType/Z, TranscodeType/R
+    private final GenericRequestBuilder&lt;GenerateParams, GenerateParams, Bitmap,         GlideDrawable&gt; generator;
+
+    public GeneratingAdapter(final Context context) {
+        generator = Glide // this part should be cleaner in Glide 4.0, but that's not released yet
+        .with(context)
+        .using(new GenerateParamsPassthroughModelLoader(), GenerateParams.class)          // custom class
+        .from(GenerateParams.class)
+        .as(Bitmap.class)
+        .transcode(new BitmapToGlideDrawableTranscoder(context), GlideDrawable.class)     // builtin
+        .decoder(new GenerateParamsBitmapResourceDecoder(context))                        // custom class
+        .encoder(new BitmapEncoder(Bitmap.CompressFormat.PNG, 0/*ignored for lossless*/)) // builtin
+        .cacheDecoder(new FileToStreamDecoder&lt;Bitmap&gt;(new StreamBitmapDecoder(context)))  // builtin
+        //.placeholder(new ColorDrawable(Color.YELLOW)) // you can pre-set placeholder and error
+        .error(new ColorDrawable(Color.RED))            // so it's easier when binding
+        //.diskCacheStrategy(DiskCacheStrategy.NONE)    // only for debugging to always regenerate
+        //.skipMemoryCache(true)                        // only for debugging to always regenerate
+        ;
+    }
+    @Override public int getItemCount() { return 1000; }
+
+    private final float[] colorCache = new float[] {0, 1.0f, 0.5f};
+    private final float[] bgCache = new float[] {0, 0.5f, 1.0f};
+    @Override public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+        colorCache[0] = bgCache[0] = (position * 15) % 360; // just to have a fancy example :)
+        GenerateParams params = new GenerateParams(
+                // omit position to see Glide caching in action (every 24th item / 12th row is the same)
+                "android text"/* + " #" + position*/,
+                Color.HSVToColor(colorCache),
+                Color.HSVToColor(bgCache)
+        );
+        generator/*.clone() in case you see weird behavior*/.load(params).into((ImageView)holder.itemView);
+    }
+
+    @Override public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+        int height = parent.getContext().getResources().getDisplayMetrics().heightPixels / 3;
+        ImageView view = new ImageView(parent.getContext());
+        view.setLayoutParams(new RecyclerView.LayoutParams(MATCH_PARENT, height));
+        view.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        return new RecyclerView.ViewHolder(view) {}; // anon class for brevity
+    }
+}
+
+public class GlideGeneratedImageListFragment extends Fragment {
+    @Override public @Nullable View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        RecyclerView view = new RecyclerView(container.getContext());
+        view.setLayoutParams(new MarginLayoutParams(MATCH_PARENT, MATCH_PARENT));
+        view.setLayoutManager(new GridLayoutManager(container.getContext(), 2 /*columns*/));
+        view.setAdapter(new GeneratingAdapter(view.getContext()));
+        return view;
+    }
+}
+
+/** Extracted params from imageWithText, but left some hardcoded values like 20sp/bold/center in {@link Generators}. */
+class GenerateParams {
+    final String text;
+    final int color;
+    final int background;
+
+    public GenerateParams(String text, int color, int bg) {
+        this.text = text;
+        this.color = color;
+        this.background = bg;
+    }
+
+    public String getId() {
+        // TODO make sure it's unique for every possible instance of GenerateParams
+        // because it will affect how the resulting bitmap is cached
+        // the below is correct correct for the current fields, if those change this has to change
+        return String.format(Locale.ROOT, "%s-%08x-%08x", text, color, background);
+    }
+}
+
+/** Boilerplate because of the degeneration in ModelType == DataType, but important for caching.
+ *  @see GeneratingAdapter#generator */
+class GenerateParamsPassthroughModelLoader implements ModelLoader&lt;GenerateParams, GenerateParams&gt; {
+    @Override public DataFetcher&lt;GenerateParams&gt; getResourceFetcher(final GenerateParams model, int width, int height) {
+        return new DataFetcher&lt;GenerateParams&gt;() {
+            @Override public GenerateParams loadData(Priority priority) throws Exception { return model; }
+            @Override public void cleanup() { }
+            @Override public String getId() { return model.getId(); }
+            @Override public void cancel() { }
+        };
+    }
+}
+
+/** Handles pooling to reduce/prevent GC lagging from too many {@link Bitmap#createBitmap}s */
+class GenerateParamsBitmapResourceDecoder implements ResourceDecoder&lt;GenerateParams, Bitmap&gt; {
+    private final Context context;
+    public GenerateParamsBitmapResourceDecoder(Context context) { this.context = context; }
+    @Override public Resource&lt;Bitmap&gt; decode(GenerateParams source, int width, int height) throws IOException {
+        BitmapPool pool = Glide.get(context).getBitmapPool();
+        Bitmap bitmap = pool.getDirty(width, height, Bitmap.Config.ARGB_8888);
+        if (bitmap == null) {
+            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        }
+        Generators.imageWithTextNoLayout(context, bitmap, source);
+        return BitmapResource.obtain(bitmap, pool);
+    }
+    @Override public String getId() {
+        // be careful if you change the Generator implementation you have to change this
+        // otherwise the users may see a cached image; or clear cache on app update
+        return "com.example.MyImageGenerator";
+    }
+}
+
+class Generators {
+    /** OP's original implementation fixed for real centering */
+    public static Bitmap imageWithText(Context context, Bitmap bitmap, GenerateParams params) {
+        TextView view = new TextView(context);
+        view.setText(params.text);
+        view.setTextColor(params.color);
+        view.setBackgroundColor(params.background);
+        view.setTypeface(null, Typeface.BOLD);
+        view.setGravity(Gravity.CENTER);
+        view.setTextSize(20 /*sp*/);
+        Canvas canvas = new Canvas(bitmap);
+        view.measure(makeMeasureSpec(canvas.getWidth(), EXACTLY), makeMeasureSpec(canvas.getHeight(), EXACTLY));
+        view.layout(0, 0, canvas.getWidth(), canvas.getHeight());
+        view.draw(canvas);
+        return bitmap;
+    }
+
+    /** Generate centered text without creating a View, more lightweight.
+     * Consider http://stackoverflow.com/a/8369690/253468 for multiline support. */
+    public static Bitmap imageWithTextNoLayout(Context context, Bitmap bitmap, GenerateParams params) {
+        Paint paint = new Paint();
+        paint.setColor(params.color);
+        paint.setTextAlign(Paint.Align.CENTER); // text's anchor for the x given in drawText
+        paint.setTextSize(applyDimension(COMPLEX_UNIT_SP, 20, context.getResources().getDisplayMetrics()));
+        paint.setTypeface(Typeface.DEFAULT_BOLD);
+
+        Canvas canvas = new Canvas(bitmap);
+        canvas.drawColor(params.background);
+        canvas.drawText(params.text, canvas.getWidth() / 2, canvas.getHeight() / 2, paint);
+        return bitmap;
+    }
+}
+
+// Here are the imports in case you need it;
+// didn't want to put it in the beginning to keep the relevant code first.
+
+import java.io.IOException;
+import java.util.Locale;
+
+import android.content.Context;
+import android.graphics.*;
+import android.graphics.drawable.ColorDrawable;
+import android.os.Bundle;
+import android.support.annotation.Nullable;
+import android.support.v4.app.Fragment;
+import android.support.v7.widget.*;
+import android.view.*;
+import android.view.ViewGroup.MarginLayoutParams;
+import android.widget.*;
+
+import static android.util.TypedValue.*;
+import static android.view.View.MeasureSpec.*;
+import static android.view.ViewGroup.LayoutParams.*;
+
+import com.bumptech.glide.*;
+import com.bumptech.glide.load.ResourceDecoder;
+import com.bumptech.glide.load.data.DataFetcher;
+import com.bumptech.glide.load.engine.Resource;
+import com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool;
+import com.bumptech.glide.load.model.ModelLoader;
+import com.bumptech.glide.load.resource.bitmap.*;
+import com.bumptech.glide.load.resource.drawable.GlideDrawable;
+import com.bumptech.glide.load.resource.file.FileToStreamDecoder;
+import com.bumptech.glide.load.resource.transcode.BitmapToGlideDrawableTranscoder;
+</code></pre>
+
+<p>Here's how it looks like (real scrolling is much smoother, GIF is really low FPS):</p>
+
+<p><a href="http://i.stack.imgur.com/i3Jju.gif"><img src="http://i.stack.imgur.com/i3Jju.gif" alt="enter image description here"></a></p>
+
+<p>Notice how it loads the first few items and then gradually loads the rest. It takes a little that the memory cache and pool warms up, but you can use a preloader if you want even smoother display. After it's warmed up it scrolls nicely. The delete button on the action bar calls <code>Glide.clearDiskCache()</code> and <code>Glide.clearMemory()</code> so it starts regenating the items again.</p>

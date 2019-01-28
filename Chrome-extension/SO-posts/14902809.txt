@@ -1,0 +1,82 @@
+<p>You are definitely trying to do this the hard way.  Here are some snippets from a new app I am working on.  It uses <a href="http://developer.android.com/reference/android/location/Criteria.html" rel="nofollow">Criteria</a> to get all providers capable of returning a fine level of accuracy without a cost.  </p>
+
+<p>If no providers are enabled a dialog is displayed that prompts the user to turn on their location settings.  If the user hits ok an Intent is actually fired that sends them to the settings on their phone.  If there are providers enabled the app takes the most recent <a href="http://developer.android.com/reference/android/location/LocationManager.html#getLastKnownLocation%28java.lang.String%29" rel="nofollow">last known location</a> from any of the enabled providers.  For my app I just need to know what general area the user is in and it's likely that the last known location is from their home area.  </p>
+
+<p>If providers are enabled the loop also requests location updates as quickly as possible.  This is ideal for my app but you can change this to conserve battery my modifying the arguments to the <a href="http://developer.android.com/reference/android/location/LocationManager.html#requestLocationUpdates%28java.lang.String,%20long,%20float,%20android.location.LocationListener%29" rel="nofollow">requestLocationUpdates method</a>.  </p>
+
+<p>The optimization that this code has that the examples on the Android app don't really show is that all of the enabled providers are started <em>simultaneously</em>.  All of the providers will return separate updates on to the <a href="http://developer.android.com/reference/android/location/LocationListener.html#onLocationChanged%28android.location.Location%29" rel="nofollow">onLocationChanged method</a>.  In my app I remove the location listener after one of the providers returns a location with a good enough accuracy.</p>
+
+<p>Start Location Updates:</p>
+
+<pre><code>void getCurrentLocation() {
+    List&lt;String&gt; providers = locationManager.getProviders(criteria, true);
+    if (providers != null) {
+        Location newestLocation = null;
+        for (String provider : providers) {
+            Location location = locationManager.getLastKnownLocation(provider);
+            if (location != null) {
+                if (newestLocation == null) {
+                    newestLocation = location;
+                } else {
+                    if (location.getTime() &gt; newestLocation.getTime()) {
+                        newestLocation = location;
+                    }
+                }
+                locationManager.requestLocationUpdates(provider, 0, 0, this);
+            }
+        }
+    } else {
+        LocationDialogFragment dialog = new LocationDialogFragment();
+        dialog.show(getSupportFragmentManager(),
+            LocationDialogFragment.class.getName());
+    }
+}
+</code></pre>
+
+<p>Receive Location Update:</p>
+
+<pre><code>@Override
+public void onLocationChanged(Location location) {
+    float bestAccuracy = -1f;
+    if (location.getAccuracy() != 0.0f
+        &amp;&amp; (location.getAccuracy() &lt; bestAccuracy) || bestAccuracy == -1f) {
+        if (location.getAccuracy() &lt; Const.MIN_ACCURACY) {
+            locationManager.removeUpdates(this);
+        }
+    }
+    bestAccuracy = location.getAccuracy();
+}
+</code></pre>
+
+<p>Location Settings Dialog:</p>
+
+<pre><code>public class LocationDialogFragment extends DialogFragment {
+
+    @Override
+    public Dialog onCreateDialog(Bundle savedInstanceState) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
+        builder.setMessage(R.string.location_dialog_message)
+                .setPositiveButton(R.string.location_dialog_positive_button,
+                    new OnClickListener() {
+
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            Intent settingsIntent = new Intent(
+                                    Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                            startActivity(settingsIntent);
+                        }
+                    })
+                .setNegativeButton(R.string.location_dialog_negative_button,
+                    new OnClickListener() {
+
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            Toast.makeText(getActivity(),
+                                R.string.no_location_message, Toast.LENGTH_LONG)
+                                    .show();
+                        }
+                    });
+        return builder.create();
+    }
+}
+</code></pre>

@@ -1,0 +1,96 @@
+<p>Here's my workaround for the time being. I didn't want to modify the ownCloud library source (again) so instead I just do a check in <code>onTransferProgress</code> like so:</p>
+
+<pre><code>@Override
+public void onTransferProgress(long rate, long transferred, long total, String fileName) {
+    if (transferred == total) {
+        runOnUiThread(new Runnable() {
+            // do the update here, file name is available
+        }
+    }
+}
+</code></pre>
+
+<p>Here's another option. I needed the file being uploaded if the upload failed so I modified the ownCloud library source. This way I could return file names in the RemoteOperationResult.</p>
+
+<p>RemoteOperationResult.java:</p>
+
+<pre><code>private String fileName;
+
+public String getFileName() {
+    return fileName;
+}
+
+public void setFileName(String name) {
+    fileName = name;
+}
+</code></pre>
+
+<p>DownloadRemoteFileOperation.java</p>
+
+<pre><code>@Override
+protected RemoteOperationResult run(OwnCloudClient client) {
+    RemoteOperationResult result = null;
+
+    /// download will be performed to a temporal file, then moved to the final location
+    File tmpFile = new File(getTmpPath());
+
+    /// perform the download
+    try {
+        tmpFile.getParentFile().mkdirs();
+        int status = downloadFile(client, tmpFile);
+        result = new RemoteOperationResult(isSuccess(status), status,
+                (mGet != null ? mGet.getResponseHeaders() : null));
+        Log_OC.i(TAG, "Download of " + mRemotePath + " to " + getTmpPath() + ": " +
+                result.getLogMessage());
+
+    } catch (Exception e) {
+        result = new RemoteOperationResult(e);
+        Log_OC.e(TAG, "Download of " + mRemotePath + " to " + getTmpPath() + ": " +
+                result.getLogMessage(), e);
+    }
+    // Added this line
+    result.setFileName(mRemotePath);
+
+    return result;
+}
+</code></pre>
+
+<p>UploadRemoteFileOperation.java:</p>
+
+<pre><code>@Override
+protected RemoteOperationResult run(OwnCloudClient client) {
+    RemoteOperationResult result = null;
+
+    try {
+        // / perform the upload
+        synchronized (mCancellationRequested) {
+            if (mCancellationRequested.get()) {
+                throw new OperationCancelledException();
+            } else {
+                mPutMethod = new PutMethod(client.getWebdavUri() +
+                        WebdavUtils.encodePath(mRemotePath));
+            }
+        }
+
+        int status = uploadFile(client);
+        if (mForbiddenCharsInServer){
+            result = new RemoteOperationResult(
+                    RemoteOperationResult.ResultCode.INVALID_CHARACTER_DETECT_IN_SERVER);
+        } else {
+            result = new RemoteOperationResult(isSuccess(status), status,
+                    (mPutMethod != null ? mPutMethod.getResponseHeaders() : null));
+        }
+    } catch (Exception e) {
+        // TODO something cleaner with cancellations
+        if (mCancellationRequested.get()) {
+            result = new RemoteOperationResult(new OperationCancelledException());
+        } else {
+            result = new RemoteOperationResult(e);
+        }
+    }
+    // Added this line
+    result.setFileName(mLocalPath);
+
+    return result;
+}
+</code></pre>

@@ -1,0 +1,192 @@
+<p>Have a look at ParseQueryAdapter </p>
+
+<p>Docs: <a href="https://parse.com/docs/android_guide#ui-queryadapter" rel="nofollow">https://parse.com/docs/android_guide#ui-queryadapter</a></p>
+
+<p>Tutorial: <a href="https://parse.com/tutorials/parse-query-adapter" rel="nofollow">https://parse.com/tutorials/parse-query-adapter</a> </p>
+
+<p>API: <a href="https://parse.com/docs/android/api/com/parse/ParseQueryAdapter.html" rel="nofollow">https://parse.com/docs/android/api/com/parse/ParseQueryAdapter.html</a>. </p>
+
+<p>Also I would recommend EventBus to pass the ParseObject to the next Activity <a href="https://github.com/greenrobot/EventBus" rel="nofollow">https://github.com/greenrobot/EventBus</a>.</p>
+
+<p>Then you can do:</p>
+
+<p>Adapter:</p>
+
+<pre><code>Intent intent = new Intent(getActivity(), FriendsProfileActivity.class);
+EventBus.getDefault().postSticky(YourParseObject);
+startActivity(intent);
+</code></pre>
+
+<p>Anywhere in FriendsProfileActivity:</p>
+
+<pre><code>ParseObject yourParseObject = EventBus.getDefault().getStickyEvent(ParseObject.class);
+</code></pre>
+
+<p>If you move on to using subclasses in parse.com, then any subclass can be sent via the EventBus this way.</p>
+
+<p>Example code - untested but should be close to what you want</p>
+
+<p><strong>The ParseQueryAdapter:</strong></p>
+
+<p>The layout for R.layout.adapter_item_friend - can be customized but nothing fancy here</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="5dp"
+    android:paddingTop="5dp"&gt;
+
+
+    &lt;TextView
+        android:id="@+id/text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentLeft="true"
+        android:layout_centerVertical="true"
+        android:text="item" /&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>The Adapter:</p>
+
+<pre><code>public class ParseUserFriendsAdapter extends ParseQueryAdapter&lt;ParseUser&gt; {
+
+    private static final String TAG = ParseUserFriendsAdapter.class.getSimpleName();
+
+    public ParseUserFriendsAdapter(Context context) {
+        super(context, new ParseQueryAdapter.QueryFactory&lt;ParseUser&gt;() {
+
+            @Override
+            public ParseQuery&lt;ParseUser&gt; create() {
+                ParseUser currentUser = ParseUser.getCurrentUser();
+                ParseRelation&lt;ParseUser&gt; friendsRelation = currentUser.getRelation(ParseConstants.KEY_FRIENDS_RELATION);
+                ParseQuery&lt;ParseUser&gt; query =  friendsRelation.getQuery();
+                query.addAscendingOrder(ParseConstants.KEY_USERNAME);
+                return query;
+            }
+        });
+    }
+
+    @InjectView(R.id.text) TextView text;
+
+    @Override
+    public View getItemView(final ParseUser user, View v, ViewGroup parent) {
+
+        if (v == null) {
+            v = View.inflate(getContext(), R.layout.adapter_item_friend,
+                    null);
+        }
+
+        super.getItemView(user, v, parent);
+
+        ButterKnife.inject(this, v);
+
+        text.setText(user.getUsername());
+
+
+        return v;
+
+    }
+
+}
+</code></pre>
+
+<p><strong>I am using a regular fragment containing a ListView in it's layout:</strong></p>
+
+<p>R.layout.yourfriendslistlayout:</p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:animateLayoutChanges="true"
+    android:orientation="vertical" &gt;
+
+    &lt;ListView
+        android:id="@+id/listview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:choiceMode="singleChoice"
+        android:dividerHeight="1dp" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p>The important parts of the code in the fragment:</p>
+
+<pre><code>@Override
+public void onCreate(Bundle savedInstanceState) {
+    Log.d(TAG, "onCreate");
+
+    mAdapter = new ParseUserFriendsAdapter(getActivity());
+
+    super.onCreate(savedInstanceState);
+}
+
+@InjectView(R.id.listview) ListView mListView;
+
+@Override
+public View onCreateView(LayoutInflater inflater, ViewGroup container,
+        Bundle savedInstanceState) {
+    View rootView = inflater.inflate(
+            R.layout.yourfriendslistlayout, container, false);
+
+    ButterKnife.inject(this, rootView);
+
+    /** Setting the list adapter for the ListFragment */
+    mListView.setAdapter(mAdapter);
+    mListView.setOnItemClickListener(new OnItemClickListener() {
+
+        @Override
+        public void onItemClick(AdapterView&lt;?&gt; parent, View view,
+                int position, long id) {
+
+            // Now it is easy to get the ParseObject that is clicked
+            ParseUser friend = mAdapter.getItem(position);
+
+            Toast.makeText(getActivity(), "clicked " + friend.getObjectId(), Toast.LENGTH_SHORT).show();
+
+            EventBus.getDefault().postSticky(friend);
+
+            Intent intent = new Intent(getActivity(),
+                    FriendsProfileActivity.class);
+            startActivity(intent);
+
+        }
+    });
+    return rootView;
+}
+</code></pre>
+
+<p>Optional addition to the fragment code:</p>
+
+<pre><code>/* 
+ *This last part automatically sets the load indicator whenever parse performs a query 
+ */
+private final OnQueryLoadListener&lt;ParseUser&gt; queryListener = new OnQueryLoadListener&lt;ParseUser&gt;() {
+
+    @Override
+    public void onLoaded(List&lt;ParseUser&gt; arg0, Exception arg1) {
+        getActivity().setProgressBarIndeterminateVisibility(Boolean.FALSE);
+    }
+
+    @Override
+    public void onLoading() {
+        getActivity().setProgressBarIndeterminateVisibility(Boolean.TRUE);
+    }
+};
+
+@Override
+public void onResume() {
+    mAdapter.addOnQueryLoadListener(queryListener);
+    super.onResume();
+}
+
+@Override
+public void onPause() {
+    mAdapter.removeOnQueryLoadListener(queryListener);
+    super.onPause();
+}
+</code></pre>

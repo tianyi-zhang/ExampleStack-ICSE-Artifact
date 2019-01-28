@@ -1,0 +1,167 @@
+<p>Painting is typically achieved by overriding <code>paintComponent</code> of a <code>JComponent</code> based class.  What you don't want to do is to try and either override <code>paint/paintComponent</code> of the <code>JScrollPane</code> and most certainly not use <code>getGraphics</code>.</p>
+
+<p><code>getGraphics</code> returns a snap shot of the last thing that was painted to the component, if you try and paint to this it will be discard the next time the component is painted, because Swing uses a passive rendering algorithm, this might be done immediately or at some random time in the future (this is why you should use <code>paintComponent</code>)</p>
+
+<p>Painting is also destructive, that is, you are expected to repaint the state of the component from scratch.</p>
+
+<p><code>JScrollPane</code> is also a composite component, that is, there are a number of other components which are used to implement it's functionality (namely the <code>JViewport</code>)</p>
+
+<p><a href="http://i.stack.imgur.com/DUjUm.gif" rel="nofollow"><img src="http://i.stack.imgur.com/DUjUm.gif" alt="JScrollPane"></a></p>
+
+<p>What you should probably do, is create a custom component, extending from something like <code>JPanel</code>, and override it's <code>paintComponent</code> method and generate your graph from within in it.</p>
+
+<p><a href="http://i.stack.imgur.com/3uRh3.png" rel="nofollow"><img src="http://i.stack.imgur.com/3uRh3.png" alt="Graph"></a></p>
+
+<p>This example also makes use of the <code>Scrollable</code> interface, which allows the <code>JScrollPane</code> to be laid out initially smaller then the preferred size of the component, which is good, as the component might be VERY wide. </p>
+
+<p>This example also just generates a simple histogram, but you get the jist</p>
+
+<pre><code>import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Rectangle;
+import java.awt.geom.Rectangle2D;
+import java.util.Map;
+import java.util.TreeMap;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.Scrollable;
+
+public class Main {
+
+    public static void main(String[] args) {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                new Main();
+            }
+        });
+    }
+
+    public Main() {
+        // For this example, I just randomised some data, you would
+        // Need to load it yourself...
+        int width = 256;
+        int height = 256;
+        int[][] data = new int[width][height];
+        for (int c = 0; c &lt; height; c++) {
+            for (int r = 0; r &lt; width; r++) {
+                data[c][r] = (int) (256 * Math.random());
+            }
+        }
+        Map&lt;Integer, Integer&gt; mapHistory = new TreeMap&lt;Integer, Integer&gt;();
+        for (int c = 0; c &lt; data.length; c++) {
+            for (int r = 0; r &lt; data[c].length; r++) {
+                int value = data[c][r];
+                int amount = 0;
+                if (mapHistory.containsKey(value)) {
+                    amount = mapHistory.get(value);
+                    amount++;
+                } else {
+                    amount = 1;
+                }
+                mapHistory.put(value, amount);
+            }
+        }
+        JFrame frame = new JFrame("Test");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setLayout(new BorderLayout());
+        frame.add(new JScrollPane(new Graph(mapHistory)));
+        frame.pack();
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+    }
+
+    protected class Graph extends JPanel implements Scrollable {
+
+        protected static final int MIN_BAR_WIDTH = 4;
+        private Map&lt;Integer, Integer&gt; mapHistory;
+
+        public Graph(Map&lt;Integer, Integer&gt; mapHistory) {
+            this.mapHistory = mapHistory;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            int width = (mapHistory.size() * MIN_BAR_WIDTH) + 11;
+            return new Dimension(width, 256);
+        }
+
+        @Override
+        public Dimension getMinimumSize() {
+            int width = (mapHistory.size() * MIN_BAR_WIDTH) + 11;
+            return new Dimension(width, 128);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (mapHistory != null) {
+                int xOffset = 5;
+                int yOffset = 5;
+                int width = getWidth() - 1 - (xOffset * 2);
+                int height = getHeight() - 1 - (yOffset * 2);
+                Graphics2D g2d = (Graphics2D) g.create();
+                g2d.setColor(Color.DARK_GRAY);
+                g2d.drawRect(xOffset, yOffset, width, height);
+                int barWidth = Math.max(MIN_BAR_WIDTH,
+                                (int) Math.floor((float) width
+                                                / (float) mapHistory.size()));
+                int maxValue = 0;
+                for (Integer key : mapHistory.keySet()) {
+                    int value = mapHistory.get(key);
+                    maxValue = Math.max(maxValue, value);
+                }
+                int xPos = xOffset;
+                for (Integer key : mapHistory.keySet()) {
+                    int value = mapHistory.get(key);
+                    int barHeight = Math.round(((float) value
+                                    / (float) maxValue) * height);
+                    g2d.setColor(new Color(key, key, key));
+                    int yPos = height + yOffset - barHeight;
+                    Rectangle2D bar = new Rectangle2D.Float(
+                                    xPos, yPos, barWidth, barHeight);
+                    g2d.fill(bar);
+                    g2d.setColor(Color.DARK_GRAY);
+                    g2d.draw(bar);
+                    xPos += barWidth;
+                }
+                g2d.dispose();
+            }
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return new Dimension(512, 256);
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return 128;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return 128;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return getPreferredSize().width
+                            &lt;= getParent().getSize().width;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return getPreferredSize().height
+                            &lt;= getParent().getSize().height;
+        }
+    }
+}
+</code></pre>
+
+<p>See <a href="http://www.oracle.com/technetwork/java/painting-140037.html" rel="nofollow">Painting in AWT and Swing</a>, <a href="http://docs.oracle.com/javase/tutorial/uiswing/painting/" rel="nofollow">Performing Custom Painting</a> and <a href="http://docs.oracle.com/javase/tutorial/uiswing/components/scrollpane.html" rel="nofollow">How to Use Scroll Panes</a> for more details</p>

@@ -1,0 +1,70 @@
+<p><strong>Update: Note that this answer is pretty ineffective now. The Garbage Collector acts aggressively on SoftReference and WeakReference, so this code is NOT suitable for new apps.</strong>  (Instead, try libraries like <a href="https://github.com/nostra13/Android-Universal-Image-Loader">Universal Image Loader</a> suggested in other answers.)</p>
+
+<p>Thanks to James for the code, and Bao-Long for the suggestion of using SoftReference. I implemented the SoftReference changes on James' code. Unfortunately SoftReferences caused my images to be garbage collected too quickly. In my case it was fine without the SoftReference stuff, because my list size is limited and my images are small.</p>
+
+<p>There's a discussion from a year ago regarding the SoftReferences on google groups: <a href="http://groups.google.com/group/android-developers/browse_thread/thread/ebabb0dadf38acc1">link to thread</a>. As a solution to the too-early garbage collection, they suggest the possibility of manually setting the VM heap size using dalvik.system.VMRuntime.setMinimumHeapSize(), which is not very attractive to me.</p>
+
+<pre><code>public DrawableManager() {
+    drawableMap = new HashMap&lt;String, SoftReference&lt;Drawable&gt;&gt;();
+}
+
+public Drawable fetchDrawable(String urlString) {
+    SoftReference&lt;Drawable&gt; drawableRef = drawableMap.get(urlString);
+    if (drawableRef != null) {
+        Drawable drawable = drawableRef.get();
+        if (drawable != null)
+            return drawable;
+        // Reference has expired so remove the key from drawableMap
+        drawableMap.remove(urlString);
+    }
+
+    if (Constants.LOGGING) Log.d(this.getClass().getSimpleName(), "image url:" + urlString);
+    try {
+        InputStream is = fetch(urlString);
+        Drawable drawable = Drawable.createFromStream(is, "src");
+        drawableRef = new SoftReference&lt;Drawable&gt;(drawable);
+        drawableMap.put(urlString, drawableRef);
+        if (Constants.LOGGING) Log.d(this.getClass().getSimpleName(), "got a thumbnail drawable: " + drawable.getBounds() + ", "
+                + drawable.getIntrinsicHeight() + "," + drawable.getIntrinsicWidth() + ", "
+                + drawable.getMinimumHeight() + "," + drawable.getMinimumWidth());
+        return drawableRef.get();
+    } catch (MalformedURLException e) {
+        if (Constants.LOGGING) Log.e(this.getClass().getSimpleName(), "fetchDrawable failed", e);
+        return null;
+    } catch (IOException e) {
+        if (Constants.LOGGING) Log.e(this.getClass().getSimpleName(), "fetchDrawable failed", e);
+        return null;
+    }
+}
+
+public void fetchDrawableOnThread(final String urlString, final ImageView imageView) {
+    SoftReference&lt;Drawable&gt; drawableRef = drawableMap.get(urlString);
+    if (drawableRef != null) {
+        Drawable drawable = drawableRef.get();
+        if (drawable != null) {
+            imageView.setImageDrawable(drawableRef.get());
+            return;
+        }
+        // Reference has expired so remove the key from drawableMap
+        drawableMap.remove(urlString);
+    }
+
+    final Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message message) {
+            imageView.setImageDrawable((Drawable) message.obj);
+        }
+    };
+
+    Thread thread = new Thread() {
+        @Override
+        public void run() {
+            //TODO : set imageView to a "pending" image
+            Drawable drawable = fetchDrawable(urlString);
+            Message message = handler.obtainMessage(1, drawable);
+            handler.sendMessage(message);
+        }
+    };
+    thread.start();
+}
+</code></pre>

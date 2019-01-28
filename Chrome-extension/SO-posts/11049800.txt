@@ -1,0 +1,141 @@
+<p>output:</p>
+
+<blockquote>
+  <p>{DefaultGateway=193.171.36.1, PrimaryDns=140.78.2.62,SecondaryDns=140.78.3.62, DomainName=, HostName=Schneider-PC}</p>
+  
+  <p>{Name=eth0, Description=WAN Miniport (IPv6), Metric=0, Type=Ethernet,Address=0.0.0.0, Mtu=1500, Netmask=0.0.0.0, Flags=65,Broadcast=0.0.0.0, Hwaddr=34:F8:20:52:41:53, Destination=0.0.0.0}</p>
+  
+  <p>totalrx(download):     4.7K </p>
+  
+  <p>totaltx(upload):   154 </p>
+  
+  <hr>
+  
+  <p>totalrx(download):     1.4K</p>
+  
+  <p>totaltx(upload):   180 </p>
+</blockquote>
+
+<p>code:</p>
+
+<pre><code>import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+
+import org.hyperic.sigar.NetFlags;
+import org.hyperic.sigar.NetInterfaceConfig;
+import org.hyperic.sigar.NetInterfaceStat;
+import org.hyperic.sigar.Sigar;
+import org.hyperic.sigar.SigarException;
+
+/**
+ * @author Headgrowe
+ * 
+ */
+public class NetworkData {
+
+    static Map&lt;String, Long&gt; rxCurrentMap = new HashMap&lt;String, Long&gt;();
+    static Map&lt;String, List&lt;Long&gt;&gt; rxChangeMap = new HashMap&lt;String, List&lt;Long&gt;&gt;();
+    static Map&lt;String, Long&gt; txCurrentMap = new HashMap&lt;String, Long&gt;();
+    static Map&lt;String, List&lt;Long&gt;&gt; txChangeMap = new HashMap&lt;String, List&lt;Long&gt;&gt;();
+    private static Sigar sigar;
+
+    /**
+     * @throws InterruptedException
+     * @throws SigarException
+     * 
+     */
+    public NetworkData(Sigar s) throws SigarException, InterruptedException {
+        sigar = s;
+        getMetric();
+        System.out.println(networkInfo());
+        Thread.sleep(1000);     
+    }
+
+    public static void main(String[] args) throws SigarException,
+            InterruptedException {
+        new NetworkData(new Sigar());
+        NetworkData.newMetrickThread();
+    }
+
+    public static String networkInfo() throws SigarException {
+        String info = sigar.getNetInfo().toString();
+        info += "\n"+ sigar.getNetInterfaceConfig().toString();
+        return info;
+    }
+
+    public static String getDefaultGateway() throws SigarException {
+        return sigar.getNetInfo().getDefaultGateway();
+    }
+
+    public static void newMetricThread() throws SigarException, InterruptedException {
+        while (true) {
+            Long[] m = getMetric();
+            long totalrx = m[0];
+            long totaltx = m[1];
+            System.out.print("totalrx(download): ");
+            System.out.println("\t" + Sigar.formatSize(totalrx));
+            System.out.print("totaltx(upload): ");
+            System.out.println("\t" + Sigar.formatSize(totaltx));
+            System.out.println("-----------------------------------");
+            Thread.sleep(1000);
+        }
+
+    }
+
+    public static Long[] getMetric() throws SigarException {
+        for (String ni : sigar.getNetInterfaceList()) {
+            // System.out.println(ni);
+            NetInterfaceStat netStat = sigar.getNetInterfaceStat(ni);
+            NetInterfaceConfig ifConfig = sigar.getNetInterfaceConfig(ni);
+            String hwaddr = null;
+            if (!NetFlags.NULL_HWADDR.equals(ifConfig.getHwaddr())) {
+                hwaddr = ifConfig.getHwaddr();
+            }
+            if (hwaddr != null) {
+                long rxCurrenttmp = netStat.getRxBytes();
+                saveChange(rxCurrentMap, rxChangeMap, hwaddr, rxCurrenttmp, ni);
+                long txCurrenttmp = netStat.getTxBytes();
+                saveChange(txCurrentMap, txChangeMap, hwaddr, txCurrenttmp, ni);
+            }
+        }
+        long totalrx = getMetricData(rxChangeMap);
+        long totaltx = getMetricData(txChangeMap);
+        for (List&lt;Long&gt; l : rxChangeMap.values())
+            l.clear();
+        for (List&lt;Long&gt; l : txChangeMap.values())
+            l.clear();
+        return new Long[] { totalrx, totaltx };
+    }
+
+    private static long getMetricData(Map&lt;String, List&lt;Long&gt;&gt; rxChangeMap) {
+        long total = 0;
+        for (Entry&lt;String, List&lt;Long&gt;&gt; entry : rxChangeMap.entrySet()) {
+            int average = 0;
+            for (Long l : entry.getValue()) {
+                average += l;
+            }
+            total += average / entry.getValue().size();
+        }
+        return total;
+    }
+
+    private static void saveChange(Map&lt;String, Long&gt; currentMap,
+            Map&lt;String, List&lt;Long&gt;&gt; changeMap, String hwaddr, long current,
+            String ni) {
+        Long oldCurrent = currentMap.get(ni);
+        if (oldCurrent != null) {
+            List&lt;Long&gt; list = changeMap.get(hwaddr);
+            if (list == null) {
+                list = new LinkedList&lt;Long&gt;();
+                changeMap.put(hwaddr, list);
+            }
+            list.add((current - oldCurrent));
+        }
+        currentMap.put(ni, current);
+    }
+
+}
+</code></pre>

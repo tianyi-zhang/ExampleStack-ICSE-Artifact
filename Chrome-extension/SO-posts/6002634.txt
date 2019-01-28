@@ -1,0 +1,208 @@
+<p>Here is my complete solution using the Graph API</p>
+
+<p>If all you intend to do is update the users status you only need to get the "publish_stream" permission.
+From developers.facebook.com...
+"publish_stream": Enables your app to post content, comments, and likes to a user's stream and to the streams of the user's friends. With this permission, you can publish content to a user's feed at any time, <strong>without requiring offline_access</strong>. However, please note that Facebook recommends a user-initiated sharing model.</p>
+
+<p>This is important because it means you do not need to re-authorize every time you attempt to update the status.  The trick is to save the key/token and send it with any update request.</p>
+
+<p>One note: I changed "Facebook.DEFAULT_AUTH_ACTIVITY_CODE" from private to public in the Facebook.java class.</p>
+
+<p>My code has two buttons one that checks for a saved token and one that just sends a blank token so I could test what happens if the token fails for some reason.  If it does fail, and the API returns a string with "OAuthException" this code makes a new attempt to authorize, then tries to update the status again.</p>
+
+<h1>FBTest.java</h1>
+
+<pre><code>package com.test.FBTest;
+
+import java.io.IOException;
+import java.net.MalformedURLException;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.preference.PreferenceManager;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.facebook.android.DialogError;
+import com.facebook.android.Facebook;
+import com.facebook.android.FacebookError;
+import com.facebook.android.Facebook.DialogListener;
+
+public class FBTest extends Activity {
+
+Facebook facebook = new Facebook("199064386804603");
+EditText et1;
+TextView tv1;
+Button button1;
+Button button2;
+
+private int mAuthAttempts = 0;
+private String mFacebookToken;
+
+@Override
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.main);
+
+    button1 = (Button)findViewById(R.id.Button1);
+    button2 = (Button)findViewById(R.id.Button2);
+    tv1 = (TextView)findViewById(R.id.TextView1);
+    et1 = (EditText)findViewById(R.id.EditText1);
+
+    button1.setOnClickListener(new OnClickListener(){
+        @Override
+        public void onClick(View v) {
+            b1Click();
+        }
+
+    });
+
+    button2.setOnClickListener(new OnClickListener(){
+        @Override
+        public void onClick(View v) {
+            b2Click();
+        }
+
+    });
+}
+
+private void saveFBToken(String token, long tokenExpires){
+    SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+    prefs.edit().putString("FacebookToken", token).commit();
+}
+
+private void fbAuthAndPost(final String message){
+
+    facebook.authorize(this, new String[]{"publish_stream"}, new DialogListener() {
+
+        @Override
+        public void onComplete(Bundle values) {
+            Log.d(this.getClass().getName(),"Facebook.authorize Complete: ");
+            saveFBToken(facebook.getAccessToken(), facebook.getAccessExpires());
+            updateStatus(values.getString(Facebook.TOKEN), message);
+        }
+
+        @Override
+        public void onFacebookError(FacebookError error) {
+            Log.d(this.getClass().getName(),"Facebook.authorize Error: "+error.toString());
+        }
+
+        @Override
+        public void onError(DialogError e) {
+            Log.d(this.getClass().getName(),"Facebook.authorize DialogError: "+e.toString());
+        }
+
+        @Override
+        public void onCancel() {
+            Log.d(this.getClass().getName(),"Facebook authorization canceled");
+        }
+    });
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode,Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+    switch (requestCode){
+    case Facebook.DEFAULT_AUTH_ACTIVITY_CODE:
+        facebook.authorizeCallback(requestCode, resultCode, data);
+    }
+}
+
+private void b1Click(){
+
+    mAuthAttempts = 0;
+
+    SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+    mFacebookToken = prefs.getString("FacebookToken", "");
+
+    if(mFacebookToken.equals("")){
+        fbAuthAndPost(et1.getText().toString());
+    }else{
+        updateStatus(mFacebookToken,et1.getText().toString());
+    }
+
+}
+
+private void b2Click(){
+    mAuthAttempts = 0;
+    updateStatus("",et1.getText().toString());
+}
+
+public void updateStatus(String accessToken, String message){  
+
+    try {         
+        Bundle bundle = new Bundle();
+        bundle.putString("message", message);         
+        bundle.putString(Facebook.TOKEN,accessToken);         
+        String response = facebook.request("me/feed",bundle,"POST");         
+        Log.d("UPDATE RESPONSE",""+response);
+        showToast("Update process complete. Respose:"+response);
+        if(response.indexOf("OAuthException") &gt; -1){
+            if(mAuthAttempts==0){
+                mAuthAttempts++;
+                fbAuthAndPost(message);
+            }else{
+                showToast("OAuthException:");
+            }
+        }
+    } catch (MalformedURLException e) {         
+        Log.e("MALFORMED URL",""+e.getMessage());
+        showToast("MalformedURLException:"+e.getMessage());
+    } catch (IOException e) {         
+        Log.e("IOEX",""+e.getMessage());
+        showToast("IOException:"+e.getMessage());
+    }
+
+    String s = facebook.getAccessToken()+"\n";
+    s += String.valueOf(facebook.getAccessExpires())+"\n";
+    s += "Now:"+String.valueOf(System.currentTimeMillis())+"\n";
+    tv1.setText(s);
+
+} 
+
+private void showToast(String message){
+    Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
+}
+}
+</code></pre>
+
+<h1>main.xml</h1>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    &gt;
+    &lt;EditText
+    android:id="@+id/EditText1"
+    android:layout_width="fill_parent" 
+    android:layout_height="wrap_content" 
+    /&gt;
+    &lt;Button
+    android:id="@+id/Button1"
+    android:text="Test: With Auth"
+    android:layout_width="fill_parent" 
+    android:layout_height="wrap_content" 
+    /&gt;
+    &lt;Button
+    android:id="@+id/Button2"
+    android:text="Test: Without Auth"
+    android:layout_width="fill_parent" 
+    android:layout_height="wrap_content" 
+    /&gt;
+    &lt;TextView  
+    android:id="@+id/TextView1"
+    android:layout_width="fill_parent" 
+    android:layout_height="wrap_content" 
+    android:text="@string/hello"
+    /&gt;
+&lt;/LinearLayout&gt;
+</code></pre>

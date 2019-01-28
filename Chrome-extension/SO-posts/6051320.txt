@@ -1,0 +1,350 @@
+<p>Solved it myself ...</p>
+
+<p><strong>the following features are included in this sample code</strong></p>
+
+<ol>
+<li>apparently-endless horizontal
+scrolling</li>
+<li>selection detection without using
+the <strong>GODAWFUL</strong>
+Gallery.setOnItemSelectedListener().</li>
+<li>highlighting the selection
+(although this needs more work -
+namely storing the selection because
+the Gallery will lose the
+highlighting after it's scrolled
+off-screen)</li>
+</ol>
+
+<hr>
+
+<pre><code>public class ActivityMine extends Activity implements OnTouchListener
+{
+    //UI references
+    private Gallery mGallery;
+
+    //member variables
+    private float fX, fY;
+    private ImageBuffer mImageBuffer;//just an array of images
+
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState)
+    {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.filter);
+
+        //get references to UI components
+        mGallery = (Gallery) findViewById(R.id.filter_gallery);
+
+        //make widgets touch sensitive
+        mGallery.setOnTouchListener(this);
+
+        //connect Gallery with adapter
+        mGallery.setAdapter(new GalleryAdapter(this, mImageBuffer));
+
+        //auto-select first image (position 1073741820)
+        final int iTemp = (int)( Integer.MAX_VALUE / 2 ) - ( ( Integer.MAX_VALUE / 2 ) % mImageBuffer.getCount() );
+        mGallery.setSelection(iTemp);
+    }
+
+
+    @Override
+    protected void onDestroy()
+    {
+        super.onDestroy();
+    }
+
+
+    public boolean onTouch(View v, MotionEvent event)
+    {
+        final int actionPerformed = event.getAction();
+        final int widgetID = v.getId();
+
+        if (actionPerformed == MotionEvent.ACTION_DOWN)
+        {
+            if (widgetID == R.id.filter_gallery)
+            {
+                fX=event.getRawX();
+                fY=event.getRawY();
+            }
+        }
+
+        if (actionPerformed == MotionEvent.ACTION_UP)
+        {
+            switch (widgetID)
+            {
+                case R.id.filter_gallery:
+                {
+                    final float posX = event.getRawX();
+                    final float posY = event.getRawY();
+
+                    final float MAXPRESSRANGE = 10.0f;
+
+                    //detect if user performed a simple press
+                    if ((posX &lt; fX+MAXPRESSRANGE) &amp;&amp; (posX &gt; fX-MAXPRESSRANGE))
+                    {
+                        if ((posY &lt; fY+MAXPRESSRANGE) &amp;&amp; (posY &gt; fY-MAXPRESSRANGE))
+                        {
+                            //valid press detected!
+
+                            //convert gallery coordinates to a position
+                            final int iPosition = mGallery.pointToPosition((int)event.getX(), (int)event.getY());
+
+                            if (iPosition != AdapterView.INVALID_POSITION)
+                            {
+                                //this is necessary to obtain the index of the view currently visible and pressed
+                                final int iVisibleViewIndex = iPosition - mGallery.getFirstVisiblePosition();
+
+                                //get a reference to the child and modify the border
+                                View child = mGallery.getChildAt(iVisibleViewIndex);
+                                if (child != null)
+                                {
+                                    RelativeLayout borderImg = (RelativeLayout)child;
+                                    borderImg.setBackgroundColor(0xFFFFFFFF);
+                                }
+                            }
+
+                            // consume event
+                            return true;
+                        }
+                    }
+                }//end of: case R.id.filter_gallery
+            }//end of: switch()
+        }
+
+        return false;//do not consume event otherwise the UI widget touched won't receive the event
+    }
+
+
+    public class GalleryAdapter extends BaseAdapter
+    {
+        //member variables
+        private Context mContext;
+        private ImageBuffer mImageBuffer;
+
+
+        public GalleryAdapter(Context context, ImageBuffer imageBuffer)
+        {
+            mContext = context;
+            mImageBuffer = imageBuffer;
+        }
+
+        //get count of images in the gallery
+        public int getCount()
+        {
+            return Integer.MAX_VALUE;
+        }
+
+        public Object getItem(int position)
+        {
+            if (position &gt;= mImageBuffer.getCount())
+            { 
+                position = position % mImageBuffer.getCount(); 
+            }
+            return position;
+        }
+
+        public long getItemId(int position)
+        {
+            if (position &gt;= mImageBuffer.getCount())
+            { 
+                position = position % mImageBuffer.getCount(); 
+            }
+            return position;
+        }
+
+        //returns the individual images to the widget as it requires them
+        public View getView(int position, View convertView, ViewGroup parent)
+        {
+            final ImageView imgView = new ImageView(mContext);
+
+            if (position &gt;= mImageBuffer.getCount())
+            { 
+                position = position % mImageBuffer.getCount(); 
+            }
+
+            imgView.setImageBitmap(mImageBuffer.getBitmapFromBuffer(position));
+
+            //put black borders around the image
+            final RelativeLayout borderImg = new RelativeLayout(mContext);
+            borderImg.setPadding(5, 5, 5, 5);
+            borderImg.setBackgroundColor(0xff000000);
+            borderImg.addView(imgView);
+            return borderImg;
+        }
+    }
+}
+
+
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import android.app.Activity;
+import android.content.res.AssetManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.os.Environment;
+
+public class ImageBuffer
+{
+    //member variables
+    private Activity mActivity;
+    private Map&lt;String,Integer&gt; mIndexMap;
+    private List&lt;Bitmap&gt; mBitmapList;
+    private int mImageCount;
+
+
+    public ImageBuffer(Activity activity)
+    {
+        mActivity = activity;
+        mIndexMap = new HashMap&lt;String,Integer&gt;();
+        mBitmapList = new ArrayList&lt;Bitmap&gt;();
+        mImageCount=0;
+    }
+
+
+    public int getCount()
+    {
+        return mImageCount;
+    }
+
+
+    public int putAssetBitmapInBuffer(String assetfilename, String overrideFilename)
+    {
+        int iValueToReturn = -1;
+
+        try
+        {
+            Bitmap bitmap = getBitmapFromAsset(assetfilename);
+            if (bitmap != null)
+            {
+                final int iIndex = mBitmapList.size();
+                if (overrideFilename == null)
+                {
+                    mIndexMap.put(assetfilename, iIndex);
+                }
+                else
+                {
+                    mIndexMap.put(overrideFilename, iIndex);
+                }
+                mBitmapList.add(bitmap);
+                iValueToReturn = iIndex;
+                mImageCount++;
+            }
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
+
+        return iValueToReturn;
+    }
+
+
+    /**
+     * put an image from filesystem folder into buffer
+     * @param filename name of file, i.e. "image.png"
+     * @param strSubFolder subfolder, i.e. "/products"
+     * @param bGetFromSDCARD when true the image is read from SDCARD, otherwise main memory
+     * @return on success: index of image in buffer. on error: -1
+     */
+    public int putLocalFSbitmapInBuffer(String filename, String strSubFolder, boolean bGetFromSDCARD)
+    {
+        int iValueToReturn = -1;
+
+        Bitmap bitmap = getBitmapFromLocalFS(filename, strSubFolder, bGetFromSDCARD);
+        if (bitmap != null)
+        {
+            final int iIndex = mBitmapList.size();
+            mIndexMap.put(filename, iIndex);
+            mBitmapList.add(bitmap);
+            iValueToReturn = iIndex;
+            mImageCount++;
+        }
+
+        return iValueToReturn;
+    }
+
+
+    public Bitmap getBitmapFromBuffer(String assetfilename)
+    {
+        Bitmap bitmap = null;
+
+        if (mIndexMap.containsKey(assetfilename))
+        {
+            final int iIndex = mIndexMap.get(assetfilename);
+            bitmap = mBitmapList.get(iIndex);
+        }
+
+        return bitmap;
+    }
+
+
+    public Bitmap getBitmapFromBuffer(int position)
+    {
+        Bitmap bitmap = null;
+
+        if (position &lt; mBitmapList.size() &amp;&amp; position &gt; -1)
+        {
+            bitmap = mBitmapList.get(position);
+        }
+
+        return bitmap;
+    }
+
+
+    /**
+     * get bitmap from assets folder in project
+     * @param assetfilename name of asset, i.e. "image.png"
+     * @return Bitmap
+     * @exception IOException when file is not found
+     */
+    private Bitmap getBitmapFromAsset(String assetfilename) throws IOException
+    {
+        AssetManager assetManager = mActivity.getAssets();
+
+        InputStream istr = assetManager.open(assetfilename);
+        Bitmap bitmap = BitmapFactory.decodeStream(istr);
+        istr.close();
+
+        return bitmap;
+    }
+
+
+    /**
+     * get bitmap from file system
+     * @param filename name of image, i.e. "image.png"
+     * @param strSubFolder subfolder, i.e. "/products"
+     * @param bGetFromSDCARD when true the image is read from SDCARD, otherwise main memory
+     * @return Bitmap
+     */
+    private Bitmap getBitmapFromLocalFS(String filename, String strSubFolder, boolean bGetFromSDCARD)
+    {
+        File file;
+
+        if (bGetFromSDCARD == true)
+        {
+            //store in SDCARD
+            file = new File(Environment.getExternalStorageDirectory()+strSubFolder, filename);
+        }
+        else
+        {
+            //store in main memory
+            file = new File(mActivity.getFilesDir().getAbsolutePath()+strSubFolder, filename);
+        }
+
+
+        Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
+
+        return bitmap;
+    }
+
+}
+</code></pre>

@@ -1,0 +1,671 @@
+<p>Here is my flash player adapted from the example on their website. BCFrame is essentially a JInternalFrame. You can have it extend whatever. It will need slight modification to work, but should be strait forward. You can rip out anything that doesnt exist.</p>
+
+<p>Other possible solutions are:<br><br>
+jffmpeg - do a search for it<br>
+<a href="http://www.humatic.de/htools/dsj/samplecode.php?WebM.java" rel="nofollow">http://www.humatic.de/htools/dsj/samplecode.php?WebM.java</a><br>
+<a href="http://code.google.com/p/gstreamer-java/" rel="nofollow">http://code.google.com/p/gstreamer-java/</a><br>
+<a href="http://www.xuggle.com/xuggler/" rel="nofollow">http://www.xuggle.com/xuggler/</a><br>
+<a href="http://www.theregister.co.uk/2010/08/20/flash_in_java/" rel="nofollow">http://www.theregister.co.uk/2010/08/20/flash_in_java/</a><br></p>
+
+<pre>
+<code>
+package Components.FlashPlayer;
+
+import Components.BCFrame;
+import GUI.BCApp.DataTypeEnum;
+import Logging.LogRunner;
+import Properties.Basic.FlashPlayer_Prop;
+import XMLProcessing.Helpers.XMLActionInfoHolder;
+import XMLProcessing.XMLUtilities;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import javax.swing.*;
+import javax.swing.filechooser.FileFilter;
+import java.io.*;
+
+// import the JFlashPlayer package
+import com.jpackages.jflashplayer.*;
+import java.net.URL;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+/**
+ * This class plays a flash video.
+ * Create with help from: http://www.jpackages.com/jflashplayer , see the website
+ * for a larger example of how to do more things with this code. I kind of modified
+ * this to fit the current needs of the project. This works in conjunction with
+ * dlls that need to go in the win32 folder. For linux/mac, look into the Apple
+ * Java Quicktime API
+ * @author dvargo
+ */
+public class FlashPlayer extends BCFrame implements FlashPanelListener {
+
+    /**
+     * handle to a FlashPanel instance
+     */
+    FlashPanel flashPanel;
+    final Label currentFrameLabel = new Label("Frame: N/A");
+    final JProgressBar progressBar = new JProgressBar();
+    JButton playButton,stopButton,forwardButton,rewindButton,backButton;
+    JCheckBox loopCheckBox;
+    private boolean isMovieSet = false;
+    FrameMonitorThread fmt;
+    boolean loop = false;
+    boolean playOnStart = true;
+
+
+
+
+    public enum Actions
+    {
+        Loop,
+        Stop,
+        Play
+    }
+
+    /**
+     * Defualt constructor
+     */
+    public FlashPlayer()
+    {
+
+    }
+
+    /**
+     * Sets FlashPlayer to defualt size
+     * @param x X position for the player
+     * @param y Y position for the player
+     * @param mainWindow Reference to the main window
+     */
+    public FlashPlayer(int x, int y, GUI.Window mainWindow) {
+        this(x, y, 600, 400, mainWindow);
+    }
+
+    /**
+     * Full consturtor
+     * @param x X position for this player
+     * @param y Y position for this player
+     * @param w Width of the player
+     * @param h Height of the player
+     * @param mainWindow reference to the main window
+     */
+    public FlashPlayer(int x, int y, int w, int h, GUI.Window mainWindow) {
+        super(x, y, w, h, mainWindow);
+        initComponents();
+        this.getContentPane().setLayout(new BorderLayout());
+        createButtons();
+        addCurrCompSetter(flashPanel,progressBar,currentFrameLabel,playButton,stopButton,forwardButton,rewindButton,loopCheckBox,backButton);
+
+    }
+
+    @SuppressWarnings("unchecked")
+    //                           
+    private void initComponents() {
+
+        videoPanel = new javax.swing.JPanel();
+
+        setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
+
+        videoPanel.setBorder(javax.swing.BorderFactory.createTitledBorder(""));
+
+        javax.swing.GroupLayout videoPanelLayout = new javax.swing.GroupLayout(videoPanel);
+        videoPanel.setLayout(videoPanelLayout);
+        videoPanelLayout.setHorizontalGroup(
+            videoPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 381, Short.MAX_VALUE)
+        );
+        videoPanelLayout.setVerticalGroup(
+            videoPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 247, Short.MAX_VALUE)
+        );
+
+        javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
+        getContentPane().setLayout(layout);
+        layout.setHorizontalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(videoPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+        );
+        layout.setVerticalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(videoPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+        );
+
+        pack();
+    }//                         
+
+    // Variables declaration - do not modify                     
+    private javax.swing.JPanel videoPanel;
+    // End of variables declaration                   
+
+
+
+
+    /**
+     * FlashPanelListener event method which receives FSCommand Flash events.
+     *
+     * You should use ExternalInterface.call instead of FSCommand
+     * with the latest ActionScript version.  Older ActionScript versions
+     * will only have access to FSCommand.
+     */
+    public void FSCommand(String command, String arg) {
+        System.out.println("FlashPlayer (ignoring): FSCommand event received: " + command + " " + arg);
+    }
+
+    private void creatFlashPlayerWorker()
+    {
+         // add the FlashPanel to the frame
+        this.getContentPane().add(flashPanel, BorderLayout.CENTER);
+
+
+        // specify the object for Flash ExternalInterface.call events to search for the called method on
+        flashPanel.setFlashCallObject(this);
+
+        // specify the FlashPanelListener in case a movie is using the older FSCommand event
+        flashPanel.addFlashPanelListener(this);
+
+        // specify variables for a flash movie which are available from the start of the
+        // movie as long as this is called before the FlashPanel is visible
+        flashPanel.setVariables("myGreeting=hi&myNumber=1&myVar=good%20job");
+
+        isMovieSet = true;
+        centerAndDisplay();
+        fmt = new FrameMonitorThread(flashPanel);
+        fmt.start();
+        revalidate();
+        if(!playOnStart)
+        {
+            stop();
+        }
+        setLoop(loop);
+    }
+
+    /**
+     * Create a FlashPanel instance and add it to the frame
+     */
+    public void createFlashPanel(String url) {
+        // install Flash 10 if Flash 6 or greater is not present
+        //FlashPanel.installFlash("6");
+
+        dataSource = dataSource.url;
+        setData("Path",url.toString());
+        String flashVersionRequired = "9";
+        try
+        { 
+            FlashPanel.setRequiredFlashVersion(flashVersionRequired);
+            flashPanel = new FlashPanel(new URL(url));//new File(flashFilePath));
+        } 
+        catch (JFlashLibraryLoadFailedException e)
+        {
+            exitError("A required library (DLL) is missing or damaged.");
+        } 
+        catch(JFlashInvalidFlashException e)
+        {
+            exitError("Required version " + flashVersionRequired + " of Flash is not installed. ");
+        } 
+        catch (Exception e)
+        {
+            exitError("Something went wrong!\n" + e.toString());
+        }
+
+        creatFlashPlayerWorker();
+
+    }
+
+     /**
+     * Create a FlashPanel instance and add it to the frame
+     */
+    public void createFlashPanel(File file) {
+        // install Flash 10 if Flash 6 or greater is not present
+        //FlashPanel.installFlash("6");
+
+        //http://samples.mplayerhq.hu/SWF/flash_adpcm_testfiles/stereo_22.swf
+
+        dataSource = dataSource.file;
+        setData("Path",file.getAbsolutePath());
+        String flashVersionRequired = "9";
+        try
+        {
+            FlashPanel.setRequiredFlashVersion(flashVersionRequired);
+            flashPanel = new FlashPanel(file);//new File(flashFilePath));
+        }
+        catch (JFlashLibraryLoadFailedException e)
+        {
+            exitError("A required library (DLL) is missing or damaged.");
+        }
+        catch(JFlashInvalidFlashException e)
+        {
+            exitError("Required version " + flashVersionRequired + " of Flash is not installed. ");
+        }
+        catch (Exception e)
+        {
+            exitError("Something went wrong!\n" + e.toString());
+        }
+
+        creatFlashPlayerWorker();
+    }
+
+
+    public boolean isMovieSet()
+    {
+        return isMovieSet;
+    }
+
+    public boolean isPlayOnStart()
+    {
+        return playOnStart;
+    }
+
+    public boolean isLoop()
+    {
+        return loop;
+    }
+
+    public void setPlayOnStart(boolean dis)
+    {
+        playOnStart = dis;
+    }
+    public void setIsLoop(boolean dis)
+    {
+        loop = dis;
+    }
+
+
+
+    /**
+     * Select a different SWF file at remote url
+     */
+    public void setMovie(URL url)
+    {
+        if(!isMovieSet)
+        {
+            createFlashPanel(url.toString());
+            return;
+        }
+        setData("Path",url.toString());
+        dataSource = dataSource.url;
+        flashPanel.setMovie(url);
+    }
+
+    /**
+     * Select a different SWF file at remote url
+     */
+    public void setMovie(String url)
+    {
+        if(!isMovieSet)
+        {
+            createFlashPanel(url);
+            return;
+        }
+        setData("Path",url);
+        dataSource = dataSource.url;
+        try
+        {
+            flashPanel.setMovie(new URL(url));
+            revalidate();
+        }
+        catch(Exception e)
+        {
+            LogRunner.dialogMessage(this.getClass(),"Could not play Flash Movie at " + url);
+        }
+
+    }
+
+    /**
+     * Select a different SWF file on local machine
+     */
+    public void setMovie(File file)
+    {
+
+        setData("Path",file.getAbsolutePath()); //setting this to absolute path might cause a problem
+        dataSource = dataSource.file;
+        try
+        {
+            if(isMovieSet)
+            {
+                flashPanel.setMovie(file);
+            }
+            else
+            {
+                createFlashPanel(file);
+            }
+        }
+        catch(Exception e)
+        {
+           LogRunner.dialogMessage(this.getClass(),"Could not play Flash Movie at " + file);
+        }
+
+    }
+
+
+    /**
+     * Instruct the flash movie to play.
+     */
+    public void play()
+    {
+        flashPanel.play();
+    }
+
+    /**
+     * Instruct the flash movie to stop playing.
+     */
+    public void stop()
+    {
+        flashPanel.stop();
+    }
+
+    /**
+     * Instruct the flash movie to go back one frame.
+     * This will also stop the movie if it was playing.
+     */
+    public void rewind()
+    {
+        rewind(1);
+    }
+
+    /**
+     * Instruct the flash movie to go back x number of frames.
+     * This will also stop the movie if it was playing.
+     * @param numberOfFrames The number of frames to rewind
+     */
+    public void rewind(int numberOfFrames)
+    {
+        for(int i = 0; i &lt numberOfFrames; i++)
+        {
+            flashPanel.back();
+        }
+    }
+
+
+    /**
+     * Instruct the flash movie to go forward 1 frame.
+     * This will also stop the movie if it was playing.
+     */
+    public void forward()
+    {
+        forward(1);
+    }
+
+    /**
+     * Instruct the flash movie to go forward x number of frame.
+     * This will also stop the movie if it was playing.
+     */
+    public void forward(int numberOfFrames)
+    {
+        for(int i = 0; i &lt numberOfFrames; i++)
+        {
+            flashPanel.forward();
+        }
+    }
+
+    /**
+     * Instruct the flash movie to rewind to the first frame.
+     * This will also stop the movie if it was playing.
+     */
+    public void goBackToBegining()
+    {
+        flashPanel.rewind();
+    }
+
+    /**
+     * Select and set the flash movie background color.
+     */
+    public void backgroundAction(Color c)
+    {
+        flashPanel.setBackground(c);
+    }
+
+    /**
+     * Instruct the flash movie to loop or not.
+     */
+    void setLoop(boolean loop) {
+        flashPanel.setLoop(loop);
+    }
+
+
+    /**
+     * Define some buttons to demonstrate JFlashPlayer functionality
+     */
+    void createButtons() {
+        JPanel buttonPanel = new JPanel();
+        buttonPanel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        buttonPanel.setLayout(new BoxLayout(buttonPanel, BoxLayout.X_AXIS));
+
+        playButton = new JButton("Play");
+        playButton.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                play();
+            }
+        });
+        buttonPanel.add(playButton);
+        JButton stopButton = new JButton("Pause");
+        stopButton.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                stop();
+            }
+        });
+        buttonPanel.add(stopButton);
+        backButton = new JButton("Back");
+        backButton.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                goBackToBegining();
+            }
+        });
+        buttonPanel.add(backButton);
+        forwardButton = new JButton("Forward");
+        forwardButton.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                forward();
+            }
+        });
+        //buttonPanel.add(forwardButton);
+        rewindButton = new JButton("Rewind");
+        rewindButton.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                rewind();
+            }
+        });
+        buttonPanel.add(rewindButton);
+
+        loopCheckBox = new JCheckBox("Loop");
+        loopCheckBox.setSelected(true);
+        loopCheckBox.addActionListener(new ActionListener() {
+
+            public void actionPerformed(ActionEvent arg0) {
+                setLoop(loopCheckBox.isSelected());
+            }
+        });
+
+        progressBar.setVisible(true);
+
+        buttonPanel.add(progressBar);
+
+        for (int i = 0; i  screenSize.height) {
+            frameSize.height = screenSize.height;
+        }
+        if (frameSize.width > screenSize.width) {
+            frameSize.width = screenSize.width;
+        }
+        //this.setLocation((screenSize.width - frameSize.width) / 2,
+        //      (screenSize.height - frameSize.height) / 2);
+        this.setVisible(true);
+        //this.toFront();
+    }
+
+
+
+    @Override
+    protected void createProperties()
+    {
+        properties = new FlashPlayer_Prop(this);
+    }
+
+    @Override
+    public void action(Enum a)
+    {
+    }
+
+    @Override
+    public Enum convertStringToActionEnumValue(String in) {
+        return null;
+    }
+
+    @Override
+    public void build(HashMap theDictionary, String filePath, String DataSource, ArrayList actions)
+    {
+        if(DataSource.equals(DataTypeEnum.url.toString()))
+            {
+                createFlashPanel((String) theDictionary.get("Path"));
+                setDataSource(DataTypeEnum.url);
+            }
+            else
+            {
+                String theFile = XMLUtilities.parseFilePath(filePath) + File.separator + (String) theDictionary.get("Path");
+                createFlashPanel(new File(theFile));
+                setDataSource(DataTypeEnum.file);
+            }
+        playOnStart = Boolean.parseBoolean(theDictionary.get("PlayOnStart"));
+        loop = Boolean.parseBoolean(theDictionary.get("Loop"));
+        //add actions to the component
+        setActions(XMLUtilities.getActions(this, actions));
+    }
+
+    @Override
+    public Element extractData(Document dom)
+    {
+        setData("PlayOnStart",Boolean.toString(playOnStart));
+        setData("Loop", Boolean.toString(loop));
+        return super.extractData(dom);
+    }
+
+    @Override
+    public File[] extractFiles(String filePath)
+    {
+        File retVal = new File(getData("Path"));
+        if(retVal == null)
+        {
+            return null;
+        }
+        setData("Path","files" + File.separator + retVal.getName());
+        return new File[]{retVal};
+    }
+
+    @Override
+    public void drag(File[] theFiles)
+    {
+     //if they dragged a one file in
+        if(theFiles.length == 1)
+        {
+            //try and set it as the image of this component
+            setMovie(new File(theFiles[0].getAbsolutePath()));
+        }
+        //they dragged multiple files in
+        else
+        {
+            for(int i = 0; i &lt theFiles.length; i++)
+            {
+                int location = (i * 5) % mainWindow.getComponentContentPane().getHeight();
+
+                FlashPlayer temp = new FlashPlayer(location,location , mainWindow);
+                temp.createFlashPanel(new File(theFiles[i].getAbsolutePath()));
+                mainWindow.getCurrPage().addComponent(temp);
+                mainWindow.getCurrPage().loadPage();
+            }
+        }
+    }
+
+    @Override
+    public BCFrame copy(int x, int y) {
+        try
+        {
+            FlashPlayer clone = new FlashPlayer(x,y,this.getWidth(),this.getHeight(),mainWindow);
+            clone.setTitleBarVisible(this.isTitleBarRemoved());
+            clone.setActions(this.getActions());
+            if(dataSource == dataSource.file)
+            {
+                clone.setMovie(new File(this.getData("Path")));
+            }
+            else
+            {
+                clone.setMovie(this.getData("Path"));
+            }
+            clone.setPlayOnStart(isPlayOnStart());
+            clone.setIsLoop(isLoop());
+            return clone;
+        }
+        catch(Exception e)
+        {
+            LogRunner.dialogMessage(this.getClass(),"Cant clone this compoenent");
+
+        }
+        return null;
+    }
+
+    /**
+     * Thread to poll the current frame of the flash movie to be displayed
+     */
+    class FrameMonitorThread extends Thread {
+
+        FlashPanel flashPanel;
+
+        FrameMonitorThread(FlashPanel fp) {
+            flashPanel = fp;
+        }
+
+        public void run() {
+            while (true) {
+                if (flashPanel != null) {
+                    final long currentFrame = flashPanel.getCurrentFrame();
+                    final long totalFrames = flashPanel.getTotalFrames();
+                    SwingUtilities.invokeLater(new Runnable() {
+
+                        public void run() {
+                            double cf = currentFrame;
+                            double tf = totalFrames;
+                            double result = cf/tf;
+                            int percent = (int)(100 * result);
+                            try{progressBar.setValue(percent);}catch(Exception e){}
+                            currentFrameLabel.setText("Frame: " + currentFrame + "/" + totalFrames);
+
+                        }
+                    });
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (Exception e) {
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks whterer the dlls that flash player needs are in their correct spot
+     * @return True if all the dlls could be found, false otherwise
+     */
+    public static boolean checkDlls()
+    {
+        String systemFolder = "C:\\WINDOWS\\system32\\";
+        String [] dlls = new String[]{"atl2k.dll","atl98.dll","jflash.dll"};
+        for(String x : dlls)
+        {
+            if(!new File(systemFolder + x).exists())
+            {
+                return false;
+            }
+        }
+
+        return true;
+
+    }
+
+
+}
+
+</code>
+</pre>

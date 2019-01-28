@@ -1,0 +1,105 @@
+<p>What you want is not possible because there might not be a .java file around (only a .class file), the .class file might reside inside a (nested) .jar file and the JVM does not know which classpath entry was used to locate the .class file.</p>
+
+<p>That said, I have tried to solve the same problem for a project of mine. The code goes like this:</p>
+
+<pre><code>    private static List&lt;Class&gt; getClassesForPackage(String packagename)
+            throws ClassNotFoundException
+    {
+        // This will hold a list of directories matching the pckgname.
+        // There may be more than one if a package is split over multiple
+        // jars/paths
+        List&lt;Class&gt; classes = new ArrayList&lt;Class&gt;();
+        List&lt;File&gt; directories = new ArrayList&lt;File&gt;();
+        try {
+            ClassLoader classLoader =
+                Thread.currentThread().getContextClassLoader();
+            if (classLoader == null) {
+                throw new ClassNotFoundException("Can't get class loader.");
+            }
+
+            // Ask for all resources for the path
+            Enumeration&lt;URL&gt; resources =
+                classLoader.getResources(packagename.replace('.', '/'));
+            while (resources.hasMoreElements()) {
+
+                URL res = resources.nextElement();
+                if (res.getProtocol().equalsIgnoreCase("jar")) {
+
+                    JarURLConnection conn =
+                        (JarURLConnection) res.openConnection();
+                    JarFile jar = conn.getJarFile();
+                    for (JarEntry e : Collections.list(jar.entries())) {
+
+                        if (e.getName().startsWith(
+                                packagename.replace('.', '/'))
+                            &amp;&amp; e.getName().endsWith(".class")
+                            &amp;&amp; !e.getName().contains("$"))
+                        {
+                            String className =
+                                e.getName().replace("/", ".").substring(
+                                        0,
+                                        e.getName().length() - 6);
+                            classes.add(Class.forName(className));
+                        }
+                    }
+                }
+                else
+                    directories.add(new File(URLDecoder.decode(
+                            res.getPath(),
+                            "UTF-8")));
+            }
+        }
+        catch (NullPointerException x) {
+            throw new ClassNotFoundException(packagename
+                + " does not appear to be "
+                + "a valid package (Null pointer exception)");
+        }
+        catch (UnsupportedEncodingException encex) {
+            throw new ClassNotFoundException(packagename
+                + " does not appear to be "
+                + "a valid package (Unsupported encoding)");
+        }
+        catch (IOException ioex) {
+            throw new ClassNotFoundException(
+                "IOException was thrown when trying "
+                    + "to get all resources for " + packagename);
+        }
+
+        List&lt;String&gt; subPackages = new ArrayList&lt;String&gt;();
+        // For every directory identified capture all the .class files
+        for (File directory : directories) {
+
+            if (directory.exists()) {
+
+                // Get the list of the files contained in the package
+                File[] files = directory.listFiles();
+                for (File file : files) {
+
+                    // add .class files to results
+                    String fileName = file.getName();
+                    if (file.isFile() &amp;&amp; fileName.endsWith(".class")) {
+                        // removes the .class extension
+                        classes.add(Class.forName(packagename + '.'
+                            + fileName.substring(0, fileName.length() - 6)));
+                    }
+                    // add directories to subpackages
+                    if (file.isDirectory()) {
+                        subPackages.add(packagename + "." + fileName);
+                    }
+                }
+            }
+            else {
+                throw new ClassNotFoundException(packagename + " ("
+                    + directory.getPath()
+                    + ") does not appear to be a valid package");
+            }
+        }
+        // check all potential subpackages
+        for (String subPackage : subPackages) {
+            classes.addAll(getClassesForPackage(subPackage));
+        }
+        return classes;
+    }
+</code></pre>
+
+<p>To find the directory of the corresponding .java file you need to configure the source directory you are using.</p>

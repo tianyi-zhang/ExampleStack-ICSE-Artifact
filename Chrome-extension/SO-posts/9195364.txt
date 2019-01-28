@@ -1,0 +1,87 @@
+<p>I'm having the same problem. I checked the Android code.
+The relevant code is in SensorManager.java</p>
+
+<pre><code>private void unregisterListener(Object listener) {
+    if (listener == null) {
+        return;
+    }
+
+    synchronized (sListeners) {
+        final int size = sListeners.size();
+        for (int i=0 ; i&lt;size ; i++) {
+            ListenerDelegate l = sListeners.get(i);
+            if (l.getListener() == listener) {
+                sListeners.remove(i);
+                // disable all sensors for this listener
+                for (Sensor sensor : l.getSensors()) {
+                    disableSensorLocked(sensor);
+                }
+                break;
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>        public void run() {
+            //Log.d(TAG, "entering main sensor thread");
+            final float[] values = new float[3];
+            final int[] status = new int[1];
+            final long timestamp[] = new long[1];
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+
+            if (!open()) {
+                return;
+            }
+
+            synchronized (this) {
+                // we've open the driver, we're ready to open the sensors
+                mSensorsReady = true;
+                this.notify();
+            }
+
+            while (true) {
+                // wait for an event
+                final int sensor = sensors_data_poll(sQueue, values, status, timestamp);
+
+                int accuracy = status[0];
+                synchronized (sListeners) {
+                    if (sensor == -1 || sListeners.isEmpty()) {
+                        // we lost the connection to the event stream. this happens
+                        // when the last listener is removed or if there is an error
+                        if (sensor == -1 &amp;&amp; !sListeners.isEmpty()) {
+                            // log a warning in case of abnormal termination
+                            Log.e(TAG, "_sensors_data_poll() failed, we bail out: sensors=" + sensor);
+                        }
+                        // we have no more listeners or polling failed, terminate the thread
+                        sensors_destroy_queue(sQueue);
+                        sQueue = 0;
+                        mThread = null;
+                        break;
+                    }
+                    final Sensor sensorObject = sHandleToSensor.get(sensor);
+                    if (sensorObject != null) {
+                        // report the sensor event to all listeners that
+                        // care about it.
+                        final int size = sListeners.size();
+                        for (int i=0 ; i&lt;size ; i++) {
+                            ListenerDelegate listener = sListeners.get(i);
+                            if (listener.hasSensor(sensorObject)) {
+                                // this is asynchronous (okay to call
+                                // with sListeners lock held).
+                                listener.onSensorChangedLocked(sensorObject,
+                                        values, timestamp, accuracy);
+                            }
+                        }
+                    }
+                }
+            }
+            //Log.d(TAG, "exiting main sensor thread");
+        }
+    }
+}
+</code></pre>
+
+<p>So it looks like the thread should be terminated when there are no listeners any more</p>

@@ -1,0 +1,372 @@
+<p>public class MusicService extends Service implements MediaPlayer.OnPreparedListener,
+        MediaPlayer.OnErrorListener, MediaPlayer.OnCompletionListener {</p>
+
+<pre><code>private boolean checkError = true;
+public MediaPlayer mPlayer;
+private Uri mSongUri;
+private Bitmap mSongBitmap;
+
+
+public static PlayingFragment playingFragment;
+private int songDuration;
+
+private ArrayList&lt;Song&gt; mListSongs;
+private int SONG_POS = 0;
+
+private final IBinder musicBind = new PlayerBinder();
+
+private final String ACTION_STOP = "com.emptylist.tabplayer.STOP";
+private final String ACTION_NEXT = "com.emptylist.tabplayer.NEXT";
+private final String ACTION_PREVIOUS = "com.emptylist.tabplayer.PREVIOUS";
+private final String ACTION_PAUSE = "com.emptylist.tabplayer.PAUSE";
+
+public static final int STATE_PAUSED = 1;
+public static final int STATE_PLAYING = 2;
+public int mState = 0;
+private static final int REQUEST_CODE_PAUSE = 101;
+private static final int REQUEST_CODE_PREVIOUS = 102;
+private static final int REQUEST_CODE_NEXT = 103;
+private static final int REQUEST_CODE_STOP = 104;
+public static int NOTIFICATION_ID = 11;
+private Notification.Builder notificationBuilder;
+private Notification mNotification;
+
+private SharedPreferences prefs;
+private SharedPreferences.Editor editor;
+
+public class PlayerBinder extends Binder {
+
+    public MusicService getService() {
+        Log.d("test", "getService()");
+        return MusicService.this;
+    }
+}
+
+@Override
+public IBinder onBind(Intent intent) {
+    Log.d("test", "onBind Called ");
+    return musicBind;
+}
+
+@Override
+public void onCreate() {
+    super.onCreate();
+    mPlayer = new MediaPlayer();
+    initPlayer();
+    mPlayer.setOnPreparedListener(this);
+    mPlayer.setOnCompletionListener(this);
+    mPlayer.setOnErrorListener(this);
+    notificationBuilder = new Notification.Builder(getApplicationContext());
+}
+
+@Override
+public int onStartCommand(Intent intent, int flags, int startId) {
+
+    if (intent != null) {
+        String action = intent.getAction();
+        if (!TextUtils.isEmpty(action)) {
+            if (action.equals(ACTION_PAUSE)) {
+                playPauseSong();
+            } else if (action.equals(ACTION_NEXT)) {
+                nextSong();
+            } else if (action.equals(ACTION_PREVIOUS)) {
+                previousSong();
+            } else if (action.equals(ACTION_STOP)) {
+                stopSong();
+                stopSelf();
+            }
+        }
+    }
+    return super.onStartCommand(intent, flags, startId);
+}
+
+@Override
+public boolean onUnbind(Intent intent) {
+    mPlayer.stop();
+    mPlayer.release();
+    return false;
+}
+
+@Override
+public void onCompletion(MediaPlayer mp) {
+
+    if (checkError == false) {
+
+        startSong(mListSongs.get(SONG_POS).getSongUri(), mListSongs.get(SONG_POS).getSongName(), mListSongs.get(SONG_POS).getmSongAlbumArt(), SONG_POS);
+        checkError = true;
+
+    } else {
+
+        mPlayer.reset();
+        try {
+            if (SONG_POS != mListSongs.size() - 1) {
+                SONG_POS++;
+                setSongDetails(SONG_POS);
+
+            } else {
+                SONG_POS = 0;
+                setSongDetails(SONG_POS);
+            }
+            mPlayer.setDataSource(getApplicationContext(), mListSongs.get(SONG_POS).getSongUri());
+        } catch (Exception e) {
+            Log.e("MUSIC SERVICE", "Error setting data source", e);
+        }
+        mPlayer.prepareAsync();
+
+        if (mState == STATE_PLAYING) {
+            MainActivity.imgPlayPause.setImageResource(R.drawable.pause);
+        } else
+            MainActivity.imgPlayPause.setImageResource(R.drawable.play);
+
+        editor = getSharedPreferences("MusicPref", MODE_PRIVATE).edit();
+        editor.putInt("SongPosition", SONG_POS);
+        editor.putString("SongURI", mListSongs.get(SONG_POS).getSongUri().toString());
+        editor.commit();
+
+    }
+}
+
+@Override
+public boolean onError(MediaPlayer mp, int what, int extra) {
+
+    Log.d("EEE", String.valueOf(what) + "," + String.valueOf(extra));
+    checkError = false;
+    return false;
+}
+
+@Override
+public void onPrepared(MediaPlayer mp) {
+    mp.start();
+    new ProgressUpdater();
+}
+
+private void initPlayer() {
+    mPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
+    mPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+    if (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.KITKAT) {
+
+        try {
+            Class&lt;?&gt; cMediaTimeProvider = Class.forName("android.media.MediaTimeProvider");
+            Class&lt;?&gt; cSubtitleController = Class.forName("android.media.SubtitleController");
+            Class&lt;?&gt; iSubtitleControllerAnchor = Class.forName("android.media.SubtitleController$Anchor");
+            Class&lt;?&gt; iSubtitleControllerListener = Class.forName("android.media.SubtitleController$Listener");
+
+            Constructor constructor = cSubtitleController.getConstructor(new Class[]{Context.class, cMediaTimeProvider, iSubtitleControllerListener});
+
+            Object subtitleInstance = constructor.newInstance(getApplicationContext(), null, null);
+
+            Field f = cSubtitleController.getDeclaredField("mHandler");
+
+            f.setAccessible(true);
+            try {
+                f.set(subtitleInstance, new Handler());
+            } catch (IllegalAccessException e) {
+            } finally {
+                f.setAccessible(false);
+            }
+
+            Method setsubtitleanchor = mPlayer.getClass().getMethod("setSubtitleAnchor", cSubtitleController, iSubtitleControllerAnchor);
+
+            setsubtitleanchor.invoke(mPlayer, subtitleInstance, null);
+            //Log.e("", "subtitle is setted :p");
+        } catch (Exception e) {
+        }
+    }
+
+}
+
+public void startSong(Uri songuri, String songName, Bitmap bitmap, int position) {
+
+    //Set data &amp; start playing music
+    setSongDetails(position);
+    mPlayer.reset();
+    mState = STATE_PLAYING;
+    mSongUri = songuri;
+    mSongBitmap = bitmap;
+
+    try {
+        mPlayer.setDataSource(getApplicationContext(), mSongUri);
+    } catch (Exception e) {
+        Log.e("MUSIC SERVICE", "Error setting data source", e);
+    }
+    mPlayer.prepareAsync();
+    if (mState == STATE_PLAYING) {
+        MainActivity.imgPlayPause.setImageResource(R.drawable.pause);
+    } else {
+        MainActivity.imgPlayPause.setImageResource(R.drawable.play);
+    }
+    Log.d("EEESonfPOs", String.valueOf(position));
+    editor = getSharedPreferences("MusicPref", MODE_PRIVATE).edit();
+    editor.putInt("SongPosition", SONG_POS);
+    editor.putString("SongURI", mListSongs.get(SONG_POS).getSongUri().toString());
+    editor.commit();
+    updateNotification(songName);
+
+}
+
+public void playPauseSong() {
+
+    if (mState == STATE_PAUSED) {
+        mState = STATE_PLAYING;
+        mPlayer.start();
+        MainActivity.imgPlayPause.setImageResource(R.drawable.pause);
+    } else {
+        mState = STATE_PAUSED;
+        mPlayer.pause();
+        MainActivity.imgPlayPause.setImageResource(R.drawable.play);
+
+    }
+}
+
+public boolean isPlayingg() {
+    return mPlayer.isPlaying();
+}
+
+public int getPosn() {
+    return mPlayer.getCurrentPosition();
+}
+
+public int getDur() {
+    int n = songDuration;
+    return songDuration;
+}
+
+public void pausePlayer() {
+    mPlayer.pause();
+}
+
+
+private void setSongDetails(int position) {
+
+    MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+    byte[] rawArt;
+    Bitmap art = null;
+    BitmapFactory.Options bfo = new BitmapFactory.Options();
+
+    mmr.setDataSource(getApplicationContext(), mListSongs.get(position).getSongUri());
+    rawArt = mmr.getEmbeddedPicture();
+
+    // if rawArt is null then no cover art is embedded in the file or is not
+    // recognized as such.
+    if (null != rawArt) {
+        Bitmap bm = Bitmap.createScaledBitmap(BitmapFactory.decodeByteArray(rawArt, 0, rawArt.length, bfo),
+                100, 100,
+                true);
+        MainActivity.imgSongArt.setImageBitmap(bm);
+        MainActivity.tvSongName.setText(mListSongs.get(position).getSongName());
+        MainActivity.tvSongArtist.setText(mListSongs.get(position).getmSongArtist());
+    } else {
+        MainActivity.imgSongArt.setImageResource(R.drawable.default_album_art);
+        MainActivity.tvSongName.setText(mListSongs.get(position).getSongName());
+        MainActivity.tvSongArtist.setText(mListSongs.get(position).getmSongArtist());
+    }
+
+}
+
+public void stopSong() {
+    mPlayer.stop();
+    NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+    manager.cancel(NOTIFICATION_ID);
+    //System.exit(0);
+}
+
+public void nextSong() {
+
+    if (SONG_POS != mListSongs.size() - 1) {
+        startSong(mListSongs.get(SONG_POS + 1).getSongUri(), mListSongs.get(SONG_POS + 1).getSongName(), mListSongs.get(SONG_POS + 1).getmSongAlbumArt(), SONG_POS + 1);
+        SONG_POS++;
+    } else {
+        SONG_POS = 0;
+        startSong(mListSongs.get(0).getSongUri(), mListSongs.get(0).getSongName(), mListSongs.get(0).getmSongAlbumArt(), 0);
+
+    }
+
+    editor = getSharedPreferences("MusicPref", MODE_PRIVATE).edit();
+    editor.putInt("SongPosition", SONG_POS);
+    editor.putString("SongURI", mListSongs.get(SONG_POS).getSongUri().toString());
+    editor.commit();
+}
+
+public void previousSong() {
+
+    if (SONG_POS != 0) {
+        startSong(mListSongs.get(SONG_POS - 1).getSongUri(), mListSongs.get(SONG_POS - 1).getSongName(), mListSongs.get(SONG_POS - 1).getmSongAlbumArt(), SONG_POS - 1);
+        SONG_POS--;
+    } else {
+        startSong(mListSongs.get(mListSongs.size() - 1).getSongUri(), mListSongs.get(mListSongs.size() - 1).getSongName(), mListSongs.get(mListSongs.size() - 1).getmSongAlbumArt(), mListSongs.size() - 1);
+        SONG_POS = mListSongs.size() - 1;
+    }
+
+    editor = getSharedPreferences("MusicPref", MODE_PRIVATE).edit();
+    editor.putInt("SongPosition", SONG_POS);
+    editor.putString("SongURI", mListSongs.get(SONG_POS).getSongUri().toString());
+    editor.commit();
+
+}
+
+public void setSongURI(Uri uri) {
+    this.mSongUri = uri;
+}
+
+public void setmSongBitmap(Bitmap mSongBitmap) {
+    this.mSongBitmap = mSongBitmap;
+}
+
+
+public void setSelectedSong(int pos, int notification_id) {
+    SONG_POS = pos;
+    NOTIFICATION_ID = notification_id;
+    setSongURI(mListSongs.get(SONG_POS).getSongUri());
+    setmSongBitmap(mListSongs.get(SONG_POS).getmSongAlbumArt());
+    showNotification();
+    startSong(mListSongs.get(SONG_POS).getSongUri(), mListSongs.get(SONG_POS).getSongName(), mListSongs.get(SONG_POS).getmSongAlbumArt(), SONG_POS);
+}
+
+public void setSongList(ArrayList&lt;Song&gt; listSong) {
+    mListSongs = listSong;
+}
+
+public void showNotification() {
+    PendingIntent pendingIntent;
+    Intent intent;
+
+    NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
+    RemoteViews notificationView = new RemoteViews(getPackageName(), R.layout.notification_mediacontroller);
+
+    notificationView.setTextViewText(R.id.notify_song_name, mListSongs.get(SONG_POS).getSongName());
+
+    intent = new Intent(ACTION_STOP);
+    pendingIntent = PendingIntent.getService(getApplicationContext(), REQUEST_CODE_STOP, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+    notificationView.setOnClickPendingIntent(R.id.notify_btn_stop, pendingIntent);
+
+    intent = new Intent(ACTION_PAUSE);
+    pendingIntent = PendingIntent.getService(getApplicationContext(), REQUEST_CODE_PAUSE, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+    notificationView.setOnClickPendingIntent(R.id.notify_btn_pause, pendingIntent);
+
+    intent = new Intent(ACTION_PREVIOUS);
+    pendingIntent = PendingIntent.getService(getApplicationContext(), REQUEST_CODE_PREVIOUS, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+    notificationView.setOnClickPendingIntent(R.id.notify_btn_previous, pendingIntent);
+
+    intent = new Intent(ACTION_NEXT);
+    pendingIntent = PendingIntent.getService(getApplicationContext(), REQUEST_CODE_NEXT, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+    notificationView.setOnClickPendingIntent(R.id.notify_btn_next, pendingIntent);
+
+    mNotification = notificationBuilder
+            .setSmallIcon(R.drawable.ic_launcher).setOngoing(true)
+            .setWhen(System.currentTimeMillis())
+            .setContent(notificationView)
+            .setDefaults(Notification.FLAG_NO_CLEAR)
+            .build();
+    notificationManager.notify(NOTIFICATION_ID, mNotification);
+}
+
+private void updateNotification(String songName) {
+    NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+    mNotification.contentView.setTextViewText(R.id.notify_song_name, songName);
+    mNotification.contentView.setImageViewBitmap(R.id.img_notification, mListSongs.get(SONG_POS).getmSongAlbumArt());
+    notificationManager.notify(NOTIFICATION_ID, mNotification);
+}
+</code></pre>
+
+<p>}</p>

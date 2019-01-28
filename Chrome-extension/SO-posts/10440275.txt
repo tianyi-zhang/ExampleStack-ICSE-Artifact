@@ -1,0 +1,90 @@
+<p>You'll have to make some changes to the billing service client code from the sample. </p>
+
+<p>First, you should call your server to get the nonce that will be used to either RestoreTransactions or make the purchase, to make things as secure as possible.</p>
+
+<p>Let's follow what happens.  Here is the BillingReceiver that gets called by Google Play:</p>
+
+<pre><code>/**
+ * This is called when Android Market sends information about a purchase state
+ * change. The signedData parameter is a plaintext JSON string that is
+ * signed by the server with the developer's private key. The signature
+ * for the signed data is passed in the signature parameter.
+ * @param context the context
+ * @param signedData the (unencrypted) JSON string
+ * @param signature the signature for the signedData
+ */
+private void purchaseStateChanged(Context context, String signedData, String signature) {
+    Intent intent = new Intent(Consts.ACTION_PURCHASE_STATE_CHANGED);
+    intent.setClass(context, BillingService.class);
+    intent.putExtra(Consts.INAPP_SIGNED_DATA, signedData);
+    intent.putExtra(Consts.INAPP_SIGNATURE, signature);
+    context.startService(intent);
+}
+</code></pre>
+
+<p>If you look at handleCommand within BillingService.java, it handles this intent:</p>
+
+<pre><code>/**
+ * The {@link BillingReceiver} sends messages to this service using intents.
+ * Each intent has an action and some extra arguments specific to that action.
+ * @param intent the intent containing one of the supported actions
+ * @param startId an identifier for the invocation instance of this service
+ */
+public void handleCommand(Intent intent, int startId) {
+    String action = intent.getAction();
+    if (Consts.DEBUG) {
+        Log.i(TAG, "handleCommand() action: " + action);
+    }
+    if (Consts.ACTION_CONFIRM_NOTIFICATION.equals(action)) {
+        String[] notifyIds = intent.getStringArrayExtra(Consts.NOTIFICATION_ID);
+        confirmNotifications(startId, notifyIds);
+    } else if (Consts.ACTION_GET_PURCHASE_INFORMATION.equals(action)) {
+        String notifyId = intent.getStringExtra(Consts.NOTIFICATION_ID);
+        getPurchaseInformation(startId, new String[] { notifyId });
+    } else if (Consts.ACTION_PURCHASE_STATE_CHANGED.equals(action)) {
+        String signedData = intent.getStringExtra(Consts.INAPP_SIGNED_DATA);
+        String signature = intent.getStringExtra(Consts.INAPP_SIGNATURE);
+        purchaseStateChanged(startId, signedData, signature);
+    } else if (Consts.ACTION_RESPONSE_CODE.equals(action)) {
+        long requestId = intent.getLongExtra(Consts.INAPP_REQUEST_ID, -1);
+        int responseCodeIndex = intent.getIntExtra(Consts.INAPP_RESPONSE_CODE,
+                ResponseCode.RESULT_ERROR.ordinal());
+        ResponseCode responseCode = ResponseCode.valueOf(responseCodeIndex);
+        checkResponseCode(requestId, responseCode);
+    }
+}
+</code></pre>
+
+<p>This then calls thePurchaseStateChanged function.  This function should be replaced by a call to your server to create a session for your content delivery.  The code from Security.java should be ported to the server side to validate the transaction within the cloud.</p>
+
+<pre><code>/**
+ * Verifies that the data was signed with the given signature, and calls
+ * {@link ResponseHandler#purchaseResponse(Context, PurchaseState, String, String, long)}
+ * for each verified purchase.
+ * @param startId an identifier for the invocation instance of this service
+ * @param signedData the signed JSON string (signed, not encrypted)
+ * @param signature the signature for the data, signed with the private key
+ */
+private void purchaseStateChanged(int startId, String signedData, String signature) {
+    ArrayList&lt;Security.VerifiedPurchase&gt; purchases;
+    purchases = Security.verifyPurchase(signedData, signature);
+    if (purchases == null) {
+        return;
+    }
+
+    ArrayList&lt;String&gt; notifyList = new ArrayList&lt;String&gt;();
+    for (VerifiedPurchase vp : purchases) {
+        if (vp.notificationId != null) {
+            notifyList.add(vp.notificationId);
+        }
+        ResponseHandler.purchaseResponse(this, vp.purchaseState, vp.productId,
+                vp.orderId, vp.purchaseTime, vp.developerPayload);
+    }
+    if (!notifyList.isEmpty()) {
+        String[] notifyIds = notifyList.toArray(new String[notifyList.size()]);
+        confirmNotifications(startId, notifyIds);
+    }
+}
+</code></pre>
+
+<p>Make sure to put your public key on the server side in the ported Security.java file.</p>

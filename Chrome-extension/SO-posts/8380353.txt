@@ -1,0 +1,111 @@
+<p>We used <a href="https://github.com/robotmedia/AndroidBillingLibrary">AndroidBillingLibrary</a>.</p>
+
+<p>Install that as a project in Eclipse and let your project import it as a library.</p>
+
+<p>We implemented BillingController.IConfiguration, something like</p>
+
+<pre><code>import net.robotmedia.billing.BillingController;
+
+public class PhoneBillingConfiguration implements BillingController.IConfiguration{
+    @Override
+    public byte[] getObfuscationSalt() {
+        return new byte[] {1,-2,3,4,-5,6,-7,theseshouldallberandombyteshere,8,-9,0};
+    }
+
+    @Override
+    public String getPublicKey() {
+        return "superlongstringhereIforgothowwemadethis";
+    }
+}
+</code></pre>
+
+<p>Then for our application, we extended <code>Application</code>:</p>
+
+<pre><code>public class LocalizedApplication extends Application {
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+
+//      BillingController.setDebug(true);
+        BillingController.setConfiguration(new PhoneBillingConfiguration());
+    }
+}
+</code></pre>
+
+<p>AndroidManifest includes this (and all the other stuff)</p>
+
+<pre><code>&lt;application
+    android:icon="@drawable/icon"
+    android:label="@string/app_name"
+    android:name=".LocalizedApplication"   &lt;!-- use your specific Application  --&gt;
+    android:largeHeap="true"
+    android:hardwareAccelerated="true"
+    &gt;
+
+    &lt;!-- For billing --&gt;
+    &lt;service android:name="net.robotmedia.billing.BillingService" /&gt;
+        &lt;receiver android:name="net.robotmedia.billing.BillingReceiver"&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="com.android.vending.billing.IN_APP_NOTIFY" /&gt;
+            &lt;action android:name="com.android.vending.billing.RESPONSE_CODE" /&gt;
+            &lt;action android:name="com.android.vending.billing.PURCHASE_STATE_CHANGED" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/receiver&gt;
+</code></pre>
+
+<p>We implemented <code>ISignatureValidator</code></p>
+
+<pre><code>public class PhoneSignatureValidator implements ISignatureValidator {
+    private final String TAG = this.getClass().getSimpleName();
+    private PhoneServerLink mServerLink;
+
+
+    private BillingController.IConfiguration configuration;
+
+    public PhoneSignatureValidator(Context context, BillingController.IConfiguration configuration, String our_product_sku) {
+        this.configuration = configuration;
+        mServerLink = new PhoneServerLink(context);
+        mServerLink.setSku(our_product_sku);
+    }
+
+
+    @Override
+    public boolean validate(String signedData, String signature) {
+        final String publicKey;
+        if (configuration == null || TextUtils.isEmpty(publicKey = configuration.getPublicKey())) {
+            Log.w(BillingController.LOG_TAG, "Please set the public key or turn on debug mode");
+            return false;
+        }
+        if (signedData == null) {
+            Log.e(BillingController.LOG_TAG, "Data is null");
+            return false;
+        }
+        // mServerLink will talk to your server
+        boolean bool = mServerLink.validateSignature(signedData, signature);
+        return bool;
+    }
+
+}
+</code></pre>
+
+<p>It's the last few lines above that call your class that will actually talk to your server.</p>
+
+<p>Our PhoneServerLink starts out something like this:</p>
+
+<pre><code>public class PhoneServerLink implements GetJSONListener {
+
+    public PhoneServerLink(Context context) {
+        mContext = context;
+    }
+
+    public boolean validateSignature(String signedData, String signature) {
+        return getPurchaseResultFromServer(signedData, signature, false);
+    }
+
+    private boolean getPurchaseResultFromServer(String signedData, String signature,  boolean async) {  
+            // send request to server using whatever protocols you like 
+    }
+
+}
+</code></pre>

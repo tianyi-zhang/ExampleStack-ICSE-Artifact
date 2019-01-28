@@ -1,0 +1,64 @@
+<p><code>KeyValueTextInputFormat</code> assumes that the key is at the start of each line, so it isn't applicable for your 6 column data set.</p>
+
+<p>Instead, you can use <a href="https://hadoop.apache.org/docs/current/api/org/apache/hadoop/mapred/TextInputFormat.html" rel="nofollow"><code>TextInputFormat</code></a> and extract the key and value yourself. I'm assuming all values in the line are separated by commas (and that there are no commas in the data, which is another story).</p>
+
+<p>With <code>TextInputFormat</code> you receive the full line in <code>value</code>, and the position of the line in the file in <code>key</code>. We don't need the position so we will ignore it. With the full line in a single <code>Text</code> we can turn it into a <code>String</code>, split it by commas, and derive the key and value to emit:</p>
+
+<pre><code>public class InverterCounter extends Configured implements Tool {
+
+    public static class MapClass extends MapReduceBase
+        implements Mapper&lt;Text, Text, Text, Text&gt; {
+
+        public void map(Text key, Text value,
+                        OutputCollector&lt;Text, Text&gt; output,
+                        Reporter reporter) throws IOException {
+
+            String[] lineFields = value.toString().split(",");
+            Text outputKey = new Text(lineFields[0] + "," + lineFields[4]);
+            Text outputValue = new Text(lineFields[1] + "," + lineFields[2] + "," +
+                                        lineFields[3] + "," + lineFields[5]);
+
+            output.collect(outputKey, outputValue);
+        }
+    }   
+    public static class Reduce extends MapReduceBase
+        implements Reducer&lt;Text, Text, Text, IntWritable&gt; {
+
+        public void reduce(Text key, Iterator&lt;Text&gt; values,
+                           OutputCollector&lt;Text, IntWritable&gt; output,
+                           Reporter reporter) throws IOException {
+
+            int count = 0;
+            while (values.hasNext()) {
+                values.next();
+                count++;
+            }
+            output.collect(key, new IntWritable(count));
+        }
+    }   
+    public int run(String[] args) throws Exception {
+        Configuration conf = getConf();      
+        JobConf job = new JobConf(conf, InverterCounter.class);    
+        Path in = new Path(args[0]);
+        Path out = new Path(args[1]);
+        FileInputFormat.setInputPaths(job, in);
+        FileOutputFormat.setOutputPath(job, out);
+
+        job.setJobName("InverterCounter");
+        job.setMapperClass(MapClass.class);
+        job.setReducerClass(Reduce.class);   
+        job.setInputFormat(TextInputFormat.class);
+        job.setOutputFormat(TextOutputFormat.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+        JobClient.runJob(job);
+        return 0;
+    }  
+    public static void main(String[] args) throws Exception { 
+        int res = ToolRunner.run(new Configuration(), new InverterCounter(), args);       
+        System.exit(res);
+    }
+}
+</code></pre>
+
+<p>I haven't had a chance to test this, so there may be small bugs. You would probably want to rename the class because it is no longer inverting anything. Finally, the value has been sent to the reducer but it isn't being used, so you could just as easily send a <a href="https://hadoop.apache.org/docs/current/api/org/apache/hadoop/io/NullWritable.html" rel="nofollow"><code>NullWritable</code></a> instead.</p>

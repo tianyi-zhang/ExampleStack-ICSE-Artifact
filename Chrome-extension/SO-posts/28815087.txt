@@ -1,0 +1,165 @@
+<p>To implement a login / registration system using MySql you need a server-side API, for example in PHP to manipulate the database. </p>
+
+<p>You need something like that on the server side:</p>
+
+<pre><code>// check for tag type
+if ($tag == 'login') {
+    // Request type is check Login
+    $email = $_POST['email'];
+    $password = $_POST['password'];
+
+    // check for user
+    $user = $db-&gt;getUserByEmailAndPassword($email, $password);
+    if ($user != false) {
+        // user found
+        $response["error"] = FALSE;
+        $response["uid"] = $user["unique_id"];
+        $response["user"]["name"] = $user["name"];
+        $response["user"]["email"] = $user["email"];
+        $response["user"]["created_at"] = $user["created_at"];
+        $response["user"]["updated_at"] = $user["updated_at"];
+        echo json_encode($response);
+    } else {
+        // user not found
+        // echo json with error = 1
+        $response["error"] = TRUE;
+        $response["error_msg"] = "Incorrect email or password!";
+        echo json_encode($response);
+    }
+</code></pre>
+
+<p>And the function that queries the database:</p>
+
+<pre><code>public function getUserByEmailAndPassword($username, $password) {
+    $query = $this-&gt;dbh-&gt;prepare("SELECT * FROM users2 WHERE username = :username");
+    $query-&gt;bindParam(':username', $username);
+    $result = $query-&gt;execute();
+    // check for results
+    if ($query-&gt;rowCount() &gt; 0) {
+        $result = $query-&gt;fetch(PDO::FETCH_ASSOC);
+        $salt = $result['salt'];
+        $encrypted_password = $result['encrypted_password'];
+        $hash = $this-&gt;checkhashSSHA($salt, $password); 
+        // check for password equality
+        if ($encrypted_password == $hash) {
+            // user authentication details are correct
+            return $result;
+        }
+    } else {
+        // user not found
+        return false;
+    }
+}
+</code></pre>
+
+<p>The android 'calls' the php scripts:</p>
+
+<pre><code>private static String login_tag = "login";
+public void loginUser(String username, String password) throws ExecutionException, InterruptedException {
+    // Building Parameters
+    List&lt;NameValuePair&gt; params = new ArrayList&lt;NameValuePair&gt;();
+    params.add(new BasicNameValuePair("tag", login_tag));
+    params.add(new BasicNameValuePair("username", username));
+    params.add(new BasicNameValuePair("password", password));
+    jsonParser = new DbHandler(activity, this, params).execute();
+}
+</code></pre>
+
+<p>And here is the DbHandler:</p>
+
+<pre><code>  public DbHandler1(Activity activity, MyCallback dbIntf, List&lt;NameValuePair&gt; params) {
+        this.activity = activity;
+        intf = dbIntf;
+        this.params = params;
+    }
+
+
+    public JSONObject makeHttpRequest() {
+        // Making HTTP request
+        try {
+            DefaultHttpClient httpClient = new DefaultHttpClient();
+            HttpPost httpPost = new HttpPost(MainActivity.baseUrl);
+            //If database contains greek characters instantiate with UTF-8 Encoding
+            httpPost.setEntity(new UrlEncodedFormEntity(params, "UTF-8"));
+
+            HttpResponse httpResponse = httpClient.execute(httpPost);
+            HttpEntity httpEntity = httpResponse.getEntity();
+            is = httpEntity.getContent();
+
+        } catch (HttpHostConnectException e) {
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(activity, R.string.connection_error, Toast.LENGTH_LONG).show();
+                }
+            });
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        try {
+            //If database contains greek characters instantiate with UTF-8 Encoding
+            BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    is, "UTF-8"), 8);
+            StringBuilder sb = new StringBuilder();
+            String line = null;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line + "\n");
+            }
+            is.close();
+            json = sb.toString();
+
+        } catch (Exception e) {
+            Log.e("Buffer Error", "Error converting result " + e.toString());
+        }
+        try {
+            jObj = new JSONObject(json);
+        } catch (JSONException e) {
+            Log.e("JSON Parser", "Error parsing data " + e.toString());
+        }
+
+        // return JSON String
+        return jObj;
+    }
+
+
+    @Override
+    protected JSONObject doInBackground(Void... params) {
+        jObj = makeHttpRequest();
+        return jObj;
+    }
+
+    @Override
+    protected void onPostExecute(JSONObject jsonObject) {
+        super.onPostExecute(jsonObject);
+        try {
+            intf.onRemoteCallComplete(jsonObject);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+</code></pre>
+
+<p>So the php scripts 'catches' the tag and if the user exists it returns a JSON response to the device. For example:</p>
+
+<pre><code>{
+    "tag": "login",
+    "success": 1,
+    "error": 0,
+}
+</code></pre>
+
+<p>The data transfered from the MySql server must be JSON encoded.</p>
+
+<p>On the android device you must read the JSON Response and act accordingly.</p>
+
+<p>Take a look here for more details.</p>
+
+<ul>
+<li><a href="http://www.androidhive.info/2012/01/android-login-and-registration-with-php-mysql-and-sqlite/" rel="nofollow">login / registration system</a></li>
+<li><a href="http://www.androidhive.info/2012/01/android-json-parsing-tutorial/" rel="nofollow">json parsing</a></li>
+</ul>

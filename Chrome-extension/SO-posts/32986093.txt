@@ -1,0 +1,110 @@
+<p>There's a problem in how you handle the beacons found. Just take a careful look at where you assign any value for the UUID, major and minor and what goes to the ListAdapter.</p>
+
+<p>In your <code>LeScanCallback</code> you add any found Bluetooth LE devices into the list adapter. You add them as a <code>BluetoothDevice</code> which is just a generic model and knows nothing about the iBeacon specific UUID, major and minor.</p>
+
+<p>You then exctract the UUID, major and minor into member variables of the class. This is done always when the found <code>BluetoothDevice</code> is recognised as an iBeacon. At any time you are storing <strong>just one set</strong> of UUID, major and minor. They are <strong>always values of the latest iBeacon found</strong>.</p>
+
+<p>So instead of having a list of BluetoothDevices you could create a simple class representing an iBeacon with the UUID, major, minor and maybe RSSI and TxPower if you want to do any distance estimation later on. Then in the scan callback do not add BluetoothDevices to the list but add iBeacons at the end of the pattern checking code. Something like:</p>
+
+<pre><code>public BluetoothAdapter.LeScanCallback mLeScanCallback = new BluetoothAdapter.LeScanCallback() {
+
+    @Override
+    public void onLeScan(final BluetoothDevice device, int rssi, byte[] scanRecord) {
+        /* Remove:
+        runOnUiThread(new Runnable() {
+        @Override
+            public void run() {
+                mLeDeviceListAdapter.addDevice(device);
+                mLeDeviceListAdapter.notifyDataSetChanged();
+            }
+        });
+        */
+        int startByte = 2;
+        boolean patternFound = false;
+        while (startByte &lt;= 5) {
+            if (((int) scanRecord[startByte + 2] &amp; 0xff) == 0x02 &amp;&amp; //Identifies an iBeacon
+                    ((int) scanRecord[startByte + 3] &amp; 0xff) == 0x15) { //Identifies correct data length
+                patternFound = true;
+                break;
+            }
+            startByte++;
+        }
+
+        if (patternFound) {
+            byte[] uuidBytes = new byte[16];
+            System.arraycopy(scanRecord, startByte + 4, uuidBytes, 0, 16);
+            String hexString = bytesToHex(uuidBytes);
+
+            //Here is your UUID
+            uuid = hexString.substring(0, 8) + "-" +
+                    hexString.substring(8, 12) + "-" +
+                    hexString.substring(12, 16) + "-" +
+                    hexString.substring(16, 20) + "-" +
+                    hexString.substring(20, 32);
+
+            major_temp = (scanRecord[startByte + 20] &amp; 0xff) * 0x100 + (scanRecord[startByte + 21] &amp; 0xff);
+            major = Integer.toString(major_temp);
+            minor_temp = (scanRecord[startByte + 22] &amp; 0xff) * 0x100 + (scanRecord[startByte + 23] &amp; 0xff);
+            minor = Integer.toString(minor_temp);
+
+            // Add:
+            IBeacon iBeacon = new IBeacon(uuid, major, minor);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    mLeDeviceListAdapter.addDevice(iBeacon);
+                    mLeDeviceListAdapter.notifyDataSetChanged();
+                }
+            });
+        }
+    }
+}
+</code></pre>
+
+<p>Then change your list adapter to use iBeacon objects and not BluetoothDevice objects and fix your code in getView(). At the moment you read the UUID, major and minor from the said member variables where they <strong>always have the values of the latest iBeacon found</strong>.</p>
+
+<p>So instead read the values from the mLeDevices list which now holds iBeacon objects. Something like:</p>
+
+<pre><code>@Override
+public View getView(int i, View view, ViewGroup viewGroup) {
+    ViewHolder viewHolder;
+    if (view == null) {
+        view = mInflator.inflate(R.layout.listitem_device, null);
+        viewHolder = new ViewHolder();
+        viewHolder.deviceAddress = (TextView) view.findViewById(R.id.device_address);
+        viewHolder.deviceName = (TextView) view.findViewById(R.id.device_name);
+        viewHolder.deviceUUID = (TextView) view.findViewById(R.id.device_uuid);
+        viewHolder.deviceMajor = (TextView) view.findViewById(R.id.device_major);
+        viewHolder.deviceMinor = (TextView) view.findViewById(R.id.device_minor);
+        view.setTag(viewHolder);
+    } else {
+        viewHolder = (ViewHolder) view.getTag();
+    }
+
+    BluetoothDevice device = mLeDevices.get(i);
+    final String deviceName = device.getName();
+    if (deviceName != null &amp;&amp; deviceName.length() &gt; 0) {
+        viewHolder.deviceName.setText(deviceName);
+    }
+    else {
+        viewHolder.deviceName.setText(R.string.unknown_device);
+    }
+    viewHolder.deviceAddress.setText(device.getAddress());
+    // Change these:
+    viewHolder.deviceUUID.setText(device.getUuid);
+    viewHolder.deviceMajor.setText(device.getMajor);
+    viewHolder.deviceMinor.setText(device.getMinor);
+
+    return view;
+}
+</code></pre>
+
+<p>You would then need to modify your list adapter's addDevice to compare IBeacon objects instead of BluetoothDevice objects.</p>
+
+<pre><code>public void addDevice(IBeacon device) {
+    // This probably won't without some extra work:        
+    if(!mLeDevices.contains(device)) {
+        mLeDevices.add(device);
+    }
+}
+</code></pre>

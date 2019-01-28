@@ -1,0 +1,575 @@
+<pre><code>        package com.app.cr.cache;
+
+    import java.io.File;
+    import java.io.FileDescriptor;
+    import java.io.FileInputStream;
+    import java.io.FileNotFoundException;
+    import java.io.FileOutputStream;
+    import java.io.IOException;
+    import java.nio.channels.FileChannel;
+    import java.util.Collections;
+    import java.util.Iterator;
+    import java.util.Map;
+    import java.util.Map.Entry;
+    import java.util.Random;
+    import java.util.WeakHashMap;
+    import java.util.concurrent.ExecutorService;
+    import java.util.concurrent.Executors;
+    import java.util.concurrent.atomic.AtomicBoolean;
+
+    import android.app.Activity;
+    import android.content.ContentUris;
+    import android.graphics.Bitmap;
+    import android.graphics.BitmapFactory;
+    import android.graphics.Canvas;
+    import android.graphics.Paint;
+    import android.net.Uri;
+    import android.os.Handler;
+    import android.os.ParcelFileDescriptor;
+    import android.util.SparseArray;
+    import android.util.SparseIntArray;
+
+    import com.app.cr.R;
+    import com.app.cr.ui.ImageViewProgress;
+    import com.app.cr.utility.Utility;
+
+    public class ImageLoader {
+
+        public MemoryCache memoryCache = new MemoryCache();
+        public FileCache fileCache;
+        private Map&lt;ImageViewProgress, String&gt; imageViews = Collections
+                .synchronizedMap(new WeakHashMap&lt;ImageViewProgress, String&gt;());
+        ExecutorService executorService;
+        Handler handler = new Handler();
+        private Activity context;
+
+        static final int default_image = R.drawable.transparent;
+        static final int[] color = new int[] { R.color.first, R.color.second,
+                R.color.third, R.color.fourth, R.color.fifth, R.color.six,
+                R.color.seven, R.color.eight };
+        SparseArray&lt;Bitmap&gt; sparseArrayBitmap = new SparseArray&lt;&gt;();
+        SparseIntArray sparseArrayInt = new SparseIntArray();
+
+        private AtomicBoolean paused = new AtomicBoolean(false);
+        private Object pauseLock = new Object();
+
+        public ImageLoader(Activity context) {
+            this.context = context;
+            fileCache = new FileCache(context);
+            executorService = Executors.newFixedThreadPool(3);
+        }
+
+        public void displayImageResource(int resourceId, ImageViewProgress imageView) {
+            imageView.setImageResource(resourceId);
+            imageView.showImage(true);
+        }
+
+        public void displayImageUri(Uri uri, ImageViewProgress imageView) {
+            if (uri == null) {
+                imageView.setImageResource(R.drawable.ic_people);
+                imageView.showImage(true);
+                return;
+            }
+            imageView.setImageUri(uri);
+            imageView.showImage(true);
+        }
+
+        public void displayImage(String url, ImageViewProgress imageView) {
+            if (url == null || url.length() == 0) {
+                Utility.log("ImageLoader", "url length zero");
+                if (imageView != null) {
+                    imageView.showImage(false);
+                }
+                return;
+            }
+
+            imageViews.put(imageView, url);
+            Bitmap bitmap = memoryCache.get(url);
+            if (bitmap != null) {
+                imageView.setImageBitmap(bitmap);
+            } else {
+                if (sparseArrayInt.get(url.hashCode()) != 0) {
+                    Bitmap b = sparseArrayBitmap.get(sparseArrayInt.get(url
+                            .hashCode()));
+                    if (b != null) {
+                        imageView.setImageBitmap(b);
+                        return;
+                    }
+                }
+                queuePhoto(url, imageView);
+                imageView.setImageResource(default_image);
+                imageView.showImage(false);
+            }
+        }
+
+        private void queuePhoto(String url, ImageViewProgress imageView) {
+            PhotoToLoad p = new PhotoToLoad(url, imageView);
+            executorService.submit(new PhotosLoader(p));
+        }
+
+        // Task for the queue
+        private class PhotoToLoad {
+            public String url;
+            public ImageViewProgress imageView;
+
+            public PhotoToLoad(String u, ImageViewProgress i) {
+                url = u;
+                imageView = i;
+            }
+        }
+
+        class PhotosLoader implements Runnable {
+            PhotoToLoad photoToLoad;
+
+            PhotosLoader(PhotoToLoad photoToLoad) {
+                this.photoToLoad = photoToLoad;
+            }
+
+            @Override
+            public void run() {
+                if (waitIfPaused())
+                    return;
+
+                try {
+                    if (imageViewReused(photoToLoad))
+                        return;
+                    Bitmap bmp = getBitmap(photoToLoad.url);
+                    if (imageViewReused(photoToLoad))
+                        return;
+                    BitmapDisplayer bd = new BitmapDisplayer(bmp, photoToLoad);
+                    handler.post(bd);
+                } catch (Throwable th) {
+                    th.printStackTrace();
+                }
+            }
+        }
+
+        private boolean waitIfPaused() {
+            AtomicBoolean pause = getPaused();
+            if (pause.get()) {
+                synchronized (getPauseLock()) {
+                    if (pause.get()) {
+                        try {
+                            getPauseLock().wait();
+                        } catch (InterruptedException e) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        public Bitmap getBitmap(String url) {
+            File f = FileCache.getFile(url);
+            Bitmap b = decodeFile(f, false);
+            if (b != null) {
+                memoryCache.put(url, b);
+                return b;
+            } else {
+                return getColourBitmap(url);
+            }
+        }
+
+        int lastColorId = 0;
+
+        private int getRandomColor() {
+            int colorId = color[new Random().nextInt(color.length)];
+            if (lastColorId == colorId) {
+                colorId = getRandomColor();
+            }
+            lastColorId = colorId;
+            return colorId;
+        }
+
+        private Bitmap getColourBitmap(String url) {
+            int colorId = getRandomColor();
+
+            sparseArrayInt.put(url.hashCode(), colorId);
+
+            Bitmap bitmap = sparseArrayBitmap.get(colorId);
+            if (bitmap == null) {
+                sparseArrayBitmap.put(colorId, makeColorFillBitmap(colorId));
+                bitmap = sparseArrayBitmap.get(colorId);
+            }
+
+            Utility.log("color :" + colorId, " hash : " + url.hashCode());
+            if (bitmap == null) {
+                return makeColorFillBitmap(colorId);
+            } else {
+                return bitmap;
+            }
+        }
+
+        private Bitmap makeColorFillBitmap(int color) {
+            int width = 150;
+            int height = 150;
+
+            Bitmap outBitmap = Bitmap.createBitmap(width, height,
+                    Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(outBitmap);
+            Paint paint = new Paint();
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(context.getResources().getColor(color));
+            canvas.drawRect(0, 0, width, height, paint);
+
+            return outBitmap;
+        }
+
+        public static Bitmap decodeFile(File f, boolean useForFileCheck) {
+            if (f == null || !f.exists()) {
+                return null;
+            }
+
+            try {
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                FileInputStream stream1 = new FileInputStream(f);
+                BitmapFactory.decodeStream(stream1, null, o);
+                stream1.close();
+                final int REQUIRED_SIZE = 160;
+
+                int width_tmp = o.outWidth, height_tmp = o.outHeight;
+                int scale = 1;
+                while (true) {
+                    if (width_tmp / 2 &lt; REQUIRED_SIZE
+                            || height_tmp / 2 &lt; REQUIRED_SIZE)
+                        break;
+                    width_tmp /= 2;
+                    height_tmp /= 2;
+                    scale *= 2;
+                }
+                BitmapFactory.Options o2 = new BitmapFactory.Options();
+                o2.inSampleSize = scale;
+                FileInputStream stream2 = new FileInputStream(f);
+
+                Bitmap bitmap = BitmapFactory.decodeStream(stream2, null, o2);
+                stream2.close();
+                return bitmap;
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        boolean imageViewReused(PhotoToLoad photoToLoad) {
+            String tag = imageViews.get(photoToLoad.imageView);
+            if (tag == null || !tag.equals(photoToLoad.url))
+                return true;
+            return false;
+        }
+
+        class BitmapDisplayer implements Runnable {
+            Bitmap bitmap;
+            PhotoToLoad photoToLoad;
+
+            public BitmapDisplayer(Bitmap b, PhotoToLoad p) {
+                bitmap = b;
+                photoToLoad = p;
+            }
+
+            public void run() {
+                if (imageViewReused(photoToLoad))
+                    return;
+                if (bitmap != null)
+                    photoToLoad.imageView.setImageBitmap(bitmap);
+                else
+                    photoToLoad.imageView.setImageResource(default_image);
+            }
+        }
+
+        public void clearCache() {
+
+            if (imageViews != null) {
+                imageViews.clear();
+            }
+
+            Map&lt;String, Bitmap&gt; cache = memoryCache.getCache();
+            Iterator&lt;Entry&lt;String, Bitmap&gt;&gt; entries = cache.entrySet().iterator();
+            while (entries.hasNext()) {
+                Entry&lt;String, Bitmap&gt; thisEntry = (Entry&lt;String, Bitmap&gt;) entries
+                        .next();
+                Bitmap value = (Bitmap) thisEntry.getValue();
+                if (value != null) {
+                    value.recycle();
+                    value = null;
+                }
+                entries.remove();
+            }
+
+            memoryCache.clear();
+            // fileCache.clear();
+            if (sparseArrayBitmap != null) {
+                sparseArrayBitmap.clear();
+            }
+            if (sparseArrayInt != null) {
+                sparseArrayInt.clear();
+            }
+            Utility.log("===Memory Cache===", "All Cleared.");
+        }
+
+        public static boolean getAlbumart(File f, Long album_id, Activity activity) {
+            try {
+
+                if (bitmap != null) {
+                    bitmap.recycle();
+                    bitmap = null;
+                }
+
+                final Uri sArtworkUri = Uri
+                        .parse("content://media/external/audio/albumart");
+
+                Uri uri = ContentUris.withAppendedId(sArtworkUri, album_id);
+
+                ParcelFileDescriptor pfd = activity.getContentResolver()
+                        .openFileDescriptor(uri, "r");
+
+                if (pfd != null) {
+                    FileDescriptor fd = pfd.getFileDescriptor();
+                    copyFdToFile(fd, f);
+                }
+
+                if (f != null &amp;&amp; f.exists()) {
+                    if (bitmap.isRecycled()) {
+                        bitmap = decodeFile(f, false);
+
+                        FileOutputStream outputStream = null;
+                        try {
+                            outputStream = new FileOutputStream(f);
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 100,
+                                    outputStream);
+                        } catch (Exception e) {
+                        } finally {
+                            if (outputStream != null) {
+                                outputStream.flush();
+                                outputStream.close();
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                return false;
+            }
+            return true;
+        }
+
+        private static Bitmap bitmap = null;
+
+        public static void copyFdToFile(FileDescriptor src, File dst)
+                throws IOException {
+
+            FileChannel inChannel = new FileInputStream(src).getChannel();
+            FileChannel outChannel = new FileOutputStream(dst).getChannel();
+            try {
+                inChannel.transferTo(0, inChannel.size(), outChannel);
+            } finally {
+                if (inChannel != null)
+                    inChannel.close();
+                if (outChannel != null)
+                    outChannel.close();
+            }
+        }
+
+        public void onPaused() {
+            paused.set(true);
+        }
+
+        public void onResumed() {
+            paused.set(false);
+            synchronized (pauseLock) {
+                pauseLock.notifyAll();
+            }
+        }
+
+        public AtomicBoolean getPaused() {
+            return paused;
+        }
+
+        public void setPaused(AtomicBoolean paused) {
+            this.paused = paused;
+        }
+
+        public Object getPauseLock() {
+            return pauseLock;
+        }
+
+        public void setPauseLock(Object pauseLock) {
+            this.pauseLock = pauseLock;
+        }
+    }
+
+
+package com.app.cr.cache;
+
+import java.io.File;
+
+import android.content.Context;
+
+public class FileCache {
+
+    public static File cacheDir;
+
+    public FileCache(Context context) {
+        if (android.os.Environment.getExternalStorageState().equals(
+                android.os.Environment.MEDIA_MOUNTED)) {
+            cacheDir = new File(
+                    android.os.Environment.getExternalStorageDirectory(),
+                    "Player");
+        } else {
+            cacheDir = context.getCacheDir();
+        }
+
+        if (!cacheDir.exists()) {
+            cacheDir.mkdirs();
+        }
+    }
+
+    public static File getFile(String url) {
+        String filename = String.valueOf(url.hashCode());
+        File f = new File(cacheDir, filename);
+        return f;
+    }
+
+    public static File getFileAbsoluteFileName(String url) {
+        File f = new File(cacheDir, url);
+        return f;
+    }
+
+    public void clear() {
+        File[] files = cacheDir.listFiles();
+        if (files == null)
+            return;
+        for (File f : files)
+            f.delete();
+    }
+
+}
+
+
+
+package com.app.cr.cache;
+
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Map.Entry;
+
+import android.graphics.Bitmap;
+import android.util.LruCache;
+
+import com.app.cr.utility.Utility;
+
+public class MemoryCache {
+
+    private static final String TAG = "MemoryCache.java";
+
+    private Map&lt;String, Bitmap&gt; cache = Collections
+            .synchronizedMap(new LinkedHashMap&lt;String, Bitmap&gt;(10, 1.5f, true));
+
+    private LruCache&lt;String, Bitmap&gt; lruCache = null;
+
+    private long size = 0;
+    private long limit = 1000000;
+
+    public MemoryCache() {
+        setLimit(Runtime.getRuntime().maxMemory() / 8);
+        lruCache = new LruCache&lt;String, Bitmap&gt;((int) Runtime.getRuntime()
+                .maxMemory() / 8) {
+            @Override
+            protected int sizeOf(String key, Bitmap value) {
+                return getBitmapSize(value);
+            }
+        };
+    }
+
+    public Map&lt;String, Bitmap&gt; getCache() {
+        return cache;
+    }
+
+    public void setLimit(long new_limit) {
+        limit = new_limit;
+        Utility.log(TAG, "MemoryCache will use up to " + limit / 1024. / 1024.
+                + "MB");
+    }
+
+    public synchronized Bitmap get(String id) {
+        if (lruCache != null) {
+            final Bitmap memBitmap = lruCache.get(id);
+            if (memBitmap != null) {
+                return memBitmap;
+            }
+        }
+
+        try {
+            if (!cache.containsKey(id))
+                return null;
+            return cache.get(id);
+        } catch (NullPointerException ex) {
+            ex.printStackTrace();
+            return null;
+        }
+    }
+
+    public synchronized void put(String id, Bitmap bitmap) {
+        if (id == null || bitmap == null) {
+            return;
+        }
+
+        // Add to memory cache
+        if (lruCache != null &amp;&amp; lruCache.get(id) == null) {
+            lruCache.put(id, bitmap);
+            return;
+        }
+
+        try {
+            if (cache.containsKey(id))
+                size -= getSizeInBytes(cache.get(id));
+            cache.put(id, bitmap);
+            size += getSizeInBytes(bitmap);
+            checkSize();
+        } catch (Throwable th) {
+            th.printStackTrace();
+        }
+    }
+
+    public static int getBitmapSize(Bitmap bitmap) {
+        return bitmap.getRowBytes() * bitmap.getHeight();
+    }
+
+    private synchronized void checkSize() {
+        // Utility.log(TAG, "cache size=" + size + " length=" + cache.size());
+        if (size &gt; limit) {
+            Iterator&lt;Entry&lt;String, Bitmap&gt;&gt; iter = cache.entrySet().iterator();
+            while (iter.hasNext()) {
+                Entry&lt;String, Bitmap&gt; entry = iter.next();
+                size -= getSizeInBytes(entry.getValue());
+                iter.remove();
+                if (size &lt;= limit)
+                    break;
+            }
+            // Utility.log(TAG, "Clean cache. New size " + cache.size());
+        }
+    }
+
+    public void clear() {
+        try {
+            if (lruCache != null)
+                lruCache.evictAll();
+
+            cache.clear();
+            size = 0;
+        } catch (NullPointerException ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    long getSizeInBytes(Bitmap bitmap) {
+        if (bitmap == null)
+            return 0;
+        return bitmap.getRowBytes() * bitmap.getHeight();
+    }
+}
+</code></pre>

@@ -1,0 +1,128 @@
+<p>Instead of polling the variable the whole time you should try to transfer the communication to the handler (either your <code>ChatClientInitializer</code> or an extra handler that you add last). Give this handler a method that you call when a new message was entered. The handler then writes to the channel.</p>
+
+<p>Maybe this example helps:</p>
+
+<pre><code>public class Client implements Runnable {
+
+    String host = "localhost";
+    int port = 9128;
+    private final ClientHandler clientHandler = new ClientHandler();
+    private boolean isRunning = false;
+    private ExecutorService executor = null;
+
+
+    public static void main(String[] args) {
+        Client client = new Client();
+        client.startClient();
+        client.writeMessage("random_text");
+        //client.stopClient();  //call this at some point to shutdown the client
+    }
+
+    public synchronized void startClient() {
+        if (!isRunning) {
+            executor = Executors.newFixedThreadPool(1);
+            executor.execute(this);
+            isRunning = true;
+        }
+    }
+
+    public synchronized boolean stopClient() {
+        boolean bReturn = true;
+        if (isRunning) {
+            if (executor != null) {
+                executor.shutdown();
+                try {
+                    executor.shutdownNow();
+                    if (executor.awaitTermination(calcTime(10, 0.66667), TimeUnit.SECONDS)) {
+                        if (!executor.awaitTermination(calcTime(10, 0.33334), TimeUnit.SECONDS)) {
+                            bReturn = false;
+                        }
+                    }
+                } catch (InterruptedException ie) {
+                    executor.shutdownNow();
+                    Thread.currentThread().interrupt();
+                } finally {
+                    executor = null;
+                }
+            }
+            isRunning = false;
+        }
+        return bReturn;
+    }
+
+    private long calcTime(int nTime, double dValue) {
+        return (long) ((double) nTime * dValue);
+    }
+
+    @Override
+    public void run() {
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            Bootstrap b = new Bootstrap();
+            b.group(workerGroup);
+            b.channel(NioSocketChannel.class);
+            b.option(ChannelOption.SO_KEEPALIVE, true);
+            b.handler(new ChannelInitializer&lt;SocketChannel&gt;() {
+                @Override
+                public void initChannel(SocketChannel ch) throws Exception {
+                    ChannelPipeline pipeline = ch.pipeline(); 
+                    pipeline.addLast(new DelimiterBasedFrameDecoder(8192, Delimiters.lineDelimiter()));
+                    pipeline.addLast(new StringDecoder());
+                    pipeline.addLast(new StringEncoder());
+                    pipeline.addLast(clientHandler);
+                }
+            });
+
+            ChannelFuture f = b.connect(host, port).sync();
+
+            f.channel().closeFuture().sync();
+        } catch (InterruptedException ex) {
+            // do nothing
+        } finally {
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    public void writeMessage(String msg) {
+        clientHandler.sendMessage(msg);
+    }
+}
+</code></pre>
+
+<p>A very basic ClientHandler:</p>
+
+<pre><code>public class ClientHandler extends SimpleChannelInboundHandler&lt;String&gt; {
+    ChannelHandlerContext ctx;
+
+    public void sendMessage(String msgToSend) {
+        if (ctx != null) {
+            ChannelFuture cf = ctx.write(Unpooled.copiedBuffer(msgToSend, CharsetUtil.UTF_8));
+            ctx.flush();
+            if (!cf.isSuccess()) {
+                System.out.println("Send failed: " + cf.cause());
+            }
+        } else {
+            //ctx not initialized yet. you were too fast. do something here
+        }
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        cause.printStackTrace();
+        ctx.close();
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext arg0, String msg) throws Exception {
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+    }
+}
+</code></pre>

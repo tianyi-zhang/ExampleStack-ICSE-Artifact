@@ -1,0 +1,152 @@
+<p>For analyzing bytecode, I would recommend <a href="http://asm.ow2.org/">ASM</a>. Given a list of Classes to analyze, a visitor can be made which finds the method calls you're interested in. One implementation which analyses classes in a jar file is below.</p>
+
+<p>Note that ASM uses <a href="http://asm.ow2.org/current/doc/javadoc/user/index.html">internalNames</a> with '/' instead of '.' as a separator. Specify the target method as a <a href="http://asm.ow2.org/current/doc/javadoc/user/org/objectweb/asm/commons/Method.html#getMethod%28java.lang.String%29">standard declaration</a> without modifiers.</p>
+
+<p>For example, to list methods that could be calling System.out.println("foo") in the java runtime jar:</p>
+
+<pre><code>java -cp "classes;asm-3.1.jar;asm-commons-3.1.jar" App \
+    c:/java/jdk/jre/lib/rt.jar \
+    java/io/PrintStream  "void println(String)"
+</code></pre>
+
+<p><em>Edit</em>: source and line numbers added: Note that this only indicates the last target method invocation per calling method - the original q only wanted to know <em>which</em> methods. I leave it as an exercise for the reader to show line numbers of the calling method declaration, or the line numbers of every target invocation, depending on what you're actually after. :)</p>
+
+<p>results in:</p>
+
+<pre><code>LogSupport.java:44 com/sun/activation/registries/LogSupport log (Ljava/lang/String;)V
+LogSupport.java:50 com/sun/activation/registries/LogSupport log (Ljava/lang/String;Ljava/lang/Throwable;)V
+...
+Throwable.java:498 java/lang/Throwable printStackTraceAsCause (Ljava/io/PrintStream;[Ljava/lang/StackTraceElement;)V
+--
+885 methods invoke java/io/PrintStream println (Ljava/lang/String;)V
+</code></pre>
+
+<p>source:</p>
+
+<pre><code>public class App {
+    private String targetClass;
+    private Method targetMethod;
+
+    private AppClassVisitor cv;
+
+    private ArrayList&lt;Callee&gt; callees = new ArrayList&lt;Callee&gt;();
+
+    private static class Callee {
+        String className;
+        String methodName;
+        String methodDesc;
+        String source;
+        int line;
+
+        public Callee(String cName, String mName, String mDesc, String src, int ln) {
+            className = cName; methodName = mName; methodDesc = mDesc; source = src; line = ln;
+        }
+    }
+
+    private class AppMethodVisitor extends MethodAdapter {
+
+        boolean callsTarget;
+        int line;
+
+        public AppMethodVisitor() { super(new EmptyVisitor()); }
+
+        public void visitMethodInsn(int opcode, String owner, String name, String desc) {
+            if (owner.equals(targetClass)
+                    &amp;&amp; name.equals(targetMethod.getName())
+                    &amp;&amp; desc.equals(targetMethod.getDescriptor())) {
+                callsTarget = true;
+            }
+        }
+
+        public void visitCode() {
+            callsTarget = false;
+        }
+
+        public void visitLineNumber(int line, Label start) {
+            this.line = line;
+        }
+
+        public void visitEnd() {
+            if (callsTarget)
+                callees.add(new Callee(cv.className, cv.methodName, cv.methodDesc, 
+                        cv.source, line));
+        }
+    }
+
+    private class AppClassVisitor extends ClassAdapter {
+
+        private AppMethodVisitor mv = new AppMethodVisitor();
+
+        public String source;
+        public String className;
+        public String methodName;
+        public String methodDesc;
+
+        public AppClassVisitor() { super(new EmptyVisitor()); }
+
+        public void visit(int version, int access, String name,
+                          String signature, String superName, String[] interfaces) {
+            className = name;
+        }
+
+        public void visitSource(String source, String debug) {
+            this.source = source;
+        }
+
+        public MethodVisitor visitMethod(int access, String name, 
+                                         String desc, String signature,
+                                         String[] exceptions) {
+            methodName = name;
+            methodDesc = desc;
+
+            return mv;
+        }
+    }
+
+
+    public void findCallingMethodsInJar(String jarPath, String targetClass,
+                                        String targetMethodDeclaration) throws Exception {
+
+        this.targetClass = targetClass;
+        this.targetMethod = Method.getMethod(targetMethodDeclaration);
+
+        this.cv = new AppClassVisitor();
+
+        JarFile jarFile = new JarFile(jarPath);
+        Enumeration&lt;JarEntry&gt; entries = jarFile.entries();
+
+        while (entries.hasMoreElements()) {
+            JarEntry entry = entries.nextElement();
+
+            if (entry.getName().endsWith(".class")) {
+                InputStream stream = new BufferedInputStream(jarFile.getInputStream(entry), 1024);
+                ClassReader reader = new ClassReader(stream);
+
+                reader.accept(cv, 0);
+
+                stream.close();
+            }
+        }
+    }
+
+
+    public static void main( String[] args ) {
+        try {
+            App app = new App();
+
+            app.findCallingMethodsInJar(args[0], args[1], args[2]);
+
+            for (Callee c : app.callees) {
+                System.out.println(c.source+":"+c.line+" "+c.className+" "+c.methodName+" "+c.methodDesc);
+            }
+
+            System.out.println("--\n"+app.callees.size()+" methods invoke "+
+                    app.targetClass+" "+
+                    app.targetMethod.getName()+" "+app.targetMethod.getDescriptor());
+        } catch(Exception x) {
+            x.printStackTrace();
+        }
+    }
+
+}
+</code></pre>

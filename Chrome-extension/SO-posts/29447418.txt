@@ -1,0 +1,446 @@
+<p>Well, for this, we have to write a proper game loop. Let's start one by one:</p>
+
+<p>Here's my <code>GameFrame</code>:</p>
+
+<pre><code>import javax.swing.*;
+import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+
+public abstract class GameFrame extends JFrame
+{
+  private GamePanel gamePanel;
+
+  public GameFrame (String gameTitle, GamePanel gamePanel)
+  {
+    super (gameTitle);
+
+    this.gamePanel = gamePanel;
+
+    setDefaultCloseOperation (WindowConstants.EXIT_ON_CLOSE);
+
+    addWindowListener (new FrameListener ());
+
+    getContentPane ().setLayout (new GridBagLayout ());
+    getContentPane ().add (gamePanel);
+
+    pack ();
+    setLocationRelativeTo (null);
+    setResizable (false);
+    setVisible (true);
+  }
+
+  public class FrameListener extends WindowAdapter
+  {
+    public void windowActivated (WindowEvent event)
+    {
+      gamePanel.setWindowPaused (false);
+    }
+
+    public void windowDeactivated (WindowEvent event)
+    {
+      gamePanel.setWindowPaused (true);
+    }
+
+    public void windowDeiconified (WindowEvent event)
+    {
+      gamePanel.setWindowPaused (false);
+    }
+
+    public void windowIconified (WindowEvent event)
+    {
+      gamePanel.setWindowPaused (true);
+    }
+
+    public void windowClosing (WindowEvent event)
+    {
+      gamePanel.stopGame ();
+    }
+  }
+}
+</code></pre>
+
+<p>Its an abstract class, and all it does is put a <code>GamePanel</code> in it, and make itself visible when initialised.</p>
+
+<p>Here's my <code>GamePanel</code> which implements a game loop:</p>
+
+<pre><code>import javax.swing.*;
+import java.awt.*;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+
+public abstract class GamePanel extends JPanel implements Runnable
+{
+  private int panelWidth;
+  private int panelHeight;
+
+  private Thread animator;
+
+  private volatile boolean running = false;
+  private volatile boolean isUserPaused = false;
+  private volatile boolean isWindowPaused = false;
+
+  private Graphics2D dbg;
+  private Image dbImage = null;
+
+  private static final int NO_DELAYS_PER_YIELD = 16;
+  private static final int MAX_FRAME_SKIPS = 5;
+
+  private Color backgroundColor;
+
+  private long period;
+
+  public GamePanel (int width, int height, long fps, Color backgroundColor)
+  {
+    this.panelWidth = width;
+    this.panelHeight = height;
+
+    this.backgroundColor = backgroundColor;
+
+    this.period = 1000000L * (long) 1000.0 / fps;
+
+    setBackground (backgroundColor);
+    setPreferredSize (new Dimension (panelWidth, panelHeight));
+
+    setFocusable (true);
+    requestFocus ();
+    readyForPause ();
+
+    addKeyListener (new KeyAdapter ()
+    {
+      public void keyPressed (KeyEvent e)
+      {
+        consumeKeyPressed (e.getKeyCode ());
+      }
+    });
+  }
+
+  protected abstract void consumeKeyPressed (int keyCode);
+
+  protected abstract void renderGame (Graphics2D graphics);
+
+  protected abstract void updateGame ();
+
+  @Override
+  public void addNotify ()
+  {
+    super.addNotify ();
+    startGame ();
+  }
+
+  protected void startGame ()
+  {
+    if (animator == null || ! running)
+    {
+      animator = new Thread (this);
+      animator.start ();
+    }
+  }
+
+  protected void stopGame ()
+  {
+    running = false;
+  }
+
+  private void readyForPause ()
+  {
+    addKeyListener (new KeyAdapter ()
+    {
+      public void keyPressed (KeyEvent e)
+      {
+        int keyCode = e.getKeyCode ();
+        if ((keyCode == KeyEvent.VK_ESCAPE) || (keyCode == KeyEvent.VK_Q)
+          || (keyCode == KeyEvent.VK_END) || (keyCode == KeyEvent.VK_P)
+          || ((keyCode == KeyEvent.VK_C) &amp;&amp; e.isControlDown ()))
+        {
+          setUserPaused (! isUserPaused);
+        }
+      }
+    });
+  }
+
+  public void run ()
+  {
+    long beforeTime, afterTime, timeDiff, sleepTime;
+    long overSleepTime = 0L;
+    int noDelays = 0;
+    long excess = 0L;
+
+    beforeTime = System.nanoTime ();
+
+    running = true;
+
+    while (running)
+    {
+      requestFocus ();
+      gameUpdate ();
+      gameRender ();
+      paintScreen ();
+
+      afterTime = System.nanoTime ();
+
+      timeDiff = afterTime - beforeTime;
+      sleepTime = (period - timeDiff) - overSleepTime;
+
+      if (sleepTime &gt; 0)
+      {
+        try
+        {
+          Thread.sleep (sleepTime / 1000000L);
+        }
+        catch (InterruptedException ignored)
+        {
+        }
+
+        overSleepTime = (System.nanoTime () - afterTime - sleepTime);
+      }
+      else
+      {
+        excess -= sleepTime;
+        overSleepTime = 0L;
+
+        if (++ noDelays &gt;= NO_DELAYS_PER_YIELD)
+        {
+          Thread.yield ();
+          noDelays = 0;
+        }
+      }
+
+      beforeTime = System.nanoTime ();
+
+      int skips = 0;
+
+      while ((excess &gt; period) &amp;&amp; (skips &lt; MAX_FRAME_SKIPS))
+      {
+        excess -= period;
+        gameUpdate ();
+        skips++;
+      }
+    }
+    System.exit (0);
+  }
+
+  private void gameUpdate ()
+  {
+    if (! isUserPaused &amp;&amp; ! isWindowPaused)
+    {
+      updateGame ();
+    }
+  }
+
+  private void gameRender ()
+  {
+    if (dbImage == null)
+    {
+      dbImage = createImage (panelWidth, panelHeight);
+      if (dbImage == null)
+      {
+        System.out.println ("Image is null.");
+        return;
+      }
+      else
+      {
+        dbg = (Graphics2D) dbImage.getGraphics ();
+      }
+    }
+
+    dbg.setColor (backgroundColor);
+    dbg.fillRect (0, 0, panelWidth, panelHeight);
+
+    renderGame (dbg);
+  }
+
+  private void paintScreen ()
+  {
+    Graphics2D g;
+
+    try
+    {
+      g = (Graphics2D) this.getGraphics ();
+      if ((g != null) &amp;&amp; (dbImage != null))
+      {
+        g.drawImage (dbImage, 0, 0, null);
+      }
+
+      Toolkit.getDefaultToolkit ().sync ();
+
+      if (g != null)
+      {
+        g.dispose ();
+      }
+    }
+    catch (Exception e)
+    {
+      System.out.println ("Graphics context error : " + e);
+    }
+  }
+
+  public void setWindowPaused (boolean isPaused)
+  {
+    isWindowPaused = isPaused;
+  }
+
+  public void setUserPaused (boolean isPaused)
+  {
+    isUserPaused = isPaused;
+  }
+}
+</code></pre>
+
+<p>This again is an abstract class. Its abstract for reusability purpose. You need not know the exact implementation of my game loop. You can create your own custom game panel that inherits from it, and implement the abstract methods of it, and everything will be good to go.</p>
+
+<p>Lets create a <code>Box</code> now:</p>
+
+<pre><code>import java.awt.*;
+
+public class Box extends Rectangle
+{
+  private Color color;
+  private Direction currentDirection = Direction.None;
+  private int speed;
+
+  public Box (int size, int speed, Color color)
+  {
+    super (size, size);
+
+    this.speed = speed;
+    this.color = color;
+  }
+
+  public void update ()
+  {
+    switch (currentDirection)
+    {
+      case None:
+        break;
+      case North:
+        y -= speed;
+        break;
+      case South:
+        y += speed;
+        break;
+      case East:
+        x += speed;
+        break;
+      case West:
+        x -= speed;
+        break;
+    }
+  }
+
+  public void draw (Graphics2D graphics)
+  {
+    graphics.setColor (color);
+
+    graphics.fill (this);
+  }
+
+  public void setDirection (Direction direction)
+  {
+    currentDirection = direction;
+  }
+}
+</code></pre>
+
+<p>Nothing out of the ordinary here. Its a <code>Rectangle</code> shape, which has <code>update</code> method to update its state based on the <code>Direction</code> it has and a <code>draw</code> method that renders it on screen using the <code>graphics</code> object as context.</p>
+
+<p>The <code>Direction</code> enum used in <code>Box</code> looks as follows:</p>
+
+<pre><code>public enum Direction
+{
+  None,
+  North,
+  South,
+  East,
+  West
+}
+</code></pre>
+
+<p>So now its time to create our own custom <code>BoxPanel</code> that will inherit from <code>GamePanel</code>. Here's how it looks like:</p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.KeyEvent;
+
+public class BoxPanel extends GamePanel
+{
+  private Box box;
+
+  public BoxPanel ()
+  {
+    super (800, 600, 60, Color.lightGray);
+
+    box = new Box (80, 5, Color.darkGray);
+  }
+
+  @Override
+  protected void consumeKeyPressed (int keyCode)
+  {
+    switch (keyCode)
+    {
+      case KeyEvent.VK_W:
+        box.setDirection (Direction.North);
+        break;
+      case KeyEvent.VK_S:
+        box.setDirection (Direction.South);
+        break;
+      case KeyEvent.VK_D:
+        box.setDirection (Direction.East);
+        break;
+      case KeyEvent.VK_A:
+        box.setDirection (Direction.West);
+        break;
+      case KeyEvent.VK_SPACE:
+        box.setDirection (Direction.None);
+        break;
+    }
+  }
+
+  @Override
+  protected void renderGame (Graphics2D graphics)
+  {
+    box.draw (graphics);
+  }
+
+  @Override
+  protected void updateGame ()
+  {
+    box.update ();
+  }
+}
+</code></pre>
+
+<p>It basically creates a <code>box</code> and implements the abstract methods of the <code>GamePanel</code> where all it does is update the box and render the box using appropriate methods present.</p>
+
+<p>The <code>consumeKeyPressed</code> is all about handling key presses, where all I do is set the direction of the <code>box</code> appropriately.</p>
+
+<p>And so finally comes my <code>BoxFrame</code> which wraps everything together into a runnable demonstration:</p>
+
+<pre><code>public class BoxFrame extends GameFrame
+{
+  public BoxFrame ()
+  {
+    super ("Box Demo", new BoxPanel ());
+  }
+
+  public static void main (String[] args)
+  {
+    new BoxFrame ();
+  }
+}
+</code></pre>
+
+<p>That's it!</p>
+
+<p>You can use <code>GameFrame</code> and <code>GamePanel</code> in your own projects too. Abstraction really pays off. Doesn't it?</p>
+
+<p>You need not worry if you don't understand part of the game loop or anything. By repeated reading of the code, you'll eventually understand it.</p>
+
+<p>This is a runnable demonstration that shows how you can create smooth movements. I'd suggest you also look into interpolation for creating smooth movements.</p>
+
+<p>You can tweak the <code>FPS</code> value while creating the <code>BoxPanel</code> to vary the smooth factor of the game.</p>
+
+<p>Run the code, read it, re-read it, understand it. Then write it yourself as practice.</p>
+
+<p>FYI, my game loop uses a concept called <a href="http://en.wikipedia.org/wiki/Multiple_buffering" rel="nofollow">Double Buffering</a> for rendering the objects smoothly on screen.</p>
+
+<p>You can create other objects too that have <code>update</code> and <code>draw</code> method, and can put their calls in the <code>updateGame</code> and <code>renderGame</code> method of your custom panel, and those objects will appropriately be rendered as well.</p>

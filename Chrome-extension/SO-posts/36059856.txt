@@ -1,0 +1,82 @@
+<p>There is no sure what to do this as different objects can have both the same System.identityHashCode() and hashCode(). You can create two objects at will with are the same for both of these using Unsafe, and randomly if you create enough.</p>
+
+<pre><code>public class UnsafeIdentityDemo {
+
+    static final Unsafe UNSAFE;
+
+    static {
+        try {
+            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+            theUnsafe.setAccessible(true);
+            UNSAFE = (Unsafe) theUnsafe.get(null);
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    public static void setIdentityHashCode(Object o, int code) {
+        UNSAFE.putInt(o, 1l, code &amp; 0x7FFF_FFF);
+    }
+
+    public static void main(String[] args) throws NoSuchFieldException, IllegalAccessException {
+        Double d = 1.0;
+        Double d2 = 1.0;
+        setIdentityHashCode(d, 1);
+        setIdentityHashCode(d2, 1);
+        System.out.println("d: "+d+" System.identityHashCode(d): "+System.identityHashCode(d));
+        System.out.println("d2: "+d2+" System.identityHashCode(d2): "+System.identityHashCode(d2));
+        System.out.println("d == d2: " + (d == d2));
+    }
+}
+</code></pre>
+
+<p>prints</p>
+
+<pre><code>d: 1.0 System.identityHashCode(d): 1
+d2: 1.0 System.identityHashCode(d2): 1
+d == d2: false
+</code></pre>
+
+<p>What you could do is assign the objects based on the order they are discovered (IntelliJ's debugger does this)</p>
+
+<pre><code>public class UniversalComparator implements Comparator&lt;Object&gt; {
+    @Override
+    public int compare(Object o1, Object o2) {
+        if (o1 == o2)
+            return 0;
+        int cmp = compare(o1.getClass(), o2.getClass());
+        // if the classes are the same, and they are Comparable.
+        if (cmp == 0 &amp;&amp; o1 instanceof Comparable)
+            cmp = ((Comparable) o1).compareTo(o2);
+        // otherwise use the built in toString/hashCode/identityHashCode
+        if (cmp == 0)
+            cmp = Integer.compare(o1.toString(), o2.toString());
+        if (cmp == 0)
+            cmp = Integer.compare(o1.hashCode(), o2.hashCode());
+        if (cmp == 0)
+            cmp = Integer.compare(System.identityHashCode(o1), System.identityHashCode(o2));
+        // otherwise generate a unique id for them
+        if (cmp == 0)
+            cmp = Integer.compare(uniqueId(o1), uniqueId(o2));
+        return cmp;
+    }
+
+    final Map&lt;Object, Integer&gt;  uniqueId = new IdentityHashMap&lt;&gt;();
+    private synchronized int uniqueId(Object o) {
+        return uniqueId.computeIfAbsent(o, k -&gt; uniqueId.size());
+    }
+}
+</code></pre>
+
+<p>This will ensure that all object of different types will be</p>
+
+<ul>
+<li>sorted by class name first.</li>
+<li>if the same class and <code>Comparable</code> use the built in compare.</li>
+<li>otherwise if the same class, compare by <code>toString()</code>, then <code>hashCode()</code>, then <code>System.identityHashCode</code></li>
+<li>otherwise generate a unique id.</li>
+</ul>
+
+<p>this means for most objects you will get a predictable sort order.</p>
+
+<p>Note: this will slowly build up a map of all the conflicting objects.  It will be small but is a potential source of memory leak. A <code>WeakIdentityHashMap</code> would be better.</p>

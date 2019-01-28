@@ -1,0 +1,95 @@
+<p>I implemented a subclass of <em>HttpStack</em> named <em>FakeHttpStack</em> that load fake response body from local file located in res/raw. I did this for development purpose, i.e., I can develop something for new API before server is ready, but you may learn something (e.g., overriding HttpStack#peformRequest and createEntity) from here.</p>
+
+<pre><code>/**
+ * Fake {@link HttpStack} that returns the fake content using resource file in res/raw.
+ */
+class FakeHttpStack implements HttpStack {
+    private static final String DEFAULT_STRING_RESPONSE = "Hello";
+    private static final String DEFAULT_JSON_RESPONSE = " {\"a\":1,\"b\":2,\"c\":3}";
+    private static final String URL_PREFIX = "http://example.com/";
+    private static final String LOGGER_TAG = "STACK_OVER_FLOW";
+
+    private static final int SIMULATED_DELAY_MS = 500;
+    private final Context context;
+
+    FakeHttpStack(Context context) {
+        this.context = context;
+    }
+
+    @Override
+    public HttpResponse performRequest(Request&lt;?&gt; request, Map&lt;String, String&gt; stringStringMap)
+            throws IOException, AuthFailureError {
+        try {
+            Thread.sleep(SIMULATED_DELAY_MS);
+        } catch (InterruptedException e) {
+        }
+        HttpResponse response
+                = new BasicHttpResponse(new BasicStatusLine(HttpVersion.HTTP_1_1, 200, "OK"));
+        List&lt;Header&gt; headers = defaultHeaders();
+        response.setHeaders(headers.toArray(new Header[0]));
+        response.setLocale(Locale.JAPAN);
+        response.setEntity(createEntity(request));
+        return response;
+    }
+
+    private List&lt;Header&gt; defaultHeaders() {
+        DateFormat dateFormat = new SimpleDateFormat("EEE, dd mmm yyyy HH:mm:ss zzz");
+        return Lists.&lt;Header&gt;newArrayList(
+                new BasicHeader("Date", dateFormat.format(new Date())),
+                new BasicHeader("Server",
+                        /* Data below is header info of my server */
+                        "Apache/1.3.42 (Unix) mod_ssl/2.8.31 OpenSSL/0.9.8e")
+        );
+    }
+
+    /**
+     * returns the fake content using resource file in res/raw. fake_res_foo.txt is used for
+     * request to http://example.com/foo
+     */
+    private HttpEntity createEntity(Request request) throws UnsupportedEncodingException {
+        String resourceName = constructFakeResponseFileName(request);
+        int resourceId = context.getResources().getIdentifier(
+                resourceName, "raw", context.getApplicationContext().getPackageName());
+        if (resourceId == 0) {
+            Log.w(LOGGER_TAG, "No fake file named " + resourceName
+                    + " found. default fake response should be used.");
+        } else {
+            InputStream stream = context.getResources().openRawResource(resourceId);
+            try {
+                String string = CharStreams.toString(new InputStreamReader(stream, Charsets.UTF_8));
+                return new StringEntity(string);
+            } catch (IOException e) {
+                Log.e(LOGGER_TAG, "error reading " + resourceName, e);
+            }
+        }
+
+        // Return default value since no fake file exists for given URL.
+        if (request instanceof StringRequest) {
+            return new StringEntity(DEFAULT_STRING_RESPONSE);
+        }
+        return new StringEntity(DEFAULT_JSON_RESPONSE);
+    }
+
+    /**
+     * Map request URL to fake file name
+     */
+    private String constructFakeResponseFileName(Request request) {
+        String reqUrl = request.getUrl();
+        String apiName = reqUrl.substring(URL_PREFIX.length());
+        return "fake_res_" + apiName;
+    }
+}
+</code></pre>
+
+<p>To use FakeHttpStack, you just have to pass it to your <em>RequestQueue</em>. I override RequestQueue too.</p>
+
+<pre><code>public class FakeRequestQueue extends RequestQueue {
+    public FakeRequestQueue(Context context) {
+        super(new NoCache(), new BasicNetwork(new FakeHttpStack(context)));
+    }
+}
+</code></pre>
+
+<p>Good point for this approach is that, it doesn't require much change in your code. You just have to switch your <em>RequestQueue</em> to <em>FakeRequestQueue</em> when testing. Thus, it can be used in acceptance testing or system testing.</p>
+
+<p>On the other hand, for unit testing, there might be more compact way. For instance, you can implement your <em>Request.Listener</em> subclass as separate class so that onResponse method can be easily tested. I recommend you to put more detail about what you want to test or put some code fragment.</p>

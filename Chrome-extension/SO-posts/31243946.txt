@@ -1,0 +1,179 @@
+<p>You can achieve this exactly by using <code>EditText</code> and <code>ListView</code>, and not <code>AutoCompleteTextView</code>. Characters are entered in the <code>EditText</code> on the basis of which the results in the <code>ListView</code> are filtered by calling the <code>GooglePlacesAutomplete</code> webservice. The following is the code:</p>
+
+<p>This is your layoout file ( <code>EditText</code> with <code>ListView</code> )</p>
+
+<pre><code>&lt;RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+xmlns:tools="http://schemas.android.com/tools"
+xmlns:app="http://schemas.android.com/apk/res-auto"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:background="#ffffff"
+tools:context="com.example.siddarthshikhar.liftsharesample.EnterLocationActivity"&gt;
+
+    &lt;EditText
+        android:paddingLeft="@dimen/activity_horizontal_margin"
+        android:layout_width="250dp"
+        android:layout_height="35dp"
+        android:textColorHint="#ffffff"
+        android:id="@+id/edEnterLocation"
+        android:textColor="#ffffff"
+        android:textSize="@dimen/abc_text_size_medium_material"
+        android:layout_alignParentLeft="true"
+        android:backgroundTint="#00000000"
+        android:gravity="start|center"&gt;
+        &lt;requestFocus /&gt;
+    &lt;/EditText&gt;
+
+&lt;ListView android:id="@+id/listView1" android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_below="@+id/filterLayout"/&gt;
+
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p>In your corresponding Activity, access this EditText and apply Filterable. You have to use <code>GooglePlacesAutompleteAdapter</code> for this.</p>
+
+<p>The following is the <code>GooglePlacesAutompleteAdapter</code> :</p>
+
+<pre><code>public class GooglePlacesAutocompleteAdapter extends ArrayAdapter implements Filterable {
+private static final String LOG_TAG = "Google Places Autocomplete";
+private static final String PLACES_API_BASE = "https://maps.googleapis.com/maps/api/place";
+private static final String TYPE_AUTOCOMPLETE = "/autocomplete";
+private static final String OUT_JSON = "/json";
+private static final String API_KEY = "your_api_key";
+private ArrayList&lt;String&gt; resultList;
+private Context context = null;
+public GooglePlacesAutocompleteAdapter(Context context, int textViewResourceId) {
+    super(context, textViewResourceId);
+    this.context = context;
+}
+
+
+@Override
+public int getCount() {
+    if(resultList != null)
+        return resultList.size();
+    else
+        return 0;
+}
+
+@Override
+public String getItem(int index) {
+    return resultList.get(index);
+}
+
+
+public ArrayList&lt;String&gt; autocomplete(String input) {
+    ArrayList&lt;String&gt; resultList = null;
+    ArrayList&lt;String&gt; descriptionList = null;
+    HttpURLConnection conn = null;
+    StringBuilder jsonResults = new StringBuilder();
+    try {
+        StringBuilder sb = new StringBuilder(PLACES_API_BASE + TYPE_AUTOCOMPLETE + OUT_JSON);
+        sb.append("?key=" + API_KEY);
+        sb.append("&amp;components=country:in");
+        sb.append("&amp;input=" + URLEncoder.encode(input, "utf8"));
+
+        URL url = new URL(sb.toString());
+        conn = (HttpURLConnection) url.openConnection();
+        InputStreamReader in = new InputStreamReader(conn.getInputStream());
+
+        // Load the results into a StringBuilder
+        int read;
+        char[] buff = new char[1024];
+        while ((read = in.read(buff)) != -1) {
+            jsonResults.append(buff, 0, read);
+        }
+    } catch (MalformedURLException e) {
+        Log.e(LOG_TAG, "Error processing Places API URL", e);
+        return resultList;
+    } catch (IOException e) {
+        Log.e(LOG_TAG, "Error connecting to Places API", e);
+        return resultList;
+    } finally {
+        if (conn != null) {
+            conn.disconnect();
+        }
+    }
+
+    try {
+        // Create a JSON object hierarchy from the results
+        Log.d("yo",jsonResults.toString());
+        JSONObject jsonObj = new JSONObject(jsonResults.toString());
+        JSONArray predsJsonArray = jsonObj.getJSONArray("predictions");
+
+        // Extract the Place descriptions from the results
+        resultList = new ArrayList(predsJsonArray.length());
+        descriptionList = new ArrayList(predsJsonArray.length());
+        for (int i = 0; i &lt; predsJsonArray.length(); i++) {
+            resultList.add(predsJsonArray.getJSONObject(i).toString());
+            descriptionList.add(predsJsonArray.getJSONObject(i).getString("description"));
+        }
+        saveArray(resultList.toArray(new String[resultList.size()]), "predictionsArray", getContext());
+    } catch (JSONException e) {
+        Log.e(LOG_TAG, "Cannot process JSON results", e);
+    }
+
+    return descriptionList;
+}
+
+
+@Override
+public Filter getFilter() {
+    Filter filter = new Filter() {
+        @Override
+        protected FilterResults performFiltering(CharSequence constraint) {
+            FilterResults filterResults = new FilterResults();
+            if (constraint != null) {
+                // Retrieve the autocomplete results.
+                resultList = autocomplete(constraint.toString());
+
+                // Assign the data to the FilterResults
+                filterResults.values = resultList;
+                filterResults.count = resultList.size();
+            }
+            return filterResults;
+        }
+
+        @Override
+        protected void publishResults(CharSequence constraint, FilterResults results) {
+            if (results != null &amp;&amp; results.count &gt; 0) {
+                setImageVisibility();
+                notifyDataSetChanged();
+            } else {
+                notifyDataSetInvalidated();
+            }
+        }
+    };
+    return filter;
+}
+}
+</code></pre>
+
+<p>Access the adapter and apply <code>getFilter()</code> to the <code>EditText</code> in the corresponding <code>Activity</code>. The following is to be added in your Activity corresponding to your layout created earlier:</p>
+
+<pre><code>dataAdapter = new   GooglePlacesAutocompleteAdapter(EnterLocationActivity.this, R.layout.adapter_google_places_autocomplete){
+
+listView = (ListView) findViewById(R.id.listView1);
+    // Assign adapter to ListView
+    listView.setAdapter(dataAdapter);
+
+    //enables filtering for the contents of the given ListView
+    listView.setTextFilterEnabled(true);
+
+etEnterLocation.addTextChangedListener(new TextWatcher() {
+
+        public void afterTextChanged(Editable s) {
+        }
+
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+        }
+
+        public void onTextChanged(CharSequence s, int start, int before, int count) {
+
+            dataAdapter.getFilter().filter(s.toString());
+        }
+    });
+</code></pre>
+
+<p>This should get you going. You can modify your layout as you want. This basically loads the autocomplete data in a <code>ListView</code>.</p>

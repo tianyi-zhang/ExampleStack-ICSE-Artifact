@@ -1,0 +1,289 @@
+<p>You can achieve your goal by using the Directions API. You supply the starting point and the ending point (it can be either lat/lon or name of the place). Another required field is the traveling mode (driving by default).</p>
+
+<p>Now the Directions return the vertexes which can be transformed to a polyline and then drawn on the map. <a href="http://stackoverflow.com/a/15053901">This answer</a> does that pretty well and I'll be using it's code.</p>
+
+<pre><code>package com.example.simon.maps;
+
+import java.util.ArrayList;
+import java.util.List;
+import org.w3c.dom.Document;
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.MapFragment;
+import com.google.android.gms.maps.model.CameraPosition;
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.os.StrictMode;
+import android.support.v4.app.FragmentActivity;
+import android.util.Log;
+import android.util.SparseArray;
+
+/**
+ * Created by Simon on 2014 Jul 25.
+ */
+
+public class MainActivity extends FragmentActivity {
+
+    final static String TAG = "MainActivity";
+    GoogleMap mMap;
+    GMapV2Direction md;
+    int mZoomLevel;
+    final float STARTING_ZOOM = 5.0f;
+    // List of polylines for each zoom level
+    SparseArray&lt;List&lt;Polyline&gt;&gt; mPolylines = new SparseArray&lt;List&lt;Polyline&gt;&gt;();
+
+    public class direction {
+        String start, end;
+        int zoomLevel;
+
+        direction(String pStart, String pEnd, int pZoomLevel) {
+            start = pStart;
+            end = pEnd;
+            zoomLevel = pZoomLevel;
+        }
+    }
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        if (android.os.Build.VERSION.SDK_INT &gt; 9) {
+            StrictMode.ThreadPolicy p = new StrictMode.ThreadPolicy.Builder().permitAll().build();
+            StrictMode.setThreadPolicy(p);
+        }
+
+        md = new GMapV2Direction();
+        mMap = ((MapFragment)getFragmentManager().findFragmentById(R.id.map)).getMap();
+
+        List&lt;direction&gt; directions = new ArrayList&lt;direction&gt;();
+        directions.add(new direction("Ahmedabad,Gujarat,India", "delhi,India", 4));
+        directions.add(new direction("Ahmedabad,Gujarat,India","Bombay,Maharashtra,India", 4));
+        directions.add(new direction("Jeypore,Odisha,India", "delhi,India", 5));
+        for (MainActivity.direction direction : directions) {
+            // Query
+            Document doc = md.getDocument(direction.start, direction.end);
+            // Parse the xml
+            if (doc == null) {
+                Log.e(TAG, "Failed to get the route from " + direction.start
+                        + " to " + direction.end);
+                continue;
+            }
+            // Get points
+            ArrayList&lt;LatLng&gt; directionPoint = md.getDirection(doc);
+            // Convert vertexes to a polyline
+            PolylineOptions rectLine = new PolylineOptions().width(3).color(Color.RED);
+            for (LatLng aDirectionPoint : directionPoint) {
+                rectLine.add(aDirectionPoint);
+            }
+            // Add poly to the map
+            addPolyline(rectLine, direction.zoomLevel);
+        }
+        // Get the starting point of the first direction
+        LatLng start = mPolylines.valueAt(0).get(0).getPoints().get(0);
+        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(start, STARTING_ZOOM), 1000, null);
+        // Set the initial zoom level and show the necessary polylines
+        mZoomLevel = (int) STARTING_ZOOM;
+        initPolylines(mZoomLevel);
+
+        // Listen for the camera zoom level changes
+        mMap.setOnCameraChangeListener(new GoogleMap.OnCameraChangeListener() {
+            @Override
+            public void onCameraChange(CameraPosition cameraPosition) {
+                // Note that because we are casting the zoomLevel to int,
+                // it will be considered as changed only when it reaches
+                // a new integer when rounded (e.g. 5.0, 6.0 etc.)
+                int newZoomLevel = (int) cameraPosition.zoom;
+                if (newZoomLevel != mZoomLevel) {
+                    Log.d(TAG, "New zoom level: " + newZoomLevel);
+                    // Loop all the changed zoom levels
+                    // E.g. zoomed-out from 15 to 13, then hide [14, 15]
+                    if (newZoomLevel &lt; mZoomLevel) { // Zoomed out
+                        for (int i=1; i&lt;=mZoomLevel-newZoomLevel; i++)
+                            hidePolylines(mPolylines.get(newZoomLevel+i));
+                    } else { // Zoomed-in
+                        for (int i=1; i&lt;=newZoomLevel-mZoomLevel; i++)
+                            showPolylines(mPolylines.get(mZoomLevel + i));
+                    }
+                    mZoomLevel = newZoomLevel;
+                }
+            }
+        });
+    }
+
+    private void addPolyline(PolylineOptions polyOpts, int zoomLevel) {
+        List&lt;Polyline&gt; polylines = mPolylines.get(zoomLevel);
+        // Create polyline list for this zoom level, if it still doesn't exist
+        if (polylines == null) {
+            polylines = new ArrayList&lt;Polyline&gt;();
+            mPolylines.put(zoomLevel, polylines);
+        }
+        // Append a new item to this poly list
+        Polyline polyline = mMap.addPolyline(polyOpts);
+        polyline.setVisible(false);
+        polylines.add(polyline);
+    }
+
+    private void initPolylines(int zoomLevel) {
+        for(int i=0; i&lt;mPolylines.size(); i++) {
+            // Loop until zoom level is reached
+            if  (mPolylines.keyAt(i) &gt; zoomLevel) break;
+
+            showPolylines(mPolylines.get(mPolylines.keyAt(i)));
+        }
+    }
+
+    private void showPolylines(List&lt;Polyline&gt; polylines) {
+        if (polylines != null)
+            for (Polyline polyline : polylines) polyline.setVisible(true);
+    }
+
+    private void hidePolylines(List&lt;Polyline&gt; polylines) {
+        if (polylines != null)
+            for (Polyline polyline : polylines) polyline.setVisible(false);
+    }
+
+}
+</code></pre>
+
+<p>This code adds the polylines to a SparseArray which holds the polylines for each zoom level. All polies are hidden by default and are revealed only when a specific zoom level is reached (also at <code>initPolylines</code>).</p>
+
+<p>There are a few things to note here:</p>
+
+<ol>
+<li>Because the <strong>zoom can change by a few levels at once</strong> we loop each level to hide/show specific directions.</li>
+<li>The <strong>location names have to be precise</strong> or they won't be found and you might receive a bunch of errors in the code (I've only added a Log.e)</li>
+<li><p>If you want to create <strong>markers</strong> at, let's say the starting and the ending point of the direction, you can use the following code to get the coordinates:</p>
+
+<pre><code>List&lt;LatLng&gt; points = mPolylines.valueAt(0).get(0).getPoints();
+LatLng start = points.get(0);
+LatLng end = points.get(points.size()-1);
+</code></pre></li>
+<li>Markers can be added/removed at specific zoom levels just like it's done here with the polylines.</li>
+</ol>
+
+<p>And here's the code of the xml parser (GMapV2Direction):</p>
+
+<pre><code>package com.example.simon.maps;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.protocol.BasicHttpContext;
+import org.apache.http.protocol.HttpContext;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import com.google.android.gms.maps.model.LatLng;
+
+public class GMapV2Direction {
+
+    public GMapV2Direction() { }
+
+    public Document getDocument(String start, String end) {
+        String url = "http://maps.googleapis.com/maps/api/directions/xml?"
+                + "origin="+start+"&amp;destination="+end+"&amp;units=metric&amp;mode=driving";
+        try {
+            HttpClient httpClient = new DefaultHttpClient();
+            HttpContext localContext = new BasicHttpContext();
+            HttpPost httpPost = new HttpPost(url);
+            HttpResponse response = httpClient.execute(httpPost, localContext);
+            InputStream in = response.getEntity().getContent();
+            DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+            return builder.parse(in);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public ArrayList&lt;LatLng&gt; getDirection (Document doc) {
+        NodeList nl1, nl2, nl3;
+        ArrayList&lt;LatLng&gt; listGeopoints = new ArrayList&lt;LatLng&gt;();
+        nl1 = doc.getElementsByTagName("step");
+        if (nl1.getLength() &gt; 0) {
+            for (int i = 0; i &lt; nl1.getLength(); i++) {
+                Node node1 = nl1.item(i);
+                nl2 = node1.getChildNodes();
+
+                Node locationNode = nl2.item(getNodeIndex(nl2, "start_location"));
+                nl3 = locationNode.getChildNodes();
+                Node latNode = nl3.item(getNodeIndex(nl3, "lat"));
+                double lat = Double.parseDouble(latNode.getTextContent());
+                Node lngNode = nl3.item(getNodeIndex(nl3, "lng"));
+                double lng = Double.parseDouble(lngNode.getTextContent());
+                listGeopoints.add(new LatLng(lat, lng));
+
+                locationNode = nl2.item(getNodeIndex(nl2, "polyline"));
+                nl3 = locationNode.getChildNodes();
+                latNode = nl3.item(getNodeIndex(nl3, "points"));
+                ArrayList&lt;LatLng&gt; arr = decodePoly(latNode.getTextContent());
+                for (LatLng anArr : arr) {
+                    listGeopoints.add(new LatLng(anArr.latitude, anArr.longitude));
+                }
+
+                locationNode = nl2.item(getNodeIndex(nl2, "end_location"));
+                nl3 = locationNode.getChildNodes();
+                latNode = nl3.item(getNodeIndex(nl3, "lat"));
+                lat = Double.parseDouble(latNode.getTextContent());
+                lngNode = nl3.item(getNodeIndex(nl3, "lng"));
+                lng = Double.parseDouble(lngNode.getTextContent());
+                listGeopoints.add(new LatLng(lat, lng));
+            }
+        }
+
+        return listGeopoints;
+    }
+
+    private int getNodeIndex(NodeList nl, String nodename) {
+        for(int i = 0 ; i &lt; nl.getLength() ; i++) {
+            if(nl.item(i).getNodeName().equals(nodename))
+                return i;
+        }
+        return -1;
+    }
+
+    private ArrayList&lt;LatLng&gt; decodePoly(String encoded) {
+        ArrayList&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+        int index = 0, len = encoded.length();
+        int lat = 0, lng = 0;
+        while (index &lt; len) {
+            int b, shift = 0, result = 0;
+            do {
+                b = encoded.charAt(index++) - 63;
+                result |= (b &amp; 0x1f) &lt;&lt; shift;
+                shift += 5;
+            } while (b &gt;= 0x20);
+            int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+            lat += dlat;
+            shift = 0;
+            result = 0;
+            do {
+                b = encoded.charAt(index++) - 63;
+                result |= (b &amp; 0x1f) &lt;&lt; shift;
+                shift += 5;
+            } while (b &gt;= 0x20);
+            int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+            lng += dlng;
+
+            LatLng position = new LatLng((double) lat / 1E5, (double) lng / 1E5);
+            poly.add(position);
+        }
+        return poly;
+    }
+}
+</code></pre>
+
+<p>Some final notes:</p>
+
+<ul>
+<li>If you've a lot of directions load them inside <code>initPolylines</code> and <code>showPolylines</code> and unload them in <code>hidePolylines</code></li>
+<li>If the directions you want to show on the map are constant, the best way would be to use tiles with polylines on specific zoom levels. A good free tool for that is <strong>Maperitive</strong>, it can export the tiles to as many zoom levels as you want. Then you would store the tiles online and use UrlTileProvider to display them on your map.</li>
+</ul>

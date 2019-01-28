@@ -1,0 +1,103 @@
+<p>You can always extend the <code>AsyncFacebookRunner</code> class and override the <code>request</code> method.<br/>
+Something like this:</p>
+
+<pre><code>public class CancelableAsyncFacebookRunner extends AsyncFacebookRunner {
+    private Thread requestThread;
+
+    public AsyncFacebookRunner(Facebook fb) {
+        super(fb);
+    }
+
+    @Override
+    public void request(final String graphPath,
+            final Bundle parameters,
+            final String httpMethod,
+            final RequestListener listener,
+            final Object state) {
+
+        this.requestThread = new Thread() {
+            @Override
+            public void run() {
+                try {
+                    String resp = fb.request(graphPath, parameters, httpMethod);
+                    listener.onComplete(resp, state);
+                } catch (FileNotFoundException e) {
+                    listener.onFileNotFoundException(e, state);
+                } catch (MalformedURLException e) {
+                    listener.onMalformedURLException(e, state);
+                } catch (IOException e) {
+                    listener.onIOException(e, state);
+                }
+            }
+        };
+    }
+
+    public void cancel() {
+        this.requestThread.interrupt();
+    }
+}
+</code></pre>
+
+<p>It hasn't been tested, but should give you the general idea.<br/></p>
+
+<hr>
+
+<h1>Edit</h1>
+
+<p>Now that I think about it, this makes little sense, since you want to use the <code>AsyncFacebookRunner</code> to make multiple requests and the <code>cancel</code> will cancel the last request only.</p>
+
+<p>I would suggest returning the thread and then have the ability to interupt it somewhere else, but you can't change the signature of the method like this and creating a new method won't make it possible to use other <code>request</code> methods defined in the <code>AsyncFacebookRunner</code> class.</p>
+
+<p>Instead you can do something like:</p>
+
+<pre><code>public class CancelableAsyncFacebookRunner extends AsyncFacebookRunner {
+    private Hashtable&lt;String, Thread&gt; requestThreads;
+
+    public AsyncFacebookRunner(Facebook fb) {
+        super(fb);
+        this.requestThreads = new Hashtable&lt;String, Thread&gt;();
+    }
+
+    @Override
+    public void request(final String id, 
+            final String graphPath,
+            final Bundle parameters,
+            final String httpMethod,
+            final RequestListener listener,
+            final Object state) {
+        Thread thread = new Thread() {
+            @Override
+            public void run() {
+                try {
+                    String resp = fb.request(graphPath, parameters, httpMethod);
+                    requestThreads.remove(id);
+                    listener.onComplete(resp, state);
+                } catch (FileNotFoundException e) {
+                    requestThreads.remove(id);
+                    listener.onFileNotFoundException(e, state);
+                } catch (MalformedURLException e) {
+                    requestThreads.remove(id);
+                    listener.onMalformedURLException(e, state);
+                } catch (IOException e) {
+                    requestThreads.remove(id);
+                    listener.onIOException(e, state);
+                }
+            }
+        });
+
+        this.requestThreads.put(id, thread);
+        thread.start();
+    }
+
+    public void cancel(String id) {
+        if (this.requestThreads.containsKey(id) {
+            this.requestThreads.get(id).interrupt();
+        }
+    }
+}
+</code></pre>
+
+<p>You'll need to generate an id somehow for the request, can be something simple like:</p>
+
+<pre><code>String.valueOf(System.currentTimeMillis());
+</code></pre>

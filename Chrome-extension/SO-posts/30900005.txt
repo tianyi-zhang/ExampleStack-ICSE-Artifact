@@ -1,0 +1,143 @@
+<p>In the documentation <a href="https://cwiki.apache.org/confluence/display/KAFKA/Consumer+Group+Example" rel="nofollow">here</a> it says: "if you provide more threads than there are partitions on the topic, some threads will never see a message". Can you add partitions to your topic? I have my consumer group thread count equal to the number of partitions in my topic, and each thread is getting messages.</p>
+
+<p>Here's my topic config:</p>
+
+<pre><code>buffalo-macbook10:kafka_2.10-0.8.2.1 aakture$ bin/kafka-topics.sh --describe --zookeeper localhost:2181 --topic recent-wins
+Topic:recent-wins   PartitionCount:3    ReplicationFactor:1 Configs:
+Topic: recent-wins  Partition: 0    Leader: 0   Replicas: 0 Isr: 0
+Topic: recent-wins  Partition: 1    Leader: 0   Replicas: 0 Isr: 0
+Topic: recent-wins  Partition: 2    Leader: 0   Replicas: 0 Isr: 0
+</code></pre>
+
+<p>And my consumer:</p>
+
+<pre><code>package com.cie.dispatcher.services;
+
+import com.cie.dispatcher.model.WinNotification;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.inject.Inject;
+import io.dropwizard.lifecycle.Managed;
+import kafka.consumer.ConsumerConfig;
+import kafka.consumer.ConsumerIterator;
+import kafka.consumer.KafkaStream;
+import kafka.javaapi.consumer.ConsumerConnector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * This will create three threads, assign them to a "group" and listen for  notifications on a topic.
+ * Current setup is to have three partitions in Kafka, so we need a thread per partition (as recommended by
+ * the kafka folks). This implements the dropwizard Managed interface, so it can be started and stopped by the
+ * lifecycle manager in dropwizard.
+ * &lt;p/&gt;
+ * Created by aakture on 6/15/15.
+ */
+public class KafkaTopicListener implements Managed {
+private static final Logger LOG = LoggerFactory.getLogger(KafkaTopicListener.class);
+private final ConsumerConnector consumer;
+private final String topic;
+private ExecutorService executor;
+private int threadCount;
+private WinNotificationWorkflow winNotificationWorkflow;
+private ObjectMapper objectMapper;
+
+@Inject
+public KafkaTopicListener(String a_zookeeper,
+                          String a_groupId, String a_topic,
+                          int threadCount,
+                          WinNotificationWorkflow winNotificationWorkflow,
+                          ObjectMapper objectMapper) {
+    consumer = kafka.consumer.Consumer.createJavaConsumerConnector(
+            createConsumerConfig(a_zookeeper, a_groupId));
+    this.topic = a_topic;
+    this.threadCount = threadCount;
+    this.winNotificationWorkflow = winNotificationWorkflow;
+    this.objectMapper = objectMapper;
+}
+
+/**
+ * Creates the config for a connection
+ *
+ * @param zookeeper the host:port for zookeeper, "localhost:2181" for example.
+ * @param groupId   the group id to use for the consumer group. Can be anything, it's used by kafka to organize the consumer threads.
+ * @return the config props
+ */
+private static ConsumerConfig createConsumerConfig(String zookeeper, String groupId) {
+    Properties props = new Properties();
+    props.put("zookeeper.connect", zookeeper);
+    props.put("group.id", groupId);
+    props.put("zookeeper.session.timeout.ms", "400");
+    props.put("zookeeper.sync.time.ms", "200");
+    props.put("auto.commit.interval.ms", "1000");
+
+    return new ConsumerConfig(props);
+}
+
+public void stop() {
+    if (consumer != null) consumer.shutdown();
+    if (executor != null) executor.shutdown();
+    try {
+        if (!executor.awaitTermination(5000, TimeUnit.MILLISECONDS)) {
+            LOG.info("Timed out waiting for consumer threads to shut down, exiting uncleanly");
+        }
+    } catch (InterruptedException e) {
+        LOG.info("Interrupted during shutdown, exiting uncleanly");
+    }
+    LOG.info("{} shutdown successfully", this.getClass().getName());
+}
+/**
+ * Starts the listener
+ */
+public void start() {
+    Map&lt;String, Integer&gt; topicCountMap = new HashMap&lt;&gt;();
+    topicCountMap.put(topic, new Integer(threadCount));
+    Map&lt;String, List&lt;KafkaStream&lt;byte[], byte[]&gt;&gt;&gt; consumerMap = consumer.createMessageStreams(topicCountMap);
+    List&lt;KafkaStream&lt;byte[], byte[]&gt;&gt; streams = consumerMap.get(topic);
+    executor = Executors.newFixedThreadPool(threadCount);
+    int threadNumber = 0;
+    for (final KafkaStream stream : streams) {
+        executor.submit(new ListenerThread(stream, threadNumber));
+        threadNumber++;
+    }
+}
+
+private class ListenerThread implements Runnable {
+    private KafkaStream m_stream;
+    private int m_threadNumber;
+
+    public ListenerThread(KafkaStream a_stream, int a_threadNumber) {
+        m_threadNumber = a_threadNumber;
+        m_stream = a_stream;
+    }
+
+    public void run() {
+        try {
+            String message = null;
+            LOG.info("started listener thread: {}", m_threadNumber);
+            ConsumerIterator&lt;byte[], byte[]&gt; it = m_stream.iterator();
+            while (it.hasNext()) {
+                try {
+                    message = new String(it.next().message());
+                    LOG.info("receive message by " + m_threadNumber + " : " + message);
+                    WinNotification winNotification = objectMapper.readValue(message, WinNotification.class);
+                    winNotificationWorkflow.process(winNotification);
+                } catch (Exception ex) {
+                    LOG.error("error processing queue for message: " + message, ex);
+                }
+            }
+            LOG.info("Shutting down listener thread: " + m_threadNumber);
+        } catch (Exception ex) {
+            LOG.error("error:", ex);
+        }
+    }
+  }
+}
+</code></pre>

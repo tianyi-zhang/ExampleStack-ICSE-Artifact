@@ -1,0 +1,41 @@
+<p>Under the hood, the <code>getNearbyEntities()</code> method from <code>org.bukkit.entity.Entity</code> loops through all relevant chunks, so I would assume doing that is faster than looping through every entity in the world.</p>
+
+<p>Unfortunately, the NMS <code>getEntities</code> method (and even some methods it calls) that <code>getNearbyEntities</code> uses internally requires an <code>Entity</code> as its first argument. You could write your own method that takes your two parameters and mirrors the behavior of the NMS method.</p>
+
+<p>I don't know if I can post the exact source code of the NMS method here because of the Craftbukkit DMC takedown and the Stack Overflow rules, but the way I understand it the <code>getEntities</code> method takes an axis aligned bounding box, finds the chunks within that box and returns the entities in those chunks.</p>
+
+<p>Since you're using a sphere and not a box as a perimeter, I would initially use the box and then do a distance check to see whether the entities are really in the given sphere.</p>
+
+<p>Here is an example of what this might look like:</p>
+
+<pre><code>public static List&lt;Entity&gt; getEntitiesAroundPoint(Location location, double radius) {
+    List&lt;Entity&gt; entities = new ArrayList&lt;Entity&gt;();
+    World world = location.getWorld();
+
+    // To find chunks we use chunk coordinates (not block coordinates!)
+    int smallX = MathHelper.floor((location.getX() - radius) / 16.0D);
+    int bigX = MathHelper.floor((location.getX() + radius) / 16.0D);
+    int smallZ = MathHelper.floor((location.getZ() - radius) / 16.0D);
+    int bigZ = MathHelper.floor((location.getZ() + radius) / 16.0D);
+
+    for (int x = smallX; x &lt;= bigX; x++) {
+        for (int z = smallZ; z &lt;= bigZ; z++) {
+            if (world.isChunkLoaded(x, z)) {
+                entities.addAll(Arrays.asList(world.getChunkAt(x, z).getEntities())); // Add all entities from this chunk to the list
+            }
+        }
+    }
+
+    // Remove the entities that are within the box above but not actually in the sphere we defined with the radius and location
+    // This code below could probably be replaced in Java 8 with a stream -&gt; filter
+    Iterator&lt;Entity&gt; entityIterator = entities.iterator(); // Create an iterator so we can loop through the list while removing entries
+    while (entityIterator.hasNext()) {
+        if (entityIterator.next().getLocation().distanceSquared(location) &gt; radius * radius) { // If the entity is outside of the sphere...
+            entityIterator.remove(); // Remove it
+        }
+    }
+    return entities;
+}
+</code></pre>
+
+<p>This method might still be slightly slower than using <code>getNearbyEntities</code> because I'm not sure whether calling the Bukkit methods used here for retrieving a <code>Chunk</code> and entities inside it is as efficient as directly calling the NMS methods like the <code>getNearbyEntities</code> method does.</p>

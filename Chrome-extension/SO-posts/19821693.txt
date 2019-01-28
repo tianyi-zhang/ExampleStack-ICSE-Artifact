@@ -1,0 +1,36 @@
+<p>I assume you are referring to the method I found in the net:</p>
+
+<pre><code>public V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+    V content = null;
+    try {
+        if (innerFuture != null) {
+            content = innerFuture.get(timeout, unit);
+        }
+    } catch (TimeoutException t) {
+        if (!contentProcessed.get() &amp;&amp; timeout != -1 &amp;&amp; ((System.currentTimeMillis() - touch.get()) &lt;= responseTimeoutInMs)) {
+            return get(timeout, unit);
+        }
+
+        if (exception.get() == null) {
+            timedOut.set(true);
+            throw new ExecutionException(new TimeoutException(String.format("No response received after %s", responseTimeoutInMs)));
+        }
+    } catch (CancellationException ce) {
+    }
+
+    if (exception.get() != null) {
+        throw new ExecutionException(exception.get());
+    }
+    return content;
+}
+</code></pre>
+
+<p>You can consider this class as being erroneous in several regards. The first mistake which jumps directly into the eye is the use of <code>System.currentTimeMillis()</code> instead of <code>System.nanoTime()</code>. <code>System.currentTimeMillis()</code> refers to the computers system clock which may be adjusted during the programs execution and hence can jump back and forth. Code dealing with timeouts should use <code>System.nanoTime()</code> which gives a value relative to the programs execution independent to the real world clock.</p>
+
+<p><code>responseTimeoutInMs</code> seems to be meant as a connection timeout but using it even when the <code>timeout</code> passed as parameter value has been expired is a violation of the <code>Future</code> contract. The correct behavior would be letting the <code>get</code> method time out even when the task represented by the <code>Future</code> may be still running.</p>
+
+<p>But invoking the <code>get</code> method recursively is a double fault. Not only is the recursion dangerous as small timeout values may lead to a <code>StackOverflowError</code>; passing the same <code>timeout</code> again to itself means deferring the time out infinitely as every re-invocation will treat that value as relative to the current time.</p>
+
+<p>Interestingly, even if the method gets to the point of timing out it will wrap the <code>TimeoutException</code> inside an <code>ExecutionException</code> reporting a completely wrong semantic to the caller.</p>
+
+<p>I don’t believe that you will find someone on stackoverflow who can explain the rationale behind this implementation, if there is one at all. You will have to ask the supporter/authors of that code directly.</p>

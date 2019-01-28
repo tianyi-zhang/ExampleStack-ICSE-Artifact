@@ -1,0 +1,224 @@
+<p>It appears to work with the "hidden window" as shown in the JNA's <a href="https://github.com/twall/jna/blob/master/contrib/native_window_msg/src/com/sun/jna/platform/win32/Win32WindowDemo.java" rel="nofollow">Win32WindowDemo</a>. So instead of attaching a "native windows event listener" to a JFrame, use the "hidden window" as a background service.</p>
+
+<p>I stripped down the Win32WindowDemo to the parts relevant for the question and added some parts to start and stop it as a background service. Note that the thread that creates the HWND must also be used to read messages for the HWND (if another thread tries to read the messages, nothing happens).</p>
+
+<p>First the main class showing a JFrame with the messages from the Win32WindowDemo:</p>
+
+<pre><code>import java.awt.*;
+import javax.swing.*;
+
+public class WinLockDetect {
+
+public static void main(String[] args) {
+
+    try {
+        new WinLockDetect().demo();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+@SuppressWarnings("serial")
+void demo() throws Exception {
+
+    final JTextArea detectMsgs =new JTextArea();
+    final JFrame window = new JFrame() {{
+        getContentPane().add(detectMsgs);
+        setSize(400, 200);
+        setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+    }};
+    EventQueue.invokeLater(new Runnable() {
+        public void run() { 
+            window.setVisible(true); 
+        };
+    });
+    Win32EventDetector winSessionDetect = new Win32EventDetector();
+    winSessionDetect.setMsgLogger(detectMsgs);
+    new Thread(winSessionDetect).start();
+    Thread.sleep(500L);
+    window.setState(java.awt.Frame.ICONIFIED);
+}
+
+}
+</code></pre>
+
+<p>Next the stripped down version of Win32WindowDemo as a background service:</p>
+
+<pre><code>import java.util.concurrent.*;
+import javax.swing.JTextArea;
+import com.sun.jna.WString;
+import com.sun.jna.platform.win32.*;
+import com.sun.jna.platform.win32.WinDef.*;
+import com.sun.jna.platform.win32.WinUser.*;
+
+public class Win32EventDetector implements WindowProc, Runnable {
+
+
+/** FIXME: don't know if this number is a real message ID. */
+private static final int DESTROY_LISTENER = 4242; 
+
+volatile boolean closed = true;
+Semaphore closing = new Semaphore(0);
+WString windowClass;
+HMODULE hInst;
+HWND hWnd;
+JTextArea detectMsgs;
+
+public void setMsgLogger(JTextArea detectMsgs) {
+    this.detectMsgs = detectMsgs;
+}
+
+void println(String msg) {
+
+    if (detectMsgs == null) {
+        System.out.println(msg);
+    } else {
+        detectMsgs.append('\n' + msg);
+        detectMsgs.setCaretPosition(detectMsgs.getDocument().getLength());
+    }
+}
+
+@Override
+public void run() {
+
+    // define new window class
+    windowClass = new WString("Win32EventDetectorClass");
+    hInst = Kernel32.INSTANCE.GetModuleHandle("");
+    WNDCLASSEX wClass = new WNDCLASSEX();
+    wClass.hInstance = hInst;
+    wClass.lpfnWndProc = Win32EventDetector.this;
+    wClass.lpszClassName = windowClass;
+    // register window class
+    User32.INSTANCE.RegisterClassEx(wClass);
+    getLastError();
+    // create new window
+    hWnd = User32.INSTANCE
+            .CreateWindowEx(
+                    User32.WS_EX_TOPMOST,
+                    windowClass,
+                    "My hidden helper window, used only to catch the windows events",
+                    0, 0, 0, 0, 0,
+                    null, // WM_DEVICECHANGE contradicts parent=WinUser.HWND_MESSAGE
+                    null, hInst, null);
+    getLastError();
+    println("window sucessfully created! window hwnd: "
+            + hWnd.getPointer().toString());
+
+    closed = false;
+    Runtime.getRuntime().addShutdownHook(new Thread() {
+        public void run() { close(); }
+    });
+
+    Wtsapi32.INSTANCE.WTSRegisterSessionNotification(hWnd,
+            Wtsapi32.NOTIFY_FOR_THIS_SESSION);
+    println("Listening for window messages.");
+    try {
+        MSG msg = new MSG();
+        while (User32.INSTANCE.GetMessage(msg, hWnd, 0, 0) != 0) {
+            if (msg.message == DESTROY_LISTENER) {
+                System.out.println("Got destroy message.");
+                break;
+            }
+            println("Got a new message: " + msg.message);
+            User32.INSTANCE.TranslateMessage(msg);
+            User32.INSTANCE.DispatchMessage(msg);
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    System.out.println("Stopped listening for window messages.");
+    destroy();
+}
+
+private void destroy() {
+
+    try {
+        Wtsapi32.INSTANCE.WTSUnRegisterSessionNotification(hWnd);
+        User32.INSTANCE.UnregisterClass(windowClass, hInst);
+        User32.INSTANCE.DestroyWindow(hWnd);
+        System.out.println("Hidden native window destroyed.");
+    } catch (Exception e) {
+        e.printStackTrace();
+    } finally {
+        closed = true;
+        closing.release();
+    }
+}
+
+public void close() {
+
+    if (closed) { return; }
+    User32.INSTANCE.PostMessage(hWnd, DESTROY_LISTENER, null, null);
+    try {
+        if (closing.tryAcquire(1000L, TimeUnit.MILLISECONDS)) {
+            System.out.println("Hidden native window closed.");
+        } else {
+            System.out.println("Hidden native window could not be closed within time-out.");
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+public LRESULT callback(HWND hwnd, int uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WinUser.WM_CREATE: {
+        println("onCreate: WM_CREATE");
+        return new LRESULT(0);
+    }
+    case WinUser.WM_DESTROY: {
+        User32.INSTANCE.PostQuitMessage(0);
+        return new LRESULT(0);
+    }
+    case WinUser.WM_SESSION_CHANGE: {
+        this.onSessionChange(wParam, lParam);
+        return new LRESULT(0);
+    }
+    default:
+        return User32.INSTANCE.DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+}
+
+public int getLastError() {
+    int rc = Kernel32.INSTANCE.GetLastError();
+    if (rc != 0)
+        println("error: " + rc);
+    return rc;
+}
+
+protected void onSessionChange(WPARAM wParam, LPARAM lParam) {
+    switch (wParam.intValue()) {
+    case Wtsapi32.WTS_CONSOLE_CONNECT: {
+        println("WTS_CONSOLE_CONNECT");
+        break;
+    }
+    case Wtsapi32.WTS_CONSOLE_DISCONNECT: {
+        println("WTS_CONSOLE_DISCONNECT");
+        break;
+    }
+    case Wtsapi32.WTS_SESSION_LOGON: {
+        println("WTS_SESSION_LOGON");
+        break;
+    }
+    case Wtsapi32.WTS_SESSION_LOGOFF: {
+        println("WTS_SESSION_LOGOFF");
+        break;
+    }
+    case Wtsapi32.WTS_SESSION_LOCK: {
+        println("WTS_SESSION_LOCK");
+        break;
+    }
+    case Wtsapi32.WTS_SESSION_UNLOCK: {
+        println("WTS_SESSION_UNLOCK");
+        break;
+    }
+    default: 
+        println("Session change " + wParam.intValue());
+        break;
+    }
+}
+
+}
+</code></pre>
+
+<p>I tested this with JNA 4.1.0 (downloaded from <a href="https://github.com/twall/jna" rel="nofollow">here</a>) on Windows Vista 64bit using the WINHOME_KEY+L. The background thread for the "hidden window" is stopped using the shutdown-trigger which is activated when the JFrame from the main class is closed.</p>

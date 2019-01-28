@@ -1,0 +1,66 @@
+<p>I also spent some time on investigation of this question. And it seems that there is no public API to do that. But I can share some results from my reverse engineering research...</p>
+
+<p>My Samsung Galaxy S is able to receive CB messages, so I decompiled SMS app and looked into the code. It has the following <code>BroadcastReceiver</code> in its manifest file:</p>
+
+<pre><code>    &lt;receiver android:name=".transaction.PrivilegedSmsReceiver"&gt;
+        ...
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.provider.Telephony.CB_RECEIVED" /&gt;
+        &lt;/intent-filter&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.provider.Telephony.CB_SETTINGS_AVAILABLE" /&gt;
+        &lt;/intent-filter&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.provider.Telephony.SET_CB_ERR_RECEIVED" /&gt;
+        &lt;/intent-filter&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.provider.Telephony.GET_CB_ERR_RECEIVED" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/receiver&gt;
+</code></pre>
+
+<p>Note the <code>android.provider.Telephony.CB_RECEIVED</code> intent-filter. I did not find any documentation about it, but from its name I assumed that it's the only broadcast that I need to catch for now.</p>
+
+<p>Then I searched through the code of decompiled apk and found that it uses <code>android.provider.Telephony.Sms.Intents-&gt;getCbMessagesFromIntent()</code> interface to access retrieve CB messages, which returns <code>CbMessage</code> class instance. This interface is outdated even for simple SMS messages, so I assumed that <code>CbMessage</code> should work with <code>pdus</code> as <code>SmsMessage</code> does. Finally I found the <a href="http://www.java2s.com/Open-Source/Android/android-core/platform-frameworks-base/android/telephony/SmsCbMessage.java.htm">source of <code>SmsCbMessage</code></a> class which is pretty similar to <code>SmsMessage</code> by API. It depends on 5-6 internal Android java files, so for simplicity I just grab them from the same site and included them into my project.
+The <code>broadcastReceiver</code> is the same as yours except the class <code>SmsMessage</code> is replaced by <code>SmsCbMessage</code>:</p>
+
+<pre><code>public class CbReceiver extends BroadcastReceiver {
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        //---get the CB message passed in---
+        Bundle bundle = intent.getExtras();        
+        SmsCbMessage[] msgs = null;
+        String str = "";            
+        if (bundle != null)  {
+            //---retrieve the SMS message received---
+            Object[] pdus = (Object[]) bundle.get("pdus");
+            msgs = new SmsCbMessage[pdus.length];            
+            for (int i=0; i&lt;msgs.length; i++) {
+                msgs[i] = SmsCbMessage.createFromPdu((byte[])pdus[i]);                
+                str += "CB lang " + msgs[i].getLanguageCode();                     
+                str += " :";
+                str += msgs[i].getMessageBody().toString();
+                str += "\n";        
+            }
+            //---display the new CB message---
+            abortBroadcast();
+            Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
+        }                         
+    }
+}
+</code></pre>
+
+<p>After installing my application into my SGS phone with the receiver above, and enabling receiving CB messages in phone SMS application, my app was able to show CB messages in toast in parallel with receiving them by standard SMS application.</p>
+
+<p>The issues are still needed to be resolved:</p>
+
+<ul>
+<li>How to enable/disable/configure_channels of CB messages in my
+application? SMS app uses <code>getCbSettings()</code>/<code>setCbSettings()</code> functions,
+but I did not find them. So temporarily I used other app for that. </li>
+<li>How to
+abort CB message broadcast, so other apps do not receive them? It
+seems <code>abortBroadcast()</code> does not work here, because the broadcast
+message is not ordered (<code>isOrderedBroadcast()</code> returns <code>false</code>).</li>
+</ul>

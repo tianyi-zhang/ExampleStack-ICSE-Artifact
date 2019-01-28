@@ -1,0 +1,305 @@
+<p>I had tried a couple of days 
+I'm finally get the answer 
+so I would like to post here my steps and all my code in order to help someone else.</p>
+
+<p>1) to get the certificate of the site you want to connect </p>
+
+<pre><code>echo | openssl s_client -connect ${MY_SERVER}:443 2&gt;&amp;1 |  sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' &gt; mycert.pem
+</code></pre>
+
+<p>2)to create your key you need BouncyCastle library you can download <a href="http://bouncycastle.org/download/bcprov-jdk16-145.jar" rel="nofollow">here</a></p>
+
+<pre><code>keytool -import -v -trustcacerts -alias 0 -file mycert.pem -keystore “store_directory/mykst“ -storetype BKS -provider org.bouncycastle.jce.provider.BouncyCastleProvider -providerpath “directory_of_bouncycastle/bcprov-jdk16-145.jar” -storepass mypassword
+</code></pre>
+
+<p>3) to check if the key was created </p>
+
+<pre><code>keytool -list -keystore "carpeta_almacen/mykst" -provider org.bouncycastle.jce.provider.BouncyCastleProvider -providerpath "directory_of_bouncycastle/bcprov-jdk16-145.jar" -storetype BKS -storepass mypassword
+</code></pre>
+
+<p>and you should see something like this :</p>
+
+<blockquote>
+  <p>Tipo de almacén de claves: BKS
+  Proveedor de almacén de claves: BC</p>
+  
+  <p>Su almacén de claves contiene entrada 1</p>
+  
+  <p>0, 07-dic-2011, trustedCertEntry,</p>
+  
+  <p>Huella digital de certificado (MD5):</p>
+  
+  <p>55:FD:E5:E3:8A:4C:D6:B8:69:EB:6A:49:05:5F:18:48</p>
+</blockquote>
+
+<p>4)then you need to copy the file "mykst" into the directory "res/raw" (create it if does not exist) in your android project.  </p>
+
+<p>5)add the permissions to in the android manifest </p>
+
+<pre><code>  &lt;uses-permission android:name="android.permission.INTERNET"/&gt;
+</code></pre>
+
+<p>6) here the code!</p>
+
+<p><strong>activity_main.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:padding="10dp" &gt;
+
+    &lt;Button
+        android:id="@+id/button"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:text="Cargar contenido" /&gt;
+
+    &lt;RelativeLayout
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent"
+        android:background="#4888ef"&gt;
+        &lt;ProgressBar
+            android:id="@+id/loading"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:indeterminate="true"
+            android:layout_centerInParent="true"
+            android:visibility="gone"/&gt;
+        &lt;ScrollView
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:fillViewport="true"
+            android:padding="10dp"&gt;
+            &lt;TextView
+                android:id="@+id/output"
+                android:layout_width="fill_parent"
+                android:layout_height="fill_parent"
+                android:textColor="#FFFFFF"/&gt;
+        &lt;/ScrollView&gt;
+    &lt;/RelativeLayout&gt;
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>MyHttpClient</strong></p>
+
+<pre><code>package com.example.https;
+
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.KeyStore;
+import java.security.cert.X509Certificate;
+import java.util.Date;
+import java.util.Enumeration;
+
+import org.apache.http.conn.ClientConnectionManager;
+import org.apache.http.conn.scheme.PlainSocketFactory;
+import org.apache.http.conn.scheme.Scheme;
+import org.apache.http.conn.scheme.SchemeRegistry;
+import org.apache.http.conn.ssl.SSLSocketFactory;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.conn.SingleClientConnManager;
+
+import android.content.Context;
+import android.os.Build;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.TrustManagerFactory;
+
+public class MyHttpClient extends DefaultHttpClient {
+
+    final Context context;
+
+    public MyHttpClient(Context context) {
+        this.context = context;
+    }
+
+    @Override
+    protected ClientConnectionManager createClientConnectionManager() {
+        SchemeRegistry registry = new SchemeRegistry();
+        registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+        // Register for port 443 our SSLSocketFactory with our keystore
+        // to the ConnectionManager
+        registry.register(new Scheme("https", newSslSocketFactory(), 443));
+        return new SingleClientConnManager(getParams(), registry);
+    }
+
+    private SSLSocketFactory newSslSocketFactory() {
+        try {
+            // Trust manager / truststore
+            KeyStore trustStore=KeyStore.getInstance(KeyStore.getDefaultType());
+
+            // If we're on an OS version prior to Ice Cream Sandwich (4.0) then use the standard way to get the system
+            //   trustStore -- System.getProperty() else we need to use the special name to get the trustStore KeyStore
+            //   instance as they changed their trustStore implementation.
+            if (Build.VERSION.RELEASE.compareTo("4.0") &lt; 0) {
+                TrustManagerFactory trustManagerFactory=TrustManagerFactory
+                        .getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                FileInputStream trustStoreStream=new FileInputStream(System.getProperty("javax.net.ssl.trustStore"));
+                trustStore.load(trustStoreStream, null);
+                trustManagerFactory.init(trustStore);
+                trustStoreStream.close();
+            } else {
+                trustStore=KeyStore.getInstance("AndroidCAStore");
+            }
+
+            InputStream certificateStream = context.getResources().openRawResource(R.raw.mykst);
+            KeyStore keyStore=KeyStore.getInstance("BKS");
+            try {
+                keyStore.load(certificateStream, "mypassword".toCharArray());
+                Enumeration&lt;String&gt; aliases=keyStore.aliases();
+                while (aliases.hasMoreElements()) {
+                    String alias=aliases.nextElement();
+                    if (keyStore.getCertificate(alias).getType().equals("X.509")) {
+                        X509Certificate cert=(X509Certificate)keyStore.getCertificate(alias);
+                        if (new Date().after(cert.getNotAfter())) {
+                            // This certificate has expired
+                            return null;
+                        }
+                    }
+                }
+            } catch (IOException ioe) {
+                // This occurs when there is an incorrect password for the certificate
+                return null;
+            } finally {
+                certificateStream.close();
+            }
+
+            KeyManagerFactory keyManagerFactory=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            keyManagerFactory.init(keyStore, "mypassword".toCharArray());
+
+            return new SSLSocketFactory(keyStore, "mypassword", trustStore);
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+}
+</code></pre>
+
+<p><strong>MainActivity</strong></p>
+
+<pre><code>package com.example.https;
+
+import android.app.Activity;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.view.View;
+import android.widget.Button;
+import android.widget.TextView;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringWriter;
+import java.io.Writer;
+
+import javax.net.ssl.SSLSocketFactory;
+
+public class MainActivity extends Activity {
+
+    private View loading;
+    private TextView output;
+    private Button button;
+
+    SSLSocketFactory socketFactory = null;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        loading = findViewById(R.id.loading);
+        output = (TextView) findViewById(R.id.output);
+        button = (Button) findViewById(R.id.button);
+        button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new CargaAsyncTask().execute(new Void[0]);
+            }
+        });
+    }
+
+    class CargaAsyncTask extends AsyncTask&lt;Void, Void, String&gt; {
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+            loading.setVisibility(View.VISIBLE);
+            button.setEnabled(false);
+        }
+
+        @Override
+        protected String doInBackground(Void... params) {
+            // Instantiate the custom HttpClient
+            DefaultHttpClient client = new MyHttpClient(getApplicationContext());
+            HttpGet get = new HttpGet("https://www.google.com");
+            // Execute the GET call and obtain the response
+            HttpResponse getResponse;
+            String resultado = null;
+            try {
+                getResponse = client.execute(get);
+                HttpEntity responseEntity = getResponse.getEntity();
+                InputStream is = responseEntity.getContent();
+                resultado = convertStreamToString(is);
+            } catch (ClientProtocolException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return resultado;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            loading.setVisibility(View.GONE);
+            button.setEnabled(true);
+            if (result == null) {
+                output.setText("Error");
+            } else {
+                output.setText(result);
+            }
+        }
+
+    }
+
+    public static String convertStreamToString(InputStream is) throws IOException {
+        /*
+         * To convert the InputStream to String we use the
+         * Reader.read(char[] buffer) method. We iterate until the
+         * Reader return -1 which means there's no more data to
+         * read. We use the StringWriter class to produce the string.
+         */
+        if (is != null) {
+            Writer writer = new StringWriter();
+
+            char[] buffer = new char[1024];
+            try {
+                Reader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+                int n;
+                while ((n = reader.read(buffer)) != -1) {
+                    writer.write(buffer, 0, n);
+                }
+            } finally {
+                is.close();
+            }
+            return writer.toString();
+        } else {
+            return "";
+        }
+    }
+}
+</code></pre>
+
+<p>I hope it could be useful for someone else!!
+<strong>enjoy it!</strong></p>

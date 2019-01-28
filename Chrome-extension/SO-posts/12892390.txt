@@ -1,0 +1,155 @@
+<p>I had the same problem and I took me about 1h to find this in the v3 documentation:</p>
+
+<blockquote>
+  <p>Service Accounts</p>
+  
+  <p>Useful for automated/offline/scheduled access to Google Analytics data for your own account. For example, to build a live dashboard of your own Google Analytics data and share it with other users.</p>
+  
+  <p>There are a few steps you need to follow to configure service accounts to work with Google Analytics:</p>
+  
+  <ol>
+  <li>Register a project in the APIs Console.</li>
+  <li>In the Google APIs Console, under the API Access pane, create a client ID with the Application Type set to Service Account.</li>
+  <li>Sign-in to Google Analytics and navigate to the Admin section.</li>
+  <li>Select the account for which you want the application to have access to.</li>
+  <li>Add the email address, from the Client ID created in the APIs Console from step #2, as a user of the selected Google Analytics account.</li>
+  <li>Follow the instructions for Service Accounts to access Google Analytics data.</li>
+  </ol>
+</blockquote>
+
+<p>Read more here:
+<a href="https://developers.google.com/analytics/devguides/reporting/core/v3/gdataAuthorization" rel="nofollow">https://developers.google.com/analytics/devguides/reporting/core/v3/gdataAuthorization</a> </p>
+
+<p>Puh, I guess the API is so big Google is having trouble documenting it an easy way =) </p>
+
+<p>Then I looked at the code in the <strong>plus-serviceaccount-cmdline-sample</strong> and <strong>analytics-cmdline-sample</strong>. This is a very basic version implemented in a Playframework2 java app that
+prints to System.out as the examples above:</p>
+
+<pre><code>private static final HttpTransport HTTP_TRANSPORT = new NetHttpTransport();
+private static final JsonFactory JSON_FACTORY = new JacksonFactory();
+
+public static Result index() {
+   GoogleCredential credential = null;
+   try {
+        credential = new GoogleCredential.Builder().setTransport(HTTP_TRANSPORT)
+              .setJsonFactory(JSON_FACTORY)
+              .setServiceAccountId("2363XXXXXXX@developer.gserviceaccount.com")
+              .setServiceAccountScopes(Arrays.asList(AnalyticsScopes.ANALYTICS_READONLY))
+              .setServiceAccountPrivateKeyFromP12File(new File("/your/path/to/privatekey/privatekey.p12"))                          
+              .build();
+     } catch (GeneralSecurityException e) {
+         e.printStackTrace();
+     } catch (IOException e) {
+         e.printStackTrace();  
+     }
+
+     // Set up and return Google Analytics API client.
+     Analytics analytics = new Analytics.Builder(HTTP_TRANSPORT, JSON_FACTORY, credential).setApplicationName(
+          "Google-Analytics-Hello-Analytics-API-Sample").build();
+
+     String profileId = "";
+     try {
+         profileId = getFirstProfileId(analytics);
+     } catch (IOException e) {
+        e.printStackTrace(); 
+     }
+
+     GaData gaData = null;
+     try {
+        gaData = executeDataQuery(analytics, profileId);
+     } catch (IOException e) {
+        e.printStackTrace();
+     }
+     printGaData(gaData);
+
+     return ok(index.render("Your new application is ready."));
+}
+
+private static String getFirstProfileId(Analytics analytics) throws IOException {
+    String profileId = null;
+
+    // Query accounts collection.
+    Accounts accounts = analytics.management().accounts().list().execute();
+
+    if (accounts.getItems().isEmpty()) {
+        System.err.println("No accounts found");
+    } else {
+        String firstAccountId = accounts.getItems().get(0).getId();
+
+        // Query webproperties collection.
+        Webproperties webproperties =
+                analytics.management().webproperties().list(firstAccountId).execute();
+
+        if (webproperties.getItems().isEmpty()) {
+            System.err.println("No Webproperties found");
+        } else {
+            String firstWebpropertyId = webproperties.getItems().get(0).getId();
+
+            // Query profiles collection.
+            Profiles profiles =
+                    analytics.management().profiles().list(firstAccountId, firstWebpropertyId).execute();
+
+            if (profiles.getItems().isEmpty()) {
+                System.err.println("No profiles found");
+            } else {
+                profileId = profiles.getItems().get(0).getId();
+            }
+        }
+    }
+    return profileId;
+}
+
+/**
+ * Returns the top 25 organic search keywords and traffic source by visits. The Core Reporting API
+ * is used to retrieve this data.
+ *
+ * @param analytics the analytics service object used to access the API.
+ * @param profileId the profile ID from which to retrieve data.
+ * @return the response from the API.
+ * @throws IOException tf an API error occured.
+ */
+private static GaData executeDataQuery(Analytics analytics, String profileId) throws IOException {
+    return analytics.data().ga().get("ga:" + profileId, // Table Id. ga: + profile id.
+            "2012-01-01", // Start date.
+            "2012-01-14", // End date.
+            "ga:visits") // Metrics.
+            .setDimensions("ga:source,ga:keyword")
+            .setSort("-ga:visits,ga:source")
+            .setFilters("ga:medium==organic")
+            .setMaxResults(25)
+            .execute();
+}
+
+/**
+ * Prints the output from the Core Reporting API. The profile name is printed along with each
+ * column name and all the data in the rows.
+ *
+ * @param results data returned from the Core Reporting API.
+ */
+private static void printGaData(GaData results) {
+    System.out.println("printing results for profile: " + results.getProfileInfo().getProfileName());
+
+    if (results.getRows() == null || results.getRows().isEmpty()) {
+        System.out.println("No results Found.");
+    } else {
+
+        // Print column headers.
+        for (GaData.ColumnHeaders header : results.getColumnHeaders()) {
+            System.out.printf("%30s", header.getName());
+        }
+        System.out.println();
+
+        // Print actual data.
+        for (List&lt;String&gt; row : results.getRows()) {
+            for (String column : row) {
+                System.out.printf("%30s", column);
+            }
+            System.out.println();
+        }
+
+        System.out.println();
+    }
+}
+</code></pre>
+
+<p>Hope this helps!</p>

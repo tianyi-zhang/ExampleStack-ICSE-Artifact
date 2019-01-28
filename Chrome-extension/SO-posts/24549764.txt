@@ -1,0 +1,155 @@
+<p>Found the problem, it was specific to the authentication manager.
+This is the working configuration for me:</p>
+
+<pre><code>@Configuration
+@ComponentScan
+@EnableResourceServer
+@Import({SecurityConfig.class})
+public class OAuth2ServerConfig {
+
+@Configuration
+@EnableAuthorizationServer
+protected static class OAuth2Config extends AuthorizationServerConfigurerAdapter {
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    @Qualifier("restDataSource")
+    private DataSource datasource;
+
+    @Bean
+    public JwtAccessTokenConverter accessTokenConverter() {
+        return new JwtAccessTokenConverter();
+    }
+
+    @Bean
+    public CustomJwtTokenStore tokenStore() {
+        return new CustomJwtTokenStore();
+    }
+
+//      @Bean
+//      public JdbcTokenStore tokenStore() {
+//          return new JdbcTokenStore(datasource);
+//      }
+
+    @Override
+    public void configure(AuthorizationServerSecurityConfigurer oauthServer) throws Exception {
+        oauthServer.tokenKeyAccess("isAnonymous() || hasAuthority('ROLE_TRUSTED_CLIENT')").checkTokenAccess(
+                "hasAuthority('ROLE_TRUSTED_CLIENT')");
+    }
+
+    @Override
+    public void configure(AuthorizationServerEndpointsConfigurer endpoints) throws Exception {
+        endpoints.authenticationManager(authenticationManager).tokenStore(tokenStore()).accessTokenConverter(accessTokenConverter());
+    }
+
+    @Override
+    public void configure(ClientDetailsServiceConfigurer clients) throws Exception {
+        clients.inMemory()
+            .withClient("my-trusted-client")
+                .authorizedGrantTypes("password", "authorization_code", "refresh_token", "implicit")
+                .authorities("ROLE_CLIENT", "ROLE_TRUSTED_CLIENT")
+                .scopes("read", "write", "trust")
+                .accessTokenValiditySeconds(60)
+        .and()
+            .withClient("my-client-with-registered-redirect")
+                .authorizedGrantTypes("authorization_code")
+                .authorities("ROLE_CLIENT")
+                .scopes("read", "trust")
+                .redirectUris("http://anywhere?key=value")
+        .and()
+            .withClient("my-client-with-secret")
+                .authorizedGrantTypes("client_credentials", "password")
+                .authorities("ROLE_CLIENT", "ROLE_TRUSTED_CLIENT")
+                .scopes("read", "write")
+                .secret("secret");
+    }
+
+}
+}
+</code></pre>
+
+<p>with the security config:</p>
+
+<pre><code>@Configuration
+@EnableWebSecurity
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+@Autowired
+private AuthenticationEntryPoint authenticationEntryPoint;
+
+@Autowired
+private AccessDeniedHandler accessDeniedHandler;
+
+@Autowired
+private GenericFilterBean filter;
+
+
+@Override
+public void configure(WebSecurity web) throws Exception {
+    web.ignoring().antMatchers("/webjars/**", "/images/**", "/oauth/uncache_approvals", "/oauth/cache_approvals");
+}
+
+@Override
+@Bean
+public AuthenticationManager authenticationManagerBean() throws Exception {
+    return super.authenticationManagerBean();
+}
+@Override
+protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+    auth.userDetailsService(userAuthenticationManager()).passwordEncoder(passwordEncoder());
+}
+
+@Override
+protected void configure(HttpSecurity http) throws Exception {
+    http
+      .sessionManagement()
+      .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+    .and()
+      .exceptionHandling()
+        .accessDeniedHandler(accessDeniedHandler) // handle access denied in general (for example comming from @PreAuthorization
+        .authenticationEntryPoint(authenticationEntryPoint) // handle authentication exceptions for unauthorized calls.
+    .and()
+      .authorizeRequests()
+        .antMatchers("/xxx/**").fullyAuthenticated()
+        .antMatchers("/xxx/**").fullyAuthenticated()
+        .antMatchers("/xxx/**").fullyAuthenticated()
+     .and()
+       .csrf().disable();;
+}
+
+@Bean
+@Autowired
+ApplicationListener&lt;AbstractAuthenticationEvent&gt; loggerBean() {
+    return new org.springframework.security.authentication.event.LoggerListener();
+}
+
+@Bean
+@Autowired
+AccessDeniedHandler accessDeniedHandler() {
+    return new AccessDeniedExceptionHandler();
+}
+
+@Bean
+@Autowired
+AuthenticationEntryPoint entryPointBean() {
+    return new UnauthorizedEntryPoint();
+}
+
+@Bean
+public BCryptPasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+}
+
+@Bean(name="userAuthenticationManager")
+public UserDetailsService userAuthenticationManager() throws Exception {
+    return new UserServiceImpl();
+}
+
+@Bean
+public UserService userService() {
+    return new UserServiceImpl();
+}   
+}
+</code></pre>

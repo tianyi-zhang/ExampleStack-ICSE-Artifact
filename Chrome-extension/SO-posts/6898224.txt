@@ -1,0 +1,230 @@
+<p>here is the example of simple map display with current location</p>
+
+<p>MyMap.java for display map</p>
+
+<pre><code>class MyMap extends MapActivity{
+/** Called when the activity is first created. */
+GeoPoint defaultPoint;
+static GeoPoint point;
+static MapController mc;
+static MapView mapView;
+static double curLat =0;
+static double curLng =0;
+
+@Override
+public void onCreate(Bundle savedInstanceState) {
+
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.main);
+
+    mapView = (MapView)findViewById(R.id.mapview);
+    mapView.setBuiltInZoomControls(true);
+
+    String coordinates[] = {"22.286595", "70.795685"};
+    double lat = Double.parseDouble(coordinates[0]);
+    double lng = Double.parseDouble(coordinates[1]);
+
+    mc = mapView.getController();
+
+    defaultPoint = new GeoPoint(
+        (int) (lat * 1E6), 
+        (int) (lng * 1E6));
+
+    mc.animateTo(defaultPoint);
+    mc.setZoom(13); 
+
+    MapOverlay mapOverlay = new MapOverlay();
+    List&lt;Overlay&gt; listOfOverlays = mapView.getOverlays();
+    listOfOverlays.clear();
+    listOfOverlays.add(mapOverlay);   
+
+    mapView.invalidate();
+
+    Intent startService = new Intent(getApplicationContext(),ServiceLocation.class);
+    startService(startService);
+}
+
+public static void updateMap() {
+    if(ServiceLocation.curLocation!=null){
+        curLat = ServiceLocation.curLocation.getLatitude();
+        curLng = ServiceLocation.curLocation.getLongitude();        
+        if(mapView!=null){
+            point = new GeoPoint((int)(curLat*1e6),(int)(curLng*1e6));
+            mc.animateTo(point);
+            mapView.invalidate();
+        }
+    }
+}
+@Override
+protected boolean isRouteDisplayed(){
+    return false;
+}
+class MapOverlay extends com.google.android.maps.Overlay{
+    @Override
+    public boolean draw(Canvas canvas, MapView mapView, boolean shadow, long when) {
+        super.draw(canvas, mapView, shadow);                   
+
+        if(!shadow){
+            //---translate the GeoPoint to screen pixels---
+            Point screenPts = new Point();
+            if(curLat==0 &amp;&amp; curLng==0)
+                mapView.getProjection().toPixels(defaultPoint, screenPts);
+            else{
+                mapView.getProjection().toPixels(point, screenPts);
+            }
+            //---add the marker---
+            Bitmap bmp = BitmapFactory.decodeResource(getResources(), R.drawable.cur_loc);            
+            canvas.drawBitmap(bmp, screenPts.x, screenPts.y-50, null);
+        }
+        return true;
+    }
+}
+}
+</code></pre>
+
+<p>here is my background service code for fetching lat/lng using gps</p>
+
+<pre><code>class ServiceLocation extends Service{
+private LocationManager locMan;
+private Boolean locationChanged;
+private Handler handler = new Handler();
+
+public static Location centerLoc;
+public static Location curLocation;
+public static boolean isService = true;
+
+
+LocationListener gpsListener = new LocationListener() {
+    public void onLocationChanged(Location location) {
+        if (curLocation == null) {
+            curLocation = location;
+            locationChanged = true;
+        }else if (curLocation.getLatitude() == location.getLatitude() &amp;&amp; curLocation.getLongitude() == location.getLongitude()){
+            locationChanged = false;
+            return;
+        }else
+            locationChanged = true;
+
+        curLocation = location;
+
+
+        if (locationChanged)
+            locMan.removeUpdates(gpsListener);
+
+
+    MyMap.updateMap();
+    }
+    public void onProviderDisabled(String provider) {
+    }
+
+    public void onProviderEnabled(String provider) {
+        // Log.w("GPS", "Location changed", null);
+    }
+
+    public void onStatusChanged(String provider, int status,Bundle extras) {
+        if (status == 0)// UnAvailable
+        {
+        } else if (status == 1)// Trying to Connect
+        {
+        } else if (status == 2) {// Available
+        }
+    }
+
+};
+
+@Override
+public void onCreate() {
+    super.onCreate();
+    if (locMan.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+       locMan.requestLocationUpdates(LocationManager.GPS_PROVIDER,100, 1, gpsListener);
+    } else {
+       this.startActivity(new Intent("android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS"));
+    }
+    centerLoc = new Location("");
+    curLocation = locMan.getLastKnownLocation(LocationManager.GPS_PROVIDER);;*/
+    centerLoc = new Location("");
+    curLocation = getBestLocation();
+
+    if (curLocation == null) 
+        Toast.makeText(getBaseContext(),"Unable to get your location", Toast.LENGTH_SHORT).show();
+
+    isService =  true;
+}
+final String TAG="LocationService";
+   @Override
+   public int onStartCommand(Intent intent, int flags, int startId) {
+ return super.onStartCommand(intent, flags, startId);
+   }
+
+
+
+@Override
+   public void onLowMemory() {
+       super.onLowMemory();
+   }
+
+   @Override
+   public void onStart(Intent i, int startId){
+      handler.postDelayed(GpsFinder,5000);// will start after 5 seconds
+   }
+
+   @Override
+   public void onDestroy() {
+       handler.removeCallbacks(GpsFinder);
+       handler = null;
+       Toast.makeText(this, "Stop services", Toast.LENGTH_SHORT).show();
+       isService = false;
+   }
+
+   public IBinder onBind(Intent arg0) {
+         return null;
+  }
+
+  public Runnable GpsFinder = new Runnable(){
+    public void run(){
+        Location tempLoc = getBestLocation();
+        if(tempLoc!=null)
+            curLocation = tempLoc;
+        handler.postDelayed(GpsFinder,5000);// register again to start after 5 seconds...        
+    }
+  };
+
+    private Location getBestLocation() {        
+        Location gpslocation = null;
+        Location networkLocation = null;
+
+        if(locMan==null)
+              locMan = (LocationManager) getApplicationContext() .getSystemService(Context.LOCATION_SERVICE);
+        try {
+            if(locMan.isProviderEnabled(LocationManager.GPS_PROVIDER)){
+                locMan.requestLocationUpdates(LocationManager.GPS_PROVIDER,100, 1, gpsListener);
+                gpslocation = locMan.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            }
+            if(locMan.isProviderEnabled(LocationManager.NETWORK_PROVIDER)){
+                locMan.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,100, 1, gpsListener);
+                networkLocation = locMan.getLastKnownLocation(LocationManager.NETWORK_PROVIDER); 
+            }
+        } catch (IllegalArgumentException e) {
+            //Log.e(ErrorCode.ILLEGALARGUMENTERROR, e.toString());
+            Log.e("error", e.toString());
+
+        }
+        if(gpslocation==null &amp;&amp; networkLocation==null)
+            return null;
+
+        if(gpslocation!=null &amp;&amp; networkLocation!=null){
+            if(gpslocation.getTime() &lt; networkLocation.getTime())
+                return networkLocation;
+            else
+                return gpslocation;
+        }
+        if (gpslocation == null) {
+            return networkLocation;
+        }
+        if (networkLocation == null) {
+            return gpslocation;
+        }
+        return null;
+    }
+}
+</code></pre>

@@ -1,0 +1,161 @@
+<p>The simple answer is: <strong>Yes</strong>, of course you can as <code>SessionFactory.getCurrentSession()</code> is just a method of an interface so you could write you own implementing class that gives you whatever <code>Session</code> you like.</p>
+
+<p>However, this is probably not the answer you are looking for.</p>
+
+<p>We've been asking ourselves a similar question: why, when using Hibernate with Spring's transaction management, do we have to add <code>@Transactional</code> to all our methods, even ones which only <code>SELECT</code> data and thus do not need to be executed within the context of a database transaction?</p>
+
+<p>The answer to this isn't so simple, but let's look at a bit of the plumbing involved and see if we can make sense of it.</p>
+
+<p>Firstly, as has been mentioned elsewhere on SO, the idea of a <code>Session</code> is fundamentally connected with the idea of a transaction. There's a hint in the javadoc for the <code>Session</code> interface:</p>
+
+<blockquote>
+  <p>The lifecycle of a Session is bounded by the beginning and end of a logical transaction. (Long transactions might span several database transactions.)</p>
+</blockquote>
+
+<p>and delving into the javadoc of the <code>@Transactional</code> class confirms that it's purpose is to indicate when code should be executed within a "transaction context", which is not <em>necessarily</em> the context of a <em>database</em> transaction.</p>
+
+<p>This also explains why Spring's <code>@Transactional</code> annotation allows you to set the property <code>readOnly=true</code> but more on that later.</p>
+
+<p>Getting back to Spring4 and Hibernate4, when you call <code>sessionFactory.getCurrentSession()</code> it actually executes the following code in <code>SessionFactoryImpl</code>:</p>
+
+<pre><code>public Session getCurrentSession() throws HibernateException {
+    if ( currentSessionContext == null ) {
+        throw new HibernateException( "No CurrentSessionContext configured!" );
+    }
+    return currentSessionContext.currentSession();
+}
+</code></pre>
+
+<p>so it's actually deferring to an implementation of <code>CurrentSessionContext</code> which (unless you're using JTA and you probably don't want to open that Pandora's box) is handled by the <code>SpringSessionContext</code> class:</p>
+
+<pre><code>@Override
+public Session currentSession() throws HibernateException {
+    Object value = TransactionSynchronizationManager.getResource(this.sessionFactory);
+    if (value instanceof Session) {
+        return (Session) value;
+    }
+    else if (value instanceof SessionHolder) {
+        SessionHolder sessionHolder = (SessionHolder) value;
+        Session session = sessionHolder.getSession();
+        if (!sessionHolder.isSynchronizedWithTransaction() &amp;&amp;
+                TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new SpringSessionSynchronization(sessionHolder, this.sessionFactory, false));
+            sessionHolder.setSynchronizedWithTransaction(true);
+            // Switch to FlushMode.AUTO, as we have to assume a thread-bound Session
+            // with FlushMode.MANUAL, which needs to allow flushing within the transaction.
+            FlushMode flushMode = session.getFlushMode();
+            if (flushMode.equals(FlushMode.MANUAL) &amp;&amp;
+                    !TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                session.setFlushMode(FlushMode.AUTO);
+                sessionHolder.setPreviousFlushMode(flushMode);
+            }
+        }
+        return session;
+    }
+
+    if (this.transactionManager != null) {
+        try {
+            if (this.transactionManager.getStatus() == Status.STATUS_ACTIVE) {
+                Session session = this.jtaSessionContext.currentSession();
+                if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new SpringFlushSynchronization(session));
+                }
+                return session;
+            }
+        }
+        catch (SystemException ex) {
+            throw new HibernateException("JTA TransactionManager found but status check failed", ex);
+        }
+    }
+
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+        Session session = this.sessionFactory.openSession();
+        if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            session.setFlushMode(FlushMode.MANUAL);
+        }
+        SessionHolder sessionHolder = new SessionHolder(session);
+        TransactionSynchronizationManager.registerSynchronization(
+                new SpringSessionSynchronization(sessionHolder, this.sessionFactory, true));
+        TransactionSynchronizationManager.bindResource(this.sessionFactory, sessionHolder);
+        sessionHolder.setSynchronizedWithTransaction(true);
+        return session;
+    }
+    else {
+        throw new HibernateException("Could not obtain transaction-synchronized Session for current thread");
+    }
+}
+</code></pre>
+
+<p>and explains why you will see the exception:</p>
+
+<blockquote>
+  <p>Could not obtain transaction-synchronized Session for current thread</p>
+</blockquote>
+
+<p>when you call <code>sessionFactory.getCurrentSession()</code> in a method which is not annotated with <code>@Transactional</code> as <code>TransactionSynchronizationManager.isSynchronizationActive()</code> returns <code>false</code> because without the <code>@Transactional</code> annotation the pointcut hasn't executed which would have created a synchronized transaction. (see <code>org.springframework.transaction.interceptor.TransactionInterceptor</code> for more info.)</p>
+
+<p>So this leads us back to our use-case, which is that we don't want the overhead of invoking the <code>PlatformTransactionManager</code> and it's database transaction code when we only want to execute a <code>SELECT</code> against the database. The easy way to achieve this is just to not call <code>sessionFactory.getCurrentSession()</code> and to instead to just open a <code>Session</code> explicitly. For example take this Spring managed code:</p>
+
+<pre><code>public class MyHibernateService {   
+
+    @Autowired
+    private SessionFactory sessionFactory;  
+
+    protected Session transactionalSession() {  
+        return sessionFactory.getCurrentSession();
+    }
+
+    protected Session readOnlySession() {
+        if(TransactionSynchronizationManager.isSynchronizationActive())
+            return transactionalSession();
+        Session session = this.sessionFactory.openSession();
+        session.setFlushMode(FlushMode.MANUAL);
+        return session;
+    }
+
+    public List&lt;SalixUrl&gt; activeUrls() {
+        return readOnlySession().createCriteria(SalixUrl.class)
+                .add(Restrictions.gt("published", LocalDateTime.now()))
+                .add(Restrictions.lt("removed", LocalDateTime.now()))
+                .list();
+    }
+
+    @Transactional
+    public List&lt;SalixUrl&gt; refreshUrls() {
+        List&lt;SalixUrl&gt; urls = activeUrls();
+        for(SalixUrl url : urls) {
+            url.setLastChecked(LocalDateTime.now());
+            transactionalSession().update(url);
+        }
+    }
+}
+</code></pre>
+
+<p>which would allow to you call <code>myHibernateService.activeUrls()</code> without having an <code>@Transactional</code> annotation, but also <code>myHibernateService.refreshUrls()</code> which you would want to go through the <code>PlatformTransactionManager</code>.</p>
+
+<p>If this code looks sightly familiar, it may be because you've looked at the source of the <code>OpenSessionInViewFilter</code> (or interceptor) which is commonly used to mitigate <code>LazyLoadingException</code>s and is also responsible for a lot of n+1 issues when programmers think they are optimising their ORM model by using <code>FetchType.LAZY</code> to define entity relationships but haven't coded their Service/Repository layer to actually fetch what needs to be fetched for the View to be generated.</p>
+
+<p>In any case, <strong>you don't want to use the above code</strong>. Instead you <em>probably</em> want to use the <code>@Transactional</code> annotation and let the Spring and Hibernate frameworks decide what type of database transaction is actually necessary.</p>
+
+<p>If you're worried about performance then you have a few options:</p>
+
+<p><strong>No 1.</strong> You can use Spring's <code>@Transactional(readOnly=true)</code> but note that this isn't <em>necessarily</em> a great idea. I'm not advocating using the javax <code>@Transactional</code> because it's more generic - if you've tied your colours to the Spring mast then you may as well use what it has to offer. Rather, I'm wary because all it does (with current implementations) is to request that the <code>Connection</code> object from the underlying database provider be marked as read-only. This can be problematic for a couple of reasons. </p>
+
+<p>For one, it's possible that your database provider does not support read-only connections (e.g. jTDS JDBC driver for MSSQL server) so it <em>might</em> be pointless.</p>
+
+<p>The second reason is due to connection pooling. If you are using a database that supports read-only connections, such as PostgreSQL, and a connection pool (such as C3P0) then you don't really want to mark some connections as read-only, then return them to the pool, then allow them to be provided back in scenarios in which you need to perform database writes. (I haven't tested this with Hibernate4 and Spring4 but it was certainly a problem with Spring3, Hibernate3 and C3P0.)</p>
+
+<p><strong>2.</strong> Use caching. With the hardware we have access to these days, caching is <em>probably</em> the answer, and you have a lot of options available to you. You can configure a 2nd-level cache for Hibernate entities and Spring itself has a good spring-cache module that allows caching of service/repository methods - take a look at how you can integrate EhCache.</p>
+
+<p><strong>3.</strong> Write you're own database queries using JDBC or whatever. Gavin King (Hibernate author) has been making the point for quite a while that just because you use Hibernate for ORM you don't have to use it for everything: <a href="https://plus.google.com/+GavinKing/posts/LGJU1NorAvY" rel="nofollow">https://plus.google.com/+GavinKing/posts/LGJU1NorAvY</a> (I can't find the explicit citation where he says "don't use Hibernate for performant <code>SELECT</code>" but I <em>think</em> I read something a few years ago).</p>
+
+<p>But there are two more important issues:</p>
+
+<p><strong>No 1.</strong> You <em>shouldn't</em> be worried about performance. And if you need to then you shouldn't be reading this as you should know all of it already ;-) - but ignoring my facetiousness, don't waste time with atomic code optimisation, instead you need to act like an engineer and look at your system as a whole (like Dirk Gently) and then make a judgement as to the most effective way to make your <em>system</em> as performant as possible. <em>Remember: there are a few reasons why concorde doesn't fly anymore.</em></p>
+
+<p><strong>No 2.</strong> You probably don't need to use the <code>SessionFactory</code> anymore. JPA 2 and <code>EntityManager</code> have been designed to make the explicit use of <code>SessionFactory</code> unnecessary. Even Emmanuel Bernard (another Hibernate author) gave us this advice a couple of years ago: <a href="http://www.theserverside.com/news/2240186700/The-JPA-20-EntityManager-vs-the-Hibernate-Session-Which-one-to-use" rel="nofollow">http://www.theserverside.com/news/2240186700/The-JPA-20-EntityManager-vs-the-Hibernate-Session-Which-one-to-use</a></p>
+
+<p>But you know what: I like the <code>SessionFactory</code> and the Hibernate Criteria API and everything that goes with it. So I'm gonna keep using it until they deprecate support for it from the Spring framework. Because, as I've said, if you've nailed your colours to a framework mast then you may as well use all that the framework has to offer. And realistically the main benefit of abstraction (that you can swap out underlying ORM or database providers) is something you will <em>probably</em> never have to worry about.</p>
+
+<p>(But yes, I've been there and done that too - I've had to migrate medium-sized codebases from MSSQL to PostgreSQL and the biggest problem has not been the Spring/ORM layer but has rather been the database specific code such as Stored Procedures and Triggers. And the fact that previous developers have tried to optimise queries by using <code>@Transactional(readOnly=true)</code> without understanding that MSSQL doesn't actually support it and it breaks when you use PostgreSQL and C3P0. Yeah, I'm still bitter about that.) </p>

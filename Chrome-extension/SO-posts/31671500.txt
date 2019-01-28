@@ -1,0 +1,160 @@
+<p>In my case, I've override the <code>makeWebViewEngine</code> method in order to be able to modify the <code>CordovaWebViewEngine</code> casted to a <code>SystemWebViewEngine</code> as follows (based on <a href="http://stackoverflow.com/questions/14574248/custom-user-agent-string-or-header-without-modifying-cordova-libs">this answer</a>):</p>
+
+<pre><code>public class MainActivity extends CordovaActivity {
+
+    private static final int FILECHOOSER_RESULTCODE = 12345;
+
+    private ValueCallback&lt;Uri&gt; mUploadMessage;
+
+    private Uri mPicUri;
+
+    private ValueCallback&lt;Uri[]&gt; mFilePathCallback;
+
+    private String mCameraPhotoPath;
+
+    @Override
+    protected CordovaWebViewEngine makeWebViewEngine() {
+        SystemWebViewEngine systemWebViewEngine = (SystemWebViewEngine) super.makeWebViewEngine();
+
+        SystemWebView systemWebView = (SystemWebView) systemWebViewEngine.getView();
+
+        systemWebView.setWebChromeClient(new SystemWebChromeClient(systemWebViewEngine) {
+            // For Android 4.1
+            public void openFileChooser(ValueCallback&lt;Uri&gt; uploadMsg, String acceptType) {
+                mUploadMessage = uploadMsg;
+                Intent cameraIntent = new Intent("android.media.action.IMAGE_CAPTURE");
+                Calendar cal = Calendar.getInstance();
+                cal.getTime();
+                SimpleDateFormat sdf = new SimpleDateFormat("HHmmss");
+                File photo = new File(Environment.getExternalStorageDirectory(), sdf.format(cal.getTime()) + ".jpg");
+                cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(photo));
+                mPicUri = Uri.fromFile(photo);
+
+                startActivityForResult(cameraIntent, FILECHOOSER_RESULTCODE);
+            }
+
+            // For Android 5.0+
+            public boolean onShowFileChooser(
+                    WebView webView, ValueCallback&lt;Uri[]&gt; filePathCallback,
+                    WebChromeClient.FileChooserParams fileChooserParams) {
+
+                // Double check that we don't have any existing callbacks
+                if (mFilePathCallback != null) {
+                    mFilePathCallback.onReceiveValue(null);
+                }
+                mFilePathCallback = filePathCallback;
+
+                // Set up the take picture intent
+                Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                if (takePictureIntent.resolveActivity(MainActivity.this.getPackageManager()) != null) {
+                    // Create the File where the photo should go
+                    File photoFile = null;
+                    try {
+                        photoFile = createImageFile();
+                        takePictureIntent.putExtra("PhotoPath", mCameraPhotoPath);
+                    } catch (IOException ex) {
+                        // Error occurred while creating the File
+                        Log.e(TAG, "Unable to create Image File", ex);
+                    }
+
+                    // Continue only if the File was successfully created
+                    if (photoFile != null) {
+                        mCameraPhotoPath = "file:" + photoFile.getAbsolutePath();
+                        takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT,
+                                Uri.fromFile(photoFile));
+                    } else {
+                        takePictureIntent = null;
+                    }
+                }
+
+                // Set up the intent to get an existing image
+                Intent contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
+                contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                contentSelectionIntent.setType("image/*");
+
+                // Set up the intents for the Intent chooser
+                Intent[] intentArray;
+                if (takePictureIntent != null) {
+                    intentArray = new Intent[]{takePictureIntent};
+                } else {
+                    intentArray = new Intent[0];
+                }
+
+                Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
+                chooserIntent.putExtra(Intent.EXTRA_INTENT, contentSelectionIntent);
+                chooserIntent.putExtra(Intent.EXTRA_TITLE, "Image Chooser");
+                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentArray);
+
+                startActivityForResult(chooserIntent, MainActivity.FILECHOOSER_RESULTCODE);
+
+                return true;
+            }
+        });
+
+        return systemWebViewEngine;
+    }
+
+    // …
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Set by &lt;content src="index.html" /&gt; in config.xml
+        loadUrl(launchUrl);
+    }
+}
+</code></pre>
+
+<p>Furthermore, based on <a href="http://stackoverflow.com/questions/28209785/android-exclude-some-camera-intent">this other answer</a>, I've had to specify the <code>openFileChooser</code> method for Android 4.1 and, for Android 5.0+, I've had to specify the <code>onShowFileChooser</code> method.</p>
+
+<p>By the way, I've modified the <code>onActivityResult</code> method as follows:</p>
+
+<pre><code>    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        if (Build.VERSION.SDK_INT &gt;= 21) {
+
+            if (requestCode != FILECHOOSER_RESULTCODE || mFilePathCallback == null) {
+                super.onActivityResult(requestCode, resultCode, intent);
+                return;
+            }
+
+            Uri[] results = null;
+
+            // Check that the response is a good one
+            if (resultCode == Activity.RESULT_OK) {
+
+                String dataString = intent.getDataString();
+                if (dataString != null) {
+                    results = new Uri[]{Uri.parse(dataString)};
+                } else {
+                    // If there is not data, then we may have taken a photo
+                    if (mCameraPhotoPath != null) {
+                        results = new Uri[]{Uri.parse(mCameraPhotoPath)};
+                    }
+                }
+            }
+
+            mFilePathCallback.onReceiveValue(results);
+            mFilePathCallback = null;
+        } else {
+            if (requestCode == FILECHOOSER_RESULTCODE) {
+                if (null == this.mUploadMessage) {
+                    return;
+                }
+
+                Uri result;
+                if (resultCode != RESULT_OK) {
+                    result = null;
+                } else {
+                    result = intent == null ? this.mPicUri : intent.getData(); // retrieve from the private variable if the intent is null
+                }
+
+                this.mUploadMessage.onReceiveValue(result);
+                this.mUploadMessage = null;
+            }
+        }
+    }
+</code></pre>
+
+<p>Thanks to @Will and @Christian for pointing the good direction in this answer BTW :)</p>

@@ -1,0 +1,228 @@
+<p>It's kind of difficult to find documentation about this, so I will collect here all information I have found. If you are in a rush or just don't like to read, jump to the <strong>How to get data from a SMS</strong> section.</p>
+
+<h2>content://mms-sms/conversations</h2>
+
+<p>This is the URI of the <a href="http://android.git.kernel.org/?p=platform/packages/providers/TelephonyProvider.git;a=blob;f=src/com/android/providers/telephony/MmsSmsProvider.java;h=e379c454ee203cb02aee59737b58bea24ac405cf;hb=HEAD">Mms and SMS provider</a>... which allows us to query the MMS and SMS databases at the same time, and mix them in a single thread (which are called <em>conversations</em>).</p>
+
+<p>Why is it uri important? Well, that's the standard way of getting MMS and SMS messages; for instance, when you receive a SMS and click on the notification bar, it will send a broadcast intent like this: <code>content://mms-sms/conversations/XXX</code>, where <code>XXX</code> is the id of the conversation.</p>
+
+<h2>Get a list of all conversations</h2>
+
+<p>The only thing you have to do is to query the <code>content://mms-sms/conversations</code> Uri:</p>
+
+<pre><code>ContentResolver contentResolver = getContentResolver();
+final String[] projection = new String[]{"*"};
+Uri uri = Uri.parse("content://mms-sms/conversations/");
+Cursor query = contentResolver.query(uri, projection, null, null, null);
+</code></pre>
+
+<p><strong>Note:</strong> usually, when you call <code>query</code> and want to return all columns you can pass <code>null</code> as the <code>projection</code> parameter. However, you cannot do that with this provider, so that's why I'm using <code>*</code>.</p>
+
+<p>Now you can loop through the <code>Cursor</code> as usual. These are the more important columns you would want to use:</p>
+
+<ul>
+<li><code>_id</code> is the ID of the message. <em>Captain obvious to the rescue?</em> Not really. This ID can be used to retrieve detailed information using either <code>content://sms</code> or <code>content://mms</code>.</li>
+<li><code>date</code> no explanation needed.</li>
+<li><code>thread_id</code> is the ID of the conversation</li>
+<li><code>body</code> The content of the last SMS on this conversation. If it's an MMS, even if it has a text part, this will be <code>null</code>.</li>
+</ul>
+
+<p><strong>Note:</strong> if you query <code>content://mms-sms/conversations</code> it will return a list of different conversations whose <code>_id</code> is the last SMS or MMS in each conversation. If you query <code>content://mms-sms/conversations/xxx</code> it will return each SMS and/or MMS on the conversation whose ID is <code>xxx</code>.</p>
+
+<h2>How to differentiate between SMS and MMS</h2>
+
+<p>Usually, you will want to know which type of message you are handling. Documentation says:</p>
+
+<blockquote>
+  <p>A virtual column,
+  <code>MmsSms.TYPE_DISCRIMINATOR_COLUMN</code>, may
+  be requested in the projection for a
+  query. Its value is either "mms" or
+  "sms", depending on whether the
+  message represented by the row is an
+  MMS message or an SMS message,
+  respectively.</p>
+</blockquote>
+
+<p>I think it's referring to <a href="http://www.google.com/codesearch#cZwlSNS7aEw/frameworks/base/core/java/android/provider/Telephony.java&amp;exact_package=android&amp;l=1591">this variable</a>... however I have not been able to make it work. If you have please tell me how or edit this post.</p>
+
+<p>So far this is what I have done and it seems to work but there must be better ways:</p>
+
+<pre><code>ContentResolver contentResolver = getContentResolver();
+final String[] projection = new String[]{"_id", "ct_t"};
+Uri uri = Uri.parse("content://mms-sms/conversations/");
+Cursor query = contentResolver.query(uri, projection, null, null, null);
+if (query.moveToFirst()) {
+    do {
+        String string = query.getString(query.getColumnIndex("ct_t"));
+        if ("application/vnd.wap.multipart.related".equals(string)) {
+            // it's MMS
+        } else {
+            // it's SMS
+        }
+    } while (query.moveToNext());
+}
+</code></pre>
+
+<h2>How to get data from a SMS</h2>
+
+<p>So you have the ID of the SMS, then the only thing you have to do is:</p>
+
+<pre><code>String selection = "_id = "+id;
+Uri uri = Uri.parse("content://sms");
+Cursor cursor = contentResolver.query(uri, null, selection, null, null);
+String phone = cursor.getString(cursor.getColumnIndex("address"));
+int type = cursor.getInt(cursor.getColumnIndex("type"));// 2 = sent, etc.
+String date = cursor.getString(cursor.getColumnIndex("date"));
+String body = cursor.getString(cursor.getColumnIndex("body"));
+</code></pre>
+
+<h2>How to get data from a MMS data?</h2>
+
+<p>MMSs are a little bit different. They can be built with different parts (text, audio, images, etc.); so here will see how to retrieve each kind of data separately.</p>
+
+<p>So let's guess we have the MMS id in the <code>mmsId</code> variable. We can get detailed information about this MMS by using the <code>content://mms/</code> provider:</p>
+
+<pre><code>Uri uri = Uri.parse("content://mms/");
+String selection = "_id = " + mmsId;
+Cursor cursor = getContentResolver().query(uri, null, selection, null, null);
+</code></pre>
+
+<p>However, the only interesting column is <code>read</code> which is <code>1</code> if the message has already been read.</p>
+
+<h3>How to get text content from MMS</h3>
+
+<p>Here we have to use <code>content://mms/part</code>... for instance:</p>
+
+<pre><code>String selectionPart = "mid=" + mmsId;
+Uri uri = Uri.parse("content://mms/part");
+Cursor cursor = getContentResolver().query(uri, null,
+    selectionPart, null, null);
+if (cursor.moveToFirst()) {
+    do {
+        String partId = cursor.getString(cursor.getColumnIndex("_id"));
+        String type = cursor.getString(cursor.getColumnIndex("ct"));
+        if ("text/plain".equals(type)) {
+            String data = cursor.getString(cursor.getColumnIndex("_data"));
+            String body;
+            if (data != null) {
+                // implementation of this method below
+                body = getMmsText(partId);
+            } else {
+                body = cursor.getString(cursor.getColumnIndex("text"));
+            }
+        }
+    } while (cursor.moveToNext());
+}
+</code></pre>
+
+<p>It could contain different parts of text... but usually it'd be only one. So if you want to remove the loop it will work most of the times. This is how the <code>getMmsText</code> method looks like:</p>
+
+<pre><code>private String getMmsText(String id) {
+    Uri partURI = Uri.parse("content://mms/part/" + id);
+    InputStream is = null;
+    StringBuilder sb = new StringBuilder();
+    try {
+        is = getContentResolver().openInputStream(partURI);
+        if (is != null) {
+            InputStreamReader isr = new InputStreamReader(is, "UTF-8");
+            BufferedReader reader = new BufferedReader(isr);
+            String temp = reader.readLine();
+            while (temp != null) {
+                sb.append(temp);
+                temp = reader.readLine();
+            }
+        }
+    } catch (IOException e) {}
+    finally {
+        if (is != null) {
+            try {
+                is.close();
+            } catch (IOException e) {}
+        }
+    }
+    return sb.toString();
+}
+</code></pre>
+
+<h3>How to get image from MMS</h3>
+
+<p>It's the same than getting the text part... the only difference is that you will be looking for a different mime-type:</p>
+
+<pre><code>String selectionPart = "mid=" + mmsId;
+Uri uri = Uri.parse("content://mms/part");
+Cursor cPart = getContentResolver().query(uri, null,
+    selectionPart, null, null);
+if (cPart.moveToFirst()) {
+    do {
+        String partId = cPart.getString(cPart.getColumnIndex("_id"));
+        String type = cPart.getString(cPart.getColumnIndex("ct"));
+        if ("image/jpeg".equals(type) || "image/bmp".equals(type) ||
+                "image/gif".equals(type) || "image/jpg".equals(type) ||
+                "image/png".equals(type)) {
+            Bitmap bitmap = getMmsImage(partId);
+        }
+    } while (cPart.moveToNext());
+}
+</code></pre>
+
+<p>This is how the <code>getMmsImage</code> method looks like:</p>
+
+<pre><code>private Bitmap getMmsImage(String _id) {
+    Uri partURI = Uri.parse("content://mms/part/" + _id);
+    InputStream is = null;
+    Bitmap bitmap = null;
+    try {
+        is = getContentResolver().openInputStream(partURI);
+        bitmap = BitmapFactory.decodeStream(is);
+    } catch (IOException e) {}
+    finally {
+        if (is != null) {
+            try {
+                is.close();
+            } catch (IOException e) {}
+        }
+    }
+    return bitmap;
+}
+</code></pre>
+
+<h3>How to get the sender address</h3>
+
+<p>You will need to use the <code>content://mms/xxx/addr</code> provider, where <code>xxx</code> is the id of the MMS:</p>
+
+<pre><code>private String getAddressNumber(int id) {
+    String selectionAdd = new String("msg_id=" + id);
+    String uriStr = MessageFormat.format("content://mms/{0}/addr", id);
+    Uri uriAddress = Uri.parse(uriStr);
+    Cursor cAdd = getContentResolver().query(uriAddress, null,
+        selectionAdd, null, null);
+    String name = null;
+    if (cAdd.moveToFirst()) {
+        do {
+            String number = cAdd.getString(cAdd.getColumnIndex("address"));
+            if (number != null) {
+                try {
+                    Long.parseLong(number.replace("-", ""));
+                    name = number;
+                } catch (NumberFormatException nfe) {
+                    if (name == null) {
+                        name = number;
+                    }
+                }
+            }
+        } while (cAdd.moveToNext());
+    }
+    if (cAdd != null) {
+        cAdd.close();
+    }
+    return name;
+}
+</code></pre>
+
+<h2>Final thoughts</h2>
+
+<ul>
+<li>Can't understand why Google, with those thousands of millions of dollars, don't pay a student or someone else to document this API. You have to check the source code to know how it works and, which is worse, they don't make public those constants used in the columns of the database, so we have to write them manually.</li>
+<li>For other kind of data inside an MMS you can apply the same idea learned above... it's just a matter of knowing the mime-type.</li>
+</ul>

@@ -1,0 +1,102 @@
+<p><strong>NEW ANSWER</strong> <em>added Jan 25th 2012</em></p>
+
+<p>Since writing the below answer, someone clued me in to the existence of <a href="http://developer.android.com/reference/android/view/ViewTreeObserver.html">ViewTreeObserver</a> and friends, APIs which have been lurking in the SDK since version 1.</p>
+
+<p>Rather than requiring a custom Layout type, a much simpler solution is to give your activity's root view a known ID, say <code>@+id/activityRoot</code>, hook a GlobalLayoutListener into the ViewTreeObserver, and from there calculate the size diff between your activity's view root and the window size:</p>
+
+<pre><code>final View activityRootView = findViewById(R.id.activityRoot);
+activityRootView.getViewTreeObserver().addOnGlobalLayoutListener(new OnGlobalLayoutListener() {
+    @Override
+    public void onGlobalLayout() {
+        int heightDiff = activityRootView.getRootView().getHeight() - activityRootView.getHeight();
+        if (heightDiff &gt; dpToPx(this, 200)) { // if more than 200 dp, it's probably a keyboard...
+            // ... do something here
+        }
+     }
+});
+</code></pre>
+
+<p>Using a utility such as: </p>
+
+<pre><code>public static float dpToPx(Context context, float valueInDp) {
+    DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+    return TypedValue.applyDimension(COMPLEX_UNIT_DIP, valueInDp, metrics);
+}
+</code></pre>
+
+<p>Easy!</p>
+
+<p><strong>Note:</strong>
+Your application must set this flag in Android Manifest <code>android:windowSoftInputMode="adjustResize"</code> otherwise above solution will not work.</p>
+
+<p><strong>ORIGINAL ANSWER</strong></p>
+
+<p>Yes it's possible, but it's far harder than it ought to be.</p>
+
+<p>If I need to care about when the keyboard appears and disappears (which is quite often) then what I do is customize my top-level layout class into one which overrides <code>onMeasure()</code>. The basic logic is that if the layout finds itself filling significantly less than the total area of the window, then a soft keyboard is probably showing. </p>
+
+<pre><code>import android.app.Activity;
+import android.content.Context;
+import android.graphics.Rect;
+import android.util.AttributeSet;
+import android.widget.LinearLayout;
+
+/*
+ * LinearLayoutThatDetectsSoftKeyboard - a variant of LinearLayout that can detect when 
+ * the soft keyboard is shown and hidden (something Android can't tell you, weirdly). 
+ */
+
+public class LinearLayoutThatDetectsSoftKeyboard extends LinearLayout {
+
+    public LinearLayoutThatDetectsSoftKeyboard(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    public interface Listener {
+        public void onSoftKeyboardShown(boolean isShowing);
+    }
+    private Listener listener;
+    public void setListener(Listener listener) {
+        this.listener = listener;
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int height = MeasureSpec.getSize(heightMeasureSpec);
+        Activity activity = (Activity)getContext();
+        Rect rect = new Rect();
+        activity.getWindow().getDecorView().getWindowVisibleDisplayFrame(rect);
+        int statusBarHeight = rect.top;
+        int screenHeight = activity.getWindowManager().getDefaultDisplay().getHeight();
+        int diff = (screenHeight - statusBarHeight) - height;
+        if (listener != null) {
+            listener.onSoftKeyboardShown(diff&gt;128); // assume all soft keyboards are at least 128 pixels high
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);       
+    }
+
+    }
+</code></pre>
+
+<p>Then in your Activity class...</p>
+
+<pre><code>public class MyActivity extends Activity implements LinearLayoutThatDetectsSoftKeyboard.Listener {
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        ...
+        LinearLayoutThatDetectsSoftKeyboard mainLayout = (LinearLayoutThatDetectsSoftKeyboard)findViewById(R.id.main);
+        mainLayout.setListener(this);
+        ...
+    }
+
+
+    @Override
+    public void onSoftKeyboardShown(boolean isShowing) {
+        // do whatever you need to do here
+    }
+
+    ...
+}
+</code></pre>

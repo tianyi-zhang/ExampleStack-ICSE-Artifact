@@ -1,0 +1,81 @@
+<p>I have solved my problem. After adding the range feature (can seek anywhere using player slider) iPhone can play the video.</p>
+
+<pre><code>private Response servePartialFile(String uri, Map&lt;String, String&gt; header,
+                                      File file, String mime) {
+        Response res;
+        try {
+            // Calculate etag
+            String etag = Integer.toHexString((file.getAbsolutePath()
+                    + file.lastModified() + "" + file.length()).hashCode());
+
+            // Support (simple) skipping:
+            long startFrom = 0;
+            long endAt = -1;
+            String range = header.get("range");
+            if (range != null) {
+                if (range.startsWith("bytes=")) {
+                    range = range.substring("bytes=".length());
+                    int minus = range.indexOf('-');
+                    try {
+                        if (minus &gt; 0) {
+                            startFrom = Long.parseLong(range
+                                    .substring(0, minus));
+                            endAt = Long.parseLong(range.substring(minus + 1));
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+
+            // Change return code and add Content-Range header when skipping is
+            // requested
+            long fileLen = file.length();
+            if (range != null &amp;&amp; startFrom &gt;= 0) {
+                if (startFrom &gt;= fileLen) {
+                    res = createResponse(Response.Status.RANGE_NOT_SATISFIABLE,
+                            NanoHTTPD.MIME_PLAINTEXT, "");
+                    res.addHeader("Content-Range", "bytes 0-0/" + fileLen);
+                    res.addHeader("ETag", etag);
+                } else {
+                    if (endAt &lt; 0) {
+                        endAt = fileLen - 1;
+                    }
+                    long newLen = endAt - startFrom + 1;
+                    if (newLen &lt; 0) {
+                        newLen = 0;
+                    }
+
+                    final long dataLen = newLen;
+                    FileInputStream fis = new FileInputStream(file) {
+                        @Override
+                        public int available() throws IOException {
+                            return (int) dataLen;
+                        }
+                    };
+                    fis.skip(startFrom);
+
+                    res = createResponse(Response.Status.PARTIAL_CONTENT, mime,
+                            fis);
+                    res.addHeader("Content-Length", "" + dataLen);
+                    res.addHeader("Content-Range", "bytes " + startFrom + "-"
+                            + endAt + "/" + fileLen);
+                    res.addHeader("ETag", etag);
+                }
+            } else {
+                if (etag.equals(header.get("if-none-match")))
+                    res = createResponse(Response.Status.NOT_MODIFIED, mime, "");
+                else {
+                    res = createResponse(Response.Status.OK, mime,
+                            new FileInputStream(file));
+                    res.addHeader("Content-Length", "" + fileLen);
+                    res.addHeader("ETag", etag);
+                }
+            }
+        } catch (IOException ioe) {
+            res = createResponse(Response.Status.FORBIDDEN,
+                    NanoHTTPD.MIME_PLAINTEXT, "FORBIDDEN: Reading file failed.");
+        }
+
+        return res;
+    }
+</code></pre>

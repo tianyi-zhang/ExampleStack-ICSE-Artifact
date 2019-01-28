@@ -1,0 +1,53 @@
+<p>The answer to your question, unfortunately, is that the docs are simply wrong and there is no such functionality.</p>
+
+<p>There is <a href="https://code.google.com/p/android/issues/detail?id=13045">an open bug from 2010</a> that addresses precisely this issue and even though 80+ people have starred it, there is no official response from the Android team.</p>
+
+<p>The issue is <a href="http://stackoverflow.com/a/11424150/219293">also discussed on SO here</a>.</p>
+
+<p>If your use case is conflict-heavy (i.e. most of the time you expect to find an existing record and want to return that ID) your suggested workaround seems the way to go. If, on the other hand, your use case is such that most of the time you expect for there to be no existing record, then the following workaround might be more appropriate:</p>
+
+<pre><code>try {
+  insertOrThrow(...)
+} catch(SQLException e) {
+  // Select the required record and get primary key from it
+} 
+</code></pre>
+
+<p>Here is a self-contained implementation of this workaround:</p>
+
+<pre><code>public static long insertIgnoringConflict(SQLiteDatabase db,
+                                          String table,
+                                          String idColumn,
+                                          ContentValues values) {
+    try {
+        return db.insertOrThrow(table, null, values);
+    } catch (SQLException e) {
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT ");
+        sql.append(idColumn);
+        sql.append(" FROM ");
+        sql.append(table);
+        sql.append(" WHERE ");
+
+        Object[] bindArgs = new Object[values.size()];
+        int i = 0;
+        for (Map.Entry&lt;String, Object&gt; entry: values.valueSet()) {
+            sql.append((i &gt; 0) ? " AND " : "");
+            sql.append(entry.getKey());
+            sql.append(" = ?");
+            bindArgs[i++] = entry.getValue();
+        }
+
+        SQLiteStatement stmt = db.compileStatement(sql.toString());
+        for (i = 0; i &lt; bindArgs.length; i++) {
+            DatabaseUtils.bindObjectToProgram(stmt, i + 1, bindArgs[i]);
+        }
+
+        try {
+            return stmt.simpleQueryForLong();
+        } finally {
+            stmt.close();
+        }
+    }
+}
+</code></pre>

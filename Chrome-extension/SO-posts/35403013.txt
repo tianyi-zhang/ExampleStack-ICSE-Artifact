@@ -1,0 +1,221 @@
+<p>Code to kill call </p>
+
+<pre><code> public boolean killCall(Context context) {
+        try {
+            // Get the boring old TelephonyManager
+            TelephonyManager telephonyManager =
+                    (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+
+            // Get the getITelephony() method
+            Class classTelephony = Class.forName(telephonyManager.getClass().getName());
+            Method methodGetITelephony = classTelephony.getDeclaredMethod("getITelephony");
+
+            // Ignore that the method is supposed to be private
+            methodGetITelephony.setAccessible(true);
+
+            // Invoke getITelephony() to get the ITelephony interface
+            Object telephonyInterface = methodGetITelephony.invoke(telephonyManager);
+
+            // Get the endCall method from ITelephony
+            Class telephonyInterfaceClass =
+                    Class.forName(telephonyInterface.getClass().getName());
+            Method methodEndCall = telephonyInterfaceClass.getDeclaredMethod("endCall");
+
+            // Invoke endCall()
+            methodEndCall.invoke(telephonyInterface);
+
+        } catch (Exception ex) { // Many things can go wrong with reflection calls
+            LogUtil.warn(TAG, "PhoneStateReceiver **" + ex.toString());
+            return false;
+        }
+        return true;
+
+    }
+</code></pre>
+
+<p>Code for different states</p>
+
+<pre><code>public abstract class PhoneCallReceiver extends BroadcastReceiver {
+
+    private static final String TAG = "PhoneCallReceiver";
+
+    //The receiver will be recreated whenever android feels like it.  We need a static variable to remember data between instantiations
+
+    private static int lastState = TelephonyManager.CALL_STATE_IDLE;
+    private static Date callStartTime;
+    private static boolean isIncoming;
+    private static String savedNumber;  //because the passed incoming is only valid in ringing
+
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+
+        //We listen to two intents.  The new outgoing call only tells us of an outgoing call.  We use it to get the number.
+        if (intent.getAction().equals("android.intent.action.NEW_OUTGOING_CALL")) {
+            savedNumber = intent.getExtras().getString("android.intent.extra.PHONE_NUMBER");
+        } else {
+            String stateStr = intent.getExtras().getString(TelephonyManager.EXTRA_STATE);
+            String number = intent.getExtras().getString(TelephonyManager.EXTRA_INCOMING_NUMBER);
+            int state = 0;
+            if (stateStr.equals(TelephonyManager.EXTRA_STATE_IDLE)) {
+                state = TelephonyManager.CALL_STATE_IDLE;
+            } else if (stateStr.equals(TelephonyManager.EXTRA_STATE_OFFHOOK)) {
+                state = TelephonyManager.CALL_STATE_OFFHOOK;
+            } else if (stateStr.equals(TelephonyManager.EXTRA_STATE_RINGING)) {
+                state = TelephonyManager.CALL_STATE_RINGING;
+            }
+
+
+            onCallStateChanged(context, state, number);
+            // Added this line to remove broadcast from caller application
+//            abortBroadcast();
+            TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+            telephonyManager.listen(new PhoneStateListener(context), PhoneStateListener.LISTEN_CALL_STATE);
+
+        }
+    }
+
+    //Derived classes should override these to respond to specific events of interest
+    protected void onIncomingCallStarted(Context ctx, String number, Date start) {
+    }
+
+    protected void onOutgoingCallStarted(Context ctx, String number, Date start) {
+    }
+
+    protected void onIncomingCallEnded(Context ctx, String number, Date start, Date end) {
+    }
+
+    protected void onOutgoingCallEnded(Context ctx, String number, Date start, Date end) {
+    }
+
+    protected void onMissedCall(Context ctx, String number, Date start) {
+    }
+
+    //Deals with actual events
+
+    //Incoming call-  goes from IDLE to RINGING when it rings, to OFFHOOK when it's answered, to IDLE when its hung up
+    //Outgoing call-  goes from IDLE to OFFHOOK when it dials out, to IDLE when hung up
+    public void onCallStateChanged(Context context, int state, String number) {
+        if (lastState == state) {
+            //No change, debounce extras
+            return;
+        }
+        switch (state) {
+            case TelephonyManager.CALL_STATE_RINGING:
+                isIncoming = true;
+                callStartTime = new Date();
+                savedNumber = number;
+                onIncomingCallStarted(context, number, callStartTime);
+                break;
+            case TelephonyManager.CALL_STATE_OFFHOOK:
+                //Transition of ringing-&gt;offhook are pickups of incoming calls.  Nothing done on them
+                if (lastState != TelephonyManager.CALL_STATE_RINGING) {
+                    isIncoming = false;
+                    callStartTime = new Date();
+                    onOutgoingCallStarted(context, savedNumber, callStartTime);
+                }
+                break;
+            case TelephonyManager.CALL_STATE_IDLE:
+                //Went to idle-  this is the end of a call.  What type depends on previous state(s)
+                if (lastState == TelephonyManager.CALL_STATE_RINGING) {
+                    //Ring but no pickup-  a miss
+                    onMissedCall(context, savedNumber, callStartTime);
+                } else if (isIncoming) {
+                    onIncomingCallEnded(context, savedNumber, callStartTime, new Date());
+                } else {
+                    onOutgoingCallEnded(context, savedNumber, callStartTime, new Date());
+                }
+                break;
+        }
+        lastState = state;
+    }
+
+    class PhoneStateListener extends PhoneStateListener {
+
+        //private static final String TAG = "PhoneStateChanged";
+        Context context; //Context to make Toast if required
+
+        public PhoneStateListener(Context context) {
+            super();
+            this.context = context;
+        }
+
+        @Override
+        public void onCallStateChanged(int state, String incomingNumber) {
+            super.onCallStateChanged(state, incomingNumber);
+
+            switch (state) {
+                case TelephonyManager.DATA_CONNECTED:
+                    LogUtil.debug(TAG, "Data connected send broadcast");
+                    Intent dataConnectedIntent = new Intent(PhoneCallTimerService.DATA_CONNECTED);
+                    context.sendBroadcast(dataConnectedIntent);
+                    break;
+                case TelephonyManager.DATA_DISCONNECTED:
+                    LogUtil.debug(TAG, "Data disconnected send broadcast");
+                    Intent dataDisConnectedIntent = new Intent(PhoneCallOutgoingService.DATA_DISCONNECTED);
+                    context.sendBroadcast(dataDisConnectedIntent);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+public class CallReceiver extends PhoneCallReceiver {
+
+    private static final String TAG = "CallReceiver";
+
+
+    @Override
+    protected void onIncomingCallStarted(Context ctx, String number, Date start) {
+    }
+
+    @Override
+    protected void onOutgoingCallStarted(final Context ctx, final String number, Date start) {
+        LogUtil.debug(TAG, "Outgoing call  started from  :: " + number);
+        final String name = Utils.getContactName(ctx, number);
+        Handler outgoingCallHandler = new Handler();
+        outgoingCallHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (!Utils.isMyServiceRunning(PhoneCallOutgoingService.class, ctx) &amp;&amp; !Utils.isMyServiceRunning(PhoneCallTimerService.class, ctx)) {
+                    Intent outGoingCallService = new Intent(ctx, PhoneCallOutgoingService.class);
+                    if (name != null &amp;&amp; name.length() &gt; 0) {
+                        outGoingCallService.putExtra(CallReceiver.CALLER_NUMBER, name);
+                    } else {
+                        outGoingCallService.putExtra(CallReceiver.CALLER_NUMBER, number);
+                    }
+                    ctx.startService(outGoingCallService);
+                } else {
+                    LogUtil.error(TAG, "Outgoing call service already started");
+                }
+            }
+        }, 2000);
+
+    }
+
+    @Override
+    protected void onIncomingCallEnded(Context ctx, String number, Date start, Date end) {
+        LogUtil.debug(TAG, "Incoming call  end from  :: " + number);
+        Intent callTerminatedIntent = new Intent(ACTION_CALL_TERMINATED);
+        ctx.sendBroadcast(callTerminatedIntent);
+
+    }
+
+    @Override
+    protected void onOutgoingCallEnded(Context ctx, String number, Date start, Date end) {
+        LogUtil.debug(TAG, "Outgoing call ended from  :: " + number);
+        Intent dataDisConnectedIntent = new Intent(PhoneCallOutgoingService.DATA_DISCONNECTED);
+        ctx.sendBroadcast(dataDisConnectedIntent);
+    }
+
+    @Override
+    protected void onMissedCall(Context ctx, String number, Date start) {
+        LogUtil.debug(TAG, "Missed call  from  :: " + number);
+        Intent missedCallIntent = new Intent(ACTION_CALL_MISSED);
+        ctx.sendBroadcast(missedCallIntent);
+    }
+</code></pre>
+
+<p>Of-course there is some code which is not important for your app so please comment or delete just delete that line.</p>

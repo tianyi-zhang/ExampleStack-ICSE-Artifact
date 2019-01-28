@@ -1,0 +1,71 @@
+<p>I've stumbled upon a way to solve this with reflection and system call commands, and decided to report it even though the thread is old and there are some caveats:</p>
+
+<ol>
+<li>Root required</li>
+<li>Hackish and maybe ROM-specific (tested on CM 12.1 titan)</li>
+<li>Probably not working on all android versions (tested on 5.1.1)</li>
+</ol>
+
+<p>Much of the code is borrowed from / inspired by <a href="http://stackoverflow.com/a/27198925">this answer by ChuongPham</a>.</p>
+
+<p>First we need to get the correct transaction code by getting the value of a declared field of the ITelephony class. Since I suspect the name of the field might be slightly different depending on the platform (for mine the field name is "TRANSACTION_setPreferredNetworkType_96"), I provide a solution that is as flexible as possible:</p>
+
+<pre><code>private static String get3gTransactionCode(Context context) throws ClassNotFoundException, NoSuchMethodException, InvocationTargetException, IllegalAccessException, NoSuchFieldException {
+    final TelephonyManager mTelephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+    final Class&lt;?&gt; mTelephonyClass = Class.forName(mTelephonyManager.getClass().getName());
+    final Method mTelephonyMethod = mTelephonyClass.getDeclaredMethod("getITelephony");
+    mTelephonyMethod.setAccessible(true);
+    final Object mTelephonyStub = mTelephonyMethod.invoke(mTelephonyManager);
+    final Class&lt;?&gt; mTelephonyStubClass = Class.forName(mTelephonyStub.getClass().getName());
+    final Class&lt;?&gt; mClass = mTelephonyStubClass.getDeclaringClass();
+    for (Field f:mClass.getDeclaredFields()) {
+        if (f.getName().contains("setPreferredNetworkType")) {
+            final Field field = mClass.getDeclaredField(f.getName());
+            field.setAccessible(true);
+            return String.valueOf(field.getInt(null));
+        }
+    }
+    throw new NoSuchFieldException();
+}
+</code></pre>
+
+<p>Next we can use the transaction code in a system call via su:</p>
+
+<pre><code>private static void setPreferredNetworkType(Context context, int preferredType) throws ClassNotFoundException, NoSuchMethodException, NoSuchFieldException, IllegalAccessException, InvocationTargetException {
+    String transactionCode = get3gTransactionCode(context);
+    String command = "service call phone " + transactionCode + " i32 " + preferredType;
+    executeCommandViaSu(context, "-c", command);
+}
+</code></pre>
+
+<p>In my case, I call that method with the 2nd parameter being 1 for 2G, and 10 for 3G preference. The constants for different network types can be found <a href="http://developer.android.com/reference/android/telephony/TelephonyManager.html#NETWORK_TYPE_1xRTT" rel="nofollow">here</a>.</p>
+
+<p>For convenience and completeness I also copy-paste the executeCommandViaSu method from <a href="http://stackoverflow.com/a/27198925">ChuongPham's answer</a> here:</p>
+
+<pre><code>private static void executeCommandViaSu(Context context, String option, String command) {
+    boolean success = false;
+    String su = "su";
+    for (int i=0; i &lt; 3; i++) {
+        // Default "su" command executed successfully, then quit.
+        if (success) {
+            break;
+        }
+        // Else, execute other "su" commands.
+        if (i == 1) {
+            su = "/system/xbin/su";
+        } else if (i == 2) {
+            su = "/system/bin/su";
+        }
+        try {
+            // Execute command as "su".
+            Runtime.getRuntime().exec(new String[]{su, option, command});
+        } catch (IOException e) {
+            success = false;
+            // Oops! Cannot execute `su` for some reason.
+            // Log error here.
+        } finally {
+            success = true;
+        }
+    }
+}
+</code></pre>

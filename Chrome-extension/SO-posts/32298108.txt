@@ -1,0 +1,225 @@
+<h1>Short version by hacking Collections.binarySearch</h1>
+
+<blockquote>
+  <p>The framework has <a href="http://docs.oracle.com/javase/7/docs/api/java/util/Collections.html#binarySearch(java.util.List,%20T,%20java.util.Comparator)" rel="nofollow">built-in binary search</a> and <a href="http://docs.oracle.com/javase/7/docs/api/java/util/List.html" rel="nofollow">generic <code>List&lt;T&gt;</code> interface</a>, you should use them.</p>
+</blockquote>
+
+<p>The built-in <code>binarySearch</code> function always supplies the pivot element to the comparator as the second argument. This is undocumented behaviour, but we can exploit that, using the following comparator:</p>
+
+<pre><code>public static class FindLadderInterval implements Comparator&lt;Ladder&gt; {
+  public final int min, max;
+  public FindLadderInterval(int min, int max) {
+    this.min = min;
+    this.max = max;
+  }
+  @Override
+  public int compare(Ladder lhs, Ladder rhs) {
+    // ignore rhs
+    int length = lhs.length();
+    return length &lt; this.min ? -1 : length &gt; this.max ? 1 : 0;
+  }
+}
+</code></pre>
+
+<p>Then you can use it this way:</p>
+
+<pre><code>int index = Collections.binarySearch(list, null, new FindLadderInterval(12, 15));
+</code></pre>
+
+<p>Working example:</p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+public class Main2 {
+
+  public static class Ladder {
+    private final int _length;
+
+    public Ladder(int length) {
+      this._length = length;
+    }
+
+    public int length() {
+      return this._length;
+    }
+
+    @Override
+    public String toString() {
+      return "Ladder(" + this._length + ")";
+    }
+  }
+
+  public static class FindLadderInterval implements Comparator&lt;Ladder&gt; {
+    public final int min, max;
+
+    public FindLadderInterval(int min, int max) {
+      this.min = min;
+      this.max = max;
+    }
+
+    @Override
+    public int compare(Ladder lhs, Ladder rhs) {
+      // ignore rhs
+      int length = lhs.length();
+      return length &lt; this.min ? -1 : length &gt; this.max ? 1 : 0;
+    }
+  }
+
+  public static void main(String[] args) {
+    List&lt;Ladder&gt; list = new ArrayList&lt;Ladder&gt;();
+
+    list.add(new Ladder(1));
+    list.add(new Ladder(2));
+    list.add(new Ladder(6));
+    list.add(new Ladder(13));
+    list.add(new Ladder(17));
+    list.add(new Ladder(21));
+
+    int index = Collections.binarySearch(list, null,
+        new FindLadderInterval(12, 15));
+    System.out.println("index: " + index);
+    System.out.println("ladder: " + list.get(index));
+  }
+}
+</code></pre>
+
+<h1>Long version using proper algorithms</h1>
+
+<p>Your task to find an element in an interval is not a simple binary search, but we can implement it using a <code>binarySearch</code> function similar to the built-in one, because that returns the <em>insertion index</em> as a negative number if the element was not found. So we can search for the element at the end of the interval, if it's found then return it, and if it's not found simply check if the item at the insertion index is in the interval, and return that. This way the algorithm will return the last element in the interval.</p>
+
+<pre><code>public static &lt;T, R extends Comparable&lt;? super R&gt;&gt; int intervalBinarySearchBy(
+    List&lt;T&gt; list, R min, R max, Function&lt;? super T, ? extends R&gt; selector) {
+  int idx = binarySearchBy(list, max, selector);
+  if (idx &gt;= 0) return idx;
+  // Collections.binarySearch returns the insertion index binary
+  // negated if the element was not found
+  idx = ~idx;
+  return (idx &lt; list.size()
+    &amp;&amp; min.compareTo(selector.apply(list.get(idx))) &lt;= 0) ? idx : -1;
+}
+</code></pre>
+
+<p>To use the built-in <code>Collections.binarySearch</code> or your function, you need to provide a <em>representative element</em>, which is pretty hard when for example you order strings by their lengths. To find a string with a length of 15 you must provide a string with length of 15. That's why I like the python style ordering much more, which uses <em>key functions</em> or <em>selectors</em>. Basically, you don't need comparisons but a mapping to a comparable value. For example a mapping from <code>String</code> to <code>Integer</code> like <code>s -&gt; s.length()</code>. This makes possible to implement sweet functions like these (lambdas make it pretty):</p>
+
+<pre><code>List&lt;Person&gt; list = getPersons();
+Person youngest = minBy(list, p -&gt; p.getAge());
+Person tallest = maxBy(list, p -&gt; p.getHeight());
+Person person42 = findBy(list, 42, p -&gt; p.getAge());
+sortBy(list, p -&gt; p.getAge());
+</code></pre>
+
+<p>See, don't need a <code>Comparator</code> to order items by a property. Simple task, simple solution. Unfortunately, I am not aware of functions like this in either the standard library or third-parties. But they can be implemented.</p>
+
+<p>A working example in Java 8:</p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.function.Function;
+
+public class Main {
+
+  public static class Collections2 {
+
+    /**
+     * Mimics Collections.binarySearch
+     * 
+     * @param list
+     * @param pivotKey
+     * @param selector
+     * @return
+     */
+    public static &lt;T, R extends Comparable&lt;? super R&gt;&gt; int binarySearchBy(
+        List&lt;T&gt; list, R pivotKey,
+        Function&lt;? super T, ? extends R&gt; selector) {
+      int low = 0;
+      int high = list.size() - 1;
+      while (low &lt;= high) {
+        int mid = (low + high) &gt;&gt;&gt; 1;
+        int ord = selector.apply(list.get(mid)).compareTo(pivotKey);
+        if (ord &lt; 0) {
+          low = mid + 1;
+        } else if (ord &gt; 0) {
+          high = mid - 1;
+        } else {
+          return mid;
+        }
+      }
+      return ~high; // bitwise negated insertion point /* -(a+1) == ~a */
+    }
+
+    /**
+     * Finds the index of the last element in the interval, or returns -1 if
+     * no such element was found.
+     * 
+     * @param list
+     * @param min
+     * @param max
+     * @param selector
+     * @return
+     */
+    public static &lt;T, R extends Comparable&lt;? super R&gt;&gt; int intervalBinarySearchBy(
+        List&lt;T&gt; list, R min, R max, Function&lt;? super T, ? extends R&gt; selector) {
+      int idx = binarySearchBy(list, max, selector);
+      if (idx &gt;= 0) return idx;
+      // Collections.binarySearch returns the insertion index binary
+      // negated if the element was not found
+      idx = ~idx;
+      return (idx &lt; list.size()
+        &amp;&amp; min.compareTo(selector.apply(list.get(idx))) &lt;= 0) ? idx : -1;
+    }
+
+    public static &lt;T, R extends Comparable&lt;? super R&gt; &gt; Comparator&lt;T&gt; comparatorBy(
+        Function&lt;? super T, ? extends R&gt; selector) {
+      return (a, b) -&gt; selector.apply(a).compareTo(selector.apply(b));
+    }
+  }
+
+  public static Function&lt;Ladder, Integer&gt; LENGTH_OF = a -&gt; a.length();
+
+  public static class Ladder {
+    private final int _length;
+
+    public Ladder(int length) {
+      this._length = length;
+    }
+
+    public int length() {
+      return this._length;
+    }
+
+    @Override
+    public String toString() {
+      return "Ladder(" + this._length + ")";
+    }
+  }
+
+  public static void main(String[] args) {
+    List&lt;Ladder&gt; list = new ArrayList&lt;Ladder&gt;();
+    list.add(new Ladder(5));
+    list.add(new Ladder(9));
+    list.add(new Ladder(14));
+    list.add(new Ladder(7));
+    list.add(new Ladder(22));
+    list.add(new Ladder(23));
+    list.add(new Ladder(11));
+    list.add(new Ladder(9));
+
+    Collections.sort(list, Collections2.comparatorBy(LENGTH_OF));
+
+    int i = 0;
+    for (Ladder s : list) {
+      System.out.println("" + (i++) + ": " + s);
+    }
+
+    int foundIdx = Collections2.intervalBinarySearchBy(list, 12, 15,
+        LENGTH_OF);
+    System.out.println("Index: " + foundIdx);
+    System.out.println(list.get(foundIdx));
+  }
+}
+</code></pre>

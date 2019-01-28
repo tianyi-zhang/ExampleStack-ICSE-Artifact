@@ -1,0 +1,223 @@
+<p>This is a fully working example that uses the (newer) <code>Transferable</code> API.  This is based on the example you have linked.</p>
+
+<p>Note, I've not bothered with using <code>String</code>s, as this just confuses people, instead, I'm transferring objects.</p>
+
+<p>Also note, that I'm using a "move" API, so names will be moved from one list to the other...</p>
+
+<p><img src="http://i.stack.imgur.com/yKemz.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import java.awt.datatransfer.*;
+import java.io.IOException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.swing.*;
+
+public class ComponentAPIDnD {
+
+    public static void main(String[] args) {
+        new ComponentAPIDnD();
+    }
+
+    public ComponentAPIDnD() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame("Testing");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new TestPane());
+                frame.pack();
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public class TestPane extends JPanel {
+
+        private JList left;
+        private JList right;
+
+        public TestPane() {
+            setLayout(new GridLayout(0, 2));
+            DefaultListModel&lt;User&gt; model = new DefaultListModel&lt;&gt;();
+            model.addElement(new User("Rai"));
+            model.addElement(new User("Mark"));
+            model.addElement(new User("Han"));
+            model.addElement(new User("Luke"));
+            model.addElement(new User("Ben"));
+            model.addElement(new User("Yoda"));
+            left = new JList(model);
+            left.setCellRenderer(new UserListCellRenderer());
+            right = new JList(new DefaultListModel&lt;User&gt;());
+            right.setCellRenderer(new UserListCellRenderer());
+
+            left.setName("Left");
+            right.setName("Right");
+
+            add(new JScrollPane(left));
+            add(new JScrollPane(right));
+
+            left.setTransferHandler(new UserTransferHandler(left));
+            right.setTransferHandler(new UserTransferHandler(right));
+
+            left.setDropMode(DropMode.ON_OR_INSERT);
+            right.setDropMode(DropMode.ON_OR_INSERT);
+
+            left.setDragEnabled(true);
+            right.setDragEnabled(true);
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            return new Dimension(400, 400);
+        }
+    }
+
+    public static class UserTransferHandler extends TransferHandler {
+
+        private JList list;
+
+        public UserTransferHandler(JList list) {
+            this.list = list;
+        }
+
+        @Override
+        public boolean canImport(TransferSupport support) {
+            boolean canImport = false;
+            if (support.isDataFlavorSupported(UserTransferable.USER_DATA_FLAVOR)) {
+                JList.DropLocation dl = (JList.DropLocation) support.getDropLocation();
+                if (dl.getIndex() != -1) {
+                    canImport = true;
+                }
+            }
+            return canImport;
+        }
+
+        @Override
+        protected void exportDone(JComponent source, Transferable data, int action) {
+            try {
+                User user = (User) data.getTransferData(UserTransferable.USER_DATA_FLAVOR);
+                ((DefaultListModel&lt;User&gt;)list.getModel()).removeElement(user);
+            } catch (UnsupportedFlavorException | IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        @Override
+        public boolean importData(TransferSupport support) {
+            boolean accepted = false;
+            if (support.isDrop()) {
+                if (support.isDataFlavorSupported(UserTransferable.USER_DATA_FLAVOR)) {
+
+                    JList.DropLocation dl = (JList.DropLocation)support.getDropLocation();
+                    DefaultListModel&lt;User&gt; model = (DefaultListModel&lt;User&gt;) list.getModel();
+                    int index = dl.getIndex();
+                    boolean insert = dl.isInsert();
+
+                    Transferable t = support.getTransferable();
+                    try {
+                        User dropped = (User) t.getTransferData(UserTransferable.USER_DATA_FLAVOR);
+                        System.out.println("Drop " + dropped + " on " + list.getName());
+                        if (insert) {
+                            if (index &gt;= model.getSize()) {
+                                model.addElement(dropped);
+                            } else {
+                                model.add(index, dropped);
+                            }
+                        } else {
+                            model.addElement(dropped);
+                        }
+
+                        accepted = true;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+            return accepted;
+        }
+
+        @Override
+        public int getSourceActions(JComponent c) {
+            return COPY_OR_MOVE;
+        }
+
+        @Override
+        protected Transferable createTransferable(JComponent c) {
+            User user = (User) list.getSelectedValue();
+            return new UserTransferable(user);
+        }
+
+    }
+
+    public static class UserTransferable implements Transferable {
+
+        public static final DataFlavor USER_DATA_FLAVOR = new DataFlavor(User.class, "User");
+
+        private User user;
+
+        public UserTransferable(User user) {
+            this.user = user;
+        }
+
+        @Override
+        public DataFlavor[] getTransferDataFlavors() {
+            return new DataFlavor[] {USER_DATA_FLAVOR};
+        }
+
+        @Override
+        public boolean isDataFlavorSupported(DataFlavor flavor) {
+            return USER_DATA_FLAVOR.equals(flavor);
+        }
+
+        @Override
+        public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException, IOException {
+            Object value = null;
+            if (USER_DATA_FLAVOR.equals(flavor)) {
+                value = user;
+            } else {
+                throw new UnsupportedFlavorException(flavor);
+            }
+            return user;
+        }
+
+    }
+
+    public class User {
+
+        private String name;
+
+        public User(String name) {
+            this.name = name;
+        }
+
+        public String getName() {
+            return name;
+        }
+    }
+
+    public class UserListCellRenderer extends DefaultListCellRenderer {
+
+        @Override
+        public Component getListCellRendererComponent(JList&lt;?&gt; list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+
+            if (value instanceof User) {
+
+                setText(((User) value).getName());
+
+            }
+
+            return this;
+        }
+    }
+}
+</code></pre>

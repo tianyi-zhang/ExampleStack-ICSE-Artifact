@@ -1,0 +1,177 @@
+<blockquote>
+  <p>please provide me some sample answer.</p>
+</blockquote>
+
+<p>Step1 Look for Example on How to Download Files in Android</p>
+
+<p>Step2 Look for Example on How to perform operations in AsyncTask.</p>
+
+<p>Step3 Look for Example on How to Display Download Progress while Downloading.</p>
+
+<p>Step4 Look for Example on How to send Custom Broadcast when Task is completed</p>
+
+<p>Step5 Look for Example on How to Persist AsysncTask operation even on device rotation</p>
+
+<p>Step6 Look for Example on How to Show Download Progress in Notification.</p>
+
+<p>Below is example code.</p>
+
+<p><strong>1. Use AsyncTask and show the download progress in a dialog</strong></p>
+
+<pre><code>// declare the dialog as a member field of your activity
+ProgressDialog mProgressDialog;
+
+// instantiate it within the onCreate method
+mProgressDialog = new ProgressDialog(YourActivity.this);
+mProgressDialog.setMessage("A message");
+mProgressDialog.setIndeterminate(false);
+mProgressDialog.setMax(100);
+mProgressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+
+// execute this when the downloader must be fired
+DownloadFile downloadFile = new DownloadFile();
+downloadFile.execute("the url to the file you want to download");
+
+The AsyncTask will look like this:
+
+// usually, subclasses of AsyncTask are declared inside the activity class.
+// that way, you can easily modify the UI thread from here
+private class DownloadFile extends AsyncTask&lt;String, Integer, String&gt; {
+    @Override
+    protected String doInBackground(String... sUrl) {
+        try {
+            URL url = new URL(sUrl[0]);
+            URLConnection connection = url.openConnection();
+            connection.connect();
+            // this will be useful so that you can show a typical 0-100% progress bar
+            int fileLength = connection.getContentLength();
+
+            // download the file
+            InputStream input = new BufferedInputStream(url.openStream());
+            OutputStream output = new FileOutputStream("/sdcard/file_name.extension");
+
+            byte data[] = new byte[1024];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                total += count;
+                // publishing the progress....
+                publishProgress((int) (total * 100 / fileLength));
+                output.write(data, 0, count);
+            }
+
+            output.flush();
+            output.close();
+            input.close();
+        } catch (Exception e) {
+        }
+        return null;
+    }
+</code></pre>
+
+<p>The method above (doInBackground) runs always on a background thread. You shouldn't do any UI tasks there. On the other hand, the onProgressUpdate and onPreExecute run on the UI thread, so there you can change the progress bar:</p>
+
+<pre><code> @Override
+    protected void onPreExecute() {
+        super.onPreExecute();
+        mProgressDialog.show();
+    }
+
+    @Override
+    protected void onProgressUpdate(Integer... progress) {
+        super.onProgressUpdate(progress);
+        mProgressDialog.setProgress(progress[0]);
+    }
+}
+</code></pre>
+
+<p><strong>2. Download from Service</strong></p>
+
+<p>The big question here is: how do I update my activity from a service?. In the next example we are going to use two classes you may not be aware of: ResultReceiver and IntentService. ResultReceiver is the one that will allow us to update our thread from a service; IntentService is a subclass of Service which spawns a thread to do background work from there (you should know that a Service runs actually in the same thread of your app; when you extends Service, you must manually spawn new threads to run CPU blocking operations).</p>
+
+<p>Download service can look like this:</p>
+
+<pre><code>public class DownloadService extends IntentService {
+    public static final int UPDATE_PROGRESS = 8344;
+    public DownloadService() {
+        super("DownloadService");
+    }
+    @Override
+    protected void onHandleIntent(Intent intent) {
+        String urlToDownload = intent.getStringExtra("url");
+        ResultReceiver receiver = (ResultReceiver) intent.getParcelableExtra("receiver");
+        try {
+            URL url = new URL(urlToDownload);
+            URLConnection connection = url.openConnection();
+            connection.connect();
+            // this will be useful so that you can show a typical 0-100% progress bar
+            int fileLength = connection.getContentLength();
+
+            // download the file
+            InputStream input = new BufferedInputStream(url.openStream());
+            OutputStream output = new FileOutputStream("/sdcard/BarcodeScanner-debug.apk");
+
+            byte data[] = new byte[1024];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                total += count;
+                // publishing the progress....
+                Bundle resultData = new Bundle();
+                resultData.putInt("progress" ,(int) (total * 100 / fileLength));
+                receiver.send(UPDATE_PROGRESS, resultData);
+                output.write(data, 0, count);
+            }
+
+            output.flush();
+            output.close();
+            input.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        Bundle resultData = new Bundle();
+        resultData.putInt("progress" ,100);
+        receiver.send(UPDATE_PROGRESS, resultData);
+    }
+}
+</code></pre>
+
+<p>Add the service to your manifest:</p>
+
+<pre><code>&lt;service android:name=".DownloadService"/&gt;
+</code></pre>
+
+<p>And the activity will look like this:</p>
+
+<p>// initialize the progress dialog like in the first example</p>
+
+<p>// this is how you fire the downloader</p>
+
+<pre><code>mProgressDialog.show();
+Intent intent = new Intent(this, DownloadService.class);
+intent.putExtra("url", "url of the file to download");
+intent.putExtra("receiver", new DownloadReceiver(new Handler()));
+startService(intent);
+</code></pre>
+
+<p>Here is were ResultReceiver comes to play:</p>
+
+<pre><code>private class DownloadReceiver extends ResultReceiver{
+    public DownloadReceiver(Handler handler) {
+        super(handler);
+    }
+
+    @Override
+    protected void onReceiveResult(int resultCode, Bundle resultData) {
+        super.onReceiveResult(resultCode, resultData);
+        if (resultCode == DownloadService.UPDATE_PROGRESS) {
+            int progress = resultData.getInt("progress");
+            mProgressDialog.setProgress(progress);
+            if (progress == 100) {
+                mProgressDialog.dismiss();
+            }
+        }
+    }
+}
+</code></pre>

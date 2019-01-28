@@ -1,0 +1,345 @@
+<p>I had a similar requirement and spent some time going through <code>ActionBarDrawerToggle</code> code. What you currently have is the best way forward. </p>
+
+<p>More to come:</p>
+
+<p>The hamburger to arrow animation is provided by a drawable implementation - <code>DrawerArrowDrawableToggle</code>. Currently, we don't have much control over how this drawable reacts to drawer states. Here's what the package-access constructor for <code>actionVarDrawerToggle</code> says:</p>
+
+<pre><code>/**
+ * In the future, we can make this constructor public if we want to let developers customize
+ * the
+ * animation.
+ */
+&lt;T extends Drawable &amp; DrawerToggle&gt; ActionBarDrawerToggle(Activity activity, Toolbar toolbar,
+        DrawerLayout drawerLayout, T slider,
+        @StringRes int openDrawerContentDescRes,
+        @StringRes int closeDrawerContentDescRes)
+</code></pre>
+
+<p>By providing your own implementation of <code>slider</code>, you can control how it reacts to drawer states. The interface that <code>slider</code> must implement:</p>
+
+<pre><code>/**
+ * Interface for toggle drawables. Can be public in the future
+ */
+static interface DrawerToggle {
+
+    public void setPosition(float position);
+
+    public float getPosition();
+}
+</code></pre>
+
+<p><code>setPosition(float)</code> is the highlight here - all drawer state changes call it to update the drawer indicator. </p>
+
+<p>For the behavior you want, your <code>slider</code> implementation's <code>setPosition(float position)</code> would do nothing. </p>
+
+<p>You will still need:</p>
+
+<pre><code>if (showHomeAsUp) {
+    mDrawerToggle.setDrawerIndicatorEnabled(false);
+    // Can be set in theme
+    mDrawerToggle.setHomeAsUpIndicator(R.drawable.lib_ic_arrow_back_light);
+    mDrawerToggle.setToolbarNavigationClickListener(view -&gt; finish());
+}
+</code></pre>
+
+<p>If you don't <code>setDrawerIndicatorEnabled(false)</code>, the <code>OnClickListener</code> you set with <code>setToolbarNavigationClickListener(view -&gt; finish());</code> will not fire.</p>
+
+<p><strong>What can we do right <em>now</em>?</strong></p>
+
+<p>On closer inspection, I find that there is a provision for your requirement in <code>ActionBarDrawerToggle</code>. I find this provision even more of an hack than what you currently have. But, I'll let you decide.</p>
+
+<p><code>ActionBarDrawerToggle</code> lets you have <em>some</em> control over the drawer indicator through interface <a href="http://androidxref.com/5.0.0_r2/xref/frameworks/support/v7/appcompat/src/android/support/v7/app/ActionBarDrawerToggle.java#89" rel="nofollow">Delegate</a>. You can have your activity implement this interface in the following manner:</p>
+
+<pre><code>public class TheActivity extends ActionBarActivity implements ActionBarDrawerToggle.Delegate {
+....
+
+    @Override
+    public void setActionBarUpIndicator(Drawable drawableNotUsed, int i) {
+
+        // First, we're not using the passed drawable, the one that animates
+
+        // Second, we check if `displayHomeAsUp` is enabled
+        final boolean displayHomeAsUpEnabled = (getSupportActionBar().getDisplayOptions()
+            &amp; ActionBar.DISPLAY_HOME_AS_UP) == ActionBar.DISPLAY_HOME_AS_UP;
+
+        // We'll control what happens on navigation-icon click
+        mToolbar.setNavigationOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (displayHomeAsUpEnabled) {
+                    finish();
+                } else {
+                    // `ActionBarDrawerToggle#toggle()` is private.
+                    // Extend `ActionBarDrawerToggle` and make provision
+                    // for toggling.
+                    mDrawerToggle.toggleDrawer();
+                }
+            }
+        });
+
+        // I will talk about `mToolbarnavigationIcon` later on.
+
+        if (displayHomeAsUpEnabled) {
+            mToolbarNavigationIcon.setIndicator(
+                          CustomDrawerArrowDrawable.HOME_AS_UP_INDICATOR);
+        } else {
+            mToolbarNavigationIcon.setIndicator(
+                          CustomDrawerArrowDrawable.DRAWER_INDICATOR);
+        }
+
+        mToolbar.setNavigationIcon(mToolbarNavigationIcon);
+        mToolbar.setNavigationContentDescription(i);
+    }
+
+    @Override
+    public void setActionBarDescription(int i) {
+        mToolbar.setNavigationContentDescription(i);
+    }
+
+    @Override
+    public Drawable getThemeUpIndicator() {
+        final TypedArray a = mToolbar.getContext()
+            .obtainStyledAttributes(new int[]{android.R.attr.homeAsUpIndicator});
+        final Drawable result = a.getDrawable(0);
+        a.recycle();
+        return result;
+    }
+
+    @Override
+    public Context getActionBarThemedContext() {
+        return mToolbar.getContext();
+    }
+
+    ....
+}
+</code></pre>
+
+<p><code>ActionBarDrawerToggle</code> will use <code>setActionBarUpIndicator(Drawable, int)</code> provided here. Since, we are ignoring the <code>Drawable</code> being passed, we have full control over what will be displayed. </p>
+
+<p>Catch: <code>ActionBarDrawerToggle</code> will let our <code>Activity</code> act as a delegate if we pass the <code>Toolbar</code> parameter as null here:</p>
+
+<pre><code>public ActionBarDrawerToggle(Activity activity, DrawerLayout drawerLayout,
+        Toolbar toolbar, @StringRes int openDrawerContentDescRes,
+        @StringRes int closeDrawerContentDescRes) { .... }
+</code></pre>
+
+<p>And, you will need to override <code>getV7DrawerToggleDelegate()</code> in your activity:</p>
+
+<pre><code>@Nullable
+@Override
+public ActionBarDrawerToggle.Delegate getV7DrawerToggleDelegate() {
+    return this;
+}
+</code></pre>
+
+<p>As you can see, going about the proper way is a lot of extra work. And we're not done yet.</p>
+
+<p>The animating <code>DrawerArrowDrawableToggle</code> can be styled using <a href="https://developer.android.com/reference/android/support/v7/appcompat/R.styleable.html#DrawerArrowToggle" rel="nofollow">these attributes</a>. If you want your drawable states(homeAsUp &amp; hamburger) <em>exactly</em> like the defaults, you will need to implement it as such:</p>
+
+<pre><code>/**
+ * A drawable that can draw a "Drawer hamburger" menu or an Arrow
+ */
+public class CustomDrawerArrowDrawable extends Drawable {
+
+    public static final float DRAWER_INDICATOR = 0f;
+
+    public static final float HOME_AS_UP_INDICATOR = 1f;
+
+    private final Activity mActivity;
+
+    private final Paint mPaint = new Paint();
+
+    // The angle in degress that the arrow head is inclined at.
+    private static final float ARROW_HEAD_ANGLE = (float) Math.toRadians(45);
+    private final float mBarThickness;
+    // The length of top and bottom bars when they merge into an arrow
+    private final float mTopBottomArrowSize;
+    // The length of middle bar
+    private final float mBarSize;
+    // The length of the middle bar when arrow is shaped
+    private final float mMiddleArrowSize;
+    // The space between bars when they are parallel
+    private final float mBarGap;
+
+    // Use Path instead of canvas operations so that if color has transparency, overlapping sections
+    // wont look different
+    private final Path mPath = new Path();
+    // The reported intrinsic size of the drawable.
+    private final int mSize;
+
+    private float mIndicator;
+
+    /**
+     * @param context used to get the configuration for the drawable from
+     */
+    public CustomDrawerArrowDrawable(Activity activity, Context context) {
+        final TypedArray typedArray = context.getTheme()
+            .obtainStyledAttributes(null, R.styleable.DrawerArrowToggle,
+                    R.attr.drawerArrowStyle,
+                    R.style.Base_Widget_AppCompat_DrawerArrowToggle);
+        mPaint.setAntiAlias(true);
+        mPaint.setColor(typedArray.getColor(R.styleable.DrawerArrowToggle_color, 0));
+        mSize = typedArray.getDimensionPixelSize(R.styleable.DrawerArrowToggle_drawableSize, 0);
+        mBarSize = typedArray.getDimension(R.styleable.DrawerArrowToggle_barSize, 0);
+        mTopBottomArrowSize = typedArray
+            .getDimension(R.styleable.DrawerArrowToggle_topBottomBarArrowSize, 0);
+        mBarThickness = typedArray.getDimension(R.styleable.DrawerArrowToggle_thickness, 0);
+        mBarGap = typedArray.getDimension(R.styleable.DrawerArrowToggle_gapBetweenBars, 0);
+
+        mMiddleArrowSize = typedArray
+            .getDimension(R.styleable.DrawerArrowToggle_middleBarArrowSize, 0);
+        typedArray.recycle();
+
+        mPaint.setStyle(Paint.Style.STROKE);
+        mPaint.setStrokeJoin(Paint.Join.ROUND);
+        mPaint.setStrokeCap(Paint.Cap.SQUARE);
+        mPaint.setStrokeWidth(mBarThickness);
+
+        mActivity = activity;
+    }
+
+    public boolean isLayoutRtl() {
+        return ViewCompat.getLayoutDirection(mActivity.getWindow().getDecorView())
+            == ViewCompat.LAYOUT_DIRECTION_RTL;
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+        Rect bounds = getBounds();
+        final boolean isRtl = isLayoutRtl();
+        // Interpolated widths of arrow bars
+        final float arrowSize = lerp(mBarSize, mTopBottomArrowSize, mIndicator);
+        final float middleBarSize = lerp(mBarSize, mMiddleArrowSize, mIndicator);
+        // Interpolated size of middle bar
+        final float middleBarCut = lerp(0, mBarThickness / 2, mIndicator);
+        // The rotation of the top and bottom bars (that make the arrow head)
+        final float rotation = lerp(0, ARROW_HEAD_ANGLE, mIndicator);
+
+        final float topBottomBarOffset = lerp(mBarGap + mBarThickness, 0, mIndicator);
+        mPath.rewind();
+
+        final float arrowEdge = -middleBarSize / 2;
+        // draw middle bar
+        mPath.moveTo(arrowEdge + middleBarCut, 0);
+        mPath.rLineTo(middleBarSize - middleBarCut, 0);
+
+        final float arrowWidth = Math.round(arrowSize * Math.cos(rotation));
+        final float arrowHeight = Math.round(arrowSize * Math.sin(rotation));
+
+        // top bar
+        mPath.moveTo(arrowEdge, topBottomBarOffset);
+        mPath.rLineTo(arrowWidth, arrowHeight);
+
+        // bottom bar
+        mPath.moveTo(arrowEdge, -topBottomBarOffset);
+        mPath.rLineTo(arrowWidth, -arrowHeight);
+        mPath.moveTo(0, 0);
+        mPath.close();
+
+        canvas.save();
+
+        if (isRtl) {
+            canvas.rotate(180, bounds.centerX(), bounds.centerY());
+        }
+        canvas.translate(bounds.centerX(), bounds.centerY());
+        canvas.drawPath(mPath, mPaint);
+
+        canvas.restore();
+    }
+
+    @Override
+    public void setAlpha(int i) {
+        mPaint.setAlpha(i);
+    } 
+
+    // override
+    public boolean isAutoMirrored() {
+        // Draws rotated 180 degrees in RTL mode.
+        return true;
+    }
+
+    @Override
+    public void setColorFilter(ColorFilter colorFilter) {
+        mPaint.setColorFilter(colorFilter);
+    }
+
+    @Override
+    public int getIntrinsicHeight() {
+        return mSize;
+    }
+
+    @Override
+    public int getIntrinsicWidth() {
+        return mSize;
+    }
+
+    @Override
+    public int getOpacity() {
+        return PixelFormat.TRANSLUCENT;
+    }
+
+    public void setIndicator(float indicator) {
+        mIndicator = indicator;
+        invalidateSelf();
+    }
+
+    /**
+     * Linear interpolate between a and b with parameter t.
+     */
+    private static float lerp(float a, float b, float indicator) {
+        if (indicator == HOME_AS_UP_INDICATOR) {
+            return b;
+        } else {
+            return a;
+        }
+    }
+}
+</code></pre>
+
+<p><code>CustomDrawerArrowDrawable's</code> implementation has been borrowed from AOSP, and stripped down to allow drawing of only two states: homeAsUp &amp; hamburger. You can toggle between these states by calling <code>setIndicator(float)</code>. We use this in the <code>Delegate</code> we implemented. Moreover, using <code>CustomDrawerArrowDrawable</code> will allow you to style it in xml: <code>barSize</code>, <code>color</code> etc. Even though you don't need this, <strong>the implementation above lets you provide custom animations for drawer opening and closing</strong>.</p>
+
+<p>I honestly don't know if I should recommend this.</p>
+
+<hr>
+
+<p>If you call <code>ActionBarDrawerToggle#setHomeAsUpIndicator(...)</code> with argument <code>null</code>, it should pick the drawable defined in your theme:</p>
+
+<pre><code>&lt;item name="android:homeAsUpIndicator"&gt;@drawable/some_back_drawable&lt;/item&gt;
+</code></pre>
+
+<p>Currently, this does not happen because of a possible bug in <code>ToolbarCompatDelegate#getThemeUpIndicator()</code>:</p>
+
+<pre><code>@Override
+public Drawable getThemeUpIndicator() {
+    final TypedArray a = mToolbar.getContext()
+                 // Should be new int[]{android.R.attr.homeAsUpIndicator}
+                .obtainStyledAttributes(new int[]{android.R.id.home});
+    final Drawable result = a.getDrawable(0);
+    a.recycle();
+    return result;
+}
+</code></pre>
+
+<p>Bug report that loosely discusses this (read Case 4): <a href="https://code.google.com/p/android/issues/detail?id=78691#c5" rel="nofollow">Link</a></p>
+
+<hr>
+
+<p>If you decide to stick with the solution you already have, please consider using <code>CustomDrawerArrowDrawable</code> in place of pngs(R.drawable.lib_ic_arrow_back_light &amp; R.drawable.lib_ic_menu_light). You won't be needing multiple drawables for density/size buckets and styling would be done in xml. Also, the final product will be the same as the framework's. </p>
+
+<pre><code>mDrawerToggle.setDrawerIndicatorEnabled(false);
+
+CustomDrawerArrowDrawable toolbarNavigationIcon 
+                = new CustomDrawerArrowDrawable(this, mToolbar.getContext());    
+
+if (showHomeAsUp) {
+    toolbarNavigationIcon.setIndicator(
+                           CustomDrawerArrowDrawable.HOME_AS_UP_INDICATOR);
+    mDrawerToggle.setToolbarNavigationClickListener(view -&gt; finish());
+} else {
+    mToolbarNavigationIcon.setIndicator(
+                           CustomDrawerArrowDrawable.DRAWER_INDICATOR);
+    mDrawerToggle.setToolbarNavigationClickListener(view -&gt; toggleDrawer());
+}
+
+mDrawerToggle.setHomeAsUpIndicator(toolbarNavigationIcon);
+</code></pre>

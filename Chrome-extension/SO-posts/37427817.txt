@@ -1,0 +1,185 @@
+<p><strong>BIG UPDATE</strong>
+Because there were like 4 or 5 question about the same topic BUT with DIFFERENTS requeriments and I tried to answer all of them a non polite admin deleted/close them making me create a ticket for each one and changing them to avoid "copy paste" I will let you a link to the <a href="http://stackoverflow.com/a/37474350/1332549">full answer</a> in where you can find all the explanation about how to get full behavior like Google Maps.</p>
+
+<hr>
+
+<p>Answering your questions </p>
+
+<blockquote>
+  <p>How could I use BottomSheetBehavior and get this additional anchored state?</p>
+</blockquote>
+
+<p>You can do it modifying default <code>BottomSheetBehavior</code> adding one more stat with following steps:<br><br></p>
+
+<ol>
+<li>Create a Java class and extend it from <code>CoordinatorLayout.Behavior&lt;V&gt;</code></li>
+<li>Copy paste code from default <code>BottomSheetBehavior</code> file to your new one.</li>
+<li><p>Modify the method <code>clampViewPositionVertical</code> with the following code:<br></p>
+
+<p>@Override
+public int clampViewPositionVertical(View child, int top, int dy) {
+    return constrain(top, mMinOffset, mHideable ? mParentHeight : mMaxOffset);
+}
+int constrain(int amount, int low, int high) {
+    return amount &lt; low ? low : (amount > high ? high : amount);
+}</p></li>
+<li><p>Add a new state</p>
+
+<p>public static final int STATE_ANCHOR_POINT = X;</p></li>
+<li><p>Modify the next methods: <code>onLayoutChild</code>, <code>onStopNestedScroll</code>, <code>BottomSheetBehavior&lt;V&gt; from(V view)</code> and <code>setState</code> (optional)</p></li>
+</ol>
+
+<p><br><br>
+I'm going to add those modified methods and a <a href="https://github.com/miguelhincapie/CustomBottomSheetBehavior" rel="nofollow">link to the example project</a><br></p>
+
+<pre><code>public boolean onLayoutChild(CoordinatorLayout parent, V child, int layoutDirection) {
+    // First let the parent lay it out
+    if (mState != STATE_DRAGGING &amp;&amp; mState != STATE_SETTLING) {
+        if (ViewCompat.getFitsSystemWindows(parent) &amp;&amp;
+                !ViewCompat.getFitsSystemWindows(child)) {
+            ViewCompat.setFitsSystemWindows(child, true);
+        }
+        parent.onLayoutChild(child, layoutDirection);
+    }
+    // Offset the bottom sheet
+    mParentHeight = parent.getHeight();
+    mMinOffset = Math.max(0, mParentHeight - child.getHeight());
+    mMaxOffset = Math.max(mParentHeight - mPeekHeight, mMinOffset);
+
+    //if (mState == STATE_EXPANDED) {
+    //    ViewCompat.offsetTopAndBottom(child, mMinOffset);
+    //} else if (mHideable &amp;&amp; mState == STATE_HIDDEN...
+    if (mState == STATE_ANCHOR_POINT) {
+        ViewCompat.offsetTopAndBottom(child, mAnchorPoint);
+    } else if (mState == STATE_EXPANDED) {
+        ViewCompat.offsetTopAndBottom(child, mMinOffset);
+    } else if (mHideable &amp;&amp; mState == STATE_HIDDEN) {
+        ViewCompat.offsetTopAndBottom(child, mParentHeight);
+    } else if (mState == STATE_COLLAPSED) {
+        ViewCompat.offsetTopAndBottom(child, mMaxOffset);
+    }
+    if (mViewDragHelper == null) {
+        mViewDragHelper = ViewDragHelper.create(parent, mDragCallback);
+    }
+    mViewRef = new WeakReference&lt;&gt;(child);
+    mNestedScrollingChildRef = new WeakReference&lt;&gt;(findScrollingChild(child));
+    return true;
+}
+
+
+public void onStopNestedScroll(CoordinatorLayout coordinatorLayout, V child, View target) {
+    if (child.getTop() == mMinOffset) {
+        setStateInternal(STATE_EXPANDED);
+        return;
+    }
+    if (target != mNestedScrollingChildRef.get() || !mNestedScrolled) {
+        return;
+    }
+    int top;
+    int targetState;
+    if (mLastNestedScrollDy &gt; 0) {
+        //top = mMinOffset;
+        //targetState = STATE_EXPANDED;
+        int currentTop = child.getTop();
+        if (currentTop &gt; mAnchorPoint) {
+            top = mAnchorPoint;
+            targetState = STATE_ANCHOR_POINT;
+        }
+        else {
+            top = mMinOffset;
+            targetState = STATE_EXPANDED;
+        }
+    } else if (mHideable &amp;&amp; shouldHide(child, getYVelocity())) {
+        top = mParentHeight;
+        targetState = STATE_HIDDEN;
+    } else if (mLastNestedScrollDy == 0) {
+        int currentTop = child.getTop();
+        if (Math.abs(currentTop - mMinOffset) &lt; Math.abs(currentTop - mMaxOffset)) {
+            top = mMinOffset;
+            targetState = STATE_EXPANDED;
+        } else {
+            top = mMaxOffset;
+            targetState = STATE_COLLAPSED;
+        }
+    } else {
+        //top = mMaxOffset;
+        //targetState = STATE_COLLAPSED;
+        int currentTop = child.getTop();
+        if (currentTop &gt; mAnchorPoint) {
+            top = mMaxOffset;
+            targetState = STATE_COLLAPSED;
+        }
+        else {
+            top = mAnchorPoint;
+            targetState = STATE_ANCHOR_POINT;
+        }
+    }
+    if (mViewDragHelper.smoothSlideViewTo(child, child.getLeft(), top)) {
+        setStateInternal(STATE_SETTLING);
+        ViewCompat.postOnAnimation(child, new SettleRunnable(child, targetState));
+    } else {
+        setStateInternal(targetState);
+    }
+    mNestedScrolled = false;
+}
+
+public final void setState(@State int state) {
+    if (state == mState) {
+        return;
+    }
+    if (mViewRef == null) {
+        // The view is not laid out yet; modify mState and let onLayoutChild handle it later
+        /**
+         * New behavior (added: state == STATE_ANCHOR_POINT ||)
+         */
+        if (state == STATE_COLLAPSED || state == STATE_EXPANDED ||
+                state == STATE_ANCHOR_POINT ||
+                (mHideable &amp;&amp; state == STATE_HIDDEN)) {
+            mState = state;
+        }
+        return;
+    }
+    V child = mViewRef.get();
+    if (child == null) {
+        return;
+    }
+    int top;
+    if (state == STATE_COLLAPSED) {
+        top = mMaxOffset;
+    } else if (state == STATE_ANCHOR_POINT) {
+        top = mAnchorPoint;
+    } else if (state == STATE_EXPANDED) {
+        top = mMinOffset;
+    } else if (mHideable &amp;&amp; state == STATE_HIDDEN) {
+        top = mParentHeight;
+    } else {
+        throw new IllegalArgumentException("Illegal state argument: " + state);
+    }
+    setStateInternal(STATE_SETTLING);
+    if (mViewDragHelper.smoothSlideViewTo(child, child.getLeft(), top)) {
+        ViewCompat.postOnAnimation(child, new SettleRunnable(child, state));
+    }
+}
+
+
+public static &lt;V extends View&gt; BottomSheetBehaviorGoogleMapsLike&lt;V&gt; from(V view) {
+    ViewGroup.LayoutParams params = view.getLayoutParams();
+    if (!(params instanceof CoordinatorLayout.LayoutParams)) {
+        throw new IllegalArgumentException("The view is not a child of CoordinatorLayout");
+    }
+    CoordinatorLayout.Behavior behavior = ((CoordinatorLayout.LayoutParams) params)
+            .getBehavior();
+    if (!(behavior instanceof BottomSheetBehaviorGoogleMapsLike)) {
+        throw new IllegalArgumentException(
+                "The view is not associated with BottomSheetBehaviorGoogleMapsLike");
+    }
+    return (BottomSheetBehaviorGoogleMapsLike&lt;V&gt;) behavior;
+}
+</code></pre>
+
+<p><br><br></p>
+
+<p>You can even use callbacks with <code>behavior.setBottomSheetCallback(new BottomSheetBehaviorGoogleMapsLike.BottomSheetCallback() {....</code><br><br></p>
+
+<p><strong>And here is how its looks like:</strong><br>
+[<img src="https://raw.githubusercontent.com/miguelhincapie/CustomBottomSheetBehavior/master/CustomBottomSheetBehaviorLikeGoogleMaps3states.gif" alt="CustomBottomSheetBehavior">]</p>

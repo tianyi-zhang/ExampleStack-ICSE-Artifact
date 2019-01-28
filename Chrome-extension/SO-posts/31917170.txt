@@ -1,0 +1,238 @@
+<blockquote>
+  <p>I can have more than one account stored?</p>
+</blockquote>
+
+<p>Yes. See how  <strong>Google</strong> or <strong>Facebook</strong> do it.</p>
+
+<blockquote>
+  <p>Is it because of syncing issues?</p>
+</blockquote>
+
+<p>Yes, you need Account to use Synchronization mechanism like <code>SyncAdapter</code></p>
+
+<p>Why you should use <code>AccountAuthenticator</code>?</p>
+
+<ul>
+<li><p>Support of background synchronization mechanism like <code>SyncAdapter</code>;</p></li>
+<li><p>Standard way to authenticate users;</p></li>
+<li><p>Support different tokens;</p></li>
+<li><p>Account sharing with different privileges</p></li>
+</ul>
+
+<p>What do you need to do?</p>
+
+<p>1). Create <code>Authenticator</code>;</p>
+
+<p>2). Create <code>Activity</code> for User Login;</p>
+
+<p>3). Create <code>Service</code> to communicate with account.</p>
+
+<h1>Terms.</h1>
+
+<p><a href="http://developer.android.com/reference/android/accounts/AccountManager.html">AccountManager</a> - it manages account on device. Request auth tokens you should be using <code>AccountManager</code>.</p>
+
+<p><a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html">AbstractAccountAuthenticator</a> - component for working with account types. It contains all logic for working with account(authorization, access rights etc.) One <code>AbstractAccountAuthenticator</code> may be used by different application(like Google account for Gmail, Calendar, Drive etc.)</p>
+
+<p><a href="http://developer.android.com/reference/android/accounts/AccountAuthenticatorActivity.html">AccountAuthenticatorActivity</a> - base <code>Activity</code>, for authorize/create account. <code>AccountManager</code> calls this account if it's necessary to identify account(Token doesn't exists or expired)</p>
+
+<p>How all of it works? Look at the Image Below:</p>
+
+<p><a href="http://i.stack.imgur.com/svOt9.png"><img src="http://i.stack.imgur.com/svOt9.png" alt="android account management diagram"></a></p>
+
+<h1>Steps.</h1>
+
+<p>1). Create <code>Authenticator</code>;</p>
+
+<p>You need to extend <code>AbstractAccountAuthenticator</code> and override 7 methods: </p>
+
+<ul>
+<li><code>Bundle editProperties(AccountAuthenticatorResponse response, String
+accountType)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#editProperties(android.accounts.AccountAuthenticatorResponse,%20java.lang.String)">link</a></li>
+<li><code>Bundle addAccount(AccountAuthenticatorResponse response, String
+accountType, String authTokenType, String[] requiredFeatures, Bundle
+options)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#addAccount(android.accounts.AccountAuthenticatorResponse,%20java.lang.String,%20java.lang.String,%20java.lang.String[],%20android.os.Bundle)">link</a></li>
+<li><code>Bundle confirmCredentials(AccountAuthenticatorResponse response,
+Account account, Bundle options)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#confirmCredentials(android.accounts.AccountAuthenticatorResponse,%20android.accounts.Account,%20android.os.Bundle)">link</a></li>
+<li><code>Bundle getAuthToken(AccountAuthenticatorResponse response, Account
+account, String authTokenType, Bundle options)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#getAuthToken(android.accounts.AccountAuthenticatorResponse,%20android.accounts.Account,%20java.lang.String,%20android.os.Bundle)">link</a></li>
+<li><code>String getAuthTokenLabel(String authTokenType)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#getAuthTokenLabel(java.lang.String)">link</a></li>
+<li><code>Bundle updateCredentials(AccountAuthenticatorResponse response,
+Account account, String authTokenType, Bundle options)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#updateCredentials(android.accounts.AccountAuthenticatorResponse,%20android.accounts.Account,%20java.lang.String,%20android.os.Bundle)">link</a></li>
+<li><code>Bundle hasFeatures(AccountAuthenticatorResponse response, Account
+account, String[] features)</code> <a href="http://developer.android.com/reference/android/accounts/AbstractAccountAuthenticator.html#hasFeatures(android.accounts.AccountAuthenticatorResponse,%20android.accounts.Account,%20java.lang.String[])">link</a></li>
+</ul>
+
+<p>Example:</p>
+
+<pre><code>public class LodossAuthenticator extends AbstractAccountAuthenticator {
+
+    private static final String LOG_TAG = LodossAuthenticator.class.getSimpleName();
+
+    private final Context mContext;
+
+    public LodossAuthenticator(Context context) {
+        super(context);
+        mContext = context;
+    }
+
+    @Override
+    public Bundle editProperties(AccountAuthenticatorResponse response, String accountType) {
+        return null;
+    }
+
+    @Override
+    public Bundle addAccount(AccountAuthenticatorResponse response, String accountType, String authTokenType, String[] requiredFeatures, Bundle options) throws NetworkErrorException {
+        final Intent intent = new Intent(mContext, CustomServerAuthenticatorSigninActivity.class);
+        intent.putExtra(Config.ARG_ACCOUNT_TYPE, accountType);
+        intent.putExtra(Config.ARG_AUTH_TYPE, authTokenType);
+        intent.putExtra(Config.ARG_IS_ADDING_NEW_ACCOUNT, true);
+        intent.putExtra(AccountManager.KEY_ACCOUNT_AUTHENTICATOR_RESPONSE, response);
+
+        final Bundle bundle = new Bundle();
+    bundle.putParcelable(AccountManager.KEY_INTENT, intent);
+    return bundle;
+    }
+
+    @Override
+    public Bundle confirmCredentials(AccountAuthenticatorResponse response, Account account, Bundle options) throws NetworkErrorException {
+        return null;
+    }
+
+    @Override
+    public Bundle getAuthToken(AccountAuthenticatorResponse response, Account account, String authTokenType, Bundle options) throws NetworkErrorException {
+        // If the caller requested an authToken type we don't support, then
+        // return an error
+        if (!authTokenType.equals(AccountGeneral.AUTHTOKEN_TYPE_READ_ONLY) &amp;&amp; !authTokenType.equals(AccountGeneral.AUTHTOKEN_TYPE_FULL_ACCESS)) {
+            final Bundle result = new Bundle();
+            result.putString(AccountManager.KEY_ERROR_MESSAGE, "invalid authTokenType");
+            return result;
+        }
+
+        // Extract the username and password from the Account Manager, and ask
+        // the server for an appropriate AuthToken.
+        final AccountManager am = AccountManager.get(mContext);
+        String authToken = am.peekAuthToken(account, authTokenType);
+
+        // Lets give another try to authenticate the user
+        if (TextUtils.isEmpty(authToken)) {
+            final String password = am.getPassword(account);
+            if (password != null) {
+                try {
+                    authToken = sServerAuthenticate.userSignIn(account.name, password, authTokenType);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        // If we get an authToken - we return it
+        if (!TextUtils.isEmpty(authToken)) {
+            final Bundle result = new Bundle();
+            result.putString(AccountManager.KEY_ACCOUNT_NAME, account.name);
+            result.putString(AccountManager.KEY_ACCOUNT_TYPE, account.type);
+            result.putString(AccountManager.KEY_AUTHTOKEN, authToken);
+            return result;
+        }
+
+        // If we get here, then we couldn't access the user's password - so we
+        // need to re-prompt them for their credentials. We do that by creating
+        // an intent to display our AuthenticatorActivity.
+        final Intent intent = new Intent(mContext, AuthenticatorActivity.class);
+        intent.putExtra(AccountManager.KEY_ACCOUNT_AUTHENTICATOR_RESPONSE, response);
+        intent.putExtra(com.lodoss.authlib.Config.ARG_ACCOUNT_TYPE, account.type);
+        intent.putExtra(com.lodoss.authlib.Config.ARG_AUTH_TYPE, authTokenType);
+        intent.putExtra(Config.ARG_ACCOUNT_NAME, account.name);
+        final Bundle bundle = new Bundle();
+    bundle.putParcelable(AccountManager.KEY_INTENT, intent);
+    return bundle;
+    }
+
+    @Override
+    public String getAuthTokenLabel(String authTokenType) {
+        if (AccountGeneral.AUTHTOKEN_TYPE_FULL_ACCESS.equals(authTokenType))
+            return AccountGeneral.AUTHTOKEN_TYPE_FULL_ACCESS_LABEL;
+        else if (AccountGeneral.AUTHTOKEN_TYPE_READ_ONLY.equals(authTokenType))
+            return AccountGeneral.AUTHTOKEN_TYPE_READ_ONLY_LABEL;
+        else
+            return authTokenType + " (Label)";
+    }
+
+    @Override
+    public Bundle updateCredentials(AccountAuthenticatorResponse response, Account account, String authTokenType, Bundle options) throws NetworkErrorException {
+        return null;
+    }
+
+    @Override
+    public Bundle hasFeatures(AccountAuthenticatorResponse response, Account account, String[] features) throws NetworkErrorException {
+        final Bundle result = new Bundle();
+        result.putBoolean(KEY_BOOLEAN_RESULT, false);
+        return result;
+    }
+}
+</code></pre>
+
+<p>Explanation:</p>
+
+<p>So, you need to see only 2 methods: <code>addAccount</code>, <code>getAuthToken</code>.</p>
+
+<p>In <code>addAccount</code> I've added some config params, which will be used by my <code>Activity</code> for User Login. The main point here is <code>intent.putExtra(Config.ARG_ACCOUNT_TYPE, accountType);</code> - you should specify account type here. Other manipulations are not necessary.</p>
+
+<p>In <code>getAuthToken</code> - <strong>Read comments please</strong>. I've copy-pasted this method from <a href="https://github.com/Udinic/AccountAuthenticator/blob/master/src/com/udinic/accounts_authenticator_example/authentication/UdinicAuthenticator.java#L46-L100">UdinicAuthenticator.java</a></p>
+
+<p>Also, you'll be needing following permissions in your AndroidManifest.xml:</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.GET_ACCOUNTS" /&gt;
+&lt;uses-permission android:name="android.permission.MANAGE_ACCOUNTS" /&gt;
+&lt;uses-permission android:name="android.permission.AUTHENTICATE_ACCOUNTS" /&gt;
+&lt;uses-permission android:name="android.permission.USE_CREDENTIALS" /&gt;
+</code></pre>
+
+<h1>Summary from methods <code>addAccount</code> and <code>getAuthToken</code></h1>
+
+<p>Try to get token, if token exists return result, else you will see <code>Activity</code> for authorization</p>
+
+<p>2). Create <code>Activity</code> for User Login;</p>
+
+<p>See <a href="https://github.com/Udinic/AccountAuthenticator/blob/master/src/com/udinic/accounts_authenticator_example/authentication/AuthenticatorActivity.java">AuthenticatorActivity</a></p>
+
+<p><strong>Brief explanation:</strong>
+Create form with UserId and Password. Using the UserId &amp; Password data get auth token from server and then execute the following step:</p>
+
+<pre><code>mAccountManager.addAccountExplicitly(account, accountPassword, null);
+mAccountManager.setAuthToken(account, authtokenType, authtoken);
+</code></pre>
+
+<p>3). Create a <code>Service</code> to communicate with account.</p>
+
+<p>See <a href="https://github.com/Udinic/AccountAuthenticator/blob/master/src/com/udinic/accounts_authenticator_example/authentication/UdinicAuthenticatorService.java">UdinicAuthenticatorService</a></p>
+
+<p>Don't forget to add this line in <code>AndroidManifest.xml</code> to <code>Service</code>:</p>
+
+<pre><code>    &lt;intent-filter&gt;
+        &lt;action android:name="android.accounts.AccountAuthenticator" /&gt;
+    &lt;/intent-filter&gt;
+    &lt;meta-data android:name="android.accounts.AccountAuthenticator"
+               android:resource="@xml/authenticator" /&gt;
+</code></pre>
+
+<p>And also in <code>res/xml</code> add file <code>authenticator.xml</code>:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
+                       android:accountType="com.mediamanagment.app"
+                       android:icon="@drawable/ic_launcher"
+                       android:smallIcon="@drawable/ic_launcher"
+                       android:label="@string/authenticator_label"/&gt;
+</code></pre>
+
+<p>That's all. You can use your <code>AccountAuthenticator</code>.</p>
+
+<h1>For Source materials thanks to</h1>
+
+<ul>
+<li><p><a href="https://github.com/Udinic">Udi Cohen</a>;</p></li>
+<li><p><a href="https://github.com/DanielSerdyukov">Daniel Serdyukov</a>(all text translated from his article(except my
+small additions) <strong>"Synchronization in android applications. Part 1"</strong>
+in Russian only. link:
+<a href="http://habrahabr.ru/company/e-Legion/blog/206210/">http://habrahabr.ru/company/e-Legion/blog/206210/</a>)</p></li>
+</ul>

@@ -1,0 +1,209 @@
+<p>First of all sorry for the example I have posted in the comment. I thought you were trying to perform a simple <code>POST</code> request by just submitting some values. I have missed that you were also <em>uploading a file</em>. So since you are also uploading a file (note that you don't just pass a filename here) this is a <em>mutlipart request</em> (you see that in your jsp: <code>enctype="multipart/form-data"</code>) and it has a little more work to do that programmatically.</p>
+
+<p>When you are submitting a multipart form the request looks like this:</p>
+
+<pre><code>-----------------------------253171262814565
+Content-Disposition: form-data; name="myfile"; filename="test.bin"
+Content-Type: application/octet-stream
+
+Test data    
+-----------------------------253171262814565
+Content-Disposition: form-data; name="submit"
+
+Submit
+-----------------------------253171262814565--
+</code></pre>
+
+<p>That strange alphanumerics are called a <em>boundary</em> (are chosen randomly by the browser) and are used to distringuish between submitted fields (files or normal fields). In the above example the submitted fields were:  </p>
+
+<ul>
+<li>a field named "myfile" that was an <code>&lt;input type="file"&gt;</code> in the form. The user selected the file named <code>test.bin</code>. The file data was a single text line <code>Test data</code></li>
+<li>a normal field value of <code>"Submit"</code> of a <code>&lt;input type="submit"&gt;</code> button </li>
+</ul>
+
+<p>Below I have copied the code from <a href="http://www.codejava.net/java-se/networking/upload-files-by-sending-multipart-request-programmatically" rel="nofollow">an example at code.java.net</a> that provides a class that can help you in creating such requests.</p>
+
+<p>Please modify any hard-coded urls and files to match your case. I have not tried it out but it should give you the idea of how to create a request like the above one. (Note that there are two classes: One that constructs the request and one with a <code>main()</code> method to test it)</p>
+
+<p>Side note: The change of line character <code>\r\n</code> does not depend on the system but it is a part of how multipart requests are constructed. So you should use it as is no matter if your system is Windows or Linux</p>
+
+<p>I hope that helps</p>
+
+<pre><code>package net.codejava.networking;
+
+import java.io.BufferedReader;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * This utility class provides an abstraction layer for sending multipart HTTP
+ * POST requests to a web server.
+ * @author www.codejava.net
+ *
+ */
+public class MultipartUtility {
+    private final String boundary;
+    private static final String LINE_FEED = "\r\n";
+    private HttpURLConnection httpConn;
+    private String charset;
+    private OutputStream outputStream;
+    private PrintWriter writer;
+
+    /**
+     * This constructor initializes a new HTTP POST request with content type
+     * is set to multipart/form-data
+     * @param requestURL
+     * @param charset
+     * @throws IOException
+     */
+    public MultipartUtility(String requestURL, String charset)
+            throws IOException {
+        this.charset = charset;
+
+        // creates a unique boundary based on time stamp
+        boundary = "===" + System.currentTimeMillis() + "===";
+
+        URL url = new URL(requestURL);
+        httpConn = (HttpURLConnection) url.openConnection();
+        httpConn.setDoOutput(true); // indicates POST method
+        httpConn.setDoInput(true);
+        httpConn.setRequestProperty("Content-Type",
+                "multipart/form-data; boundary=" + boundary);
+        outputStream = httpConn.getOutputStream();
+        writer = new PrintWriter(new OutputStreamWriter(outputStream, charset),
+                true);
+    }
+
+    /**
+     * Adds a form field to the request
+     * @param name field name
+     * @param value field value
+     */
+    public void addFormField(String name, String value) {
+        writer.append("--" + boundary).append(LINE_FEED);
+        writer.append("Content-Disposition: form-data; name=\"" + name + "\"")
+                .append(LINE_FEED);
+        writer.append("Content-Type: text/plain; charset=" + charset).append(
+                LINE_FEED);
+        writer.append(LINE_FEED);
+        writer.append(value).append(LINE_FEED);
+        writer.flush();
+    }
+
+    /**
+     * Adds a upload file section to the request
+     * @param fieldName name attribute in &lt;input type="file" name="..." /&gt;
+     * @param uploadFile a File to be uploaded
+     * @throws IOException
+     */
+    public void addFilePart(String fieldName, File uploadFile)
+            throws IOException {
+        String fileName = uploadFile.getName();
+        writer.append("--" + boundary).append(LINE_FEED);
+        writer.append(
+                "Content-Disposition: form-data; name=\"" + fieldName
+                        + "\"; filename=\"" + fileName + "\"")
+                .append(LINE_FEED);
+        writer.append(
+                "Content-Type: "
+                        + URLConnection.guessContentTypeFromName(fileName))
+                .append(LINE_FEED);
+        writer.append("Content-Transfer-Encoding: binary").append(LINE_FEED);
+        writer.append(LINE_FEED);
+        writer.flush();
+
+        FileInputStream inputStream = new FileInputStream(uploadFile);
+        byte[] buffer = new byte[4096];
+        int bytesRead = -1;
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            outputStream.write(buffer, 0, bytesRead);
+        }
+        outputStream.flush();
+        inputStream.close();
+
+        writer.append(LINE_FEED);
+        writer.flush();    
+    }
+
+    /**
+     * Completes the request and receives response from the server.
+     * @return a list of Strings as response in case the server returned
+     * status OK, otherwise an exception is thrown.
+     * @throws IOException
+     */
+    public List&lt;String&gt; finish() throws IOException {
+        List&lt;String&gt; response = new ArrayList&lt;String&gt;();
+
+        writer.append(LINE_FEED).flush();
+        writer.append("--" + boundary + "--").append(LINE_FEED);
+        writer.close();
+
+        // checks server's status code first
+        int status = httpConn.getResponseCode();
+        if (status == HttpURLConnection.HTTP_OK) {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    httpConn.getInputStream()));
+            String line = null;
+            while ((line = reader.readLine()) != null) {
+                response.add(line);
+            }
+            reader.close();
+            httpConn.disconnect();
+        } else {
+            throw new IOException("Server returned non-OK status: " + status);
+        }
+
+        return response;
+    }
+}
+
+//---------------------------------------------------------
+
+package net.codejava.networking;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
+
+/**
+ * This program demonstrates a usage of the MultipartUtility class.
+ * @author www.codejava.net
+ *
+ */
+public class MultipartFileUploader {
+
+    public static void main(String[] args) {
+        String charset = "UTF-8";
+        File uploadFile1 = new File("e:/Test/PIC1.JPG");
+        File uploadFile2 = new File("e:/Test/PIC2.JPG");
+        String requestURL = "http://localhost:8080/FileUploadSpringMVC/uploadFile.do";
+
+        try {
+            MultipartUtility multipart = new MultipartUtility(requestURL, charset);
+            multipart.addFormField("description", "Cool pix");
+            multipart.addFilePart("fileUpload", uploadFile1);
+            multipart.addFilePart("fileUpload", uploadFile2);
+
+            List&lt;String&gt; response = multipart.finish();
+            System.out.println("SERVER REPLIED:");
+            for (String line : response) {
+                System.out.println(line);
+            }
+        } catch (IOException ex) {
+            System.out.println("ERROR: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+}
+</code></pre>

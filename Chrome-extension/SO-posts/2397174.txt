@@ -1,0 +1,229 @@
+<p>Here is the code I promised in another comment... it isn't quite what I remember but it might get you started.  </p>
+
+<p>Essentially you call: String fileName = FileUtils.getFileName(Main.class, "foo.txt");</p>
+
+<p>and it goes and finds that file on disk or in a JAR file.  If it is in the JAR file it extracts it to a temp directory.  You can then use "new File(fileName)" to open the file which, no matter where it was before, will be on the disk.</p>
+
+<p>What I would do is take a look at the getFile method and look at what you can do with the JAR file to iterate over the contents of it and find the files in a given directory.</p>
+
+<p>Like I said, not exactly what you want, but does do a lot of the initial work for you.</p>
+
+<pre><code>import java.io.Closeable;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipException;
+import java.util.zip.ZipFile;
+
+
+public class FileUtils
+{
+    public static String getFileName(final Class&lt;?&gt;  owner,
+                                     final String    name)
+        throws URISyntaxException,
+               ZipException,
+               IOException
+    {
+        String    fileName;
+        final URI uri;
+
+        try
+        {
+            final String external;
+            final String decoded;
+            final int    pos;
+
+            uri      = getResourceAsURI(owner.getPackage().getName().replaceAll("\\.", "/") + "/" + name, owner);
+            external = uri.toURL().toExternalForm();
+            decoded  = external; // URLDecoder.decode(external, "UTF-8");
+            pos      = decoded.indexOf(":/");
+            fileName = decoded.substring(pos + 1);
+        }
+        catch(final FileNotFoundException ex)
+        {
+            fileName = null;
+        }
+
+        if(fileName == null || !(new File(fileName).exists()))
+        {
+            fileName = getFileNameX(owner, name);
+        }
+
+        return (fileName);
+    }
+
+    private static String getFileNameX(final Class&lt;?&gt; clazz, final String name)
+        throws UnsupportedEncodingException
+    {
+        final URL    url;
+        final String fileName;
+
+        url = clazz.getResource(name);
+
+        if(url == null)
+        {
+            fileName = name;
+        }
+        else
+        {
+            final String decoded;
+            final int    pos;
+
+            decoded  = URLDecoder.decode(url.toExternalForm(), "UTF-8");
+            pos      = decoded.indexOf(":/");
+            fileName = decoded.substring(pos + 1);
+        }
+
+        return (fileName);
+    }
+
+    private static URI getResourceAsURI(final String    resourceName,
+                                       final Class&lt;?&gt; clazz)
+        throws URISyntaxException,
+               ZipException,
+               IOException
+    {
+        final URI uri;
+        final URI resourceURI;
+
+        uri         = getJarURI(clazz);
+        resourceURI = getFile(uri, resourceName);
+
+        return (resourceURI);
+    }
+
+    private static URI getJarURI(final Class&lt;?&gt; clazz)
+        throws URISyntaxException
+    {
+        final ProtectionDomain domain;
+        final CodeSource       source;
+        final URL              url;
+        final URI              uri;
+
+        domain = clazz.getProtectionDomain();
+        source = domain.getCodeSource();
+        url    = source.getLocation();
+        uri    = url.toURI();
+
+        return (uri);
+    }
+
+    private static URI getFile(final URI    where,
+                               final String fileName)
+        throws ZipException,
+               IOException
+    {
+        final File location;
+        final URI  fileURI;
+
+        location = new File(where);
+
+        // not in a JAR, just return the path on disk
+        if(location.isDirectory())
+        {
+            fileURI = URI.create(where.toString() + fileName);
+        }
+        else
+        {
+            final ZipFile zipFile;
+
+            zipFile = new ZipFile(location);
+
+            try
+            {
+                fileURI = extract(zipFile, fileName);
+            }
+            finally
+            {
+                zipFile.close();
+            }
+        }
+
+        return (fileURI);
+    }
+
+    private static URI extract(final ZipFile zipFile,
+                               final String  fileName)
+        throws IOException
+    {
+        final File         tempFile;
+        final ZipEntry     entry;
+        final InputStream  zipStream;
+        OutputStream       fileStream;
+
+        tempFile = File.createTempFile(fileName.replace("/", ""), Long.toString(System.currentTimeMillis()));
+        tempFile.deleteOnExit();
+        entry    = zipFile.getEntry(fileName);
+
+        if(entry == null)
+        {
+            throw new FileNotFoundException("cannot find file: " + fileName + " in archive: " + zipFile.getName());
+        }
+
+        zipStream  = zipFile.getInputStream(entry);
+        fileStream = null;
+
+        try
+        {
+            final byte[] buf;
+            int          i;
+
+            fileStream = new FileOutputStream(tempFile);
+            buf        = new byte[1024];
+            i          = 0;
+
+            while((i = zipStream.read(buf)) != -1)
+            {
+                fileStream.write(buf, 0, i);
+            }
+        }
+        finally
+        {
+            close(zipStream);
+            close(fileStream);
+        }
+
+        return (tempFile.toURI());
+    }
+
+    private static void close(final Closeable stream)
+    {
+        if(stream != null)
+        {
+            try
+            {
+                stream.close();
+            }
+            catch(final IOException ex)
+            {
+                ex.printStackTrace();
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Edit:</p>
+
+<p>Sorry, I don't have time to work on this right now (if I get some I'll do it and post the code here).  This is what I would do though:</p>
+
+<ol>
+<li>Look at the <a href="http://java.sun.com/javase/6/docs/api/java/util/zip/ZipFile.html" rel="nofollow">ZipFile</a> class and use the <a href="http://java.sun.com/javase/6/docs/api/java/util/zip/ZipFile.html#entries%28%29" rel="nofollow">entries()</a> method to find all of the files/directories in the zip file. </li>
+<li>the <a href="http://java.sun.com/javase/6/docs/api/java/util/zip/ZipEntry.html" rel="nofollow">ZipEntry</a> has an isDirectory() method that you can use to figure out what it is.</li>
+<li>I think the code I posted in <a href="http://stackoverflow.com/questions/617414/create-a-temporary-directory-in-java/617438#617438">this answer</a> will give you a way to pick a temporary directory to extract the contents to.</li>
+<li>I think the code I posted in <a href="http://stackoverflow.com/questions/625420/what-is-the-fastest-way-to-read-a-large-number-of-small-files-into-memory/625810#625810">this answer</a> could help with copying the ZipEntry contents to the file system.</li>
+<li>once the items are on the file system the code you already have for iterating over the directory would still work.  You would add a new method to the FileUtils class in the code above and be able to find all of the files as you are doing now.</li>
+</ol>
+
+<p>There is probably a better way to do it, but off the top of my head I think that will work.</p>

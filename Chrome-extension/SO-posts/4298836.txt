@@ -1,0 +1,399 @@
+<p><strong>EDIT:</strong> You can <strong><a href="http://training.perl.com/scripts/tchrist-unicode-charclasses__alpha.java">download the full source</a></strong> for the function I discuss below. I also discuss it in more detail in <a href="http://stackoverflow.com/questions/4304928/unicode-equivalents-for-w-and-b-in-java-regular-expressions/4307261#4307261">this answer</a>.</p>
+
+<h2>The Problem</h2>
+
+<p>The <code>org.apache.commons.lang.StringEscapeUtils.unescapeJava()</code> given here as “the answer” is really very little help at all.</p>
+
+<ul>
+<li>You have to provide for loading up yet another ginormous jar file with buttloads of cruft you don’t need or want.</li>
+<li>It has a licence. Some people don’t want to worry about a licence, no matter how good or how bad it actually is.</li>
+<li>It forgets about <code>\0</code> for null.</li>
+<li>It doesn’t handle octal <strong>at all</strong>. </li>
+<li>It can’t handle the sorts of escapes admitted by the <code>java.util.regex.Pattern.compile()</code> and everything that uses it, including <code>\a</code>, <code>\e</code>, and especially <code>\cX</code>. </li>
+<li>It has no support for logical Unicode code points by number, only for the idiotic UTF-16 brain-damage.</li>
+<li>It’s written by some bloody idiot who doesn’t even know the difference between a <strong>slash</strong> and a <strong>backslash</strong>.</li>
+<li>The source code is full of annoying carriage returns.</li>
+<li>It’s written to take a <code>writer</code> argument, so if you don’t pass it one it still has to create a dummy <code>StringWriter</code> for the output, then convert that to pass back to you.</li>
+<li>This looks like UCS-2 code, not UTF-16 code: they use the depreciated <code>charAt</code> interface instead of the <code>codePoint</code> interface, thus promugating the delusion that a Java <code>char</code> is guaranteed to hold a Unicode character. It’s not. They only get away with this blindness to the astral planes because no UTF-16 surrogate will wind up looking for anything they’re looking for. </li>
+</ul>
+
+<p>Like many of the other points, their embarrassing ignorance about the names of code points  <code>U+2F</code> and <code>U+5C</code> instills no confidence in them whatsoever. For the record:</p>
+
+<pre><code>  /  47    002F  SOLIDUS
+        = slash, virgule
+        x (latin letter dental click - 01C0)
+        x (combining long solidus overlay - 0338)
+        x (fraction slash - 2044)
+        x (division slash - 2215)
+ \  92    005C  REVERSE SOLIDUS
+        = backslash
+        x (combining reverse solidus overlay - 20E5)
+        x (set minus - 2216)
+</code></pre>
+
+<h2>The Solution</h2>
+
+<p>So this morning I <em>finally</em> got fed up with not being able to read in strings with embedded escapes in them.  I needed it for writing the test suite for a larger and more intersting project: transparently converting Java’s <strong>indefensibly Unicode-ignorant regular expressions</strong> into versions where you can use all of <code>\w</code>, <code>\W</code>, <code>\s</code>, <code>\S</code>, <code>\v</code>, <code>\V</code>, <code>\h</code>, <code>\H</code>, <code>\d</code>, <code>\D</code>, <code>\b</code>, <code>\B</code>, <code>\X</code>, and <code>\R</code> in your patterns and have them actually work properly with Unicode. All I do is rewrite the pattern string; it still compiles with the standard <code>java.util.regex.Pattern.compile()</code>  function, so everything works as expected. The string unescaper intentionally passes any <code>\b</code>’s through untouched, in case you call it before you call the converter function to make Java regexes Unicode-aware, since that has to deal with <code>\b</code> in the boundary sense.</p>
+
+<p>Anyway, here's the string unescaper, which although the less interesting of the pair, does solve the OP’s question without all the irritations of the Apache code. It could handle a bit of tightening in a couple places, but I quickly hacked it out over a few hours before lunch just to get it up and running to help drive the test suite.  The other function is a lot more work: <em>that</em> one took me all day yesterday, darn it.</p>
+
+<pre><code>/*
+ *
+ * unescape_perl_string()
+ *
+ *      Tom Christiansen &lt;tchrist@perl.com&gt;
+ *      Sun Nov 28 12:55:24 MST 2010
+ *
+ * It's completely ridiculous that there's no standard
+ * unescape_java_string function.  Since I have to do the
+ * damn thing myself, I might as well make it halfway useful
+ * by supporting things Java was too stupid to consider in
+ * strings:
+ * 
+ *   =&gt; "?" items  are additions to Java string escapes
+ *                 but normal in Java regexes
+ *
+ *   =&gt; "!" items  are also additions to Java regex escapes
+ *   
+ * Standard singletons: ?\a ?\e \f \n \r \t
+ * 
+ *      NB: \b is unsupported as backspace so it can pass-through
+ *          to the regex translator untouched; I refuse to make anyone
+ *          doublebackslash it as doublebackslashing is a Java idiocy
+ *          I desperately wish would die out.  There are plenty of
+ *          other ways to write it:
+ *
+ *              \cH, \12, \012, \x08 \x{8}, \u0008, \U00000008
+ *
+ * Octal escapes: \0 \0N \0NN \N \NN \NNN
+ *    Can range up to !\777 not \377
+ *    
+ *      TODO: add !\o{NNNNN}
+ *          last Unicode is 4177777
+ *          maxint is 37777777777
+ *
+ * Control chars: ?\cX
+ *      Means: ord(X) ^ ord('@')
+ *
+ * Old hex escapes: \xXX
+ *      unbraced must be 2 xdigits
+ *
+ * Perl hex escapes: !\x{XXX} braced may be 1-8 xdigits
+ *       NB: proper Unicode never needs more than 6, as highest
+ *           valid codepoint is 0x10FFFF, not maxint 0xFFFFFFFF
+ *
+ * Lame Java escape: \[IDIOT JAVA PREPROCESSOR]uXXXX must be
+ *                   exactly 4 xdigits;
+ *
+ *       I can't write XXXX in this comment where it belongs
+ *       because the damned Java Preprocessor can't mind its
+ *       own business.  Idiots!
+ *
+ * Lame Python escape: !\UXXXXXXXX must be exactly 8 xdigits
+ * 
+ * TODO: Perl translation escapes: \Q \U \L \E \[IDIOT JAVA PREPROCESSOR]u \l
+ *       These are not so important to cover if you're passing the
+ *       result to Pattern.compile(), since it handles them for you
+ *       further downstream.  Hm, what about \[IDIOT JAVA PREPROCESSOR]u?
+ *
+ */
+
+public final static
+String unescape_perl_string(String oldstr) {
+
+    /*
+     * In contrast to fixing Java's broken regex charclasses,
+     * this one need be no bigger, as unescaping shrinks the string
+     * here, where in the other one, it grows it.
+     */
+
+    StringBuffer newstr = new StringBuffer(oldstr.length());
+
+    boolean saw_backslash = false;
+
+    for (int i = 0; i &lt; oldstr.length(); i++) {
+        int cp = oldstr.codePointAt(i);
+        if (oldstr.codePointAt(i) &gt; Character.MAX_VALUE) {
+            i++; /****WE HATES UTF-16! WE HATES IT FOREVERSES!!!****/
+        }
+
+        if (!saw_backslash) {
+            if (cp == '\\') {
+                saw_backslash = true;
+            } else {
+                newstr.append(Character.toChars(cp));
+            }
+            continue; /* switch */
+        }
+
+        if (cp == '\\') {
+            saw_backslash = false;
+            newstr.append('\\');
+            newstr.append('\\');
+            continue; /* switch */
+        }
+
+        switch (cp) {
+
+            case 'r':  newstr.append('\r');
+                       break; /* switch */
+
+            case 'n':  newstr.append('\n');
+                       break; /* switch */
+
+            case 'f':  newstr.append('\f');
+                       break; /* switch */
+
+            /* PASS a \b THROUGH!! */
+            case 'b':  newstr.append("\\b");
+                       break; /* switch */
+
+            case 't':  newstr.append('\t');
+                       break; /* switch */
+
+            case 'a':  newstr.append('\007');
+                       break; /* switch */
+
+            case 'e':  newstr.append('\033');
+                       break; /* switch */
+
+            /*
+             * A "control" character is what you get when you xor its
+             * codepoint with '@'==64.  This only makes sense for ASCII,
+             * and may not yield a "control" character after all.
+             *
+             * Strange but true: "\c{" is ";", "\c}" is "=", etc.
+             */
+            case 'c':   {
+                if (++i == oldstr.length()) { die("trailing \\c"); }
+                cp = oldstr.codePointAt(i);
+                /*
+                 * don't need to grok surrogates, as next line blows them up
+                 */
+                if (cp &gt; 0x7f) { die("expected ASCII after \\c"); }
+                newstr.append(Character.toChars(cp ^ 64));
+                break; /* switch */
+            }
+
+            case '8':
+            case '9': die("illegal octal digit");
+                      /* NOTREACHED */
+
+    /*
+     * may be 0 to 2 octal digits following this one
+     * so back up one for fallthrough to next case;
+     * unread this digit and fall through to next case.
+     */
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7': --i;
+                      /* FALLTHROUGH */
+
+            /*
+             * Can have 0, 1, or 2 octal digits following a 0
+             * this permits larger values than octal 377, up to
+             * octal 777.
+             */
+            case '0': {
+                if (i+1 == oldstr.length()) {
+                    /* found \0 at end of string */
+                    newstr.append(Character.toChars(0));
+                    break; /* switch */
+                }
+                i++;
+                int digits = 0;
+                int j;
+                for (j = 0; j &lt;= 2; j++) {
+                    if (i+j == oldstr.length()) {
+                        break; /* for */
+                    }
+                    /* safe because will unread surrogate */
+                    int ch = oldstr.charAt(i+j);
+                    if (ch &lt; '0' || ch &gt; '7') {
+                        break; /* for */
+                    }
+                    digits++;
+                }
+                if (digits == 0) {
+                    --i;
+                    newstr.append('\0');
+                    break; /* switch */
+                }
+                int value = 0;
+                try {
+                    value = Integer.parseInt(
+                                oldstr.substring(i, i+digits), 8);
+                } catch (NumberFormatException nfe) {
+                    die("invalid octal value for \\0 escape");
+                }
+                newstr.append(Character.toChars(value));
+                i += digits-1;
+                break; /* switch */
+            } /* end case '0' */
+
+            case 'x':  {
+                if (i+2 &gt; oldstr.length()) {
+                    die("string too short for \\x escape");
+                }
+                i++;
+                boolean saw_brace = false;
+                if (oldstr.charAt(i) == '{') {
+                        /* ^^^^^^ ok to ignore surrogates here */
+                    i++;
+                    saw_brace = true;
+                }
+                int j;
+                for (j = 0; j &lt; 8; j++) {
+
+                    if (!saw_brace &amp;&amp; j == 2) {
+                        break;  /* for */
+                    }
+
+                    /*
+                     * ASCII test also catches surrogates
+                     */
+                    int ch = oldstr.charAt(i+j);
+                    if (ch &gt; 127) {
+                        die("illegal non-ASCII hex digit in \\x escape");
+                    }
+
+                    if (saw_brace &amp;&amp; ch == '}') { break; /* for */ }
+
+                    if (! ( (ch &gt;= '0' &amp;&amp; ch &lt;= '9')
+                                ||
+                            (ch &gt;= 'a' &amp;&amp; ch &lt;= 'f')
+                                ||
+                            (ch &gt;= 'A' &amp;&amp; ch &lt;= 'F')
+                          )
+                       )
+                    {
+                        die(String.format(
+                            "illegal hex digit #%d '%c' in \\x", ch, ch));
+                    }
+
+                }
+                if (j == 0) { die("empty braces in \\x{} escape"); }
+                int value = 0;
+                try {
+                    value = Integer.parseInt(oldstr.substring(i, i+j), 16);
+                } catch (NumberFormatException nfe) {
+                    die("invalid hex value for \\x escape");
+                }
+                newstr.append(Character.toChars(value));
+                if (saw_brace) { j++; }
+                i += j-1;
+                break; /* switch */
+            }
+
+            case 'u': {
+                if (i+4 &gt; oldstr.length()) {
+                    die("string too short for \\u escape");
+                }
+                i++;
+                int j;
+                for (j = 0; j &lt; 4; j++) {
+                    /* this also handles the surrogate issue */
+                    if (oldstr.charAt(i+j) &gt; 127) {
+                        die("illegal non-ASCII hex digit in \\u escape");
+                    }
+                }
+                int value = 0;
+                try {
+                    value = Integer.parseInt( oldstr.substring(i, i+j), 16);
+                } catch (NumberFormatException nfe) {
+                    die("invalid hex value for \\u escape");
+                }
+                newstr.append(Character.toChars(value));
+                i += j-1;
+                break; /* switch */
+            }
+
+            case 'U': {
+                if (i+8 &gt; oldstr.length()) {
+                    die("string too short for \\U escape");
+                }
+                i++;
+                int j;
+                for (j = 0; j &lt; 8; j++) {
+                    /* this also handles the surrogate issue */
+                    if (oldstr.charAt(i+j) &gt; 127) {
+                        die("illegal non-ASCII hex digit in \\U escape");
+                    }
+                }
+                int value = 0;
+                try {
+                    value = Integer.parseInt(oldstr.substring(i, i+j), 16);
+                } catch (NumberFormatException nfe) {
+                    die("invalid hex value for \\U escape");
+                }
+                newstr.append(Character.toChars(value));
+                i += j-1;
+                break; /* switch */
+            }
+
+            default:   newstr.append('\\');
+                       newstr.append(Character.toChars(cp));
+           /*
+            * say(String.format(
+            *       "DEFAULT unrecognized escape %c passed through",
+            *       cp));
+            */
+                       break; /* switch */
+
+        }
+        saw_backslash = false;
+    }
+
+    /* weird to leave one at the end */
+    if (saw_backslash) {
+        newstr.append('\\');
+    }
+
+    return newstr.toString();
+}
+
+/*
+ * Return a string "U+XX.XXX.XXXX" etc, where each XX set is the
+ * xdigits of the logical Unicode code point. No bloody brain-damaged
+ * UTF-16 surrogate crap, just true logical characters.
+ */
+ public final static
+ String uniplus(String s) {
+     if (s.length() == 0) {
+         return "";
+     }
+     /* This is just the minimum; sb will grow as needed. */
+     StringBuffer sb = new StringBuffer(2 + 3 * s.length());
+     sb.append("U+");
+     for (int i = 0; i &lt; s.length(); i++) {
+         sb.append(String.format("%X", s.codePointAt(i)));
+         if (s.codePointAt(i) &gt; Character.MAX_VALUE) {
+             i++; /****WE HATES UTF-16! WE HATES IT FOREVERSES!!!****/
+         }
+         if (i+1 &lt; s.length()) {
+             sb.append(".");
+         }
+     }
+     return sb.toString();
+ }
+
+private static final
+void die(String foa) {
+    throw new IllegalArgumentException(foa);
+}
+
+private static final
+void say(String what) {
+    System.out.println(what);
+}
+</code></pre>
+
+<p>As anybody can plainly see from the Java code above, I'm really a C programmer — Java is <em>anything</em> but my favorite language. I’m afraid that I really do have to side with <a href="http://www.youtube.com/watch?v=5kj5ApnhPAE">Rob Pike in his famous <em>public static void</em> talk</a> on this one.</p>
+
+<p>’Nuff said.</p>
+
+<p>Anyway, it’s only a quick morning’s hackery, but if it helps others, you’re welcome to it — no strings attached. If you improve it, I’d love for you to mail me your enhancements, but you certainly don’t have to.</p>

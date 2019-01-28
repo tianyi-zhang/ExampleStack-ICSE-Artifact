@@ -1,0 +1,97 @@
+<p>I've spent the last week working with a similar problem and can propose a solution similar to Tom Tache's (using reflection), but might be a little bit easier to understand.  The following method will comb a notification for any text present and return that text in an ArrayList if possible.</p>
+
+<pre><code>public static List&lt;String&gt; getText(Notification notification)
+{
+    // We have to extract the information from the view
+    RemoteViews        views = notification.bigContentView;
+    if (views == null) views = notification.contentView;
+    if (views == null) return null;
+
+    // Use reflection to examine the m_actions member of the given RemoteViews object.
+    // It's not pretty, but it works.
+    List&lt;String&gt; text = new ArrayList&lt;String&gt;();
+    try
+    {
+        Field field = views.getClass().getDeclaredField("mActions");
+        field.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        ArrayList&lt;Parcelable&gt; actions = (ArrayList&lt;Parcelable&gt;) field.get(views);
+
+        // Find the setText() and setTime() reflection actions
+        for (Parcelable p : actions)
+        {
+            Parcel parcel = Parcel.obtain();
+            p.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+
+            // The tag tells which type of action it is (2 is ReflectionAction, from the source)
+            int tag = parcel.readInt();
+            if (tag != 2) continue;
+
+            // View ID
+            parcel.readInt();
+
+            String methodName = parcel.readString();
+            if (methodName == null) continue;
+
+            // Save strings
+            else if (methodName.equals("setText"))
+            {
+                // Parameter type (10 = Character Sequence)
+                parcel.readInt();
+
+                // Store the actual string
+                String t = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(parcel).toString().trim();
+                text.add(t);
+            }
+
+            // Save times. Comment this section out if the notification time isn't important
+            else if (methodName.equals("setTime"))
+            {
+                // Parameter type (5 = Long)
+                parcel.readInt();
+
+                String t = new SimpleDateFormat("h:mm a").format(new Date(parcel.readLong()));
+                text.add(t);
+            }
+
+            parcel.recycle();
+        }
+    }
+
+    // It's not usually good style to do this, but then again, neither is the use of reflection...
+    catch (Exception e)
+    {
+        Log.e("NotificationClassifier", e.toString());
+    }
+
+    return text;
+}
+</code></pre>
+
+<p>Because this probably looks a bit like black magic, let me explain in more detail.  We first pull the RemoteViews object from the notification itself. This represents the views within the actual notification.  In order to access those views, we either have to inflate the RemoteViews object (which will only work when an activity context is present) or use reflection.  Reflection will work in either circumstance and is the method used here.  </p>
+
+<p>If you examine the source for RemoteViews <a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/4.3_r2.1/android/widget/RemoteViews.java?av=f">here</a>, you will see that one of the private members is an ArrayList of Action objects.  This represents what will be done to the views after they are inflated.  For example, after the views are created, setText() will be called at some point on each TextView that is a part of the hierarchy to assign the proper Strings.  What we do is obtain access to this list of actions and iterate through it.  Action is defined as follows:</p>
+
+<pre><code>private abstract static class Action implements Parcelable
+{
+    ...
+}
+</code></pre>
+
+<p>There are a number of concrete subclasses of Action defined in RemoteViews. The one we're interested in is called ReflectionAction and is defined as follows:</p>
+
+<pre><code>private class ReflectionAction extends Action
+{
+    String methodName;
+    int type;
+    Object value;
+}
+</code></pre>
+
+<p>This action is used to assign values to views.  A single instance of this class would likely have the values {"setText", 10, "content of textview"}.  Therefore, we're only interested in the elements of mActions that are "ReflectionAction" objects and assign text in some way.  We can tell a particular "Action" is a "ReflectionAction" by examining the "TAG" field within the Action, which is always the first value to be read from the parcel.  TAGs of 2 represent ReflectionAction objects.</p>
+
+<p>After that, we just have to read the values from the parcel according to the order in which they were written (see the source link, if you're curious).  We find any string that is set with setText() and save it in the list.  (setTime() is also included, in case the notification time is also needed. If not, those lines can be safely deleted.)</p>
+
+<p>While I typically oppose the use of reflection in instances like this, there are times when it is necessary.  Unless there is an activity context available, the "standard" method won't work properly, so this is the only option.</p>

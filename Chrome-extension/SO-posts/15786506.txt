@@ -1,0 +1,323 @@
+<p>I know this is an old question but for those who are interested, I made additions to what ahal and P?teris Caune did.</p>
+
+<p><strong>Additions</strong></p>
+
+<ol>
+<li>Included a layout to contain the horizontal view and the more button(refer to image from P?teris Caune's question)</li>
+<li>The layout, instead of just the button is removed when there is no overflow</li>
+<li>Hidden text is shown or hidden depending on state of button</li>
+</ol>
+
+<p><strong>Updated Code</strong></p>
+
+<p><strong>ExpandablePanel Class</strong></p>
+
+<pre><code>package com.example.myandroidhustles;
+import com.example.myandroidhustles.R;
+
+import android.content.Context;
+import android.content.res.TypedArray;
+import android.util.AttributeSet;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.Animation;
+import android.view.animation.Transformation;
+import android.widget.LinearLayout;
+
+public class ExpandablePanel extends LinearLayout {
+
+    private final int mHandleId;
+    private final int mContentId;
+    private final int mViewGroupId;
+
+    private final boolean isViewGroup;
+
+    private View mHandle;
+    private View mContent;
+    private ViewGroup viewGroup;
+
+    private boolean mExpanded = false;
+    private int mCollapsedHeight = 0;
+    private int mContentHeight = 0;
+    private int mAnimationDuration = 0;
+
+    private OnExpandListener mListener;
+
+    public ExpandablePanel(Context context) {
+        this(context, null);
+    }
+
+    public ExpandablePanel(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        mListener = new DefaultOnExpandListener();
+
+        TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.ExpandablePanel, 0, 0);
+
+        // How high the content should be in "collapsed" state
+        mCollapsedHeight = (int) a.getDimension(R.styleable.ExpandablePanel_collapsedHeight, 0.0f);
+
+        // How long the animation should take
+        mAnimationDuration = a.getInteger(R.styleable.ExpandablePanel_animationDuration, 500);
+
+        int handleId = a.getResourceId(R.styleable.ExpandablePanel_handle, 0);
+        if (handleId == 0) {
+            throw new IllegalArgumentException(
+                "The handle attribute is required and must refer "
+                    + "to a valid child.");
+        }
+
+        int contentId = a.getResourceId(R.styleable.ExpandablePanel_content, 0);
+        if (contentId == 0) {
+            throw new IllegalArgumentException("The content attribute is required and must refer to a valid child.");
+        }
+
+        int isViewGroupId = a.getResourceId(R.styleable.ExpandablePanel_isviewgroup, 0);
+        int viewGroupId = a.getResourceId(R.styleable.ExpandablePanel_viewgroup, 0);
+//        isViewGroup = findViewById(isViewGroupId);
+        isViewGroup = a.getBoolean(R.styleable.ExpandablePanel_isviewgroup, false);
+        if (isViewGroup) {
+            mViewGroupId = viewGroupId;
+        }
+        else {
+            mViewGroupId = 0;
+        }
+
+        mHandleId = handleId;
+        mContentId = contentId;        
+
+        a.recycle();
+    }
+
+    public void setOnExpandListener(OnExpandListener listener) {
+        mListener = listener; 
+    }
+
+    public void setCollapsedHeight(int collapsedHeight) {
+        mCollapsedHeight = collapsedHeight;
+    }
+
+    public void setAnimationDuration(int animationDuration) {
+        mAnimationDuration = animationDuration;
+    }
+
+    @Override
+    protected void onFinishInflate() {
+        super.onFinishInflate();
+
+        mHandle = findViewById(mHandleId);        
+        if (mHandle == null) {
+            throw new IllegalArgumentException(
+                "The handle attribute is must refer to an"
+                    + " existing child.");
+        }
+        if(mViewGroupId != 0) {
+            viewGroup = (ViewGroup) findViewById(mViewGroupId);
+        }
+
+
+        mContent = findViewById(mContentId);
+        if (mContent == null) {
+            throw new IllegalArgumentException(
+                "The content attribute must refer to an"
+                    + " existing child.");
+        }
+
+        android.view.ViewGroup.LayoutParams lp = mContent.getLayoutParams();
+        lp.height = mCollapsedHeight;
+        mContent.setLayoutParams(lp);
+
+        mHandle.setOnClickListener(new PanelToggler());
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        // First, measure how high content wants to be
+        mContent.measure(widthMeasureSpec, MeasureSpec.UNSPECIFIED);
+        mContentHeight = mContent.getMeasuredHeight();
+
+        if (mContentHeight &lt; mCollapsedHeight) {
+            viewGroup.setVisibility(View.GONE);
+//            mHandle.setVisibility(View.GONE);
+
+        } else {
+            viewGroup.setVisibility(View.VISIBLE);
+//            mHandle.setVisibility(View.VISIBLE);
+        }
+
+        // Then let the usual thing happen
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    private class PanelToggler implements OnClickListener {
+        public void onClick(View v) {
+            Animation a;
+            if (mExpanded) {
+                a = new ExpandAnimation(mContentHeight, mCollapsedHeight);
+                mListener.onCollapse(mHandle, mContent);
+            } else {
+                a = new ExpandAnimation(mCollapsedHeight, mContentHeight);
+                mListener.onExpand(mHandle, mContent);
+            }
+            a.setDuration(mAnimationDuration);
+            if(mContent.getLayoutParams().height == 0) //Need to do this or else the animation will not play if the height is 0
+           {
+            android.view.ViewGroup.LayoutParams lp = mContent.getLayoutParams();
+            lp.height = 1;
+            mContent.setLayoutParams(lp);
+            mContent.requestLayout();
+          }
+            mContent.startAnimation(a);
+            mExpanded = !mExpanded;
+        }
+    }
+
+    private class ExpandAnimation extends Animation {
+        private final int mStartHeight;
+        private final int mDeltaHeight;
+
+        public ExpandAnimation(int startHeight, int endHeight) {
+            mStartHeight = startHeight;
+            mDeltaHeight = endHeight - startHeight;
+        }
+
+        @Override
+        protected void applyTransformation(float interpolatedTime, Transformation t) {
+            android.view.ViewGroup.LayoutParams lp = mContent.getLayoutParams();
+            lp.height = (int) (mStartHeight + mDeltaHeight * interpolatedTime);
+            mContent.setLayoutParams(lp);
+        }
+
+        @Override
+        public boolean willChangeBounds() {
+            return true;
+        }
+    }
+
+    public interface OnExpandListener {
+        public void onExpand(View handle, View content); 
+        public void onCollapse(View handle, View content);
+    }
+
+    private class DefaultOnExpandListener implements OnExpandListener {
+        public void onCollapse(View handle, View content) {}
+        public void onExpand(View handle, View content) {}
+    }
+}
+</code></pre>
+
+<p><strong>attrs.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+    &lt;declare-styleable name="ExpandablePanel"&gt;
+        &lt;attr name="handle" format="reference" /&gt;
+        &lt;attr name="content" format="reference" /&gt;
+        &lt;attr name="viewgroup" format="reference"/&gt;
+        &lt;attr name="isviewgroup" format="boolean"/&gt;
+        &lt;attr name="collapsedHeight" format="dimension"/&gt;
+        &lt;attr name="animationDuration" format="integer"/&gt;
+    &lt;/declare-styleable&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p><strong>Layout: tryExpandablePanel.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:example="http://schemas.android.com/apk/res/com.example.myandroidhustles"
+    android:layout_width="fill_parent"
+    android:layout_height="match_parent" &gt;
+
+    &lt;com.example.myandroidhustles.ExpandablePanel
+        android:id="@+id/expandablePanel"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent"
+        android:orientation="vertical"
+        example:collapsedHeight="50dip"
+        example:content="@+id/value"
+        example:handle="@+id/expand"
+        example:isviewgroup="true"
+        example:viewgroup="@+id/expandL" &gt;
+
+        &lt;TextView
+            android:id="@+id/value"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:maxHeight="100dip" /&gt;
+
+        &lt;LinearLayout
+            android:id="@+id/expandL"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="10dp"
+            android:weightSum="100" &gt;
+
+            &lt;View
+                android:id="@+id/view"
+                android:layout_width="fill_parent"
+                android:layout_height="1dp"
+                android:layout_gravity="center_vertical|left"
+                android:layout_weight="30"
+                android:background="@android:color/darker_gray" /&gt;
+
+            &lt;Button
+                android:id="@+id/expand"
+                android:layout_width="fill_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="right"
+                android:layout_weight="70"
+                android:text="More" /&gt;
+        &lt;/LinearLayout&gt;
+    &lt;/com.example.myandroidhustles.ExpandablePanel&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>Implementation: ExpandablePanelImplementation Class</strong></p>
+
+<pre><code>package com.example.myandroidhustles;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.view.View;
+import android.widget.Button;
+import android.widget.TextView;
+
+
+public class ExpandablePanelImplementation extends Activity {
+    ExpandablePanel panel;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.tryexpandable);
+        TextView text;
+        text = (TextView)findViewById(R.id.value);
+
+            text.setText("ksaflfsklafjsfj sdfjklds fj asklfjklasfjskladf fjslkafjf" +
+                    "asfkdaslfjsf;sjdaflkadsjflkdsajfkldsajflkdsanfvsjvfdskljflkdnjdsadf" +
+                    "askfvdsklfjvsdlkfjdsklvdkjkdsadsj;lkasjdfklvsddsjkdsljskldfj");
+
+
+      panel = (ExpandablePanel)findViewById(R.id.expandablePanel);
+
+      panel.setOnExpandListener(new ExpandablePanel.OnExpandListener() {
+          public void onCollapse(View handle, View content) {
+              Button btn = (Button)handle;
+              btn.setText("More");
+
+              panel.setCollapsedHeight(100);
+          }
+          public void onExpand(View handle, View content) {
+              Button btn = (Button)handle;
+              panel.setCollapsedHeight(50);
+              btn.setText("Less");
+          }
+      });
+
+
+    }
+
+}
+</code></pre>

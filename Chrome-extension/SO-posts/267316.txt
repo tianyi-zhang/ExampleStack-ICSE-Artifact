@@ -1,0 +1,88 @@
+<p>It is an interesting question... It is late, I will experiment tomorrow. I will first try and use a BufferedImage.TYPE_BYTE_INDEXED (perhaps after drawing) to see if Java is smart enough to generate an 8bit PNG.<br>
+Or perhaps some image library can allow that.</p>
+
+<p>[EDIT] Some years later... Actually, I made the code at the time, but forgot to update this thread... I used <a href="http://gman.eichberger.de/2007/07/transparent-gifs-in-java.html" rel="nofollow">the code pointed at by Kat</a>, with a little refinement on the handling of transparency, and saving in PNG format instead of Gif format. It works in making a 8-bit PNG file with all-or-nothing transparency.</p>
+
+<p>You can find a working test file at <a href="http://bazaar.launchpad.net/~philho/+junk/Java/view/head:/Tests/src/org/philhosoft/tests/image/AddTransparency.java" rel="nofollow">http://bazaar.launchpad.net/~philho/+junk/Java/view/head:/Tests/src/org/philhosoft/tests/image/AddTransparency.java</a>
+using my <a href="http://bazaar.launchpad.net/~philho/+junk/Java/view/head:/Utilities/src/org/philhosoft/util/ImageUtil.java" rel="nofollow">ImageUtil</a> class.</p>
+
+<p>Since the code isn't that big, for posterity sake, I post it here, without the JavaDoc to save some lines.</p>
+
+<pre><code>public class ImageUtil
+{
+  public static int ALPHA_BIT_MASK = 0xFF000000;
+
+  public static BufferedImage imageToBufferedImage(Image image, int width, int height)
+  {
+    return imageToBufferedImage(image, width, height, BufferedImage.TYPE_INT_ARGB);
+  }
+
+  public static BufferedImage imageToBufferedImage(Image image, int width, int height, int type)
+  {
+    BufferedImage dest = new BufferedImage(width, height, type);
+    Graphics2D g2 = dest.createGraphics();
+    g2.drawImage(image, 0, 0, null);
+    g2.dispose();
+    return dest;
+  }
+
+  public static BufferedImage convertRGBAToIndexed(BufferedImage srcImage)
+  {
+    // Create a non-transparent palletized image
+    Image flattenedImage = transformTransparencyToMagenta(srcImage);
+    BufferedImage flatImage = imageToBufferedImage(flattenedImage,
+        srcImage.getWidth(), srcImage.getHeight(), BufferedImage.TYPE_BYTE_INDEXED);
+    BufferedImage destImage = makeColorTransparent(flatImage, 0, 0);
+    return destImage;
+  }
+
+  private static Image transformTransparencyToMagenta(BufferedImage image)
+  {
+    ImageFilter filter = new RGBImageFilter()
+    {
+      @Override
+      public final int filterRGB(int x, int y, int rgb)
+      {
+        int pixelValue = 0;
+        int opacity = (rgb &amp; ALPHA_BIT_MASK) &gt;&gt;&gt; 24;
+        if (opacity &lt; 128)
+        {
+          // Quite transparent: replace color with transparent magenta
+          // (traditional color for binary transparency)
+          pixelValue = 0x00FF00FF;
+        }
+        else
+        {
+          // Quite opaque: get pure color
+          pixelValue = (rgb &amp; 0xFFFFFF) | ALPHA_BIT_MASK;
+        }
+        return pixelValue;
+      }
+    };
+
+    ImageProducer ip = new FilteredImageSource(image.getSource(), filter);
+      return Toolkit.getDefaultToolkit().createImage(ip);
+  }
+
+  public static BufferedImage makeColorTransparent(BufferedImage image, int x, int y)
+  {
+    ColorModel cm = image.getColorModel();
+    if (!(cm instanceof IndexColorModel))
+      return image; // No transparency added as we don't have an indexed image
+
+    IndexColorModel originalICM = (IndexColorModel) cm;
+    WritableRaster raster = image.getRaster();
+    int colorIndex = raster.getSample(x, y, 0); // colorIndex is an offset in the palette of the ICM'
+    // Number of indexed colors
+    int size = originalICM.getMapSize();
+    byte[] reds = new byte[size];
+    byte[] greens = new byte[size];
+    byte[] blues = new byte[size];
+    originalICM.getReds(reds);
+    originalICM.getGreens(greens);
+    originalICM.getBlues(blues);
+    IndexColorModel newICM = new IndexColorModel(8, size, reds, greens, blues, colorIndex);
+    return new BufferedImage(newICM, raster, image.isAlphaPremultiplied(), null);
+  }
+}
+</code></pre>

@@ -1,0 +1,214 @@
+<blockquote>
+  <p>That is because of dialog will became null.
+  You can resolve these using two different ways.</p>
+</blockquote>
+
+<ol>
+<li><p>Stop recreating whole activity. i.e setting 
+You can avoid activity recreation by adding following to your application's manifest file.</p>
+
+<p>android:configChanges="orientation|keyboardHidden|screenSize"
+As follows</p>
+
+<pre><code>&lt;activity
+    android:name=".your activity"
+    android:configChanges="orientation|keyboardHidden|screenSize"
+    android:label="@string/app_name" &gt;
+&lt;/activity&gt;
+</code></pre></li>
+<li><p>Show/dismiss the dialog within AsyncTask during onPreExecute/onPostExecute as usual, though in case of orientation-change create/show a new instance of the dialog in the activity and pass its reference to the task. Refer below code and do necessary steps.</p></li>
+</ol>
+
+<p>public class MainActivity extends Activity {</p>
+
+<pre><code>    private Button mButton;
+    private MyTask mTask = null;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+
+        MyTask task = (MyTask) getLastNonConfigurationInstance();
+        if (task != null) {
+            mTask = task;
+            mTask.mContext = this;
+            mTask.mDialog =  new ProgressDialog(MainActivityProgress.this);
+            mTask.mDialog.setMessage("Please wait...");
+            mTask.mDialog.setIndeterminate(false);
+            mTask.mDialog.setMax(100);
+            mTask.mDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+            mTask.mDialog.setCancelable(true);
+            mTask.mDialog.show();
+        }
+
+        mButton = (Button) findViewById(R.id.button1);
+        mButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                mTask = new MyTask(MainActivity.this);
+                mTask.execute();
+            }
+        });
+    }
+
+    @Override
+    public Object onRetainNonConfigurationInstance() {
+        String str = "null";
+        if (mTask != null) {
+            str = mTask.toString();
+            mTask.mDialog.dismiss();
+        }
+        Toast.makeText(this, str, Toast.LENGTH_SHORT).show();
+        return mTask;
+    }
+
+    private class MyTask extends AsyncTask&lt;Void, Void, Void&gt; {
+        private ProgressDialog mDialog;
+        private MainActivity mContext;
+
+        public MyTask(MainActivity context) {
+            super();
+            mContext = context;
+        }
+
+        protected void onPreExecute() {
+                mDialog = new ProgressDialog(MainActivityProgress.this);
+        mDialog.setMessage("Please wait...");
+        mDialog.setIndeterminate(false);
+        mDialog.setMax(100);
+        mDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+        mDialog.setCancelable(true);
+        mDialog.show();
+        }
+
+        protected void onPostExecute(Void result) {
+            mContext.mTask = null;
+            mDialog.dismiss();
+        }
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            SystemClock.sleep(5000);
+            return null;
+        }
+    }
+}
+</code></pre>
+
+<p>Ok, So after editing your code it will look as below:</p>
+
+<p>public class MainActivityProgress extends Activity {</p>
+
+<pre><code>Button button;
+
+public static final int progress_bar_type = 0;
+
+private static String file_url = "http://farm1.static.flickr.com/114/298125983_0e4bf66782_b.jpg";
+private DownloadFileFromURL mTask = null;
+
+@Override
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main_activity_progress);
+    button = (Button) findViewById(R.id.btn_download);
+    DownloadFileFromURL task = (DownloadFileFromURL) getLastNonConfigurationInstance();
+    if (task != null) {
+        mTask = task;
+        mTask.mContext = this;
+        mTask.mDialog = ProgressDialog.show(MainActivityProgress.this,
+                "Downloading file.", "Please wait...", true);
+    }
+
+    button.setOnClickListener(new View.OnClickListener() {
+
+        @Override
+        public void onClick(View v) {
+            mTask = new DownloadFileFromURL(MainActivityProgress.this);
+            mTask.execute(file_url);
+        }
+    });
+}
+
+@Override
+public Object onRetainNonConfigurationInstance() {
+    String str = "null";
+    if (mTask != null) {
+        str = mTask.toString();
+        mTask.mDialog.dismiss();
+    }
+    return mTask;
+}
+
+class DownloadFileFromURL extends AsyncTask&lt;String, String, String&gt; {
+
+    private ProgressDialog mDialog;
+    private MainActivityProgress mContext;
+
+    public DownloadFileFromURL(MainActivityProgress context) {
+        mContext = context;
+    }
+
+    protected void onPreExecute() {
+        mDialog = ProgressDialog.show(MainActivityProgress.this,
+                "Downloading file.", "Please wait...", true);
+    }
+
+    @Override
+    protected String doInBackground(String... f_url) {
+        SystemClock.sleep(5000);
+        int count;
+        try {
+            URL url = new URL(f_url[0]);
+            URLConnection conection = url.openConnection();
+            conection.connect();
+
+            int lenghtOfFile = conection.getContentLength();
+
+            InputStream input = new BufferedInputStream(url.openStream(),
+                    8192);
+
+            OutputStream output = new FileOutputStream(
+                    "/sdcard/downloadedfile.jpg");
+
+            byte data[] = new byte[1024];
+
+            long total = 0;
+
+            while ((count = input.read(data)) != -1) {
+                total += count;
+                publishProgress("" + (total * 100) / lenghtOfFile);
+
+                output.write(data, 0, count);
+            }
+
+            output.flush();
+
+            output.close();
+            input.close();
+
+        } catch (Exception e) {
+            Log.e("Error: ", e.getMessage());
+        }
+
+        return null;
+    }
+     protected void onProgressUpdate(String... progress) {
+         mDialog.setProgress(Integer.parseInt(progress[0]));
+       }
+    @Override
+    protected void onPostExecute(String file_url) {
+        mContext.mTask = null;
+        if (mDialog.isShowing()) {
+            mDialog.dismiss();
+        }
+
+        String imagePath = Environment.getExternalStorageDirectory()
+                .toString() + "/downloadedfile.jpg";
+        Log.e("imagePath: ", imagePath);
+        // imageView.setImageDrawable(Drawable.createFromPath(imagePath));
+    }
+
+}
+</code></pre>
+
+<p>}</p>

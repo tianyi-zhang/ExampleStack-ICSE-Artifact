@@ -1,0 +1,68 @@
+<p>Very interesting question. I've just decided to debug and seems that it is really native protocol. </p>
+
+<p>Call processing starts from <code>com.google.gwt.dev.shell.BrowserChannel</code>. This class extended by BrowserChannelClient and BrowserChannelServer.</p>
+
+<p>And <code>com.google.gwt.dev.shell.BrowserListener</code> creates listener for new connections from browsers. Here is constructor from BrowserListener:</p>
+
+<pre><code>/**
+ * Listens for new connections from browsers.
+ * 
+ * @param logger 
+ * @param port 
+ * @param handler 
+ */
+public BrowserListener(final TreeLogger logger, String bindAddress,
+  int port, final SessionHandlerServer handler) {
+  try {
+    listenSocket = new ServerSocket();
+    listenSocket.setReuseAddress(true);
+    InetAddress address = InetAddress.getByName(bindAddress);
+    listenSocket.bind(new InetSocketAddress(address, port));
+
+    if (logger.isLoggable(TreeLogger.TRACE)) {
+      logger.log(TreeLogger.TRACE, "Started code server on port "
+          + listenSocket.getLocalPort(), null);
+    }
+    listenThread = new Thread() {
+      @Override
+      public void run() {
+        while (true) {
+          try {
+            Socket sock = listenSocket.accept();
+            TreeLogger branch = logger.branch(TreeLogger.TRACE,
+                "Connection received from "
+                    + sock.getInetAddress().getCanonicalHostName() + ":"
+                    + sock.getPort());
+            try {
+              sock.setTcpNoDelay(true);
+              sock.setKeepAlive(true);
+            } catch (SocketException e) {
+              // Ignore non-critical errors.
+            }
+
+            BrowserChannelServer server = new BrowserChannelServer(branch,
+                sock, handler, ignoreRemoteDeath);
+            /*
+             * This object is special-cased by the SessionHandler, used for
+             * methods needed by the client like hasMethod/hasProperty/etc.
+             * handler is used for this object just to make sure it doesn't
+             * conflict with some real object exposed to the client.
+             */
+            int id = server.getJavaObjectsExposedInBrowser().add(server);
+            assert id == BrowserChannel.SPECIAL_SERVERMETHODS_OBJECT;
+          } catch (IOException e) {
+            logger.log(TreeLogger.ERROR, "Communications error", e);
+          }
+        }
+      }
+    };
+    listenThread.setName("Code server listener");
+    listenThread.setDaemon(true);
+  } catch (BindException e) {
+    logger.log(TreeLogger.ERROR, "Unable to bind socket on port " + port
+        + " -- is another session active?", e);
+  } catch (IOException e) {
+    logger.log(TreeLogger.ERROR, "Communications error", e);
+  }
+}
+</code></pre>

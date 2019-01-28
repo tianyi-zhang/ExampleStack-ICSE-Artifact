@@ -1,0 +1,230 @@
+<p>You can do by changing the horizontal values to vertical ( change all width related calculations to height ). Change onLayout() &amp; onFling() as below:</p>
+
+<pre><code>    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+
+        // "Edit mode" means when the View is being displayed in the Android GUI editor. (this class
+        // is instantiated in the IDE, so we need to be a bit careful what we do).
+        if (isInEditMode())
+            return;
+
+        View cv = mChildViews.get(mCurrent);
+        Point cvOffset;
+
+        if (!mResetLayout) {
+            // Move to next or previous if current is sufficiently off center
+            if (cv != null) {
+                cvOffset = subScreenSizeOffset(cv);
+                // cv.getRight() may be out of date with the current scale
+                // so add left to the measured width for the correct position
+                //if (cv.getLeft() + cv.getMeasuredWidth() + cvOffset.x + GAP/2 + mXScroll &lt; getWidth()/2 &amp;&amp; mCurrent + 1 &lt; mAdapter.getCount()) {
+                if (cv.getTop() + cv.getMeasuredHeight() + cvOffset.y + GAP / 2 + mYScroll &lt; getHeight() / 2 &amp;&amp; mCurrent + 1 &lt; mAdapter.getCount()) {
+                    postUnsettle(cv);
+                    // post to invoke test for end of animation
+                    // where we must set hq area for the new current view
+                    mStepper.prod();
+
+                    onMoveOffChild(mCurrent);
+                    mCurrent++;
+                    onMoveToChild(mCurrent);
+                }
+
+                //if (cv.getLeft() - cvOffset.x - GAP/2 + mXScroll &gt;= getWidth()/2 &amp;&amp; mCurrent &gt; 0) {
+                if (cv.getTop() - cvOffset.y - GAP / 2 + mYScroll &gt;= getHeight() / 2 &amp;&amp; mCurrent &gt; 0) {
+                    postUnsettle(cv);
+                    // post to invoke test for end of animation
+                    // where we must set hq area for the new current view
+                    mStepper.prod();
+
+                    onMoveOffChild(mCurrent);
+                    mCurrent--;
+                    onMoveToChild(mCurrent);
+                }
+            }
+
+            // Remove not needed children and hold them for reuse
+            int numChildren = mChildViews.size();
+            int childIndices[] = new int[numChildren];
+            for (int i = 0; i &lt; numChildren; i++)
+                childIndices[i] = mChildViews.keyAt(i);
+
+            for (int i = 0; i &lt; numChildren; i++) {
+                int ai = childIndices[i];
+                if (ai &lt; mCurrent - 1 || ai &gt; mCurrent + 1) {
+                    View v = mChildViews.get(ai);
+                    onNotInUse(v);
+                    mViewCache.add(v);
+                    removeViewInLayout(v);
+                    mChildViews.remove(ai);
+                }
+            }
+        } else {
+            mResetLayout = false;
+            mXScroll = mYScroll = 0;
+
+            // Remove all children and hold them for reuse
+            int numChildren = mChildViews.size();
+            for (int i = 0; i &lt; numChildren; i++) {
+                View v = mChildViews.valueAt(i);
+                onNotInUse(v);
+                mViewCache.add(v);
+                removeViewInLayout(v);
+            }
+            mChildViews.clear();
+
+            // Don't reuse cached views if the adapter has changed
+            if (mReflowChanged) {
+                mReflowChanged = false;
+                mViewCache.clear();
+            }
+
+            // post to ensure generation of hq area
+            mStepper.prod();
+        }
+
+        // Ensure current view is present
+        int cvLeft, cvRight, cvTop, cvBottom;
+        boolean notPresent = (mChildViews.get(mCurrent) == null);
+        cv = getOrCreateChild(mCurrent);
+        // When the view is sub-screen-size in either dimension we
+        // offset it to center within the screen area, and to keep
+        // the views spaced out
+        cvOffset = subScreenSizeOffset(cv);
+        if (notPresent) {
+            //Main item not already present. Just place it top left
+            cvLeft = cvOffset.x;
+            cvTop = cvOffset.y;
+        } else {
+            // Main item already present. Adjust by scroll offsets
+            cvLeft = cv.getLeft() + mXScroll;
+            cvTop = cv.getTop() + mYScroll;
+        }
+        // Scroll values have been accounted for
+        mXScroll = mYScroll = 0;
+        cvRight = cvLeft + cv.getMeasuredWidth();
+        cvBottom = cvTop + cv.getMeasuredHeight();
+
+        if (!mUserInteracting &amp;&amp; mScroller.isFinished()) {
+            Point corr = getCorrection(getScrollBounds(cvLeft, cvTop, cvRight, cvBottom));
+            cvRight += corr.x;
+            cvLeft += corr.x;
+            cvTop += corr.y;
+            cvBottom += corr.y;
+        } else if (cv.getMeasuredWidth() &lt;= getWidth()) {
+//            // When the current view is as small as the screen in height, clamp
+//            // it vertically
+//            Point corr = getCorrection(getScrollBounds(cvLeft, cvTop, cvRight, cvBottom));
+//            cvTop += corr.y;
+//            cvBottom += corr.y;
+
+            // When the current view is as small as the screen in width, clamp
+            // it horizontally
+            Point corr = getCorrection(getScrollBounds(cvLeft, cvTop, cvRight, cvBottom));
+            cvRight += corr.x;
+            cvLeft += corr.x;
+        }
+
+
+
+        cv.layout(cvLeft, cvTop, cvRight, cvBottom);
+
+        if (mCurrent &gt; 0) {
+            View lv = getOrCreateChild(mCurrent - 1);
+            Point leftOffset = subScreenSizeOffset(lv);
+            /*int gap = leftOffset.x + GAP + cvOffset.x;
+            lv.layout(cvLeft - lv.getMeasuredWidth() - gap,
+                    (cvBottom + cvTop - lv.getMeasuredHeight())/2,
+                    cvLeft - gap,
+                    (cvBottom + cvTop + lv.getMeasuredHeight())/2);*/
+
+                        int gap = leftOffset.y + GAP + cvOffset.y;
+            lv.layout((cvRight + cvLeft - lv.getMeasuredWidth())/2,
+                    cvTop - lv.getMeasuredHeight() - gap,
+                    (cvRight + cvLeft + lv.getMeasuredWidth())/2,
+                    cvTop - gap);
+
+        }
+
+        if (mCurrent + 1 &lt; mAdapter.getCount()) {
+            View rv = getOrCreateChild(mCurrent + 1);
+            Point rightOffset = subScreenSizeOffset(rv);
+            /*int gap = cvOffset.x + GAP + rightOffset.x;
+            rv.layout(cvRight + gap,
+                    (cvBottom + cvTop - rv.getMeasuredHeight())/2,
+                    cvRight + rv.getMeasuredWidth() + gap,
+                    (cvBottom + cvTop + rv.getMeasuredHeight())/2);*/
+
+                        int gap = cvOffset.y + GAP + rightOffset.y;
+            rv.layout((cvRight + cvLeft - rv.getMeasuredWidth())/2,
+                    cvBottom + gap,
+                    (cvRight + cvLeft + rv.getMeasuredWidth())/2,
+                    cvBottom + rv.getMeasuredHeight() + gap);
+
+
+
+        }
+
+        invalidate();
+    }
+</code></pre>
+
+<p>And,</p>
+
+<pre><code> public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
+                           float velocityY) {
+        if (mScaling)
+            return true;
+
+        View v = mChildViews.get(mCurrent);
+        if (v != null) {
+            Rect bounds = getScrollBounds(v);
+            switch (directionOfTravel(velocityX, velocityY)) {
+
+                case MOVING_UP:
+                    if (bounds.top &gt;= 0) {
+                        // Fling off to the left bring next view onto screen
+                        View vl = mChildViews.get(mCurrent + 1);
+
+                        if (vl != null) {
+                            slideViewOntoScreen(vl);
+                            return true;
+                        }
+                    }
+                    break;
+
+                case MOVING_DOWN:
+                    if (bounds.bottom &lt;= 0) {
+                        // Fling off to the right bring previous view onto screen
+                        View vr = mChildViews.get(mCurrent - 1);
+
+                        if (vr != null) {
+                            slideViewOntoScreen(vr);
+                            return true;
+                        }
+                    }
+                    break;
+            }
+            mScrollerLastX = mScrollerLastY = 0;
+            // If the page has been dragged out of bounds then we want to spring back
+            // nicely. fling jumps back into bounds instantly, so we don't want to use
+            // fling in that case. On the other hand, we don't want to forgo a fling
+            // just because of a slightly off-angle drag taking us out of bounds other
+            // than in the direction of the drag, so we test for out of bounds only
+            // in the direction of travel.
+            //
+            // Also don't fling if out of bounds in any direction by more than fling
+            // margin
+            Rect expandedBounds = new Rect(bounds);
+            expandedBounds.inset(-FLING_MARGIN, -FLING_MARGIN);
+
+            if (withinBoundsInDirectionOfTravel(bounds, velocityX, velocityY)
+                    &amp;&amp; expandedBounds.contains(0, 0)) {
+                mScroller.fling(0, 0, (int) velocityX, (int) velocityY, bounds.left, bounds.right, bounds.top, bounds.bottom);
+                mStepper.prod();
+            }
+        }
+
+        return true;
+    }
+</code></pre>

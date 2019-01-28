@@ -1,0 +1,77 @@
+<p>Temporary directories created by <a href="http://docs.oracle.com/javase/7/docs/api/java/nio/file/Files.html#createTempDirectory%28java.lang.String,%20java.nio.file.attribute.FileAttribute...%29"><code>Files.createTempDirectory()</code></a> are not deleted upon system exit, unless you configure them to do so:</p>
+
+<blockquote>
+  <p>A <a href="http://docs.oracle.com/javase/7/docs/api/java/lang/Runtime.html#addShutdownHook%28java.lang.Thread%29">shutdown-hook</a>, or the <a href="http://docs.oracle.com/javase/7/docs/api/java/io/File.html#deleteOnExit%28%29"><code>File.deleteOnExit()</code></a> mechanism may be used to delete the directory automatically.</p>
+</blockquote>
+
+<p>Meaning you could call:</p>
+
+<pre><code>Path tmp = Files.createTempDirectory(null);
+tmp.toFile().deleteOnExit();
+</code></pre>
+
+<p>However you cannot delete a directory unless it's empty, as document by <a href="http://docs.oracle.com/javase/7/docs/api/java/io/File.html#delete%28%29"><code>File.delete()</code></a>:</p>
+
+<blockquote>
+  <p>Deletes the file or directory denoted by this abstract pathname. If
+  this pathname denotes a directory, then the directory must be empty in
+  order to be deleted.</p>
+</blockquote>
+
+<p>So we need to get a bit fancier if you want the directory and its contents deleted.  You can recursively register a directory and its children for deletion like so:</p>
+
+<pre><code>public static void recursiveDeleteOnExit(Path path) throws IOException {
+  Files.walkFileTree(path, new SimpleFileVisitor&lt;Path&gt;() {
+    @Override
+    public FileVisitResult visitFile(Path file,
+        @SuppressWarnings("unused") BasicFileAttributes attrs) {
+      file.toFile().deleteOnExit();
+      return FileVisitResult.CONTINUE;
+    }
+    @Override
+    public FileVisitResult preVisitDirectory(Path dir,
+        @SuppressWarnings("unused") BasicFileAttributes attrs) {
+      dir.toFile().deleteOnExit();
+      return FileVisitResult.CONTINUE;
+    }
+  });
+}
+</code></pre>
+
+<p>Take note however, this registers all <em>currently existing files</em> for deletion - if after calling this method you create new files, they and their parent directories will not be deleted per the documented behavior of <code>File.delete()</code>.</p>
+
+<p>If you want to delete a directory upon exit, regardless of the contents of said directory, you can use a shutdown-hook in an almost identical manner:</p>
+
+<pre><code>public static void recursiveDeleteOnShutdownHook(final Path path) {
+  Runtime.getRuntime().addShutdownHook(new Thread(
+    new Runnable() {
+      @Override
+      public void run() {
+        try {
+          Files.walkFileTree(path, new SimpleFileVisitor&lt;Path&gt;() {
+            @Override
+            public FileVisitResult visitFile(Path file,
+                @SuppressWarnings("unused") BasicFileAttributes attrs)
+                throws IOException {
+              Files.delete(file);
+              return FileVisitResult.CONTINUE;
+        }
+        @Override
+        public FileVisitResult postVisitDirectory(Path dir, IOException e)
+            throws IOException {
+          if (e == null) {
+            Files.delete(dir);
+            return FileVisitResult.CONTINUE;
+          }
+          // directory iteration failed
+          throw e;
+        }
+        });
+      } catch (IOException e) {
+        throw new RuntimeException("Failed to delete "+path, e);
+      }
+    }}));
+}
+</code></pre>
+
+<p>Note however that calling this repeatedly registers a new shutdown thread each time, which could potentially cause problems at scale.  <code>File.deleteOnExit()</code> stores a set of registered files, and deletes all of them in one shutdown hook.  If you need to delete many directories in this manner, you'd want to implement something similar.</p>

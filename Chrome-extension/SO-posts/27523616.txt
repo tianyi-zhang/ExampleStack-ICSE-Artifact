@@ -1,0 +1,105 @@
+<p>As mentioned by longilong trusting all certificates is not the best approach. In fact it's a very bad approach in a production environment, since it basically nullifies the effect of SSL and makes you venerable to <a href="http://en.wikipedia.org/wiki/Man-in-the-middle_attack" rel="nofollow">Man-in-the-middle attacks</a>. </p>
+
+<p>The problem boils down to the <a href="http://en.wikipedia.org/wiki/POODLE" rel="nofollow">POODLE SSL3 bug</a> which has made some (most?) service provider disable their SSLv3 support. This is bad news for us Android-developers because HttpConnection defaults to SSLv3 in Build.VERSION.SDK_INT >= 9 &amp;&amp; Build.VERSION.SDK_INT &lt;= 20.</p>
+
+<p>There is an issue filed in the <a href="https://code.google.com/p/android/issues/detail?id=78187" rel="nofollow">Android issue tracker</a> with more information and a solution consists of providing a custom SSLFactory which refuses to set SSLv3 as the only fallback protocol and here is the code from that very issue. I take no credit for this solution, but it is what we currently use for all versions before Lollipop.</p>
+
+<pre><code>/**
+ * An {@link javax.net.ssl.SSLSocket} that doesn't allow {@code SSLv3} only connections
+ * &lt;p&gt;fixes https://github.com/koush/ion/issues/386&lt;/p&gt;
+ */
+private static class NoSSLv3SSLSocket extends DelegateSSLSocket {
+
+private NoSSLv3SSLSocket(SSLSocket delegate) {
+    super(delegate);
+
+    String canonicalName = delegate.getClass().getCanonicalName();
+    if (!canonicalName.equals("org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl")){
+        // try replicate the code from HttpConnection.setupSecureSocket()
+        try {
+            Method msetUseSessionTickets = delegate.getClass().getMethod("setUseSessionTickets", boolean.class);
+            if (null != msetUseSessionTickets) {
+                msetUseSessionTickets.invoke(delegate, true);
+            }
+        } catch (NoSuchMethodException ignored) {
+        } catch (InvocationTargetException ignored) {
+        } catch (IllegalAccessException ignored) {
+        }
+    }
+}
+
+@Override
+public void setEnabledProtocols(String[] protocols) {
+    if (protocols != null &amp;&amp; protocols.length == 1 &amp;&amp; "SSLv3".equals(protocols[0])) {
+        // no way jose
+        // see issue https://code.google.com/p/android/issues/detail?id=78187
+        List&lt;String&gt; enabledProtocols = new ArrayList&lt;String&gt;(Arrays.asList(delegate.getEnabledProtocols()));
+        if (enabledProtocols.size() &gt; 1) {
+            enabledProtocols.remove("SSLv3");
+        } else {
+            LogManager.getLogger().w("SSL stuck with protocol available for " + String.valueOf(enabledProtocols));
+        }
+        protocols = enabledProtocols.toArray(new String[enabledProtocols.size()]);
+    }
+    super.setEnabledProtocols(protocols);
+}
+}
+
+
+/**
+ * {@link javax.net.ssl.SSLSocketFactory} that doesn't allow {@code SSLv3} only connections
+ */
+private static class NoSSLv3Factory extends SSLSocketFactory {
+private final SSLSocketFactory delegate;
+
+private NoSSLv3Factory() {
+    this.delegate = HttpsURLConnection.getDefaultSSLSocketFactory();
+}
+
+@Override
+public String[] getDefaultCipherSuites() {
+    return delegate.getDefaultCipherSuites();
+}
+
+@Override
+public String[] getSupportedCipherSuites() {
+    return delegate.getSupportedCipherSuites();
+}
+
+private static Socket makeSocketSafe(Socket socket) {
+    if (socket instanceof SSLSocket) {
+        socket = new NoSSLv3SSLSocket((SSLSocket) socket);
+    }
+    return socket;
+}
+
+@Override
+public Socket createSocket(Socket s, String host, int port, boolean autoClose) throws IOException {
+    return makeSocketSafe(delegate.createSocket(s, host, port, autoClose));
+}
+
+@Override
+public Socket createSocket(String host, int port) throws IOException {
+    return makeSocketSafe(delegate.createSocket(host, port));
+}
+
+@Override
+public Socket createSocket(String host, int port, InetAddress localHost, int localPort) throws IOException {
+    return makeSocketSafe(delegate.createSocket(host, port, localHost, localPort));
+}
+
+@Override
+public Socket createSocket(InetAddress host, int port) throws IOException {
+    return makeSocketSafe(delegate.createSocket(host, port));
+}
+
+@Override
+public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort) throws IOException {
+    return makeSocketSafe(delegate.createSocket(address, port, localAddress, localPort));
+}
+}
+
+static {
+HttpsURLConnection.setDefaultSSLSocketFactory(new NoSSLv3Factory());
+}
+</code></pre>

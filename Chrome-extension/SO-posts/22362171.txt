@@ -1,0 +1,151 @@
+<p>OK I reworked my last answer to use Bouncy Castle v1.5 in place of OpenSSL.  It took a lot of googling to find non-deprecated functions from Bouncy Castle.  I still used a Keygen HTML5 tag, to generate the private key for Firefox.  I was only interested in using Firefox, but from what I read most other web browser should work. If you use this code make sure you set a different serial-number for each cert if you try to import two with the name number; Firefox just ignores the request.</p>
+
+<pre><code>import java.io.*;
+import java.math.*;
+import java.security.*;
+import java.security.cert.*;
+import java.util.*;
+import javax.servlet.*;
+import javax.servlet.http.*;
+
+import org.bouncycastle.asn1.misc.*;
+import org.bouncycastle.asn1.x500.*;
+import org.bouncycastle.asn1.x509.*;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.cert.*;
+import org.bouncycastle.cert.jcajce.*;
+import org.bouncycastle.jce.netscape.*;
+import org.bouncycastle.jce.provider.*;
+import org.bouncycastle.operator.*;
+import org.bouncycastle.operator.jcajce.*;
+import org.bouncycastle.util.encoders.*;
+
+public class ExampleClientAuth extends HttpServlet {
+
+    private static final long serialVersionUID = 5599842503981845987L;
+
+    public void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        response.setContentType("text/html");
+        PrintWriter out = response.getWriter();
+
+        out.println("&lt;html&gt;");
+        out.println("&lt;head&gt;");
+        out.println("&lt;title&gt;SSL Generator&lt;/title&gt;");
+        out.println("&lt;/head&gt;");
+        out.println("&lt;body&gt;");
+
+        out.println("&lt;form method=\"post\"&gt;");
+        out.println("&lt;keygen name=\"pubkey\" challenge=\"randomchars\"&gt;");
+        out.println("Username: &lt;input type=\"text\" name=\"username\" value=\"John Doe\"&gt;");
+        out.println("&lt;input type=\"submit\" name=\"createcert\" value=\"Generate\"&gt;");
+        out.println("&lt;/form&gt;");
+
+        out.println("&lt;/body&gt;");
+        out.println("&lt;/html&gt;");     
+    }
+
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        String CN = "/var/lib/tomcat7/webapps/ROOT/WEB-INF/certs/";
+        PrintWriter out = new PrintWriter(CN+"log.txt", "UTF-8");
+        try {
+            response.setContentType("application/x-x509-user-cert");
+            OutputStream os=response.getOutputStream();
+            String pubkey = request.getParameter("pubkey");
+            pubkey = pubkey.replace("\n", "").replace("\r", "").replace("\t", "").replace("\0", "").replace("\u000B", "");
+            String username = request.getParameter("username");
+
+            BC_SingCert_Spkac(os,pubkey,username,out);
+
+            os.close();
+            os.flush();         
+        } catch (Throwable t) {
+            t.printStackTrace(out);
+        } finally {
+            out.close();
+            out.flush();
+        }
+    }
+
+    protected void BC_SingCert_Spkac(OutputStream os,String Spkac, String ID, PrintWriter log) throws Exception {
+        Security.addProvider(new BouncyCastleProvider());
+
+        KeyStore keystore = KeyStore.getInstance(KeyStore.getDefaultType());
+        keystore.load(new FileInputStream("/usr/share/tomcat7/bin/cacerts.jks"),
+            "password".toCharArray());
+        PrivateKey cakey = (PrivateKey)keystore.getKey("my_ca", "password".toCharArray());
+        X509Certificate cacert = (X509Certificate)keystore.getCertificate("my_ca");
+
+        X509Certificate ncert = createCertFromSpkac(cacert, cakey, Spkac, ID);
+
+        byte[] buf = ncert.getEncoded();
+        os.write(buf, 0, buf.length);
+    }
+
+    private X509Certificate createCertFromSpkac(X509Certificate cacert,
+        PrivateKey caPrivKey, String spkacData, String ID) throws Exception {
+
+        X500Name subject = new X500Name("CN=\""+ID+"\",OU=\"Organizational Unit\",O=\"Organizational\",L=\"City\",ST=\"California\",C=\"US\",E=\"email@example.com\"");
+        X500Name issuer = JcaX500NameUtil.getIssuer(cacert);
+        int VALIDITY_PERIOD = 365 * 24 * 60 * 60 * 1000; // one year
+        Date startDate = new Date(System.currentTimeMillis());
+        Date endDate = new Date(System.currentTimeMillis() + VALIDITY_PERIOD);
+        String subjAltNameURI = "http://example.com";
+        BigInteger serialNumber = BigInteger.valueOf(1000);
+
+        PublicKey caPubKey = cacert.getPublicKey();
+        NetscapeCertRequest netscapeCertReq = new NetscapeCertRequest(Base64.decode(spkacData));
+        PublicKey certPubKey = netscapeCertReq.getPublicKey();
+
+        X509v3CertificateBuilder certGenerator = new X509v3CertificateBuilder(
+            issuer, 
+            serialNumber, 
+            startDate, 
+            endDate, 
+            subject, 
+            SubjectPublicKeyInfo.getInstance(certPubKey.getEncoded())
+        );
+        // Adds the Basic Constraint (CA: false) extension.
+        certGenerator.addExtension(Extension.basicConstraints, true,
+            new BasicConstraints(false));
+
+        // Adds the Key Usage extension.
+        certGenerator.addExtension(Extension.keyUsage, true, new KeyUsage(
+            KeyUsage.digitalSignature | KeyUsage.nonRepudiation
+            | KeyUsage.keyEncipherment | KeyUsage.keyAgreement
+            | KeyUsage.keyCertSign));
+
+        // Adds the Netscape certificate type extension.
+        certGenerator.addExtension(MiscObjectIdentifiers.netscapeCertType,
+            false, new NetscapeCertType(NetscapeCertType.sslClient
+            | NetscapeCertType.smime));
+
+        // Adds the subject key identifier extension.
+        SubjectKeyIdentifier subjectKeyIdentifier =  
+            new JcaX509ExtensionUtils().createSubjectKeyIdentifier(certPubKey);
+        certGenerator.addExtension(Extension.subjectKeyIdentifier, false,
+            subjectKeyIdentifier);
+
+        // Adds the subject alternative-name extension (critical).
+        if (subjAltNameURI != null) {
+            GeneralNames subjectAltNames = new GeneralNames(new GeneralName(
+                GeneralName.uniformResourceIdentifier, subjAltNameURI));
+            certGenerator.addExtension(Extension.subjectAlternativeName,
+                false, subjectAltNames);
+        }
+
+        // Creates and sign this certificate with the private key corresponding
+        // to the public key of the certificate 
+
+        ContentSigner signer = new JcaContentSignerBuilder("SHA1withRSA").setProvider("BC").build(caPrivKey);
+
+        X509CertificateHolder holder = certGenerator.build(signer);
+        X509Certificate cert = new JcaX509CertificateConverter().setProvider("BC").getCertificate(holder);
+
+        // Checks that this certificate has indeed been correctly signed.
+        cert.verify(caPubKey);
+
+        return cert;
+    }
+
+}
+</code></pre>

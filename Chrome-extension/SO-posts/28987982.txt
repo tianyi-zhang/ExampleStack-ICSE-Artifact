@@ -1,0 +1,66 @@
+<p>In the comments pskink suggests to use <code>AbstractWindowedCursor</code>.</p>
+
+<p>I was not familiar with this class and investigated it a bit. It turns out that <code>SQLiteCursor</code> extends it already. The documentation states this:</p>
+
+<blockquote>
+  <p>The cursor owns the cursor window it uses. When the cursor is closed, its window is also closed. Likewise, when the window used by the cursor is changed, its old window is closed. This policy of strict ownership ensures that cursor windows are not leaked. </p>
+</blockquote>
+
+<p>This means that at any given moment only a tiny portion of the data queried from the DB is actually kept in memory. This is the interesting part of the code in <code>SQLiteCursor</code>:</p>
+
+<pre><code>@Override
+public boolean onMove(int oldPosition, int newPosition) {
+    // Make sure the row at newPosition is present in the window
+    if (mWindow == null || newPosition &lt; mWindow.getStartPosition() ||
+            newPosition &gt;= (mWindow.getStartPosition() + mWindow.getNumRows())) {
+        fillWindow(newPosition);
+    }
+
+    return true;
+}
+
+@Override
+public int getCount() {
+    if (mCount == NO_COUNT) {
+        fillWindow(0);
+    }
+    return mCount;
+}
+
+private void fillWindow(int requiredPos) {
+    clearOrCreateWindow(getDatabase().getPath());
+
+    try {
+        if (mCount == NO_COUNT) {
+            int startPos = DatabaseUtils.cursorPickFillWindowStartPosition(requiredPos, 0);
+            mCount = mQuery.fillWindow(mWindow, startPos, requiredPos, true);
+            mCursorWindowCapacity = mWindow.getNumRows();
+            if (Log.isLoggable(TAG, Log.DEBUG)) {
+                Log.d(TAG, "received count(*) from native_fill_window: " + mCount);
+            }
+        } else {
+            int startPos = DatabaseUtils.cursorPickFillWindowStartPosition(requiredPos,
+                    mCursorWindowCapacity);
+            mQuery.fillWindow(mWindow, startPos, requiredPos, false);
+        }
+    } catch (RuntimeException ex) {
+        // Close the cursor window if the query failed and therefore will
+        // not produce any results.  This helps to avoid accidentally leaking
+        // the cursor window if the client does not correctly handle exceptions
+        // and fails to close the cursor.
+        closeWindow();
+        throw ex;
+    }
+}
+</code></pre>
+
+<p>This means 2 things:</p>
+
+<ol>
+<li>it should be safe to load the entire dataset, as it will be not fully kept in memory. Only a portion of it (a <code>CursorWindow</code>) is in memory at any time. The 1MB size limit is either (possibly) a myth or it refers to the CursorWindow object and in that case it is a safe size</li>
+<li>Performance shouldn't be an issue since, again, the cursor always works on a fixed amount of data. Probably the initial query (which calculates the total size of the data set, stored in the <code>mCount</code> variable) might have some impact on the perceived performance. I need to further test this.</li>
+</ol>
+
+<p>In conclusion, most likely there is no need to use the MergeCursor trick or to worry excessively about OOM.</p>
+
+<p>I could have investigated better in the source code but I was a bit tricked by what I read on the web.</p>

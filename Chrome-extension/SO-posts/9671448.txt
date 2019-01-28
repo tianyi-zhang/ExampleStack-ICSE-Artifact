@@ -1,0 +1,97 @@
+<p>First you need to create a <code>BroadcastReceiver</code> to trigger on BOOT_COMPLETE</p>
+
+<pre><code>public class BootReceiver extends BroadcastReceiver {
+
+    @Override
+    public void onReceive(final Context context, final Intent intent) {
+            if ("android.intent.action.BOOT_COMPLETED".equals(intent.getAction())) {
+                    Intent mServiceIntent = new Intent();
+                    mServiceIntent
+                                    .setAction("com.crossfire.appname.service.BootService");
+                    ComponentName service = context.startService(mServiceIntent);
+                    if (null == service) {
+                            // something really wrong here
+                            Log.e(TAG, "Could not start service ");
+                    }
+            } else {
+                    Log.e(TAG, "Received unexpected intent " + intent.toString());
+            }
+    }
+}
+</code></pre>
+
+<p>Then create a service to reset all your alarms:</p>
+
+<pre><code>public class BootService extends Service {
+
+    private final String TAG = "BootService";
+
+    @Override
+    public IBinder onBind(final Intent intent) {
+            return null;
+    }
+
+    @Override
+    public void onCreate() {
+            super.onCreate();
+            Trace.i(TAG, "created");
+    }
+
+    @Override
+    public void onStart(final Intent intent, final int startId) {
+            super.onStart(intent, startId);
+            Trace.i(TAG, "started");
+
+            LoadAlarmsFromDatabase();
+
+    }
+
+    private void LoadAlarmsFromDatabase() {
+           Cursor c = mDbHelper.getPendingAlarms();
+            if (c.moveToFirst()) {
+                    do {
+
+                            int id = c.getInt(mDbHelper.ID_COLUMN);
+                            String time = c.getString(mDbHelper.TIME_COLUMN);
+                            addNotification(id, time);
+                    } while (c.moveToNext());
+            }
+            c.close();
+    }
+
+    private void addNotification(int apptId, String time) {
+            Trace.d(TAG, "addNotification " + apptId + ", " + time);
+            Intent intent = new Intent(BootService.this,
+                            ApptBroadcastReceiver.class);
+
+            intent.putExtra("appt_id", Integer.toString(apptId));
+
+            PendingIntent mAlarmSender = PendingIntent.getBroadcast(
+                            BootService.this, apptId, intent, 0);
+
+            long alarmTime = System.currentTimeMillis() + 60000;
+            Calendar c = null;
+
+            try {
+                    c = CustomDateUtils.StringToCalendar(time);
+                    alarmTime = c.getTimeInMillis();
+            } catch (ParseException e) {
+                    Log.e(TAG, "ParseException");
+            }
+
+            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+            am.set(AlarmManager.RTC_WAKEUP, alarmTime, mAlarmSender);
+
+    }
+}
+</code></pre>
+
+<p>Finally, add the permission and receiver to the manifest</p>
+
+<pre><code> &lt;uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" /&gt;
+ &lt;receiver android:name=".receiver.BootReceiver" android:enabled="true"&gt;
+            &lt;intent-filter&gt;
+                    &lt;action android:name ="android.intent.action.BOOT_COMPLETED"&gt;&lt;/action&gt;
+            &lt;/intent-filter&gt;
+    &lt;/receiver&gt;
+</code></pre>

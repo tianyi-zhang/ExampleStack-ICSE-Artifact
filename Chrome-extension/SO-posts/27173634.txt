@@ -1,0 +1,226 @@
+<p>OK, so I think <strong>there is no sufficient answer</strong> for general camera preview stretching problem. Or at least I didn't find one. My app also suffered this stretching syndrome and it took me a while to puzzle together a solution from all the user answers on this portal and internet.</p>
+
+<p>I tried @Hesam's <a href="http://stackoverflow.com/a/22758359/3422034">solution</a> but it didn't work and left my camera preview majorly distorted.</p>
+
+<p>First I show the code of my solution (the important parts of the code) and then I explain why I took those steps. There is room for performance modifications.</p>
+
+<p><strong>Main activity xml layout:</strong></p>
+
+<pre><code>&lt;RelativeLayout 
+    android:id="@+id/main_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal" &gt;
+
+    &lt;FrameLayout
+        android:id="@+id/camera_preview"
+        android:layout_centerInParent="true"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+    /&gt;
+&lt;/RelativeLayout&gt;
+</code></pre>
+
+<p><strong>Camera Preview:</strong></p>
+
+<pre><code>public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
+
+private SurfaceHolder prHolder;
+private Camera prCamera;
+public List&lt;Camera.Size&gt; prSupportedPreviewSizes;
+private Camera.Size prPreviewSize;
+
+@SuppressWarnings("deprecation")
+public YoCameraPreview(Context context, Camera camera) {
+    super(context);
+    prCamera = camera;
+
+    prSupportedPreviewSizes = prCamera.getParameters().getSupportedPreviewSizes();
+
+    prHolder = getHolder();
+    prHolder.addCallback(this);
+    prHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+}
+
+public void surfaceCreated(SurfaceHolder holder) {
+    try {
+        prCamera.setPreviewDisplay(holder);
+        prCamera.startPreview();
+    } catch (IOException e) {
+        Log.d("Yologram", "Error setting camera preview: " + e.getMessage());
+    }
+}
+
+public void surfaceDestroyed(SurfaceHolder holder) {
+}
+
+public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    if (prHolder.getSurface() == null){
+      return;
+    }
+
+    try {
+        prCamera.stopPreview();
+    } catch (Exception e){
+    }
+
+    try {
+        Camera.Parameters parameters = prCamera.getParameters();
+        List&lt;String&gt; focusModes = parameters.getSupportedFocusModes();
+        if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
+            parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+        }
+        parameters.setPreviewSize(prPreviewSize.width, prPreviewSize.height);
+
+        prCamera.setParameters(parameters);
+        prCamera.setPreviewDisplay(prHolder);
+        prCamera.startPreview();
+
+    } catch (Exception e){
+        Log.d("Yologram", "Error starting camera preview: " + e.getMessage());
+    }
+}
+
+@Override
+protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+
+    final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+    final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+
+    setMeasuredDimension(width, height);
+
+    if (prSupportedPreviewSizes != null) {
+        prPreviewSize = 
+            getOptimalPreviewSize(prSupportedPreviewSizes, width, height);
+    }    
+}
+
+public Camera.Size getOptimalPreviewSize(List&lt;Camera.Size&gt; sizes, int w, int h) {
+
+    final double ASPECT_TOLERANCE = 0.1;
+    double targetRatio = (double) h / w;
+
+    if (sizes == null)
+        return null;
+
+    Camera.Size optimalSize = null;
+    double minDiff = Double.MAX_VALUE;
+
+    int targetHeight = h;
+
+    for (Camera.Size size : sizes) {
+        double ratio = (double) size.width / size.height;
+        if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE)
+            continue;
+
+        if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+            optimalSize = size;
+            minDiff = Math.abs(size.height - targetHeight);
+        }
+    }
+
+    if (optimalSize == null) {
+        minDiff = Double.MAX_VALUE;
+        for (Camera.Size size : sizes) {
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+    }
+
+    return optimalSize;
+}
+}
+</code></pre>
+
+<p><strong>Main activity:</strong></p>
+
+<pre><code>public class MainActivity extends Activity {
+
+...
+
+@SuppressLint("NewApi")
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);     
+    setContentView(R.layout.activity_main);
+
+        maCamera = getCameraInstance();
+
+        maLayoutPreview = (FrameLayout) findViewById(R.id.camera_preview);
+
+        maPreview = new CameraPreview(this, maCamera);
+
+        Point displayDim = getDisplayWH();
+        Point layoutPreviewDim = calcCamPrevDimensions(displayDim, 
+                maPreview.getOptimalPreviewSize(maPreview.prSupportedPreviewSizes, 
+                    displayDim.x, displayDim.y));
+        if (layoutPreviewDim != null) {
+            RelativeLayout.LayoutParams layoutPreviewParams = 
+                (RelativeLayout.LayoutParams) maLayoutPreview.getLayoutParams();
+            layoutPreviewParams.width = layoutPreviewDim.x;
+            layoutPreviewParams.height = layoutPreviewDim.y;
+            layoutPreviewParams.addRule(RelativeLayout.CENTER_IN_PARENT);
+            maLayoutPreview.setLayoutParams(layoutPreviewParams);
+        }
+        maLayoutPreview.addView(maPreview);
+}
+
+@SuppressLint("NewApi")
+@SuppressWarnings("deprecation")
+private Point getDisplayWH() {
+
+    Display display = this.getWindowManager().getDefaultDisplay();
+    Point displayWH = new Point();
+
+    if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB_MR2) {
+        display.getSize(displayWH);
+        return displayWH;
+    }
+    displayWH.set(display.getWidth(), display.getHeight());
+    return displayWH;
+}
+
+private Point calcCamPrevDimensions(Point disDim, Camera.Size camDim) {
+
+    Point displayDim = disDim;
+    Camera.Size cameraDim = camDim;
+
+    double widthRatio = (double) displayDim.x / cameraDim.width;
+    double heightRatio = (double) displayDim.y / cameraDim.height;
+
+    // use "&gt;" to zoom preview full screen
+    if (widthRatio &lt; heightRatio) {
+        Point calcDimensions = new Point();
+        calcDimensions.x = displayDim.x;
+        calcDimensions.y = (displayDim.x * cameraDim.height) / cameraDim.width;
+        return calcDimensions;
+    }
+    // use "&lt;" to zoom preview full screen
+    if (widthRatio &gt; heightRatio) { 
+        Point calcDimensions = new Point();
+        calcDimensions.x = (displayDim.y * cameraDim.width) / cameraDim.height;
+        calcDimensions.y = displayDim.y;
+        return calcDimensions;
+    }
+    return null;
+}   
+}
+</code></pre>
+
+<p><strong>My commentary:</strong></p>
+
+<p>The point of all this is, that although you calculate the <strong>optimal camera size</strong> in <code>getOptimalPreviewSize()</code> you only pick the <strong>closest ratio</strong> to fit your screen. So unless the ratio is exactly <strong>the same</strong> the preview will stretch.</p>
+
+<p>Why will it stretch? Because your FrameLayout camera preview is set in <strong>layout.xml</strong> to <strong>match_parent</strong> in width and height. So that is why the preview will stretch to full screen.</p>
+
+<p>What needs to be done is to <strong>set camera preview layout</strong> width and height to match the chosen <strong>camera size ratio</strong>, so the preview keeps its aspect ratio and won't distort.</p>
+
+<p>I tried to use the <code>CameraPreview</code> class to do all the calculations and layout changes, but I couldn't figure it out. I tried to apply <a href="http://stackoverflow.com/a/14406953/3422034">this solution</a>, but <code>SurfaceView</code> doesn't recognize <code>getChildCount ()</code> or <code>getChildAt (int index)</code>. I think, I got it working eventually with a reference to <code>maLayoutPreview</code>, but it was misbehaving and applied the set ratio to my whole app and it did so after first picture was taken. So I let it go and moved the layout modifications to the <code>MainActivity</code>.</p>
+
+<p>In <code>CameraPreview</code> I changed <code>prSupportedPreviewSizes</code> and <code>getOptimalPreviewSize()</code> to <strong>public</strong> so I can use it in <code>MainActivity</code>. Then I needed the <strong>display dimensions</strong> (minus the navigation/status bar if there is one) and chosen optimal <strong>camera size</strong>. I tried to get the RelativeLayout (or FrameLayout) size instead of display size, but it was returning zero value. <a href="http://stackoverflow.com/a/20548045/3422034">This solution</a> didn't work for me. The layout got it's value after <code>onWindowFocusChanged</code> (checked in the log).</p>
+
+<p>So I have my methods for calculating the layout dimensions to match the aspect ratio of chosen camera size. Now you just need to set <code>LayoutParams</code> of your camera preview layout. Change the width, height and center it in parent.</p>
+
+<p>There are two choices how to calculate the preview dimensions. Either you want it to fit the screen with <strong>black bars</strong> (if windowBackground is set to null) on the sides or top/bottom. Or you want the preview <strong>zoomed to full screen</strong>. I left comment with more information in <code>calcCamPrevDimensions()</code>.</p>

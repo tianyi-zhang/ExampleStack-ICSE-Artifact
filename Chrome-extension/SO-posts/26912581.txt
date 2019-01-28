@@ -1,0 +1,101 @@
+<p>Thanks for the help everyone, it works now!</p>
+
+<p>Apparently I was using the SD card storage which required permissions as explained in <a href="http://stackoverflow.com/questions/14450839/uses-permission-vs-permission-for-android-permissions-in-the-manifest-xml-file">permission vs uses-permisson</a> instead of local sandboxed storage which requires no permissions starting from API level 19.</p>
+
+<p>SD card access, requires write permission: Environment.getExternalStoragePublicDirectory </p>
+
+<p>Sandboxed local storage for your app: getExternalFilesDir</p>
+
+<p>I use this code for API level 16, it should require minimal effort to implement and change but if you encounter problems, leave a message and I'll try to help or clarify.</p>
+
+<p>Most of the explanation is in the code as commentary</p>
+
+<pre><code>    //OnClick hook, requires implements View.OnClickListener to work
+    public void takePicture(View v) {
+        dispatchTakePictureIntent();
+    }
+
+    private void dispatchTakePictureIntent() {
+        //Create intent to capture an image from the camera
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        // Ensure that there's a camera activity to handle the intent
+        if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            // Create the directory File where the photo should go, do NOT try to create the image file itself
+            File photoFile = null;
+            try {
+                //mCurrentPhotoPath is a File outside of the methods, so all methods know the last directory for the last picture taken
+                mCurrentPhotoPath = createImageFile();
+                photoFile = mCurrentPhotoPath;
+            } catch (IOException ex) {
+                // Error occurred while creating the File
+                ex.printStackTrace();
+            }
+            // Continue only if the File was successfully created
+            if (photoFile != null) {
+                //photoFile MUST be a directory or the camera will hang on an internal
+                //error and will refuse to store the picture,
+                //resulting in not being able to to click accept
+                //MediaStore will automatically store a jpeg for you in the specific directory and add the filename to the path
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(photoFile));
+                startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_IMAGE_CAPTURE &amp;&amp; resultCode == RESULT_OK) {
+            //unique name, can be pretty much whatever you want
+            imageId = generateImageId(); 
+            //Get file.jpg as bitmap from MediaStore's returned File object
+            Bitmap imageBitmap = BitmapFactory.decodeFile(mCurrentPhotoPath.getAbsolutePath()); 
+            //resize it to fit the screen
+            imageBitmap = Bitmap.createScaledBitmap(imageBitmap,300,300,false); 
+            //Some ImageView in your layout.xml
+            ImageView imageView = (ImageView)findViewById(R.id.imageView); 
+            imageView.setImageBitmap(imageBitmap);
+            Bitmap thumbnail =  makeThumbnail(mCurrentPhotoPath);
+            ImageView thumbnail = (ImageView)findViewById(R.id.thumbnail); 
+            thumbnail.setImageBitmap(imageBitmap);
+        }
+    }
+
+    private File createImageFile() throws IOException {
+        // Create an image file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        //completely optional subdirectory structure
+        storageDir = new File(storageDir, "custom_directory");
+        return storageDir;
+    }    
+
+    private Bitmap makeThumbnail(File currentPhotoPath) {
+        // Get the dimensions of the View, I strongly recommend creating a &lt;dimens&gt; resource for dip scaled pixels
+        int targetW = 45;
+        int targetH = 80;
+
+        // Get the dimensions of the bitmap
+        BitmapFactory.Options bmOptions = new BitmapFactory.Options();
+        bmOptions.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(currentPhotoPath.getAbsolutePath(), bmOptions);
+        int photoW = bmOptions.outWidth;
+        int photoH = bmOptions.outHeight;
+
+        // Determine how much to scale down the image
+        int scaleFactor = Math.min(photoW/targetW, photoH/targetH);
+
+        // Decode the image file into a Bitmap sized to fill the View
+        bmOptions.inJustDecodeBounds = false;
+        bmOptions.inSampleSize = scaleFactor;
+        bmOptions.inPurgeable = true;
+
+        Bitmap bitmap = BitmapFactory.decodeFile(currentPhotoPath.getAbsolutePath(), bmOptions);
+        return bitmap;
+    }
+
+    private long generateImageId() {
+        return Calendar.getInstance().getTimeInMillis();
+    }
+</code></pre>
+
+<p>Android 5.0, API 21, will use the Camera2 API where all of this will be hidden far away, from what I understand. You can read about it <a href="https://developer.android.com/reference/android/hardware/camera2/package-summary.html" rel="nofollow">here</a></p>

@@ -1,0 +1,661 @@
+<pre><code>try this code..
+
+
+/**
+ * Author  : Ramesh R
+ * Created : 11/25/13 10:11 PM
+ * ----------------------------------------------------------------------
+ * Copyright © EMD Systems Software Private Ltd.  All rights reserved.
+ * This file is subject to the terms and conditions defined in
+ * file 'LICENSE.txt', which is part of this source code package.
+ * All other rights reserved.
+ * ----------------------------------------------------------------------
+ */
+
+package com.emdsys.android.pacs.viewer.model;
+
+import com.emdsys.android.pacs.R;
+import com.emdsys.android.pacs.activity.TabActivityPacs;
+import com.emdsys.android.pacs.activity.ViewerActivity;
+import com.emdsys.android.pacs.shared.Config;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.graphics.Point;
+import android.graphics.PointF;
+import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.support.v4.view.VelocityTrackerCompat;
+import android.util.AttributeSet;
+import android.util.Log;
+import android.view.GestureDetector;
+import android.view.GestureDetector.OnDoubleTapListener;
+import android.view.GestureDetector.OnGestureListener;
+import android.view.animation.DecelerateInterpolator;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
+import android.view.VelocityTracker;
+import android.view.View;
+import android.widget.ImageView;
+
+@SuppressLint("Recycle")
+public class TouchImageView extends ImageView {
+
+    private Matrix mMatrix;
+
+    // We can be in one of these 3 states
+    static final int NONE = 0;
+    static final int DRAG = 1;
+    static final int ZOOM = 2;
+    int mode = NONE;
+    public static Rect startBounds;
+    // Remember some things for zooming
+    PointF last = new PointF();
+    PointF start = new PointF();
+    float minScale = 1f;
+    float maxScale = 3f;
+    float[] m;
+    public static float startScaleFinal;
+    public static int tab_check = 0;
+    int viewWidth, viewHeight;
+    static final int CLICK = 3;
+    float saveScale = 1f;
+    protected float origWidth, origHeight;
+    int oldMeasuredWidth, oldMeasuredHeight;
+    public int touchActionDownX = 0;
+    public int touchActionDownY = 0;
+    ScaleGestureDetector mScaleDetector;
+    GestureDetector hidingevent;
+    private int check = 0;
+    private VelocityTracker mVelocityTracker = null;
+    Context context;
+    int pre_x = 0, pre_y = 0;
+    public int check_for_unwanted = 0;
+    private static Animator mCurrentAnimator;
+    private static int mShortAnimationDuration = 500;
+    public static TouchImageView full_image;
+    public static View maintainView;
+
+    public TouchImageView(Context context) {
+        super(context);
+        sharedConstructing(context);
+    }
+
+    public TouchImageView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        sharedConstructing(context);
+    }
+
+    private void sharedConstructing(Context context) {
+        super.setClickable(true);
+        this.context = context;
+        TouchImageView.tab_check = 0;
+        mScaleDetector = new ScaleGestureDetector(context, new ScaleListener());
+        hidingevent = new GestureDetector(context, new singleTablistener());
+        mMatrix = new Matrix();
+        m = new float[9];
+        setImageMatrix(mMatrix);
+        setScaleType(ScaleType.MATRIX);
+
+        setOnTouchListener(new OnTouchListener() {
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                maintainView = v;
+                hidingevent.onTouchEvent(event);
+                if (ViewerActivity.sClick == 1) {
+                    mScaleDetector.onTouchEvent(event);
+                    PointF curr = new PointF(event.getX(), event.getY());
+                    switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        last.set(curr);
+                        start.set(last);
+                        mode = DRAG;
+                        break;
+
+                    case MotionEvent.ACTION_MOVE:
+                        if (mode == DRAG) {
+                            float deltaX = curr.x - last.x;
+                            float deltaY = curr.y - last.y;
+                            float fixTransX = getFixDragTrans(deltaX,
+                                    viewWidth, origWidth * saveScale);
+                            float fixTransY = getFixDragTrans(deltaY,
+                                    viewHeight, origHeight * saveScale);
+                            mMatrix.postTranslate(fixTransX, fixTransY);
+                            fixTrans();
+                            last.set(curr.x, curr.y);
+                        }
+                        break;
+
+                    case MotionEvent.ACTION_UP:
+                        mode = NONE;
+                        int xDiff = (int) Math.abs(curr.x - start.x);
+                        int yDiff = (int) Math.abs(curr.y - start.y);
+                        if (xDiff &lt; CLICK &amp;&amp; yDiff &lt; CLICK)
+                            performClick();
+                        break;
+
+                    case MotionEvent.ACTION_POINTER_UP:
+                        mode = NONE;
+                        break;
+                    }
+
+                    setImageMatrix(mMatrix);
+                    invalidate();
+                    return true; // indicate event was handled
+                } else {
+                    //
+                    // Drag motion of the image view is achieved here.....
+                    //
+                    int index = event.getActionIndex();
+                    int action = event.getActionMasked();
+                    int pointerId = event.getPointerId(index);
+                    switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                        if (mVelocityTracker == null) {
+                            // Retrieve a new VelocityTracker object to watch
+                            // the
+                            // velocity of a motion.
+                            mVelocityTracker = VelocityTracker.obtain();
+                        } else {
+                            // Reset the velocity tracker back to its initial
+                            // state.
+                            mVelocityTracker.clear();
+                        }
+                        // Add a user's movement to the tracker
+                        touchActionDownX = (int) event.getX();
+                        touchActionDownY = (int) event.getY();
+                        pre_x = (int) event.getX();
+                        pre_y = (int) event.getY();
+                        mVelocityTracker.addMovement(event);
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        mVelocityTracker.addMovement(event);
+
+                        mVelocityTracker.computeCurrentVelocity(1000);
+
+                        Log.d("", "DownX: " + touchActionDownX);
+                        Log.d("", "DownY: " + touchActionDownY);
+                        // On touch point identification..
+                        int New_x = (int) event.getX();
+                        int New_y = (int) event.getY();
+                        //
+                        // velocity of the pointer movement in the display...
+                        //
+                        int Velocityx = Math.abs((int) VelocityTrackerCompat
+                                .getXVelocity(mVelocityTracker, pointerId));
+                        int Velocityy = Math.abs((int) VelocityTrackerCompat
+                                .getYVelocity(mVelocityTracker, pointerId));
+                        if ((Math.abs(New_x - pre_x) &gt; 3)
+                                || (Math.abs(New_y - pre_y) &gt; 3)) {
+                            ViewerActivity.sDiffx = ((pre_x - New_x) / 3);
+                            ViewerActivity.sDiffy = ((pre_y - New_y) / 3);
+
+                            if ((ViewerActivity.sDiffx &gt;= 0)
+                                    &amp;&amp; (ViewerActivity.sDiffy &gt;= 0)) {
+                                if (check == 0) {
+                                    ViewerActivity.selecting_mode(Velocityx,
+                                            Velocityy, 1);
+                                    Log.d("", "Loop1");
+                                    check++;
+                                } else {
+                                    check = 0;
+                                }
+
+                            } else if ((ViewerActivity.sDiffx &lt;= 0)
+                                    &amp;&amp; (ViewerActivity.sDiffy &gt;= 0)) {
+                                if (check == 0) {
+                                    ViewerActivity.selecting_mode(Velocityx,
+                                            Velocityy, 1);
+                                    Log.d("", "Loop1");
+                                    check++;
+                                } else {
+                                    check = 0;
+                                }
+                            } else if ((ViewerActivity.sDiffx &lt;= 0)
+                                    &amp;&amp; ViewerActivity.sDiffy &lt;= 0) {
+                                if (check == 0) {
+                                    ViewerActivity.selecting_mode(Velocityx,
+                                            Velocityy, 1);
+                                    Log.d("", "Loop1");
+                                    check++;
+                                } else {
+                                    check = 0;
+                                }
+
+                            } else if ((ViewerActivity.sDiffx &gt;= 0)
+                                    &amp;&amp; ViewerActivity.sDiffy &lt;= 0) {
+                                if (check == 0) {
+                                    ViewerActivity.selecting_mode(Velocityx,
+                                            Velocityy, 1);
+                                    Log.d("", "Loop1");
+                                    check++;
+                                } else {
+                                    check = 0;
+                                }
+                            } else {
+                                // Nothing is executing here....
+                            }
+                        }
+
+                        pre_x = New_x;
+                        pre_y = New_y;
+                        break;
+                    case MotionEvent.ACTION_UP:
+                        check_for_unwanted = 1;
+                        // if(TouchImageView.tab_check!=1)
+                        // {
+                        //
+                        // }
+                    case MotionEvent.ACTION_CANCEL:
+                        // mVelocityTracker.recycle();
+                        if (check_for_unwanted == 1) {
+                            ViewerActivity.update_image(111);
+                        } else {
+                            ViewerActivity.selecting_mode(0, 0, 0);
+                        }
+                        break;
+                    }
+                    return true;
+                }
+
+            }
+
+        });
+    }
+
+    public void setMaxZoom(float x) {
+        maxScale = x;
+    }
+
+    private class ScaleListener extends
+            ScaleGestureDetector.SimpleOnScaleGestureListener {
+        @Override
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            mode = ZOOM;
+            return true;
+        }
+
+        @Override
+        public boolean onScale(ScaleGestureDetector detector) {
+            float mScaleFactor = detector.getScaleFactor();
+            float origScale = saveScale;
+            saveScale *= mScaleFactor;
+            if (saveScale &gt; maxScale) {
+                saveScale = maxScale;
+                mScaleFactor = maxScale / origScale;
+            } else if (saveScale &lt; minScale) {
+                saveScale = minScale;
+                mScaleFactor = minScale / origScale;
+            }
+            if (origWidth * saveScale &lt;= viewWidth
+                    || origHeight * saveScale &lt;= viewHeight)
+                mMatrix.postScale(mScaleFactor, mScaleFactor, viewWidth / 2,
+                        viewHeight / 2);
+            else
+                mMatrix.postScale(mScaleFactor, mScaleFactor,
+                        detector.getFocusX(), detector.getFocusY());
+
+            // creation of reset button in viewer
+            if ((viewHeight &gt; ViewerActivity.sResetHeight)
+                    &amp;&amp; (viewWidth &gt; ViewerActivity.sResetWidth)) {
+                ViewerActivity.sResetImageButton.setVisibility(View.GONE);
+            } else {
+                ViewerActivity.sResetImageButton.setVisibility(View.GONE);
+            }
+            fixTrans();
+            return true;
+        }
+    }
+
+    void fixTrans() {
+        mMatrix.getValues(m);
+        float transX = m[Matrix.MTRANS_X];
+        float transY = m[Matrix.MTRANS_Y];
+
+        float fixTransX = getFixTrans(transX, viewWidth, origWidth * saveScale);
+        float fixTransY = getFixTrans(transY, viewHeight, origHeight
+                * saveScale);
+
+        if (fixTransX != 0 || fixTransY != 0)
+            mMatrix.postTranslate(fixTransX, fixTransY);
+        // visibility of the image reset button...
+
+    }
+
+    float getFixTrans(float trans, float viewSize, float contentSize) {
+        float minTrans, maxTrans;
+
+        if (contentSize &lt;= viewSize) {
+            minTrans = 0;
+            maxTrans = viewSize - contentSize;
+        } else {
+            minTrans = viewSize - contentSize;
+            maxTrans = 0;
+        }
+
+        if (trans &lt; minTrans)
+            return -trans + minTrans;
+        if (trans &gt; maxTrans)
+            return -trans + maxTrans;
+        return 0;
+    }
+
+    float getFixDragTrans(float delta, float viewSize, float contentSize) {
+        if (contentSize &lt;= viewSize) {
+            return 0;
+        }
+        return delta;
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        viewWidth = MeasureSpec.getSize(widthMeasureSpec);
+        viewHeight = MeasureSpec.getSize(heightMeasureSpec);
+        //
+        // Rescaled image on rotation
+        //
+        if (oldMeasuredHeight == viewWidth &amp;&amp; oldMeasuredHeight == viewHeight
+                || viewWidth == 0 || viewHeight == 0)
+            return;
+        oldMeasuredHeight = viewHeight;
+        oldMeasuredWidth = viewWidth;
+
+        if (saveScale == 1) {
+            // Fit to screen.
+            float scale;
+
+            Drawable drawable = getDrawable();
+            if (drawable == null || drawable.getIntrinsicWidth() == 0
+                    || drawable.getIntrinsicHeight() == 0)
+                return;
+            int bmWidth = drawable.getIntrinsicWidth();
+            int bmHeight = drawable.getIntrinsicHeight();
+
+            Log.d("bmSize", "bmWidth: " + bmWidth + " bmHeight : " + bmHeight);
+
+            float scaleX = (float) viewWidth / (float) bmWidth;
+            float scaleY = (float) viewHeight / (float) bmHeight;
+            scale = Math.min(scaleX, scaleY);
+            mMatrix.setScale(scale, scale);
+
+            // Center the image
+            float redundantYSpace = (float) viewHeight
+                    - (scale * (float) bmHeight);
+            float redundantXSpace = (float) viewWidth
+                    - (scale * (float) bmWidth);
+            redundantYSpace /= (float) 2;
+            redundantXSpace /= (float) 2;
+
+            mMatrix.postTranslate(redundantXSpace, redundantYSpace);
+
+            origWidth = viewWidth - 2 * redundantXSpace;
+            origHeight = viewHeight - 2 * redundantYSpace;
+            setImageMatrix(mMatrix);
+        }
+        fixTrans();
+    }
+
+    public class singleTablistener implements OnDoubleTapListener,
+            OnGestureListener {
+
+        @Override
+        public boolean onDoubleTap(MotionEvent e) {
+            return false;
+        }
+
+        @Override
+        public boolean onDoubleTapEvent(MotionEvent e) {
+
+            return false;
+        }
+
+        @Override
+        public boolean onSingleTapConfirmed(MotionEvent e) {
+
+            if (ViewerActivity.sHide == 0) {
+                TouchImageView.tab_check = 1;
+                TabActivityPacs.tabs.setVisibility(View.GONE);
+                TabActivityPacs.recorder_Layout.setVisibility(View.GONE);
+                TabActivityPacs.layout.setVisibility(View.GONE);
+                TabActivityPacs.playerloyout.setVisibility(View.GONE);
+                TabActivityPacs.Tab_whole.setVisibility(View.GONE);
+                final Bitmap bitmap = (Bitmap) ((BitmapDrawable) ((ImageView) ViewerActivity.sImage)
+                        .getDrawable()).getBitmap();
+                zoomImageFromThumb(ViewerActivity.sImage, bitmap);
+                ViewerActivity.sHide = 1;
+                return true;
+            } else {
+                if (TouchImageView.mCurrentAnimator != null) {
+                    TouchImageView.mCurrentAnimator.cancel();
+                }
+
+                // Animate the four positioning/sizing properties in parallel,
+                // back to their original values.
+                AnimatorSet set = new AnimatorSet();
+                set.play(
+                        ObjectAnimator.ofFloat(
+                                TabActivityPacs.expandedImageView, View.X,
+                                TouchImageView.startBounds.left))
+                        .with(ObjectAnimator.ofFloat(
+                                TabActivityPacs.expandedImageView, View.Y,
+                                TouchImageView.startBounds.top))
+                        .with(ObjectAnimator.ofFloat(
+                                TabActivityPacs.expandedImageView,
+                                View.SCALE_X, TouchImageView.startScaleFinal))
+                        .with(ObjectAnimator.ofFloat(
+                                TabActivityPacs.expandedImageView,
+                                View.SCALE_Y, TouchImageView.startScaleFinal));
+                set.setDuration(TouchImageView.mShortAnimationDuration);
+                set.setInterpolator(new DecelerateInterpolator());
+                set.addListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        TouchImageView.full_image.setAlpha(1f);
+                        TabActivityPacs.tabs.setVisibility(View.VISIBLE);
+                        TabActivityPacs.Tab_whole.setVisibility(View.VISIBLE);
+                        if (Config.sUserType.equalsIgnoreCase("radiologist")) {
+                            TabActivityPacs.recorder_Layout
+                                    .setVisibility(View.VISIBLE);
+                        } else {
+                            TabActivityPacs.playerloyout
+                                    .setVisibility(View.VISIBLE);
+                        }
+                        TabActivityPacs.layout.setVisibility(View.VISIBLE);
+                        TabActivityPacs.expandedImageView
+                                .setVisibility(View.GONE);
+                        final Bitmap bitmap = (Bitmap) ((BitmapDrawable) ((ImageView) TabActivityPacs.expandedImageView)
+                                .getDrawable()).getBitmap();
+                        if (bitmap != null) {
+                            ViewerActivity.sImage.setImageBitmap(bitmap);
+                        } else {
+                            ViewerActivity.sImage
+                                    .setImageResource(R.drawable.defaultimage);
+                        }
+
+                        TouchImageView.mCurrentAnimator = null;
+                    }
+
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        full_image.setAlpha(1f);
+                        TabActivityPacs.tabs.setVisibility(View.VISIBLE);
+                        TabActivityPacs.layout.setVisibility(View.VISIBLE);
+                        TabActivityPacs.Tab_whole.setVisibility(View.VISIBLE);
+                        if (Config.sUserType.equalsIgnoreCase("radiologist")) {
+                            TabActivityPacs.recorder_Layout
+                                    .setVisibility(View.VISIBLE);
+                        } else {
+                            TabActivityPacs.playerloyout
+                                    .setVisibility(View.VISIBLE);
+                        }
+
+                        TabActivityPacs.expandedImageView
+                                .setVisibility(View.GONE);
+                        final Bitmap bitmap = (Bitmap) ((BitmapDrawable) ((ImageView) TabActivityPacs.expandedImageView)
+                                .getDrawable()).getBitmap();
+                        if (bitmap != null) {
+                            ViewerActivity.sImage.setImageBitmap(bitmap);
+                        } else {
+                            ViewerActivity.sImage
+                                    .setImageResource(R.drawable.defaultimage);
+                        }
+
+                        TouchImageView.mCurrentAnimator = null;
+                    }
+                });
+                set.start();
+                TouchImageView.mCurrentAnimator = set;
+                ViewerActivity.sHide = 0;
+                return true;
+
+            }
+        }
+
+        @Override
+        public boolean onDown(MotionEvent e) {
+            return false;
+        }
+
+        @Override
+        public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
+                float velocityY) {
+            return false;
+        }
+
+        @Override
+        public void onLongPress(MotionEvent e) {
+        }
+
+        @Override
+        public boolean onScroll(MotionEvent e1, MotionEvent e2,
+                float distanceX, float distanceY) {
+            return false;
+        }
+
+        @Override
+        public void onShowPress(MotionEvent e) {
+        }
+
+        @Override
+        public boolean onSingleTapUp(MotionEvent e) {
+            return false;
+        }
+
+    }
+
+    private void zoomImageFromThumb(final TouchImageView thumbView,
+            Bitmap imageResId) {
+        // If there's an animation in progress, cancel it
+        // immediately and proceed with this one.
+        if (mCurrentAnimator != null) {
+            mCurrentAnimator.cancel();
+        }
+        full_image = thumbView;
+        // Load the high-resolution "zoomed-in" image.
+        try {
+            if (imageResId != null) {
+                TabActivityPacs.expandedImageView.setImageBitmap(imageResId);
+            } else {
+                TabActivityPacs.expandedImageView
+                        .setImageResource(R.drawable.defaultimage);
+            }
+        } catch (Exception exception) {
+            Log.d(null, " Error " + exception);
+        }
+
+        // Calculate the starting and ending bounds for the zoomed-in image.
+        // This step involves lots of math. Yay, math.
+        TouchImageView.startBounds = new Rect();
+        final Rect finalBounds = new Rect();
+        final Point globalOffset = new Point();
+
+        // The start bounds are the global visible rectangle of the thumbnail,
+        // and the final bounds are the global visible rectangle of the
+        // container
+        // view. Also set the container view's offset as the origin for the
+        // bounds, since that's the origin for the positioning animation
+        // properties (X, Y).
+        full_image.getGlobalVisibleRect(startBounds);
+        TabActivityPacs.host.getGlobalVisibleRect(finalBounds, globalOffset);
+        startBounds.offset(-globalOffset.x, -globalOffset.y);
+        finalBounds.offset(-globalOffset.x, -globalOffset.y);
+
+        // Adjust the start bounds to be the same aspect ratio as the final
+        // bounds using the "center crop" technique. This prevents undesirable
+        // stretching during the animation. Also calculate the start scaling
+        // factor (the end scaling factor is always 1.0).
+        float startScale;
+        if ((float) finalBounds.width() / finalBounds.height() &gt; (float) startBounds
+                .width() / startBounds.height()) {
+            // Extend start bounds horizontally
+            startScale = (float) startBounds.height() / finalBounds.height();
+            float startWidth = startScale * finalBounds.width();
+            float deltaWidth = (startWidth - startBounds.width()) / 2;
+            startBounds.left -= deltaWidth;
+            startBounds.right += deltaWidth;
+        } else {
+            // Extend start bounds vertically
+            startScale = (float) startBounds.width() / finalBounds.width();
+            float startHeight = startScale * finalBounds.height();
+            float deltaHeight = (startHeight - startBounds.height()) / 2;
+            startBounds.top -= deltaHeight;
+            startBounds.bottom += deltaHeight;
+        }
+
+        // Hide the thumbnail and show the zoomed-in view. When the animation
+        // begins, it will position the zoomed-in view in the place of the
+        // thumbnail.
+        full_image.setAlpha(0f);
+        TabActivityPacs.expandedImageView.setVisibility(View.VISIBLE);
+
+        // Set the pivot point for SCALE_X and SCALE_Y transformations
+        // to the top-left corner of the zoomed-in view (the default
+        // is the center of the view).
+        TabActivityPacs.expandedImageView.setPivotX(0f);
+        TabActivityPacs.expandedImageView.setPivotY(0f);
+
+        // Construct and run the parallel animation of the four translation and
+        // scale properties (X, Y, SCALE_X, and SCALE_Y).
+        AnimatorSet set = new AnimatorSet();
+        set.play(
+                ObjectAnimator.ofFloat(TabActivityPacs.expandedImageView,
+                        View.X, startBounds.left, finalBounds.left))
+                .with(ObjectAnimator.ofFloat(TabActivityPacs.expandedImageView,
+                        View.Y, startBounds.top, finalBounds.top))
+                .with(ObjectAnimator.ofFloat(TabActivityPacs.expandedImageView,
+                        View.SCALE_X, startScale, 1f))
+                .with(ObjectAnimator.ofFloat(TabActivityPacs.expandedImageView,
+                        View.SCALE_Y, startScale, 1f));
+        set.setDuration(mShortAnimationDuration);
+        set.setInterpolator(new DecelerateInterpolator());
+        set.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                mCurrentAnimator = null;
+            }
+
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                mCurrentAnimator = null;
+            }
+        });
+        set.start();
+        mCurrentAnimator = set;
+
+        // Upon clicking the zoomed-in image, it should zoom back down
+        // to the original bounds and show the thumbnail instead of
+        // the expanded image.
+        startScaleFinal = startScale;
+    }
+
+}
+</code></pre>

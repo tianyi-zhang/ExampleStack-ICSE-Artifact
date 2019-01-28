@@ -1,0 +1,121 @@
+<p>This solution more concise but requires using RequestMappingHandlerAdapter, which Spring use when <code>&lt;mvc:annotation-driven /&gt;</code> enabled.
+Hope it will help somebody.
+The idea is to extend ServletRequestDataBinder like this:</p>
+
+<pre><code> /**
+ * ServletRequestDataBinder which supports fields renaming using {@link ParamName}
+ *
+ * @author jkee
+ */
+public class ParamNameDataBinder extends ExtendedServletRequestDataBinder {
+
+    private final Map&lt;String, String&gt; renameMapping;
+
+    public ParamNameDataBinder(Object target, String objectName, Map&lt;String, String&gt; renameMapping) {
+        super(target, objectName);
+        this.renameMapping = renameMapping;
+    }
+
+    @Override
+    protected void addBindValues(MutablePropertyValues mpvs, ServletRequest request) {
+        super.addBindValues(mpvs, request);
+        for (Map.Entry&lt;String, String&gt; entry : renameMapping.entrySet()) {
+            String from = entry.getKey();
+            String to = entry.getValue();
+            if (mpvs.contains(from)) {
+                mpvs.add(to, mpvs.getPropertyValue(from).getValue());
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>Appropriate processor:</p>
+
+<pre><code>/**
+ * Method processor supports {@link ParamName} parameters renaming
+ *
+ * @author jkee
+ */
+
+public class RenamingProcessor extends ServletModelAttributeMethodProcessor {
+
+    @Autowired
+    private RequestMappingHandlerAdapter requestMappingHandlerAdapter;
+
+    //Rename cache
+    private final Map&lt;Class&lt;?&gt;, Map&lt;String, String&gt;&gt; replaceMap = new ConcurrentHashMap&lt;Class&lt;?&gt;, Map&lt;String, String&gt;&gt;();
+
+    public RenamingProcessor(boolean annotationNotRequired) {
+        super(annotationNotRequired);
+    }
+
+    @Override
+    protected void bindRequestParameters(WebDataBinder binder, NativeWebRequest nativeWebRequest) {
+        Object target = binder.getTarget();
+        Class&lt;?&gt; targetClass = target.getClass();
+        if (!replaceMap.containsKey(targetClass)) {
+            Map&lt;String, String&gt; mapping = analyzeClass(targetClass);
+            replaceMap.put(targetClass, mapping);
+        }
+        Map&lt;String, String&gt; mapping = replaceMap.get(targetClass);
+        ParamNameDataBinder paramNameDataBinder = new ParamNameDataBinder(target, binder.getObjectName(), mapping);
+        requestMappingHandlerAdapter.getWebBindingInitializer().initBinder(paramNameDataBinder, nativeWebRequest);
+        super.bindRequestParameters(paramNameDataBinder, nativeWebRequest);
+    }
+
+    private static Map&lt;String, String&gt; analyzeClass(Class&lt;?&gt; targetClass) {
+        Field[] fields = targetClass.getDeclaredFields();
+        Map&lt;String, String&gt; renameMap = new HashMap&lt;String, String&gt;();
+        for (Field field : fields) {
+            ParamName paramNameAnnotation = field.getAnnotation(ParamName.class);
+            if (paramNameAnnotation != null &amp;&amp; !paramNameAnnotation.value().isEmpty()) {
+                renameMap.put(paramNameAnnotation.value(), field.getName());
+            }
+        }
+        if (renameMap.isEmpty()) return Collections.emptyMap();
+        return renameMap;
+    }
+}
+</code></pre>
+
+<p>Annotation: </p>
+
+<pre><code>/**
+ * Overrides parameter name
+ * @author jkee
+ */
+
+@Target(ElementType.FIELD)
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+public @interface ParamName {
+
+    /**
+     * The name of the request parameter to bind to.
+     */
+    String value();
+
+}
+</code></pre>
+
+<p>Spring config:</p>
+
+<pre><code>&lt;mvc:annotation-driven&gt;
+    &lt;mvc:argument-resolvers&gt;
+        &lt;bean class="ru.yandex.metrika.util.params.RenamingProcessor"&gt;
+            &lt;constructor-arg name="annotationNotRequired" value="true"/&gt;
+        &lt;/bean&gt;
+    &lt;/mvc:argument-resolvers&gt;
+&lt;/mvc:annotation-driven&gt; 
+</code></pre>
+
+<p>And finally, usage (like Bozho solution):</p>
+
+<pre><code>public class Job {
+    @ParamName("job-type")
+    private String jobType;
+    @ParamName("loc")
+    private String location;
+}
+</code></pre>

@@ -1,0 +1,642 @@
+<p>I was struggling with same question. Especially, as most of code samples are already outdated + Android Studio/SDKs is improving, so old answers sometimes are not relevant anymore.</p>
+
+<p>So, first things first: you need to determine if you want to use <strong>Instrumental</strong> or simple <strong>JUnit</strong> tests.</p>
+
+<p>The difference between them beautifully described by S.D. <a href="http://stackoverflow.com/a/18271651/1658267">here</a>;
+In short: JUnit tests are more lightweight and not require an emulator to run, Instrumental - give you the closest to the actual device possible experience (sensors, gps, interaction with other apps etc.). Also read more about <a href="http://developer.android.com/tools/testing/testing_android.html">testing in Android</a>.</p>
+
+<h1><strong>1. JUnit testing of fragments</strong></h1>
+
+<p>Let's say, you don't need heavy Instrumental tests and simple junit tests are enough.
+I use nice framework <a href="http://robolectric.org/getting-started/">Robolectric</a> for this purpose.</p>
+
+<p>In gradle add:</p>
+
+<pre><code>dependencies {
+    .....
+    testCompile 'junit:junit:4.12'
+    testCompile 'org.robolectric:robolectric:3.0'
+    testCompile "org.mockito:mockito-core:1.10.8"
+    testCompile ('com.squareup.assertj:assertj-android:1.0.0') {
+        exclude module: 'support-annotations'
+    }
+    .....
+}
+</code></pre>
+
+<p>Mockito, AsserJ are optional, but I found them very useful so I highly recommend to include them too.</p>
+
+<p>Then in <em>Build Variants</em> specify <strong>Unit Tests</strong> as a <em>Test Artifact</em>:
+<a href="http://i.stack.imgur.com/THaSV.png"><img src="http://i.stack.imgur.com/THaSV.png" alt="enter image description here"></a></p>
+
+<p>Now it's time to write some real tests :-)
+As an example, lets take the standard "Blank Activity with Fragment" sample project.</p>
+
+<p>I added some lines of code, to have actually something to test:</p>
+
+<pre><code>import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import java.util.ArrayList;
+import java.util.List;
+
+public class MainActivityFragment extends Fragment {
+
+    private List&lt;Cow&gt; cows;
+    public MainActivityFragment() {}
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                             Bundle savedInstanceState) {   
+        cows = new ArrayList&lt;&gt;();
+        cows.add(new Cow("Burka", 10));
+        cows.add(new Cow("Zorka", 9));
+        cows.add(new Cow("Kruzenshtern", 15));
+
+        return inflater.inflate(R.layout.fragment_main, container, false);
+    }
+
+    int calculateYoungCows(int maxAge) {
+        if (cows == null) {
+            throw new IllegalStateException("onCreateView hasn't been called");
+        }
+
+        if (getActivity() == null) {
+            throw new IllegalStateException("Activity is null");
+        }
+
+        if (getView() == null) {
+            throw new IllegalStateException("View is null");
+        }
+
+        int result = 0;
+        for (Cow cow : cows) {
+            if (cow.age &lt;= maxAge) {
+                result++;
+            }
+        }
+
+        return result;
+    }
+}
+</code></pre>
+
+<p>And class Cow:</p>
+
+<pre><code>public class Cow {
+    public String name;
+    public int age;
+
+    public Cow(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+}
+</code></pre>
+
+<p>The Robolectic's test set would look something like:</p>
+
+<pre><code>import android.app.Application;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.app.FragmentTransaction;
+import android.test.ApplicationTestCase;
+
+import junit.framework.Assert;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
+import org.robolectric.RobolectricGradleTestRunner;
+import org.robolectric.annotation.Config;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+@RunWith(RobolectricGradleTestRunner.class)
+@Config(constants = BuildConfig.class, sdk=21)
+public class MainActivityFragmentTest extends ApplicationTestCase&lt;Application&gt; {
+
+    public MainActivityFragmentTest() {
+        super(Application.class);
+    }
+
+    MainActivity mainActivity;
+    MainActivityFragment mainActivityFragment;
+
+    @Before
+    public void setUp() {
+        mainActivity = Robolectric.setupActivity(MainActivity.class);
+        mainActivityFragment = new MainActivityFragment();
+        startFragment(mainActivityFragment);
+    }
+
+    @Test
+    public void testMainActivity() {
+        Assert.assertNotNull(mainActivity);
+    }
+
+    @Test
+    public void testCowsCounter() {
+        assertThat(mainActivityFragment.calculateYoungCows(10)).isEqualTo(2);
+        assertThat(mainActivityFragment.calculateYoungCows(99)).isEqualTo(3);
+    }
+
+    private void startFragment( Fragment fragment ) {
+        FragmentManager fragmentManager = mainActivity.getSupportFragmentManager();
+        FragmentTransaction fragmentTransaction = fragmentManager.beginTransaction();
+        fragmentTransaction.add(fragment, null );
+        fragmentTransaction.commit();
+    }
+}
+</code></pre>
+
+<p>I.e. we create activity via <em>Robolectric.setupActivity</em>, new fragment in the test-classes' setUp(). Optionally, you can immediately start the fragment from the setUp() or you can do it directly from the test. </p>
+
+<p><strong>NB!</strong> I haven't spent <em>too</em> much time on it, but it looks like it's almost impossible to tie it together with Dagger(I don't know if it's easier with Dagger2), as you can't set custom test Application with mocked injections.</p>
+
+<h1><strong>2. Instrumental testing of fragments</strong></h1>
+
+<p>The complexity of this approach is highly depends on if you're using Dagger/Dependency injection in the app you want to test.</p>
+
+<p>In <em>Build Variants</em> specify <strong>Android Instrumental Tests</strong> as a <em>Test Artifact</em>:
+<a href="http://i.stack.imgur.com/8Iweu.png"><img src="http://i.stack.imgur.com/8Iweu.png" alt="enter image description here"></a></p>
+
+<p>In Gradle I add these dependencies:</p>
+
+<pre><code>dependencies {
+    .....
+    androidTestCompile "com.google.dexmaker:dexmaker:1.1"
+    androidTestCompile "com.google.dexmaker:dexmaker-mockito:1.1"
+    androidTestCompile 'com.squareup.assertj:assertj-android:1.0.0'
+    androidTestCompile "org.mockito:mockito-core:1.10.8"
+    }
+    .....
+}
+</code></pre>
+
+<p>(again, pretty much all of them are optional, but they can make your life so much easier)</p>
+
+<h2><strong>- If you don't have Dagger</strong></h2>
+
+<p>This a happy path. The difference with Robolectric from the above would be only in small details.</p>
+
+<p><em>Pre-step 1</em>: If you are going to use Mockito, you have to enable it to run on the devices and emulators with this hack:</p>
+
+<pre><code>public class TestUtils {
+    private static final String CACHE_DIRECTORY = "/data/data/" + BuildConfig.APPLICATION_ID + "/cache";
+    public static final String DEXMAKER_CACHE_PROPERTY = "dexmaker.dexcache";
+
+    public static void enableMockitoOnDevicesAndEmulators() {
+        if (System.getProperty(DEXMAKER_CACHE_PROPERTY) == null || System.getProperty(DEXMAKER_CACHE_PROPERTY).isEmpty()) {
+            File file = new File(CACHE_DIRECTORY);
+            if (!file.exists()) {
+                final boolean success = file.mkdirs();
+                if (!success) {
+                    fail("Unable to create cache directory required for Mockito");
+                }
+            }
+
+            System.setProperty(DEXMAKER_CACHE_PROPERTY, file.getPath());
+        }
+    }
+}
+</code></pre>
+
+<p>The MainActivityFragment stays the same, as above. So the test-set would look like:</p>
+
+<pre><code>package com.klogi.myapplication;
+
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.app.FragmentTransaction;
+import android.test.ActivityInstrumentationTestCase2;
+
+import junit.framework.Assert;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+public class MainActivityFragmentTest extends ActivityInstrumentationTestCase2&lt;MainActivity&gt; {
+
+    public MainActivityFragmentTest() {
+        super(MainActivity.class);
+    }
+
+    MainActivity mainActivity;
+    MainActivityFragment mainActivityFragment;
+
+    @Override
+    protected void setUp() throws Exception {
+        TestUtils.enableMockitoOnDevicesAndEmulators();
+        mainActivity = getActivity();
+        mainActivityFragment = new MainActivityFragment();
+    }
+
+    public void testMainActivity() {
+        Assert.assertNotNull(mainActivity);
+    }
+
+    public void testCowsCounter() {
+        startFragment(mainActivityFragment);
+        assertThat(mainActivityFragment.calculateYoungCows(10)).isEqualTo(2);
+        assertThat(mainActivityFragment.calculateYoungCows(99)).isEqualTo(3);
+    }
+
+    private void startFragment( Fragment fragment ) {
+        FragmentManager fragmentManager = mainActivity.getSupportFragmentManager();
+        FragmentTransaction fragmentTransaction = fragmentManager.beginTransaction();
+        fragmentTransaction.add(fragment, null);
+        fragmentTransaction.commit();
+
+        getActivity().runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                getActivity().getSupportFragmentManager().executePendingTransactions();
+            }
+        });
+
+        getInstrumentation().waitForIdleSync();
+    }
+
+}
+</code></pre>
+
+<p>As you can see, Test class is an extension of <em>ActivityInstrumentationTestCase2</em> class. 
+Also, it's very important to pay attention to <em>startFragment</em> method, that has changed comparing to JUnit example: by default, tests are not running on the UI thread and we need to explicitly call for execution pending FragmentManager's transactions.</p>
+
+<h2><strong>- If you do have Dagger</strong></h2>
+
+<p>Things are getting serious here :-)</p>
+
+<p>First, we are getting rid of <em>ActivityInstrumentationTestCase2</em> in favor of <em>ActivityUnitTestCase</em> class, as a base class for all fragment's test classes.</p>
+
+<p>As usual, it's not that simple and there're several pitfalls (<a href="http://stackoverflow.com/questions/24760354/namenotfoundexception-at-activityunittestcase-with-actionbaractivity">this</a> is one of examples). So we need to pimp our <em>AcitivityUnitTestCase</em> to <strong>ActivityUnitTestCaseOverride</strong></p>
+
+<p>It's a bit too long to post it fully here, so I upload full version of it to <a href="https://gist.github.com/ksloginov/31b835597792429184cb">github</a>;</p>
+
+<pre><code>public abstract class ActivityUnitTestCaseOverride&lt;T extends Activity&gt;
+        extends ActivityUnitTestCase&lt;T&gt; {
+
+    ........
+    private Class&lt;T&gt; mActivityClass;
+
+    private Context mActivityContext;
+    private Application mApplication;
+    private MockParent mMockParent;
+
+    private boolean mAttached = false;
+    private boolean mCreated = false;
+
+    public ActivityUnitTestCaseOverride(Class&lt;T&gt; activityClass) {
+        super(activityClass);
+        mActivityClass = activityClass;
+    }
+
+    @Override
+    public T getActivity() {
+        return (T) super.getActivity();
+    }
+
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+
+        // default value for target context, as a default
+        mActivityContext = getInstrumentation().getTargetContext();
+    }
+
+    /**
+     * Start the activity under test, in the same way as if it was started by
+     * {@link android.content.Context#startActivity Context.startActivity()}, providing the
+     * arguments it supplied.  When you use this method to start the activity, it will automatically
+     * be stopped by {@link #tearDown}.
+     * &lt;p/&gt;
+     * &lt;p&gt;This method will call onCreate(), but if you wish to further exercise Activity life
+     * cycle methods, you must call them yourself from your test case.
+     * &lt;p/&gt;
+     * &lt;p&gt;&lt;i&gt;Do not call from your setUp() method.  You must call this method from each of your
+     * test methods.&lt;/i&gt;
+     *
+     * @param intent                       The Intent as if supplied to {@link android.content.Context#startActivity}.
+     * @param savedInstanceState           The instance state, if you are simulating this part of the life
+     *                                     cycle.  Typically null.
+     * @param lastNonConfigurationInstance This Object will be available to the
+     *                                     Activity if it calls {@link android.app.Activity#getLastNonConfigurationInstance()}.
+     *                                     Typically null.
+     * @return Returns the Activity that was created
+     */
+    protected T startActivity(Intent intent, Bundle savedInstanceState,
+                              Object lastNonConfigurationInstance) {
+        assertFalse("Activity already created", mCreated);
+
+        if (!mAttached) {
+            assertNotNull(mActivityClass);
+            setActivity(null);
+            T newActivity = null;
+            try {
+                IBinder token = null;
+                if (mApplication == null) {
+                    setApplication(new MockApplication());
+                }
+                ComponentName cn = new ComponentName(getInstrumentation().getTargetContext(), mActivityClass.getName());
+                intent.setComponent(cn);
+                ActivityInfo info = new ActivityInfo();
+                CharSequence title = mActivityClass.getName();
+                mMockParent = new MockParent();
+                String id = null;
+
+                newActivity = (T) getInstrumentation().newActivity(mActivityClass, mActivityContext,
+                        token, mApplication, intent, info, title, mMockParent, id,
+                        lastNonConfigurationInstance);
+            } catch (Exception e) {
+                assertNotNull(newActivity);
+            }
+
+            assertNotNull(newActivity);
+            setActivity(newActivity);
+
+            mAttached = true;
+        }
+
+        T result = getActivity();
+        if (result != null) {
+            getInstrumentation().callActivityOnCreate(getActivity(), savedInstanceState);
+            mCreated = true;
+        }
+        return result;
+    }
+
+    protected Class&lt;T&gt; getActivityClass() {
+        return mActivityClass;
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+
+        setActivity(null);
+
+        // Scrub out members - protects against memory leaks in the case where someone
+        // creates a non-static inner class (thus referencing the test case) and gives it to
+        // someone else to hold onto
+        scrubClass(ActivityInstrumentationTestCase.class);
+
+        super.tearDown();
+    }
+
+    /**
+     * Set the application for use during the test.  You must call this function before calling
+     * {@link #startActivity}.  If your test does not call this method,
+     *
+     * @param application The Application object that will be injected into the Activity under test.
+     */
+    public void setApplication(Application application) {
+        mApplication = application;
+    }
+    .......
+}
+</code></pre>
+
+<p>Create an abstract AbstractFragmentTest for all your fragment tests:</p>
+
+<pre><code>import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
+import android.support.v4.app.FragmentTransaction;
+
+/**
+ * Common base class for {@link Fragment} tests.
+ */
+public abstract class AbstractFragmentTest&lt;TFragment extends Fragment, TActivity extends FragmentActivity&gt; extends ActivityUnitTestCaseOverride&lt;TActivity&gt; {
+
+    private TFragment fragment;
+    protected MockInjectionRegistration mocks;
+
+    protected AbstractFragmentTest(TFragment fragment, Class&lt;TActivity&gt; activityType) {
+        super(activityType);
+        this.fragment = parameterIsNotNull(fragment);
+    }
+
+    @Override
+    protected void setActivity(Activity testActivity) {
+        if (testActivity != null) {
+            testActivity.setTheme(R.style.AppCompatTheme);
+        }
+
+        super.setActivity(testActivity);
+    }
+
+    /**
+     * Get the {@link Fragment} under test.
+     */
+    protected TFragment getFragment() {
+        return fragment;
+    }
+
+    protected void setUpActivityAndFragment() {
+        createMockApplication();
+
+        final Intent intent = new Intent(getInstrumentation().getTargetContext(),
+                getActivityClass());
+        startActivity(intent, null, null);
+        startFragment(getFragment());
+
+        getInstrumentation().callActivityOnStart(getActivity());
+        getInstrumentation().callActivityOnResume(getActivity());
+    }
+
+    private void createMockApplication() {
+        TestUtils.enableMockitoOnDevicesAndEmulators();
+
+        mocks = new MockInjectionRegistration();
+        TestApplication testApplication = new TestApplication(getInstrumentation().getTargetContext());
+        testApplication.setModules(mocks);
+        testApplication.onCreate();
+        setApplication(testApplication);
+    }
+
+    private void startFragment(Fragment fragment) {
+        FragmentManager fragmentManager = getActivity().getSupportFragmentManager();
+        FragmentTransaction fragmentTransaction = fragmentManager.beginTransaction();
+        fragmentTransaction.add(fragment, null);
+        fragmentTransaction.commit();
+    }
+}
+</code></pre>
+
+<p>There're several important things here.</p>
+
+<p><strong>1)</strong> We override <em>setActivity()</em> method to set the AppCompact theme to the activity. Without that, test suit will crash.</p>
+
+<p><strong>2)</strong> setUpActivityAndFragment() method:</p>
+
+<p><em>I.</em> creates activity ( => getActivity() starts returning non-null value, in tests and in the app which is under test)
+  1) onCreate() of activity called;</p>
+
+<p>2) onStart() of activity called;</p>
+
+<p>3) onResume() of activity called;</p>
+
+<p><em>II.</em> attach and starts fragment to the activity</p>
+
+<p>1) onAttach() of fragment called;</p>
+
+<p>2) onCreateView() of fragment called;</p>
+
+<p>3) onStart() of fragment called;</p>
+
+<p>4) onResume() of fragment called;</p>
+
+<p><strong>3)</strong> createMockApplication() method:
+As in the non-dagger version, in Pre-step 1, we enable mocking on the devices and on the emulators.</p>
+
+<p>Then we replace the normal application with its injections with our custom, TestApplication!</p>
+
+<p><em>MockInjectionRegistration</em> looks like:</p>
+
+<pre><code>....
+import javax.inject.Singleton;
+
+import dagger.Module;
+import dagger.Provides;
+import de.greenrobot.event.EventBus;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+@Module(
+        injects = {
+
+                ....
+                MainActivity.class,
+                MyWorkFragment.class,
+                HomeFragment.class,
+                ProfileFragment.class,
+                ....
+        },
+        addsTo = DelveMobileInjectionRegistration.class,
+        overrides = true
+)
+public final class MockInjectionRegistration {
+
+    .....
+    public DataSource dataSource;
+    public EventBus eventBus;
+    public MixpanelAPI mixpanel;
+    .....
+
+    public MockInjectionRegistration() {
+        .....
+        dataSource = mock(DataSource.class);
+        eventBus = mock(EventBus.class);
+        mixpanel = mock(MixpanelAPI.class);
+        MixpanelAPI.People mixpanelPeople = mock(MixpanelAPI.People.class);
+        when(mixpanel.getPeople()).thenReturn(mixpanelPeople);
+        .....
+    }
+...........
+    @Provides
+    @Singleton
+    @SuppressWarnings("unused")
+        // invoked by Dagger
+    DataSource provideDataSource() {
+        Guard.valueIsNotNull(dataSource);
+        return dataSource;
+    }
+
+    @Provides
+    @Singleton
+    @SuppressWarnings("unused")
+        // invoked by Dagger
+    EventBus provideEventBus() {
+        Guard.valueIsNotNull(eventBus);
+        return eventBus;
+    }
+
+    @Provides
+    @Singleton
+    @SuppressWarnings("unused")
+        // invoked by Dagger
+    MixpanelAPI provideMixpanelAPI() {
+        Guard.valueIsNotNull(mixpanel);
+        return mixpanel;
+    }
+.........
+}
+</code></pre>
+
+<p>I.e. instead of real classes, we are providing to the fragments their mocked versions. (That are easily traceable, allows to configure results of method calls, etc.).</p>
+
+<p>And the TestApplication is just your custom extension of Application, that should support setting modules and initialize the ObjectGraph.</p>
+
+<p><strong>These were pre-steps for start writing the tests :)</strong>
+Now the simple part, the real tests:</p>
+
+<pre><code>public class SearchFragmentTest extends AbstractFragmentTest&lt;SearchFragment, MainActivity&gt; {
+
+    public SearchFragmentTest() {
+        super(new SearchFragment(), MainActivity.class);
+    }
+
+    @UiThreadTest
+    public void testOnCreateView() throws Exception {
+        setUpActivityAndFragment();
+
+        SearchFragment searchFragment = getFragment();
+        assertNotNull(searchFragment.adapter);
+        assertNotNull(SearchFragment.getSearchAdapter());
+        assertNotNull(SearchFragment.getSearchSignalLogger());
+    }
+
+    @UiThreadTest
+    public void testOnPause() throws Exception {
+        setUpActivityAndFragment();
+
+        SearchFragment searchFragment = getFragment();
+        assertTrue(Strings.isNullOrEmpty(SharedPreferencesTools.getString(getActivity(), SearchFragment.SEARCH_STATE_BUNDLE_ARGUMENT)));
+
+        searchFragment.searchBoxRef.setCurrentConstraint("abs");
+        searchFragment.onPause();
+
+        assertEquals(searchFragment.searchBoxRef.getCurrentConstraint(), SharedPreferencesTools.getString(getActivity(), SearchFragment.SEARCH_STATE_BUNDLE_ARGUMENT));
+    }
+
+    @UiThreadTest
+    public void testOnQueryTextChange() throws Exception {
+        setUpActivityAndFragment();
+        reset(mocks.eventBus);
+
+        getFragment().onQueryTextChange("Donald");
+        Thread.sleep(300);
+
+        // Should be one cached, one uncached event
+        verify(mocks.eventBus, times(2)).post(isA(SearchRequest.class));
+        verify(mocks.eventBus).post(isA(SearchLoadingIndicatorEvent.class));
+    }
+
+    @UiThreadTest
+    public void testOnQueryUpdateEventWithDifferentConstraint() throws Exception {
+        setUpActivityAndFragment();
+
+        reset(mocks.eventBus);
+
+        getFragment().onEventMainThread(new SearchResponse(new ArrayList&lt;&gt;(), "Donald", false));
+
+        verifyNoMoreInteractions(mocks.eventBus);
+    }
+    ....
+}
+</code></pre>
+
+<p><strong>That's it!</strong> 
+Now you have Instrumental/JUnit tests enabled for your Fragments.</p>
+
+<p>I sincerely hope this post helps someone.</p>

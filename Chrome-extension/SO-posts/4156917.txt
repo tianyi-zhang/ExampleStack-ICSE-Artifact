@@ -1,0 +1,254 @@
+<p>I have had the same problem,you can either make a custom renderer like this:
+or (a do it little bit complicated by subclassing SurfaceView directly)</p>
+
+<hr>
+
+<pre><code>import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
+import javax.microedition.khronos.opengles.GL11;
+import javax.microedition.khronos.opengles.GL11Ext;
+
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.opengl.GLSurfaceView;
+import android.util.Log;
+
+import com.TIEmulator.JNI.NLib;
+
+class EmulatorRenderer implements GLSurfaceView.Renderer, NLib.EventsInterface {
+
+    public static interface RenderCb {
+        public boolean dismissStartupDialog();
+
+        public void updateStartupDialog(String msg);
+    }
+
+    private static int mViewHeight;
+    private static int mViewWidth;
+    private static BitmapFactory.Options sBitmapOptions = new BitmapFactory.Options();
+
+    private static int TEX_BUF_HEIGHT = 128;
+    private static int TEX_BUF_WIDTH = 256;
+
+    private final ByteBuffer byteBuffer = ByteBuffer.allocateDirect(4
+            * EmulatorRenderer.TEX_BUF_HEIGHT * EmulatorRenderer.TEX_BUF_WIDTH);
+    private boolean emulation_running = false;
+
+    private Context mContext = null;
+    private final int[] mCropWorkspace;
+    private final GLSurfaceView mGLView;
+    protected int mTex = -1;
+
+    protected int[] mtexBuf = new int[1];
+    private final int[] mTextureNameWorkspace;
+
+    public EmulatorRenderer(final Context ctx, final GLSurfaceView v) {
+        // Pre-allocate and store these objects so we can use them at runtime
+        // without allocating memory mid-frame.
+        mTextureNameWorkspace = new int[1];
+        mCropWorkspace = new int[4];
+
+        byteBuffer.order(ByteOrder.BIG_ENDIAN);
+
+        // Set our bitmaps to 16-bit, 565 format.
+        EmulatorRenderer.sBitmapOptions.inPreferredConfig = Bitmap.Config.RGB_565;
+        mGLView = v;
+        mContext = ctx;
+
+        try {
+            NLib.setListener(this);
+        } catch (final RuntimeException exc) {
+            exc.printStackTrace();
+            callFinishOnce();
+            return;
+        }
+        if (!NLib.TryLoadLib()) {
+            callFinishOnce();
+            return;
+        }
+        Log.v(this.getClass().toString(),"&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; init successfull! &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;");
+    }
+
+    private void callFinishOnce() {
+        if (mContext != null) {
+            ((Activity) mContext).finish();
+            mContext = null;
+        }
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+        NLib.stopEmu();
+        super.finalize();
+    }
+
+    protected int loadBB(final GL10 gl) {
+        int textureName = -1;
+        if (mContext != null &amp;&amp; gl != null) {
+            gl.glGenTextures(1, mTextureNameWorkspace, 0);
+
+            textureName = mTextureNameWorkspace[0];
+            gl.glBindTexture(GL10.GL_TEXTURE_2D, textureName);
+
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER,
+                    GL10.GL_NEAREST);
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER,
+                    GL10.GL_NEAREST);// GL10.GL_LINEAR);
+
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S,
+                    GL10.GL_CLAMP_TO_EDGE);
+            gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T,
+                    GL10.GL_CLAMP_TO_EDGE);
+
+            gl.glTexEnvf(GL10.GL_TEXTURE_ENV, GL10.GL_TEXTURE_ENV_MODE,
+                    GL10.GL_REPLACE);
+
+            mCropWorkspace[0] = 0; // u
+            // mCropWorkspace[1] = EMU_HEIGHT; // v
+            mCropWorkspace[1] = 0; // v
+
+            mCropWorkspace[2] = NLib.getWidth(); // w
+            // mCropWorkspace[3] = -EMU_HEIGHT; // h -EMU_HEIGHT;
+            mCropWorkspace[3] = NLib.getHeight(); // h -EMU_HEIGHT;
+            byteBuffer.order(ByteOrder.BIG_ENDIAN);
+
+            final int error = gl.glGetError();
+            if (error != GL10.GL_NO_ERROR) {
+                Log.e("SpriteMethodTest", "Texture Load GLError: " + error);
+            }
+        }
+        return textureName;
+    }
+
+    public void onDrawFrame(final GL10 gl) {
+        // Log.v(this.toString(),"onDrawFrame called");
+        gl.glActiveTexture(mTex);
+        gl.glClientActiveTexture(mTex);
+
+        byteBuffer.position(0);
+
+        // this two lines bind and create the texture!
+        gl.glBindTexture(GL10.GL_TEXTURE_2D, mTex);
+        ((GL11) gl).glTexParameteriv(GL10.GL_TEXTURE_2D,
+                GL11Ext.GL_TEXTURE_CROP_RECT_OES, mCropWorkspace, 0);
+
+        gl.glTexImage2D(GL10.GL_TEXTURE_2D, 0, GL10.GL_RGBA,
+                EmulatorRenderer.TEX_BUF_WIDTH,
+                EmulatorRenderer.TEX_BUF_HEIGHT, 0, GL10.GL_RGBA,
+                GL10.GL_UNSIGNED_BYTE, byteBuffer);
+
+        ((GL11Ext) gl).glDrawTexiOES(0, 0, 0, EmulatorRenderer.mViewWidth,
+                EmulatorRenderer.mViewHeight);
+
+        /** gl.glEnable(GL10.GL_DEPTH_TEST); gl.glDepthFunc(GL10.GL_LEQUAL);
+         */
+    }
+
+    public void OnFatalError(final String text) {
+        Log.d(toString(), "FATAL ERROR CALLBACK raised: " + text
+                + " ===&gt; Activity calls finish()");
+    }
+
+    public void onFinish() {
+        onPause();
+    }
+/*
+* JNI interface
+*
+*/
+    @Override
+    public void OnBufferUpdate() {
+        mGLView.requestRender();
+    }
+    // TODO Auto-generated method stub
+
+    @Override
+    public void OnWarning(String msg) {
+        // TODO Auto-generated method stub
+
+    }
+    public void onPause() {
+        mGLView.onPause();
+        // Log.v("onPause", "NILib.stopEmulate()");
+        emulation_running = false;
+        //startupDialogDismiss = false;
+        NLib.stopEmu();
+    }
+
+    public void onResume() {
+        // Log.v(this.toString(),"EmulatorRenderer:onResume called");
+        NLib.startEmu(byteBuffer);
+
+        mGLView.onResume();
+        //callFinishOnce();
+        emulation_running = true;
+    }
+
+    public void onSurfaceChanged(final GL10 gl, final int w, final int h) {
+        EmulatorRenderer.mViewWidth = w;
+        EmulatorRenderer.mViewHeight = h;
+        Log.v(toString(), "onSurfaceChanged: ==&gt; New View Size: [" + w + ","
+                + h + "]");
+    }
+
+    public void onSurfaceCreated(final GL10 gl, final EGLConfig config) {
+
+        gl.glHint(GL10.GL_PERSPECTIVE_CORRECTION_HINT, GL10.GL_FASTEST);
+
+        gl.glClearColor(0.5f, 0.5f, 0.5f, 1);
+        gl.glShadeModel(GL10.GL_FLAT);
+        gl.glDisable(GL10.GL_DEPTH_TEST);
+        gl.glEnable(GL10.GL_TEXTURE_2D);
+
+        /*
+         * By default, OpenGL enables features that improve quality but reduce
+         * performance. One might want to tweak that especially on software
+         * renderer.
+         */
+        gl.glDisable(GL10.GL_DITHER);
+        gl.glDisable(GL10.GL_LIGHTING);
+        gl.glDisable(GL10.GL_BLEND);
+        gl.glDisable(GL10.GL_DEPTH_TEST);
+        gl.glHint(GL10.GL_LINE_SMOOTH_HINT, GL10.GL_NICEST); // Set Line
+        // Antialiasing
+        gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
+
+        // create the one and only texture here...
+        mTex = loadBB(gl);
+    }
+
+    public void OnTIEmuStopped() {
+        System.out.println("OnTIEmuStopped callback called! ");
+        callFinishOnce();
+    }
+
+    /* Called when the size of the window changes. */
+    public void sizeChanged(final GL10 gl, final int w, final int h) {
+        // Log.v(this.toString(),"sizeChanged: ==&gt; new Viewport: ["+w+","+h+"]");
+
+        gl.glViewport(0, 0, w, h);
+        /*
+         * Set our projection matrix. This doesn't have to be done each time we
+         * draw, but usually a new projection needs to be set when the viewport
+         * is resized.
+         */
+        gl.glMatrixMode(GL10.GL_PROJECTION);
+        gl.glLoadIdentity();
+
+        // Set up the orthographic projection
+        // gl.glOrthof(0.0f, w, 0.0f, h, 0.0f, 1.0f);
+        gl.glOrthof(0.0f, w, 0.0f, 0.0f, h, 1.0f);
+
+        gl.glBlendFunc(GL10.GL_SRC_ALPHA, GL10.GL_ONE_MINUS_SRC_ALPHA);
+        gl.glColor4x(0x10000, 0x10000, 0x10000, 0x10000);
+        gl.glEnable(GL10.GL_TEXTURE_2D);
+
+        gl.glMatrixMode(GL10.GL_MODELVIEW);
+    }
+}
+</code></pre>

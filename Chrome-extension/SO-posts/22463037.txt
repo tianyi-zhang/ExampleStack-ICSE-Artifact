@@ -1,0 +1,87 @@
+<p>First of all, I think there's a problem with your texture loading. I believe the order of the bytes is reversed or something similar, which is why you get the red on black. Here's a working load-texture-from-BufferedImage example taken from my own code:</p>
+
+<pre><code>     BufferedImage image = ImageIO.read(new File("&lt;file path&gt;.png"));
+     int[] pixels = new int[image.getWidth() * image.getHeight()];
+     image.getRGB(0, 0, image.getWidth(), image.getHeight(), pixels, 0, image.getWidth());
+
+     ByteBuffer buffer = BufferUtils.createByteBuffer(image.getWidth() * image.getHeight() * 4);
+
+     for(int y = 0; y &lt; image.getHeight(); y++){
+         for(int x = 0; x &lt; image.getWidth(); x++){
+             int pixel = pixels[y * image.getWidth() + x];
+             buffer.put((byte) ((pixel &gt;&gt; 16) &amp; 0xFF));     // Red component
+             buffer.put((byte) ((pixel &gt;&gt; 8) &amp; 0xFF));      // Green component
+             buffer.put((byte) (pixel &amp; 0xFF));               // Blue component
+             buffer.put((byte) ((pixel &gt;&gt; 24) &amp; 0xFF));    // Alpha component. Only for RGBA
+         }
+     }
+
+     buffer.flip(); //FOR THE LOVE OF GOD DO NOT FORGET THIS
+
+     // You now have a ByteBuffer filled with the color data of each pixel.
+     // Now just create a texture ID and bind it. Then you can load it using 
+     // whatever OpenGL method you want, for example:
+
+     int textureID = GL11.glGenTextures(); //Generate texture ID
+     GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureID); //Bind texture ID
+
+     //Setup wrap mode
+     GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+     GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+
+     //Setup texture scaling filtering
+     GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+     GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+
+     //Send texel data to OpenGL
+     GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, image.getWidth(), image.getHeight(), 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
+</code></pre>
+
+<p>Now, to the actual rendering problem:</p>
+
+<p>For OpenGL, GL_TEXTURE_2D must be enabled or disabled depending on whether or not the polygon you are drawing is textured. If you do not supply texture coordinates for each vertex, then the last texture coords call still holds and is used for each vertex. So, you'll get a quad using one pixel's worth of texture. This is what's causing the black quads - it's taking from one pixel from a corner of your improperly loaded texture. So, your fixed rendering code:</p>
+
+<pre><code>GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+
+GL11.glDisable(GL11.GL_TEXTURE_2D);
+
+GL11.glColor3f(0.5f,0.5f,1.0f);
+renderQuad(0, 0, 800, 600);
+
+// render action bar
+GL11.glColor3f(0.2f,0.2f,1.0f);
+renderQuad(0, 0, 800, 200);
+
+GL11.glColor3f(1.0f,0.0f,0.0f);
+renderQuad(50, 50, 100, 60);
+
+renderQuad(200, 50, 100, 60);
+
+GL11.glEnable(GL11.GL_TEXTURE_2D);
+
+// render textured quad
+GL11.glColor3f(1.0f, 1.0f, 1.0f);
+GL11.glPushMatrix();
+GL11.glBindTexture(GL11.GL_TEXTURE_2D, button);
+GL11.glBegin(GL11.GL_QUADS);
+    GL11.glTexCoord2d(0.0,1.0); 
+    GL11.glVertex2f(x, y);
+    GL11.glTexCoord2d(1.0,1.0); 
+    GL11.glVertex2f(x + width, y);
+    GL11.glTexCoord2d(1.0,0.0); 
+    GL11.glVertex2f(x + width, y + height);
+    GL11.glTexCoord2d(0.0,0.0); 
+    GL11.glVertex2f(x, y + height);
+GL11.glEnd();
+GL11.glPopMatrix();
+</code></pre>
+
+<p>On a side note, you can use simply glEnable() instead of GL11.glEnable() if you do:</p>
+
+<pre><code>import static org.lwjgl.opengl.GL11.*;
+</code></pre>
+
+<p>instead of simply</p>
+
+<pre><code>import org.lwjgl.opengl.GL11;
+</code></pre>

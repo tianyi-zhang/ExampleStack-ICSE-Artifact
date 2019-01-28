@@ -1,0 +1,108 @@
+<p>Use <a href="http://www.ietf.org/rfc/rfc2898.txt" rel="nofollow">RFC2898</a> to generate keys from passwords.  This isn't included in the JRE or JCE, as far as I know, but it is included in J2EE Servers like <a href="http://docs.jboss.com/seam/latest/api/org/jboss/seam/security/crypto/PBKDF2.html" rel="nofollow">JBoss</a>, Oracle, and <a href="http://download.oracle.com/docs/cd/E12839_01/apirefs.1111/e10668/oracle/security/crypto/core/PBEAlgorithmIdentifier.html" rel="nofollow">WebSphere</a>.  It is also included in the .NET Base Class Library (<a href="http://msdn.microsoft.com/en-us/library/system.security.cryptography.rfc2898derivebytes.aspx" rel="nofollow">Rfc2898DeriveBytes</a>). </p>
+
+<p>There are some LGPL implementations in Java out there, but on a quick look <a href="http://www.rtner.de/software/PBKDF2.html" rel="nofollow">this one</a> looks a little over complicated. There is also a good <a href="http://anandam.name/pbkdf2/pbkdf2.js.txt" rel="nofollow">javascript version</a>.  (I produced <a href="http://cheeso.members.winisp.net/srcview.aspx?dir=AES-example&amp;file=Ionic.Com.PBKDF2.wsc" rel="nofollow">a modified version of that one</a> and packaged it as a Windows Script Component)</p>
+
+<p>Lacking a good implementation with an appropriate license, I packaged some code up from Mattias Gartner.  This is the code in its entirety.  Short, simple, easy to understand.  It's licensed under the <a href="http://www.opensource.org/licenses/ms-pl.html" rel="nofollow">MS Public License</a>.</p>
+
+<pre><code>// PBKDF2.java
+// ------------------------------------------------------------------
+//
+// RFC2898 PBKDF2 in Java.  The RFC2898 defines a standard algorithm for
+// deriving key bytes from a text password.  This is sometimes
+// abbreviated "PBKDF2", for Password-based key derivation function #2.
+//
+// There's no RFC2898-compliant PBKDF2 function in the JRE, as far as I
+// know, but it is available in many J2EE runtimes, including those from
+// JBoss, IBM, and Oracle.
+//
+// It's fairly simple to implement, so here it is. 
+// 
+// Created Sun Aug 09 01:06:57 2009
+//
+// last saved: 
+// Time-stamp: &lt;2009-August-09 02:19:50&gt;
+// ------------------------------------------------------------------
+//
+// code thanks to Matthias Gartner
+//
+// ------------------------------------------------------------------
+
+package cheeso.examples;
+
+
+import java.security.NoSuchAlgorithmException;
+import java.security.InvalidKeyException;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+
+public class PBKDF2
+{
+    public static byte[] deriveKey( byte[] password, byte[] salt, int iterationCount, int dkLen )
+        throws java.security.NoSuchAlgorithmException, java.security.InvalidKeyException
+    {
+        SecretKeySpec keyspec = new SecretKeySpec( password, "HmacSHA1" );
+        Mac prf = Mac.getInstance( "HmacSHA1" );
+        prf.init( keyspec );
+
+        // Note: hLen, dkLen, l, r, T, F, etc. are horrible names for
+        //       variables and functions in this day and age, but they
+        //       reflect the terse symbols used in RFC 2898 to describe
+        //       the PBKDF2 algorithm, which improves validation of the
+        //       code vs. the RFC.
+        //
+        // dklen is expressed in bytes. (16 for a 128-bit key)
+
+        int hLen = prf.getMacLength();   // 20 for SHA1
+        int l = Math.max( dkLen, hLen); //  1 for 128bit (16-byte) keys
+        int r = dkLen - (l-1)*hLen;      // 16 for 128bit (16-byte) keys
+        byte T[] = new byte[l * hLen];
+        int ti_offset = 0;
+        for (int i = 1; i &lt;= l; i++) {
+            F( T, ti_offset, prf, salt, iterationCount, i );
+            ti_offset += hLen;
+        }
+
+        if (r &lt; hLen) {
+            // Incomplete last block
+            byte DK[] = new byte[dkLen];
+            System.arraycopy(T, 0, DK, 0, dkLen);
+            return DK;
+        }
+        return T;
+    } 
+
+
+    private static void F( byte[] dest, int offset, Mac prf, byte[] S, int c, int blockIndex ) {
+        final int hLen = prf.getMacLength();
+        byte U_r[] = new byte[ hLen ];
+        // U0 = S || INT (i);
+        byte U_i[] = new byte[S.length + 4];
+        System.arraycopy( S, 0, U_i, 0, S.length );
+        INT( U_i, S.length, blockIndex );
+        for( int i = 0; i &lt; c; i++ ) {
+            U_i = prf.doFinal( U_i );
+            xor( U_r, U_i );
+        }
+
+        System.arraycopy( U_r, 0, dest, offset, hLen );
+    }
+
+    private static void xor( byte[] dest, byte[] src ) {
+        for( int i = 0; i &lt; dest.length; i++ ) {
+            dest[i] ^= src[i];
+        }
+    }
+
+    private static void INT( byte[] dest, int offset, int i ) {
+        dest[offset + 0] = (byte) (i / (256 * 256 * 256));
+        dest[offset + 1] = (byte) (i / (256 * 256));
+        dest[offset + 2] = (byte) (i / (256));
+        dest[offset + 3] = (byte) (i);
+    } 
+
+    // ctor
+    private PBKDF2 () {}
+
+}
+</code></pre>

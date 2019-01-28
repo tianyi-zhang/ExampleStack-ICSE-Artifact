@@ -1,0 +1,450 @@
+<p>Raghav Sood is correct. But if you need PreferenceFragment bad (I needed in tab) you can use this. But it can brake in the future so better to use this only for old apis.
+It's a little modified PreferenceFragment I made with SupportLibrary and reflection.</p>
+
+<pre><code>import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.preference.Preference;
+import android.preference.PreferenceManager;
+import android.preference.PreferenceScreen;
+import android.support.v4.app.Fragment;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.View.OnKeyListener;
+import android.widget.ListView;
+
+@SuppressLint("HandlerLeak")
+public abstract class PreferenceFragment
+        extends Fragment
+{
+
+    private static final String PREFERENCES_TAG = "android:preferences";
+
+    private PreferenceManager mPreferenceManager;
+    private ListView mList;
+    private boolean viewCreated;
+    // private boolean mHavePrefs;
+    // private boolean mInitDone;
+
+    /**
+     * The starting request code given out to preference framework.
+     */
+    private static final int FIRST_REQUEST_CODE = 100;
+
+    private static final int MSG_BIND_PREFERENCES = 1;
+    private final Handler mHandler = new Handler()
+    {
+        @Override
+        public void handleMessage(Message msg)
+        {
+            switch (msg.what) {
+
+            case MSG_BIND_PREFERENCES:
+                if (viewCreated) {
+                    bindPreferences();
+                }
+                break;
+            }
+        }
+    };
+
+    private final Runnable mRequestFocus = new Runnable()
+    {
+        @Override
+        public void run()
+        {
+            mList.focusableViewAvailable(mList);
+        }
+    };
+
+    /**
+     * Interface that PreferenceFragment's containing activity should implement
+     * to be able to process preference items that wish to switch to a new
+     * fragment.
+     */
+    public interface OnPreferenceStartFragmentCallback
+    {
+        /**
+         * Called when the user has clicked on a Preference that has a fragment
+         * class name associated with it. The implementation to should
+         * instantiate and switch to an instance of the given fragment.
+         */
+        boolean onPreferenceStartFragment(PreferenceFragment caller,
+                Preference pref);
+    }
+
+    @SuppressLint("NewApi")
+    @Override
+    public void onCreate(Bundle savedInstanceState)
+    {
+        super.onCreate(savedInstanceState);
+
+        try {
+            Constructor&lt;?&gt; constructor = PreferenceManager.class
+                    .getDeclaredConstructor(Activity.class, int.class);
+            constructor.setAccessible(true);
+            mPreferenceManager = (PreferenceManager) constructor.newInstance(
+                    getActivity(), FIRST_REQUEST_CODE);
+        } catch (Throwable e) {
+            throw new RuntimeException(
+                    "Could not instantiate PreferenceManager: "
+                            + e.getMessage());
+        }
+
+    }
+
+    @Override
+    public final View onCreateView(LayoutInflater inflater,
+            ViewGroup container, Bundle savedInstanceState) {
+        View v = inflater.inflate(R.layout.activity_preferences, null);
+        this.viewCreated = true;
+        return v;
+    }
+
+    // @Override
+    // public View onCreateView(LayoutInflater inflater, ViewGroup container,
+    // Bundle savedInstanceState) {
+    // return inflater.inflate(R.layout.preference_list_fragment, container,
+    // false);
+    // }
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState)
+    {
+        super.onActivityCreated(savedInstanceState);
+
+        // if (mHavePrefs) {
+        bindPreferences();
+        // }
+
+        // mInitDone = true;
+
+        if (savedInstanceState != null) {
+            Bundle container = savedInstanceState.getBundle(PREFERENCES_TAG);
+            if (container != null) {
+                final PreferenceScreen preferenceScreen = getPreferenceScreen();
+                if (preferenceScreen != null) {
+                    preferenceScreen.restoreHierarchyState(container);
+                }
+            }
+        }
+    }
+
+    // @Override
+    // public void onStart() {
+    // super.onStart();
+    // IllegalAccessException
+    // try {
+    // Method m = PreferenceManager.class
+    // .getDeclaredMethod("setOnPreferenceTreeClickListener",
+    // Class.forName("android.preference.PreferenceManager$OnPreferenceTreeClickListener"));
+    // m.invoke(mPreferenceManager, this);
+    // } catch (Exception e) {
+    // e.printStackTrace();
+    // }
+    // mPreferenceManager.setOnPreferenceTreeClickListener(this);
+    // }
+
+    @Override
+    public void onStop()
+    {
+        super.onStop();
+        try {
+            Method m = PreferenceManager.class
+                    .getDeclaredMethod("dispatchActivityStop");
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        // IllegalAccessException
+        // try {
+        // Method m = PreferenceManager.class
+        // .getDeclaredMethod("setOnPreferenceTreeClickListener",
+        // Class.forName("android.preference.PreferenceManager$OnPreferenceTreeClickListener"));
+        // m.invoke(mPreferenceManager, (Object) null);
+        // } catch (Exception e) {
+        // e.printStackTrace();
+        // }
+        // mPreferenceManager.setOnPreferenceTreeClickListener(null);
+    }
+
+    @Override
+    public void onDestroyView()
+    {
+        this.viewCreated = false;
+        mList = null;
+        mHandler.removeCallbacks(mRequestFocus);
+        mHandler.removeMessages(MSG_BIND_PREFERENCES);
+        super.onDestroyView();
+    }
+
+    @Override
+    public void onDestroy()
+    {
+        super.onDestroy();
+        try {
+            Method m = PreferenceManager.class
+                    .getDeclaredMethod("dispatchActivityDestroy");
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState)
+    {
+        super.onSaveInstanceState(outState);
+
+        final PreferenceScreen preferenceScreen = getPreferenceScreen();
+        if (preferenceScreen != null) {
+            Bundle container = new Bundle();
+            preferenceScreen.saveHierarchyState(container);
+            outState.putBundle(PREFERENCES_TAG, container);
+        }
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data)
+    {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod(
+                    "dispatchActivityResult", int.class, int.class,
+                    Intent.class);
+            m.setAccessible(true);
+            m.invoke(mPreferenceManager, requestCode, resultCode, data);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Returns the {@link PreferenceManager} used by this fragment.
+     * 
+     * @return The {@link PreferenceManager}.
+     */
+    public PreferenceManager getPreferenceManager()
+    {
+        return mPreferenceManager;
+    }
+
+    /**
+     * Sets the root of the preference hierarchy that this fragment is showing.
+     * 
+     * @param preferenceScreen
+     *            The root {@link PreferenceScreen} of the preference hierarchy.
+     */
+    public void setPreferenceScreen(PreferenceScreen preferenceScreen)
+    {
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod(
+                    "setPreferences", PreferenceScreen.class);
+            m.setAccessible(true);
+            boolean result = (Boolean) m.invoke(mPreferenceManager,
+                    preferenceScreen);
+            if (result &amp;&amp; preferenceScreen != null) {
+                postBindPreferences();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Gets the root of the preference hierarchy that this fragment is showing.
+     * 
+     * @return The {@link PreferenceScreen} that is the root of the preference
+     *         hierarchy.
+     */
+    public PreferenceScreen getPreferenceScreen()
+    {
+        try {
+            Method m = PreferenceManager.class
+                    .getDeclaredMethod("getPreferenceScreen");
+            m.setAccessible(true);
+            return (PreferenceScreen) m.invoke(mPreferenceManager);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * Adds preferences from activities that match the given {@link Intent}.
+     * 
+     * @param intent
+     *            The {@link Intent} to query activities.
+     */
+    public void addPreferencesFromIntent(Intent intent)
+    {
+        requirePreferenceManager();
+        try {
+            Method m = PreferenceManager.class
+                    .getDeclaredMethod("inflateFromIntent");
+            m.setAccessible(true);
+            PreferenceScreen ps = (PreferenceScreen) m.invoke(
+                    mPreferenceManager, intent, getPreferenceScreen());
+            setPreferenceScreen(ps);
+        } catch (Throwable e) {
+
+        }
+    }
+
+    /**
+     * Inflates the given XML resource and adds the preference hierarchy to the
+     * current preference hierarchy.
+     * 
+     * @param preferencesResId
+     *            The XML resource ID to inflate.
+     */
+    public void addPreferencesFromResource(int preferencesResId)
+    {
+        requirePreferenceManager();
+
+        try {
+            Method m = PreferenceManager.class.getDeclaredMethod(
+                    "inflateFromResource", Context.class, int.class,
+                    PreferenceScreen.class);
+            m.setAccessible(true);
+            PreferenceScreen prefScreen = (PreferenceScreen) m.invoke(
+                    mPreferenceManager, getActivity(), preferencesResId,
+                    getPreferenceScreen());
+            setPreferenceScreen(prefScreen);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public boolean onPreferenceTreeClick(PreferenceScreen preferenceScreen,
+            Preference preference)
+    {
+        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.HONEYCOMB) {
+            try {
+                Method m = Preference.class.getDeclaredMethod("getFragment");
+                Object o = m.invoke(preference);
+                if (o != null
+                        &amp;&amp; getActivity() instanceof OnPreferenceStartFragmentCallback) {
+                    return ((OnPreferenceStartFragmentCallback) getActivity())
+                            .onPreferenceStartFragment(this, preference);
+                }
+            } catch (Throwable e) {
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Finds a {@link Preference} based on its key.
+     * 
+     * @param key
+     *            The key of the preference to retrieve.
+     * @return The {@link Preference} with the key, or null.
+     * @see PreferenceGroup#findPreference(CharSequence)
+     */
+    public Preference findPreference(CharSequence key)
+    {
+        if (mPreferenceManager == null) {
+            return null;
+        }
+        return mPreferenceManager.findPreference(key);
+    }
+
+    private void requirePreferenceManager()
+    {
+        if (mPreferenceManager == null) {
+            throw new RuntimeException(
+                    "This should be called after super.onCreate.");
+        }
+    }
+
+    private void postBindPreferences()
+    {
+        if (mHandler.hasMessages(MSG_BIND_PREFERENCES))
+            return;
+        mHandler.obtainMessage(MSG_BIND_PREFERENCES).sendToTarget();
+    }
+
+    private void bindPreferences()
+    {
+        final PreferenceScreen preferenceScreen = getPreferenceScreen();
+        if (preferenceScreen != null) {
+            preferenceScreen.bind(getListView());
+        }
+    }
+
+    /** @hide */
+    public ListView getListView()
+    {
+        ensureList();
+        return mList;
+    }
+
+    private void ensureList()
+    {
+        if (mList != null) {
+            return;
+        }
+        View root = getView();
+        if (root == null) {
+            throw new IllegalStateException("Content view not yet created");
+        }
+        View rawListView = root.findViewById(android.R.id.list);
+        if (!(rawListView instanceof ListView)) {
+            throw new RuntimeException(
+                    "Content has view with id attribute 'android.R.id.list' "
+                            + "that is not a ListView class");
+        }
+        mList = (ListView) rawListView;
+        if (mList == null) {
+            throw new RuntimeException(
+                    "Your content must have a ListView whose id attribute is "
+                            + "'android.R.id.list'");
+        }
+        mList.setOnKeyListener(mListOnKeyListener);
+        mHandler.post(mRequestFocus);
+    }
+
+    private OnKeyListener mListOnKeyListener = new OnKeyListener()
+    {
+
+        @Override
+        public boolean onKey(View v, int keyCode, KeyEvent event)
+        {
+            Object selectedItem = mList.getSelectedItem();
+            if (selectedItem instanceof Preference) {
+                View selectedView = mList.getSelectedView();
+                Preference p = (Preference) selectedItem;
+                try {
+                    Method m = Preference.class.getDeclaredMethod("onKey",
+                            View.class, int.class, KeyEvent.class);
+                    m.setAccessible(true);
+                    boolean result = (Boolean) m.invoke(p, selectedView,
+                            keyCode, event);
+                    return result;
+                } catch (Throwable e) {
+                }
+            }
+            return false;
+        }
+
+    };
+}
+</code></pre>

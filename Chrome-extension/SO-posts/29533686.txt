@@ -1,0 +1,329 @@
+<p>I had to parse <code>/system/etc/fonts.xml</code> in a recent project. Here are the current font families as of Lollipop:</p>
+
+<pre><code>?????????????????????????????????????????????????????????????????
+?    ? FONT FAMILY                ? TTF FILE                    ?
+?????????????????????????????????????????????????????????????????
+?  1 ? casual                     ? ComingSoon.ttf              ?
+?  2 ? cursive                    ? DancingScript-Regular.ttf   ?
+?  3 ? monospace                  ? DroidSansMono.ttf           ?
+?  4 ? sans-serif                 ? Roboto-Regular.ttf          ?
+?  5 ? sans-serif-black           ? Roboto-Black.ttf            ?
+?  6 ? sans-serif-condensed       ? RobotoCondensed-Regular.ttf ?
+?  7 ? sans-serif-condensed-light ? RobotoCondensed-Light.ttf   ?
+?  8 ? sans-serif-light           ? Roboto-Light.ttf            ?
+?  9 ? sans-serif-medium          ? Roboto-Medium.ttf           ?
+? 10 ? sans-serif-smallcaps       ? CarroisGothicSC-Regular.ttf ?
+? 11 ? sans-serif-thin            ? Roboto-Thin.ttf             ?
+? 12 ? serif                      ? NotoSerif-Regular.ttf       ?
+? 13 ? serif-monospace            ? CutiveMono.ttf              ?
+?????????????????????????????????????????????????????????????????
+</code></pre>
+
+<hr>
+
+<p>Here is the parser (based off <a href="https://github.com/android/platform_frameworks_base/blob/59701b9ba5c453e327bc0e6873a9f6ff87a10391/graphics/java/android/graphics/FontListParser.java">FontListParser</a>):</p>
+
+<pre><code>import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+
+import android.util.Xml;
+
+/**
+ * Helper class to get the current font families on an Android device.&lt;/p&gt;
+ * 
+ * Usage:&lt;/p&gt; {@code List&lt;SystemFont&gt; fonts = FontListParser.safelyGetSystemFonts();}&lt;/p&gt;
+ */
+public final class FontListParser {
+
+    private static final File FONTS_XML = new File("/system/etc/fonts.xml");
+
+    private static final File SYSTEM_FONTS_XML = new File("/system/etc/system_fonts.xml");
+
+    public static List&lt;SystemFont&gt; getSystemFonts() throws Exception {
+        String fontsXml;
+        if (FONTS_XML.exists()) {
+            fontsXml = FONTS_XML.getAbsolutePath();
+        } else if (SYSTEM_FONTS_XML.exists()) {
+            fontsXml = SYSTEM_FONTS_XML.getAbsolutePath();
+        } else {
+            throw new RuntimeException("fonts.xml does not exist on this system");
+        }
+        Config parser = parse(new FileInputStream(fontsXml));
+        List&lt;SystemFont&gt; fonts = new ArrayList&lt;&gt;();
+
+        for (Family family : parser.families) {
+            if (family.name != null) {
+                Font font = null;
+                for (Font f : family.fonts) {
+                    font = f;
+                    if (f.weight == 400) {
+                        break;
+                    }
+                }
+                SystemFont systemFont = new SystemFont(family.name, font.fontName);
+                if (fonts.contains(systemFont)) {
+                    continue;
+                }
+                fonts.add(new SystemFont(family.name, font.fontName));
+            }
+        }
+
+        for (Alias alias : parser.aliases) {
+            if (alias.name == null || alias.toName == null || alias.weight == 0) {
+                continue;
+            }
+            for (Family family : parser.families) {
+                if (family.name == null || !family.name.equals(alias.toName)) {
+                    continue;
+                }
+                for (Font font : family.fonts) {
+                    if (font.weight == alias.weight) {
+                        fonts.add(new SystemFont(alias.name, font.fontName));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (fonts.isEmpty()) {
+            throw new Exception("No system fonts found.");
+        }
+
+        Collections.sort(fonts, new Comparator&lt;SystemFont&gt;() {
+
+            @Override
+            public int compare(SystemFont font1, SystemFont font2) {
+                return font1.name.compareToIgnoreCase(font2.name);
+            }
+
+        });
+
+        return fonts;
+    }
+
+    public static List&lt;SystemFont&gt; safelyGetSystemFonts() {
+        try {
+            return getSystemFonts();
+        } catch (Exception e) {
+            String[][] defaultSystemFonts = {
+                    {
+                            "cursive", "DancingScript-Regular.ttf"
+                    }, {
+                            "monospace", "DroidSansMono.ttf"
+                    }, {
+                            "sans-serif", "Roboto-Regular.ttf"
+                    }, {
+                            "sans-serif-light", "Roboto-Light.ttf"
+                    }, {
+                            "sans-serif-medium", "Roboto-Medium.ttf"
+                    }, {
+                            "sans-serif-black", "Roboto-Black.ttf"
+                    }, {
+                            "sans-serif-condensed", "RobotoCondensed-Regular.ttf"
+                    }, {
+                            "sans-serif-thin", "Roboto-Thin.ttf"
+                    }, {
+                            "serif", "NotoSerif-Regular.ttf"
+                    }
+            };
+            List&lt;SystemFont&gt; fonts = new ArrayList&lt;&gt;();
+            for (String[] names : defaultSystemFonts) {
+                File file = new File("/system/fonts", names[1]);
+                if (file.exists()) {
+                    fonts.add(new SystemFont(names[0], file.getAbsolutePath()));
+                }
+            }
+            return fonts;
+        }
+    }
+
+    /* Parse fallback list (no names) */
+    public static Config parse(InputStream in) throws XmlPullParserException, IOException {
+        try {
+            XmlPullParser parser = Xml.newPullParser();
+            parser.setInput(in, null);
+            parser.nextTag();
+            return readFamilies(parser);
+        } finally {
+            in.close();
+        }
+    }
+
+    private static Alias readAlias(XmlPullParser parser) throws XmlPullParserException, IOException {
+        Alias alias = new Alias();
+        alias.name = parser.getAttributeValue(null, "name");
+        alias.toName = parser.getAttributeValue(null, "to");
+        String weightStr = parser.getAttributeValue(null, "weight");
+        if (weightStr == null) {
+            alias.weight = 0;
+        } else {
+            alias.weight = Integer.parseInt(weightStr);
+        }
+        skip(parser); // alias tag is empty, ignore any contents and consume end tag
+        return alias;
+    }
+
+    private static Config readFamilies(XmlPullParser parser) throws XmlPullParserException,
+            IOException {
+        Config config = new Config();
+        parser.require(XmlPullParser.START_TAG, null, "familyset");
+        while (parser.next() != XmlPullParser.END_TAG) {
+            if (parser.getEventType() != XmlPullParser.START_TAG) {
+                continue;
+            }
+            if (parser.getName().equals("family")) {
+                config.families.add(readFamily(parser));
+            } else if (parser.getName().equals("alias")) {
+                config.aliases.add(readAlias(parser));
+            } else {
+                skip(parser);
+            }
+        }
+        return config;
+    }
+
+    private static Family readFamily(XmlPullParser parser) throws XmlPullParserException,
+            IOException {
+        String name = parser.getAttributeValue(null, "name");
+        String lang = parser.getAttributeValue(null, "lang");
+        String variant = parser.getAttributeValue(null, "variant");
+        List&lt;Font&gt; fonts = new ArrayList&lt;Font&gt;();
+        while (parser.next() != XmlPullParser.END_TAG) {
+            if (parser.getEventType() != XmlPullParser.START_TAG) {
+                continue;
+            }
+            String tag = parser.getName();
+            if (tag.equals("font")) {
+                String weightStr = parser.getAttributeValue(null, "weight");
+                int weight = weightStr == null ? 400 : Integer.parseInt(weightStr);
+                boolean isItalic = "italic".equals(parser.getAttributeValue(null, "style"));
+                String filename = parser.nextText();
+                String fullFilename = "/system/fonts/" + filename;
+                fonts.add(new Font(fullFilename, weight, isItalic));
+            } else {
+                skip(parser);
+            }
+        }
+        return new Family(name, fonts, lang, variant);
+    }
+
+    private static void skip(XmlPullParser parser) throws XmlPullParserException, IOException {
+        int depth = 1;
+        while (depth &gt; 0) {
+            switch (parser.next()) {
+            case XmlPullParser.START_TAG:
+                depth++;
+                break;
+            case XmlPullParser.END_TAG:
+                depth--;
+                break;
+            }
+        }
+    }
+
+    private FontListParser() {
+
+    }
+
+    public static class Alias {
+
+        public String name;
+
+        public String toName;
+
+        public int weight;
+    }
+
+    public static class Config {
+
+        public List&lt;Alias&gt; aliases;
+
+        public List&lt;Family&gt; families;
+
+        Config() {
+            families = new ArrayList&lt;Family&gt;();
+            aliases = new ArrayList&lt;Alias&gt;();
+        }
+
+    }
+
+    public static class Family {
+
+        public List&lt;Font&gt; fonts;
+
+        public String lang;
+
+        public String name;
+
+        public String variant;
+
+        public Family(String name, List&lt;Font&gt; fonts, String lang, String variant) {
+            this.name = name;
+            this.fonts = fonts;
+            this.lang = lang;
+            this.variant = variant;
+        }
+
+    }
+
+    public static class Font {
+
+        public String fontName;
+
+        public boolean isItalic;
+
+        public int weight;
+
+        Font(String fontName, int weight, boolean isItalic) {
+            this.fontName = fontName;
+            this.weight = weight;
+            this.isItalic = isItalic;
+        }
+
+    }
+
+    public static class SystemFont {
+
+        public String name;
+
+        public String path;
+
+        public SystemFont(String name, String path) {
+            this.name = name;
+            this.path = path;
+        }
+
+    }
+}
+</code></pre>
+
+<hr>
+
+<p>Feel free to use the above class in your project. For example, you could give your users a selection of font families and set the typeface based on their preference.</p>
+
+<p>A small incomplete example:</p>
+
+<pre><code>final List&lt;FontListParser.SystemFont&gt; fonts = FontListParser.safelyGetSystemFonts();
+String[] items = new String[fonts.size()];
+for (int i = 0; i &lt; fonts.size(); i++) {
+    items[i] = fonts.get(i).name;
+}
+
+new AlertDialog.Builder(this).setSingleChoiceItems(items, -1, new DialogInterface.OnClickListener() {
+    @Override
+    public void onClick(DialogInterface dialog, int which) {
+        FontListParser.SystemFont selectedFont = fonts.get(which);
+        // TODO: do something with the font
+        Toast.makeText(getApplicationContext(), selectedFont.path, Toast.LENGTH_LONG).show();
+    }
+}).show();
+</code></pre>

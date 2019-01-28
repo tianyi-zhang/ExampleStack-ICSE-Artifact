@@ -1,0 +1,83 @@
+<p>I compiled some of the other answers into a single utility method:</p>
+
+<pre><code>public class TimeLimitedCodeBlock {
+
+  public static void runWithTimeout(final Runnable runnable, long timeout, TimeUnit timeUnit) throws Exception {
+    runWithTimeout(new Callable&lt;Object&gt;() {
+      @Override
+      public Object call() throws Exception {
+        runnable.run();
+        return null;
+      }
+    }, timeout, timeUnit);
+  }
+
+  public static &lt;T&gt; T runWithTimeout(Callable&lt;T&gt; callable, long timeout, TimeUnit timeUnit) throws Exception {
+    final ExecutorService executor = Executors.newSingleThreadExecutor();
+    final Future&lt;T&gt; future = executor.submit(callable);
+    executor.shutdown(); // This does not cancel the already-scheduled task.
+    try {
+      return future.get(timeout, timeUnit);
+    }
+    catch (TimeoutException e) {
+      //remove this if you do not want to cancel the job in progress
+      //or set the argument to 'false' if you do not want to interrupt the thread
+      future.cancel(true);
+      throw e;
+    }
+    catch (ExecutionException e) {
+      //unwrap the root cause
+      Throwable t = e.getCause();
+      if (t instanceof Error) {
+        throw (Error) t;
+      } else if (t instanceof Exception) {
+        throw (Exception) t;
+      } else {
+        throw new IllegalStateException(t);
+      }
+    }
+  }
+
+}
+</code></pre>
+
+<p>Sample code making use of this utility method:</p>
+
+<pre><code>  public static void main(String[] args) throws Exception {
+    final long startTime = System.currentTimeMillis();
+    log(startTime, "calling runWithTimeout!");
+    try {
+      TimeLimitedCodeBlock.runWithTimeout(new Runnable() {
+        @Override
+        public void run() {
+          try {
+            log(startTime, "starting sleep!");
+            Thread.sleep(10000);
+            log(startTime, "woke up!");
+          }
+          catch (InterruptedException e) {
+            log(startTime, "was interrupted!");
+          }
+        }
+      }, 5, TimeUnit.SECONDS);
+    }
+    catch (TimeoutException e) {
+      log(startTime, "got timeout!");
+    }
+    log(startTime, "end of main method!");
+  }
+
+  private static void log(long startTime, String msg) {
+    long elapsedSeconds = (System.currentTimeMillis() - startTime);
+    System.out.format("%1$5sms [%2$16s] %3$s\n", elapsedSeconds, Thread.currentThread().getName(), msg);
+  }
+</code></pre>
+
+<p>Output from running the sample code on my machine:</p>
+
+<pre><code>    0ms [            main] calling runWithTimeout!
+   13ms [ pool-1-thread-1] starting sleep!
+ 5015ms [            main] got timeout!
+ 5016ms [            main] end of main method!
+ 5015ms [ pool-1-thread-1] was interrupted!
+</code></pre>

@@ -1,0 +1,264 @@
+<p>Here is a code snippet of with the basis for my FPS style camera.  As you can see I am calculating the delta of the mouse position with the center of the screen along the X and Y axis. </p>
+
+<p>You can see in my System.out.println calls the values I am calculating for deltas and the fact that it should be rotating by this amount.  I then multiply these values by my sensitivity and rotate the camera by this amount.</p>
+
+<pre><code>import org.lwjgl.BufferUtils;
+import org.lwjgl.Sys;
+import org.lwjgl.glfw.*;
+import org.lwjgl.opengl.*;
+
+import java.nio.ByteBuffer;
+import java.nio.DoubleBuffer;
+import java.nio.FloatBuffer;
+
+import static org.lwjgl.glfw.Callbacks.*;
+import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.glfw.GLFW.glfwGetCursorPos;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL15.*;
+import static org.lwjgl.opengl.GL20.*;
+import static org.lwjgl.opengl.GL30.*;
+import static org.lwjgl.system.MemoryUtil.*;
+
+public class Main {
+
+    // We need to strongly reference callback instances.
+    private GLFWErrorCallback errorCallback;
+    private GLFWKeyCallback   keyCallback;
+
+    // The window handle
+    private long window;
+
+    public void run() {
+        System.out.println("Hello LWJGL " + Sys.getVersion() + "!");
+
+        try {
+            init();
+            loop();
+
+            // Release window and window callbacks
+            glfwDestroyWindow(window);
+            keyCallback.release();
+        } finally {
+            // Terminate GLFW and release the GLFWerrorfun
+            glfwTerminate();
+            errorCallback.release();
+        }
+    }
+
+    private void init() {
+        // Setup an error callback. The default implementation
+        // will print the error message in System.err.
+        glfwSetErrorCallback(errorCallback = errorCallbackPrint(System.err));
+
+        // Initialize GLFW. Most GLFW functions will not work before doing this.
+        if ( glfwInit() != GL11.GL_TRUE )
+            throw new IllegalStateException("Unable to initialize GLFW");
+
+        // Configure our window
+        glfwDefaultWindowHints(); // optional, the current window hints are already the default
+        glfwWindowHint(GLFW_VISIBLE, GL_FALSE); // the window will stay hidden after creation
+        glfwWindowHint(GLFW_RESIZABLE, GL_TRUE); // the window will be resizable
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+
+
+        int WIDTH = 800;
+        int HEIGHT = 600;
+
+        // Create the window
+        window = glfwCreateWindow(WIDTH, HEIGHT, "Hello World!", NULL, NULL);
+        if ( window == NULL )
+            throw new RuntimeException("Failed to create the GLFW window");
+
+        // Setup a key callback. It will be called every time a key is pressed, repeated or released.
+        glfwSetKeyCallback(window, keyCallback = new GLFWKeyCallback() {
+            @Override
+            public void invoke(long window, int key, int scancode, int action, int mods) {
+                if ( key == GLFW_KEY_ESCAPE &amp;&amp; action == GLFW_RELEASE )
+                    glfwSetWindowShouldClose(window, GL_TRUE); // We will detect this in our rendering loop
+            }
+        });
+
+        // Get the resolution of the primary monitor
+        ByteBuffer vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+        // Center our window
+        glfwSetWindowPos(
+                window,
+                (GLFWvidmode.width(vidmode) - WIDTH) / 2,
+                (GLFWvidmode.height(vidmode) - HEIGHT) / 2
+        );
+
+        // Make the OpenGL context current
+        glfwMakeContextCurrent(window);
+        // Enable v-sync
+        glfwSwapInterval(1);
+
+        // Make the window visible
+        glfwShowWindow(window);
+    }
+
+    private void loop() {
+        // This line is critical for LWJGL's interoperation with GLFW's
+        // This line is critical for LWJGL's interoperation with GLFW's
+        // OpenGL context, or any context that is managed externally.
+        // LWJGL detects the context that is current in the current thread,
+        // creates the ContextCapabilities instance and makes the OpenGL
+        // bindings available for use.
+        GLContext.createFromCurrent();
+
+
+        // Create a FloatBuffer to hold our vertex data
+        FloatBuffer vertices = BufferUtils.createFloatBuffer(9);
+        // Add vertices of the triangle
+        vertices.put(new float[]
+                {
+                        0.0f,  0.5f,  0.0f,
+                        0.5f, -0.5f,  0.0f,
+                        -0.5f, -0.5f,  0.0f
+                });
+        // Rewind the vertices
+        vertices.rewind();
+
+
+        int vbo = glGenBuffers();
+        int vao = glGenVertexArrays();
+
+        glBindBuffer (GL_ARRAY_BUFFER, vbo);
+        glBufferData (GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
+        glBindVertexArray(vao);
+
+        glEnableVertexAttribArray (0);
+        glBindBuffer (GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer (0, 3, GL_FLOAT, false, 0, 0);
+
+        final String vertex_shader =
+                "#version 410\n" +
+                        "in vec3 vp;\n" +
+                        "void main () {\n" +
+                        "  gl_Position = vec4 (vp, 1.0);\n" +
+                        "}";
+
+        final String frag_shader =
+                "#version 400\n"    +
+                        "out vec4 frag_colour;" +
+                        "void main () {"         +
+                        "  frag_colour = vec4 (0.5, 0.0, 0.5, 1.0);" +
+                        "}";
+
+        int shader_programme = glCreateProgram();
+
+
+        int vertexShaderID = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vertexShaderID, vertex_shader);
+        glCompileShader (vertexShaderID);
+
+        if(glGetShaderi(vertexShaderID, GL_COMPILE_STATUS) == 0){
+            System.err.println(glGetShaderInfoLog(vertexShaderID, 1024));
+            System.exit(1);
+        }
+
+        glAttachShader (shader_programme, vertexShaderID);
+
+        int fragmentShaderID = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragmentShaderID, frag_shader);
+        glCompileShader (fragmentShaderID);
+
+        if(glGetShaderi(fragmentShaderID, GL_COMPILE_STATUS) == 0){
+            System.err.println(glGetShaderInfoLog(fragmentShaderID, 1024));
+            System.exit(1);
+        }
+
+        glAttachShader (shader_programme, fragmentShaderID);
+
+        glLinkProgram (shader_programme);
+
+        if(glGetProgrami(shader_programme, GL_LINK_STATUS) == 0){
+            System.err.println(glGetProgramInfoLog(shader_programme, 1024));
+            System.exit(1);
+        }
+
+        glValidateProgram(shader_programme);
+
+        if(glGetProgrami(shader_programme, GL_VALIDATE_STATUS) == 0){
+            System.err.println(glGetProgramInfoLog(shader_programme, 1024));
+            System.exit(1);
+        }
+
+        boolean mouseLocked = false;
+        double newX = 400;
+        double newY = 300;
+
+        double prevX = 0;
+        double prevY = 0;
+
+        boolean rotX = false;
+        boolean rotY = false;
+
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+
+        while ( glfwWindowShouldClose(window) == GL_FALSE ) {
+
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_1) == GLFW_PRESS) {
+                glfwSetCursorPos(window, 800/2, 600/2);
+
+                mouseLocked = true;
+            }
+
+            if (mouseLocked){
+                DoubleBuffer x = BufferUtils.createDoubleBuffer(1);
+                DoubleBuffer y = BufferUtils.createDoubleBuffer(1);
+
+                glfwGetCursorPos(window, x, y);
+                x.rewind();
+                y.rewind();
+
+                newX = x.get();
+                newY = y.get();
+
+                double deltaX = newX - 400;
+                double deltaY = newY - 300;
+
+                rotX = newX != prevX;
+                rotY = newY != prevY;
+
+                if(rotY) {
+                    System.out.println("ROTATE Y AXIS: " + deltaY);
+
+                }
+                if(rotX) {
+                    System.out.println("ROTATE X AXIS: " + deltaX);
+                }
+
+                prevX = newX;
+                prevY = newY;
+
+
+                System.out.println("Delta X = " + deltaX + " Delta Y = " + deltaY);
+
+                glfwSetCursorPos(window, 800/2, 600/2);
+            }
+
+            // wipe the drawing surface clear
+            glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glUseProgram (shader_programme);
+            glBindVertexArray (vao);
+            // draw points 0-3 from the currently bound VAO with current in-use shader
+            glDrawArrays (GL_TRIANGLES, 0, 3);
+            // update other events like input handling
+            glfwPollEvents ();
+            // put the stuff we've been drawing onto the display
+            glfwSwapBuffers (window);
+
+        }
+    }
+
+    public static void main(String[] args) {
+        new Main().run();
+    }
+
+}
+</code></pre>

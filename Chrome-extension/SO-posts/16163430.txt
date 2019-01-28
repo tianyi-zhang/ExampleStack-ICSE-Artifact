@@ -1,0 +1,378 @@
+<p>AsyncLoadTasks</p>
+
+<pre><code>package com.google.api.services.samples.tasks.android;
+
+import com.google.api.services.tasks.model.Task;
+import android.util.Log;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+
+class AsyncLoadTasks extends CommonAsyncTask {
+  final String Tag="States";
+  AsyncLoadTasks(TasksSample tasksSample) {
+    super(tasksSample);
+  }
+
+  @Override
+  protected void doInBackground() throws IOException {
+    Log.d(Tag, "doInBackground");
+    List&lt;String&gt; result = new ArrayList&lt;String&gt;();
+    List&lt;Task&gt; tasks =
+    client.tasks().list("@default").setFields("items/title").execute().getItems();
+    Log.d(Tag, "???????????");
+    if (tasks != null) {
+  for (Task task : tasks) {
+    result.add(task.getTitle());
+  }
+} else {
+  result.add("No tasks.");
+}
+activity.tasksList = result;
+
+  }
+
+  static void run(TasksSample tasksSample) {
+    new AsyncLoadTasks(tasksSample).execute();
+  }
+}
+</code></pre>
+
+<p>CommonAsyncTask</p>
+
+<pre><code>package com.google.api.services.samples.tasks.android;
+
+import     com.google.api.client.googleapis.extensions.android.gms.auth.GooglePlayServicesAvailabilityI    OException;
+import     com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
+
+import android.os.AsyncTask;
+import android.util.Log;
+import android.view.View;
+import java.io.IOException;
+
+
+abstract class CommonAsyncTask extends AsyncTask&lt;Void, Void, Boolean&gt; {
+  final String Tag="States";
+  final TasksSample activity;
+  final com.google.api.services.tasks.Tasks client;
+  private final View progressBar;
+
+  CommonAsyncTask(TasksSample activity) {
+    Log.d(Tag, "CommonAsyncTask");
+    this.activity = activity;
+    client = activity.service;
+    progressBar = activity.findViewById(R.id.title_refresh_progress);
+  }
+
+  @Override
+  protected void onPreExecute() {
+    Log.d(Tag, "onPreExecute");
+    super.onPreExecute();
+    activity.numAsyncTasks++;
+    progressBar.setVisibility(View.VISIBLE);
+  }
+
+  @Override
+  protected final Boolean doInBackground(Void... ignored) {
+    Log.d(Tag, "Boolean doInBackground");
+    try {
+      doInBackground();
+      return true;
+        } catch (final GooglePlayServicesAvailabilityIOException availabilityException)     {
+      Log.d(Tag, "1");
+      activity.showGooglePlayServicesAvailabilityErrorDialog(
+      availabilityException.getConnectionStatusCode());
+    } catch (UserRecoverableAuthIOException userRecoverableException) {
+  Log.d(Tag, "2");
+  activity.startActivityForResult(
+      userRecoverableException.getIntent(), TasksSample.REQUEST_AUTHORIZATION);
+    } catch (IOException e) {
+  Log.d(Tag, "3");
+  Utils.logAndShow(activity, TasksSample.TAG, e);
+    }
+    return false;
+  }
+
+  @Override
+  protected final void onPostExecute(Boolean success) {
+Log.d(Tag, "onPostExecute");
+super.onPostExecute(success);
+if (0 == --activity.numAsyncTasks) {
+  progressBar.setVisibility(View.GONE);
+}
+if (success) {
+  activity.refreshView();
+    }
+  }
+
+  abstract protected void doInBackground() throws IOException;
+}
+</code></pre>
+
+<p>TasksSample</p>
+
+<pre><code>package com.google.api.services.samples.tasks.android;
+
+
+import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.api.client.extensions.android.http.AndroidHttp;
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential;
+import com.google.api.client.http.HttpTransport;
+import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.tasks.TasksScopes;
+
+import android.accounts.AccountManager;
+import android.app.Activity;
+import android.app.Dialog;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.widget.ArrayAdapter;
+import android.widget.ListView;
+
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+
+
+public final class TasksSample extends Activity {
+
+
+  private static final Level LOGGING_LEVEL = Level.OFF;
+
+  private static final String PREF_ACCOUNT_NAME = "accountName";
+
+  static final String TAG = "TasksSample";
+
+  static final int REQUEST_GOOGLE_PLAY_SERVICES = 0;
+
+  static final int REQUEST_AUTHORIZATION = 1;
+
+  static final int REQUEST_ACCOUNT_PICKER = 2;
+
+  final HttpTransport transport = AndroidHttp.newCompatibleTransport();
+
+  final JsonFactory jsonFactory = new GsonFactory();
+
+  GoogleAccountCredential credential;
+
+  List&lt;String&gt; tasksList;
+
+  ArrayAdapter&lt;String&gt; adapter;
+
+  com.google.api.services.tasks.Tasks service;
+
+  int numAsyncTasks;
+
+  private ListView listView;
+  final String Tag="States";
+
+  @Override
+  public void onCreate(Bundle savedInstanceState) {
+
+super.onCreate(savedInstanceState);
+Log.d(Tag, "onCreate");
+// enable logging
+Logger.getLogger("com.google.api.client").setLevel(LOGGING_LEVEL);
+// view and menu
+setContentView(R.layout.calendarlist);
+listView = (ListView) findViewById(R.id.list);
+// Google Accounts
+credential = GoogleAccountCredential.usingOAuth2(this, TasksScopes.TASKS);
+SharedPreferences settings = getPreferences(Context.MODE_PRIVATE);
+credential.setSelectedAccountName(settings.getString(PREF_ACCOUNT_NAME, null));
+// Tasks client
+service =
+    new com.google.api.services.tasks.Tasks.Builder(transport, jsonFactory, credential)
+        .setApplicationName("Google-TasksAndroidSample/1.0").build();
+  }
+
+  void showGooglePlayServicesAvailabilityErrorDialog(final int connectionStatusCode) {
+runOnUiThread(new Runnable() {
+  public void run() {
+    Log.d(Tag, "run");
+    Dialog dialog =
+        GooglePlayServicesUtil.getErrorDialog(connectionStatusCode, TasksSample.this,
+            REQUEST_GOOGLE_PLAY_SERVICES);
+    dialog.show();
+  }
+    });
+  }
+
+  void refreshView() {
+Log.d(Tag, "refreshView");
+adapter = new ArrayAdapter&lt;String&gt;(this, android.R.layout.simple_list_item_1, tasksList);
+listView.setAdapter(adapter);
+  }
+
+  @Override
+  protected void onResume() {
+Log.d(Tag, "onResume");
+super.onResume();
+if (checkGooglePlayServicesAvailable()) {
+  haveGooglePlayServices();
+}
+  }
+
+  @Override
+  protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+Log.d(Tag, "onActivityResult");
+super.onActivityResult(requestCode, resultCode, data);
+switch (requestCode) {
+  case REQUEST_GOOGLE_PLAY_SERVICES:
+    if (resultCode == Activity.RESULT_OK) {
+      haveGooglePlayServices();
+    } else {
+      checkGooglePlayServicesAvailable();
+    }
+    break;
+  case REQUEST_AUTHORIZATION:
+    if (resultCode == Activity.RESULT_OK) {
+      AsyncLoadTasks.run(this);
+    } else {
+      chooseAccount();
+    }
+    break;
+  case REQUEST_ACCOUNT_PICKER:
+    if (resultCode == Activity.RESULT_OK &amp;&amp; data != null &amp;&amp; data.getExtras() != null) {
+      String accountName = data.getExtras().getString(AccountManager.KEY_ACCOUNT_NAME);
+      if (accountName != null) {
+        credential.setSelectedAccountName(accountName);
+        SharedPreferences settings = getPreferences(Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = settings.edit();
+        editor.putString(PREF_ACCOUNT_NAME, accountName);
+        editor.commit();
+        AsyncLoadTasks.run(this);
+      }
+    }
+    break;
+    }
+  }
+
+  @Override
+  public boolean onCreateOptionsMenu(Menu menu) {
+Log.d(Tag, "onCreateOptionsMenu");
+MenuInflater inflater = getMenuInflater();
+inflater.inflate(R.menu.main_menu, menu);
+return super.onCreateOptionsMenu(menu);
+  }
+
+  @Override
+  public boolean onOptionsItemSelected(MenuItem item) {
+Log.d(Tag, "onOptionsItemSelected");
+switch (item.getItemId()) {
+  case R.id.menu_refresh:
+    AsyncLoadTasks.run(this);
+    break;
+  case R.id.menu_accounts:
+    chooseAccount();
+    return true;
+}
+return super.onOptionsItemSelected(item);
+  }
+
+
+  private boolean checkGooglePlayServicesAvailable() {
+Log.d(Tag, "checkGooglePlayServicesAvailable");
+final int connectionStatusCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(this);
+if (GooglePlayServicesUtil.isUserRecoverableError(connectionStatusCode)) {
+  showGooglePlayServicesAvailabilityErrorDialog(connectionStatusCode);
+  return false;
+}
+return true;
+  }
+
+  private void haveGooglePlayServices() {
+Log.d(Tag, "haveGooglePlayServices");
+// check if there is already an account selected
+if (credential.getSelectedAccountName() == null) {
+  Log.d(Tag, "user to choose account");
+  // ask user to choose account
+  chooseAccount();
+} else {
+  Log.d(Tag, "load calendars");
+  // load calendars
+  AsyncLoadTasks.run(this);
+}
+  }
+
+  private void chooseAccount() {
+Log.d(Tag, "chooseAccount");
+startActivityForResult(credential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
+  }
+
+}
+</code></pre>
+
+<p>Utils</p>
+
+<pre><code>package com.google.api.services.samples.tasks.android;
+
+import com.google.android.gms.auth.GoogleAuthException;
+import com.google.api.client.googleapis.json.GoogleJsonError;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+
+import android.app.Activity;
+import android.content.res.Resources;
+import android.util.Log;
+import android.widget.Toast;
+
+public class Utils {
+
+  public static void logAndShow(Activity activity, String tag, Throwable t) {
+ //   Log.d(Tag, "onPostExecute");
+Log.e(tag, "Error", t);
+String message = t.getMessage();
+if (t instanceof GoogleJsonResponseException) {
+  GoogleJsonError details = ((GoogleJsonResponseException) t).getDetails();
+  if (details != null) {
+    message = details.getMessage();
+  }
+} else if (t.getCause() instanceof GoogleAuthException) {
+  message = ((GoogleAuthException) t.getCause()).getMessage();
+}
+showError(activity, message);
+  }
+</code></pre>
+
+<p>/**</p>
+
+<pre><code>  public static void logAndShowError(Activity activity, String tag, String message) {
+String errorMessage = getErrorMessage(activity, message);
+Log.e(tag, errorMessage);
+showErrorInternal(activity, errorMessage);
+  }
+
+
+  public static void showError(Activity activity, String message) {
+String errorMessage = getErrorMessage(activity, message);
+showErrorInternal(activity, errorMessage);
+  }
+
+  private static void showErrorInternal(final Activity activity, final String errorMessage) {
+activity.runOnUiThread(new Runnable() {
+  public void run() {
+    Toast.makeText(activity, errorMessage, Toast.LENGTH_LONG).show();
+  }
+    });
+  }
+
+  private static String getErrorMessage(Activity activity, String message) {
+Resources resources = activity.getResources();
+if (message == null) {
+  return resources.getString(R.string.error);
+}
+return resources.getString(R.string.error_format, message);
+  }
+}
+</code></pre>
+
+<p>It is my code. What I can fix?</p>

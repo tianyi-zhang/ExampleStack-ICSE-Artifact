@@ -1,0 +1,113 @@
+<p>I asked <a href="http://stackoverflow.com/questions/32894366/accessing-a-mappers-counter-from-a-reducer-in-hadoop-mapreduce?lq=1">this question</a>, but I haven't solve my problem. However, an alternative solution came to my mind. In mapper, number of words is counted, and it can be written to intermediate output with minimum key(so that this value is in head) in cleanup function which runs a the end of the mapper. In the reducer, number of words is calculating by adding values in head. The sample code and a part of its output is available below.</p>
+
+<pre><code>import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+
+import java.io.IOException;
+import java.util.StringTokenizer;
+
+/**
+ * Created by tolga on 1/26/16.
+ */
+public class WordCount {
+    static enum TestCounters { TEST }
+    public static class Map extends Mapper&lt;Object, Text, Text, LongWritable&gt; {
+        private final static LongWritable one = new LongWritable(1);
+        private Text word = new Text();
+
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            String line = value.toString();
+            StringTokenizer tokenizer = new StringTokenizer(line);
+            while (tokenizer.hasMoreTokens()) {
+                word.set(tokenizer.nextToken());
+                context.write(word, one);
+                context.getCounter(TestCounters.TEST).increment(1);
+            }
+        }
+
+        @Override
+        protected void cleanup(Context context) throws IOException, InterruptedException {
+            context.write(new Text("!"),new LongWritable(context.getCounter(TestCounters.TEST).getValue()));
+        }
+    }
+
+    public static class Reduce extends Reducer&lt;Text, LongWritable, Text, LongWritable&gt; {
+
+        public void reduce(Text key, Iterable&lt;LongWritable&gt; values, Context context)
+                throws IOException, InterruptedException {
+            int sum = 0;
+            for (LongWritable val : values) {
+                sum += val.get();
+            }
+            context.write(key, new LongWritable(sum));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+
+        Job job = new Job(conf, "WordCount");
+        job.setJarByClass(WordCount.class);
+
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(LongWritable.class);
+
+        job.setMapperClass(Map.class);
+        job.setReducerClass(Reduce.class);
+
+        job.setInputFormatClass(TextInputFormat.class);
+        job.setOutputFormatClass(TextOutputFormat.class);
+
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+
+        job.waitForCompletion(true);
+    }
+}
+</code></pre>
+
+<p><strong>Text File:</strong></p>
+
+<pre><code>Turgut Özal University is a private university located in Ankara, Turkey. It was established in 2008 by the Turgut Özal Thought and Action Foundation and is named after former Turkish president Turgut Özal.
+</code></pre>
+
+<p><strong>Intermediate Output</strong></p>
+
+<p><div class="snippet" data-lang="js" data-hide="false">
+<div class="snippet-code">
+<pre class="snippet-code-html lang-html prettyprint-override"><code>**! 33**
+2008 1
+Action 1
+Ankara, 1
+Foundation 1
+It 1
+Thought 1
+Turgut 1
+Turgut 1
+Turgut 1</code></pre>
+</div>
+</div>
+</p>
+
+<p><div class="snippet" data-lang="js" data-hide="false">
+<div class="snippet-code">
+<pre class="snippet-code-html lang-html prettyprint-override"><code>**! 33**
+2008 1
+Action 1
+Ankara, 1
+Foundation 1
+It 1
+Thought 1
+Turgut 3</code></pre>
+</div>
+</div>
+</p>

@@ -1,0 +1,222 @@
+<p>I make some important modifications on your classes to get them better work.</p>
+
+<p><strong>PHP</strong></p>
+
+<p>DB_Functions.php</p>
+
+<p>I add a new function so that we can make update on users table.</p>
+
+<pre><code>    /**
+     * Update user by email and password
+     */
+    public function updateUserByEmailAndPassword($email, $password, $lon, $lat) {
+      $user = $this -&gt; getUserByEmailAndPassword($email, $password);
+        if ($user != false) {   
+            $unique_id=$user["unique_id"];
+            mysql_query("UPDATE users SET loclong='$lon', loclat='$lat', updated_at=now() WHERE unique_id='$unique_id'") or die(mysql_error());
+            $affected = mysql_affected_rows();
+            if($affected &gt; 0){
+             return true;
+           } else {
+            return false;
+           }
+        }else{
+         return false;
+        }
+    }
+</code></pre>
+
+<p><strong>Dbase.php</strong> 
+I add a new tag="update_location" to receive and manage POST request for user update</p>
+
+<pre><code>else if ($tag == 'update_location') { // check for tag type
+        // Request type is check Login
+        $email = $_POST['email'];
+        $password = $_POST['password'];
+
+        // Request lon/lat
+        $lon = $_POST['lon'];
+        $lat = $_POST['lat'];
+
+        // check for user
+        $state = $db-&gt;UpdateUserByEmailAndPassword($email, $password, $lon, $lat);
+        if ($state != false) {
+            $response["success"] = 1;
+            $response["success_msg"] = "Geo location data update successfull!";
+            echo json_encode($response);
+        } else {
+            // user not found
+            // echo json with error = 1
+            $response["error"] = 1;
+            $response["error_msg"] = "Geo location data update failed!";
+            echo json_encode($response);
+        }
+    } 
+</code></pre>
+
+<p>Also i make a little change on your database.table (users) because the longitude/latitude are not Integer
+replace </p>
+
+<pre><code> `loclat` int(11) NOT NULL,
+ `loclong` int(11) NOT NULL
+</code></pre>
+
+<p>with</p>
+
+<pre><code>`loclat` varchar(11) NOT NULL,
+`loclong` varchar(11) NOT NULL,
+</code></pre>
+
+<p>The most modifications are made in DashboardActivity. Look inside and if you have questions feel free to ask me.</p>
+
+<pre><code>public class DashboardActivity extends Activity {
+
+   public static String USER_FUNCTIONS = "user functions";
+   private static String KEY_SUCCESS = "success";
+
+   /**
+    * Millisecondes
+    */
+   private static int POLLING_WAITING_TIME = 5 * 1000;
+   UserFunctions mUserFunctions;
+   Button btnLogout;
+   Button btnloc;
+   GPSTracker gps;
+
+   private Handler mHandler;
+   private Runnable mRunnable;
+
+   @Override
+   public void onCreate(Bundle savedInstanceState) {
+      super.onCreate(savedInstanceState);
+      setContentView(R.layout.dashboard);
+
+      Bundle extras = getIntent().getExtras();
+      if (extras != null) {
+         if (extras.containsKey(USER_FUNCTIONS)) {
+            mUserFunctions = (UserFunctions) extras.getSerializable(USER_FUNCTIONS);
+         }
+      }
+      toggleActivities();
+   }
+
+   @Override
+   protected void onResume() {
+      super.onResume();
+      toggleActivities();
+   }
+
+   /**
+    * 
+    */
+   private void toggleActivities() {
+      // Check login status in database
+      if (mUserFunctions != null &amp;&amp; mUserFunctions.isUserLoggedIn(getApplicationContext())) {
+         // user already logged in show databoard
+
+         btnLogout = (Button) findViewById(R.id.btnLogout);
+         btnLogout.setOnClickListener(new View.OnClickListener() {
+
+            public void onClick(View arg0) {
+               // TODO Auto-generated method stub
+               mUserFunctions.logoutUser(getApplicationContext());
+               Intent login = new Intent(getApplicationContext(), LoginActivity.class);
+               login.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+               startActivity(login);
+               // Closing dashboard screen
+               finish();
+            }
+         });
+
+      } else {
+         // user is not logged in show login screen
+         Intent login = new Intent(getApplicationContext(), LoginActivity.class);
+         login.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+         startActivity(login);
+         // Closing dashboard screen
+         finish();
+      }
+      // startTimer
+      timer();
+   }
+
+   /**
+    * managed HandlerManger and controls the timer
+    */
+   private void timer() {
+      mRunnable = new HandlerManger();
+      mHandler = new Handler();
+      mHandler.postDelayed(mRunnable, POLLING_WAITING_TIME);
+   }
+
+   /**
+    * 
+    */
+   private void processGPSTracker() {
+      if (mUserFunctions == null || !mUserFunctions.isUserLoggedIn(getApplicationContext()))
+         return;
+
+      gps = new GPSTracker(DashboardActivity.this);
+      if (gps.canGetLocation()) {
+
+         double latitude = gps.getLatitude();
+         double longitude = gps.getLongitude();
+
+         JSONObject json = mUserFunctions.updateUserGeoLocation(Double.valueOf(longitude)
+               .toString(), Double.valueOf(latitude).toString());
+
+         // check for login response
+         try {
+            if (json.getString(KEY_SUCCESS) != null &amp;&amp; json.getString(KEY_SUCCESS).equals("1")) {
+               Log.i("DashboardActivity", "Update on geolocation success");
+            } else {
+               Log.e("DashboardActivity", "Update on geolocation Failed");
+            }
+         } catch (JSONException e) {
+            e.printStackTrace();
+         }
+
+         // \n is for new line
+         Toast.makeText(getApplicationContext(),
+               "Your Location is - \nLat: " + latitude + "\nLong: " + longitude, Toast.LENGTH_LONG)
+               .show();
+
+      } else {
+         // can't get location
+         // GPS or Network is not enabled
+         // Ask user to enable GPS/network in settings
+         gps.showSettingsAlert();
+      }
+   }
+
+   /**
+    * Timer business logic runner
+    * 
+    * @author Festus Tamakloe
+    */
+   private class HandlerManger implements Runnable {
+
+      public void run() {
+         processGPSTracker();
+      }
+
+   }
+}
+</code></pre>
+
+<p>In userFunctions i add also a new method to communicate with http server</p>
+
+<pre><code> public JSONObject updateUserGeoLocation(String lon, String lat) {
+      // Building Parameters
+      List&lt;NameValuePair&gt; params = new ArrayList&lt;NameValuePair&gt;();
+      params.add(new BasicNameValuePair("tag", LOCATION_UPDATE_TAG));
+      params.add(new BasicNameValuePair("email", email));
+      params.add(new BasicNameValuePair("password", password));
+      params.add(new BasicNameValuePair("lon", lon));
+      params.add(new BasicNameValuePair("lat", lat));
+      JSONObject json = jsonParser.getJSONFromUrl(LOCATION_UPDATE_URL, params);
+      return json;
+   }
+</code></pre>
+
+<p>I hope this can help you</p>

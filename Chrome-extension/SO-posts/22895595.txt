@@ -1,0 +1,33 @@
+<p>I think you can classify this (writing a reverse proxy) as a generally Hard Problem in any language. The client-side HTTP libraries in Java are full of quirks, which to be fair is probably only a reflection of the fact that HTTP is not really all that simple a protocol. You might end up having to implement, or at least understand in more detail than you would like, the whole thing to do a good job of the proxy problem. The clients will frustrate you sometimes by trying to be too clever (e.g. caching connections and cookies, or following redirects). The only sensible choice for the client is the Apache Commons one, but its API isn't very stable, and the documentation is sparse.</p>
+
+<p>I've had to do reverse proxying a number of times in a Spring app, but never found a library that did it out of the box. I've always ended up with special cases that I was sure would work in the specific situations for which they were written for (because I could test them fairly exhaustively, and watch their behaviour in production), but was never convinced that they would stand up as generic solutions. <a href="https://github.com/cloudfoundry/login-server/blob/master/login-server/src/main/java/org/cloudfoundry/identity/uaa/login/RemoteUaaController.java#L472" rel="nofollow">Here's one</a> that is pretty close to generic (maybe), but I'm sure suffers from problems (not the least of which being I have not dealt with streaming of large response bodies).</p>
+
+<p>Excerpt from the above (it uses Spring <code>RestTemplate</code> and Apache <code>HttpClient</code>):</p>
+
+<pre><code>protected ResponseEntity&lt;byte[]&gt; passthru(HttpServletRequest request, HttpEntity&lt;byte[]&gt; entity,
+                Map&lt;String, Object&gt; model) throws Exception {
+
+    String path = extractPath(request);
+
+    HttpHeaders requestHeaders = new HttpHeaders();
+    requestHeaders.putAll(getRequestHeaders(entity.getHeaders()));
+    requestHeaders.remove(COOKIE);
+    requestHeaders.remove(COOKIE.toLowerCase());
+    // Get back end cookie if saved in session
+    String cookie = (String) model.get(COOKIE_MODEL);
+    if (cookie != null) {
+        logger.debug("Found back end cookies: " + cookie);
+        for (String value : cookie.split(";")) {
+            requestHeaders.add(COOKIE, value);
+        }
+    }
+
+    ResponseEntity&lt;byte[]&gt; response = defaultTemplate.exchange(getUaaBaseUrl() + "/" + path,
+                    HttpMethod.valueOf(request.getMethod()), new HttpEntity&lt;byte[]&gt;(entity.getBody(),
+                                    requestHeaders),
+                    byte[].class);
+    HttpHeaders outgoingHeaders = getResponseHeaders(response.getHeaders());
+    return new ResponseEntity&lt;byte[]&gt;(response.getBody(), outgoingHeaders, response.getStatusCode());
+
+}
+</code></pre>

@@ -1,0 +1,298 @@
+<p>Yes , it does work. The code is in java, so it work with pretty much any device. Forever, if you try the example, it use old for the android 2.x which doesn't seen to work with honeycomb. So you will have to create your own camera wrapper. What works is the library, the ZXing-1.7.zip.</p>
+
+<p>Here is the code needed to make it work. Note that it will show the content of the barcode in the title. So, the step required to make it work:</p>
+
+<ol>
+<li>Create a new android project in eclipse with the name
+"CameraPreview" and set the package name to "com.example.android.apis.graphics".</li>
+<li>Get ZXing-1.7.zip from <a href="http://code.google.com/p/zxing/" rel="nofollow">http://code.google.com/p/zxing/</a>
+<ol>
+<li>Extract the folder called "com" from the directory
+"ZXing-1.7.zip\zxing\core\src".</li>
+<li>Drag and drop that extracted folder inside Eclipse in the folder
+src: "CameraPreview\src". It will ask you if you want to replace the "com" folder, say "yes".</li>
+<li>Get also a copy of "ZXing-1.7.zip\zxing\android\src\com\google\zxing\client\android\PlanarYUVLuminanceSource.java" and put it in a new package called "com.google.zxing.client.android" (You mint have to create a new package).</li>
+</ol></li>
+<li>Replace the code "CameraPreviewActivity.java" with this one:</li>
+</ol>
+
+<p><strong>CameraPreviewActivity.java:</strong></p>
+
+<pre><code>/* Copyright (C) 2007 The Android Open Source Project */
+
+package com.example.android.apis.graphics;
+
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.ReaderException;
+import com.google.zxing.Result;
+import com.google.zxing.client.android.PlanarYUVLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
+
+import android.app.Activity;
+import android.hardware.Camera;
+import android.os.Bundle;
+
+// ----------------------------------------------------------------------
+
+public class CameraPreviewActivity extends Activity {
+    Preview mPreview;
+    Camera mCamera;
+    MultiFormatReader multiFormatReader;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Create a RelativeLayout container that will hold a SurfaceView,
+        // and set it as the content of our activity.
+        mPreview = new Preview(this);
+        setContentView(mPreview);
+
+        // Setup ZXing.
+        multiFormatReader = new MultiFormatReader();
+        CameraPreviewActivity.this.getActionBar().setTitle("");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        mCamera = Camera.open();
+        mCamera.setPreviewCallback(new Camera.PreviewCallback() {
+            public void onPreviewFrame(byte[] data, Camera camera) {
+
+                Camera.Size size = camera.getParameters().getPreviewSize();
+                PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(data, size.width, size.height, 0, 0,
+                        size.width, size.height, false);
+                BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+                try {
+                    Result r = multiFormatReader.decode(bitmap);
+                    CameraPreviewActivity.this.getActionBar().setTitle(r.getText());
+                } catch (ReaderException re) {
+                  // continue
+                }
+            }
+        });
+        mPreview.setCamera(mCamera);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+
+        // Because the Camera object is a shared resource, it's very
+        // important to release it when the activity is paused.
+        if (mCamera != null) {
+            mPreview.setCamera(null);
+            mCamera.setPreviewCallback(null);
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+}
+</code></pre>
+
+<p>Create a new class called <strong>Preview.java:</strong></p>
+
+<pre><code>/* Copyright (C) 2007 The Android Open Source Project */
+
+package com.example.android.apis.graphics;
+
+import android.content.Context;
+import android.hardware.Camera;
+import android.hardware.Camera.Size;
+import android.util.Log;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup;
+
+import java.io.IOException;
+import java.util.List;
+
+// ----------------------------------------------------------------------
+
+/**
+ * A simple wrapper around a Camera and a SurfaceView that renders a centered preview of the Camera
+ * to the surface. We need to center the SurfaceView because not all devices have cameras that
+ * support preview sizes at the same aspect ratio as the device's display.
+ */
+class Preview extends ViewGroup implements SurfaceHolder.Callback {
+    private final String TAG = "Preview";
+
+    SurfaceView mSurfaceView;
+    SurfaceHolder mHolder;
+    Size mPreviewSize;
+    List&lt;Size&gt; mSupportedPreviewSizes;
+    Camera mCamera;
+
+    Preview(Context context) {
+        super(context);
+
+        mSurfaceView = new SurfaceView(context);
+        addView(mSurfaceView);
+
+        // Install a SurfaceHolder.Callback so we get notified when the
+        // underlying surface is created and destroyed.
+        mHolder = mSurfaceView.getHolder();
+        mHolder.addCallback(this);
+        mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    }
+
+    public void setCamera(Camera camera) {
+        mCamera = camera;
+        if (mCamera != null) {
+            mSupportedPreviewSizes = mCamera.getParameters().getSupportedPreviewSizes();
+            requestLayout();
+        }
+    }
+
+    public void switchCamera(Camera camera) {
+       setCamera(camera);
+       try {
+           camera.setPreviewDisplay(mHolder);
+       } catch (IOException exception) {
+           Log.e(TAG, "IOException caused by setPreviewDisplay()", exception);
+       }
+       Camera.Parameters parameters = camera.getParameters();
+       parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
+       requestLayout();
+
+       camera.setParameters(parameters);
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        // We purposely disregard child measurements because act as a
+        // wrapper to a SurfaceView that centers the camera preview instead
+        // of stretching it.
+        final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+        final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+        setMeasuredDimension(width, height);
+
+        if (mSupportedPreviewSizes != null) {
+            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, width, height);
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        if (changed &amp;&amp; getChildCount() &gt; 0) {
+            final View child = getChildAt(0);
+
+            final int width = r - l;
+            final int height = b - t;
+
+            int previewWidth = width;
+            int previewHeight = height;
+            if (mPreviewSize != null) {
+                previewWidth = mPreviewSize.width;
+                previewHeight = mPreviewSize.height;
+            }
+
+            // Center the child SurfaceView within the parent.
+            if (width * previewHeight &gt; height * previewWidth) {
+                final int scaledChildWidth = previewWidth * height / previewHeight;
+                child.layout((width - scaledChildWidth) / 2, 0,
+                        (width + scaledChildWidth) / 2, height);
+            } else {
+                final int scaledChildHeight = previewHeight * width / previewWidth;
+                child.layout(0, (height - scaledChildHeight) / 2,
+                        width, (height + scaledChildHeight) / 2);
+            }
+        }
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+        // The Surface has been created, acquire the camera and tell it where
+        // to draw.
+        try {
+            if (mCamera != null) {
+                mCamera.setPreviewDisplay(holder);
+            }
+        } catch (IOException exception) {
+            Log.e(TAG, "IOException caused by setPreviewDisplay()", exception);
+        }
+    }
+
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // Surface will be destroyed when we return, so stop the preview.
+        if (mCamera != null) {
+            mCamera.stopPreview();
+        }
+    }
+
+
+    private Size getOptimalPreviewSize(List&lt;Size&gt; sizes, int w, int h) {
+        final double ASPECT_TOLERANCE = 0.1;
+        double targetRatio = (double) w / h;
+        if (sizes == null) return null;
+
+        Size optimalSize = null;
+        double minDiff = Double.MAX_VALUE;
+
+        int targetHeight = h;
+
+        // Try to find an size match aspect ratio and size
+        for (Size size : sizes) {
+            double ratio = (double) size.width / size.height;
+            if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE) continue;
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+
+        // Cannot find the one match the aspect ratio, ignore the requirement
+        if (optimalSize == null) {
+            minDiff = Double.MAX_VALUE;
+            for (Size size : sizes) {
+                if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                    optimalSize = size;
+                    minDiff = Math.abs(size.height - targetHeight);
+                }
+            }
+        }
+        return optimalSize;
+    }
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+        // Now that the size is known, set up the camera parameters and begin
+        // the preview.
+        Camera.Parameters parameters = mCamera.getParameters();
+        parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
+        requestLayout();
+
+        mCamera.setParameters(parameters);
+        mCamera.startPreview();
+    }
+}
+</code></pre>
+
+<p>Also, replace the content of <strong>AndroidManifest.xml</strong> (this will work only with Android Honeycomb 3.2, if you want to make it work an other version, you will have to make change to this file):</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+      package="com.example.android.apis.graphics"
+      android:versionCode="1"
+      android:versionName="1.0"&gt;
+    &lt;uses-sdk android:minSdkVersion="13" /&gt;
+    &lt;uses-permission android:name="android.permission.CAMERA" /&gt;
+    &lt;uses-feature android:name="android.hardware.camera" /&gt;
+    &lt;uses-feature android:name="android.hardware.camera.autofocus" /&gt;
+
+    &lt;application android:icon="@drawable/icon" android:label="@string/app_name"&gt;
+        &lt;activity android:name=".CameraPreviewActivity"
+                  android:label="@string/app_name"&gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+
+    &lt;/application&gt;
+&lt;/manifest&gt;
+</code></pre>
+
+<p>Sorry for the copyright header, but most of code of both class: <em>CameraPreview.java</em> and <em>Preview.java</em> come from <a href="http://developer.android.com/resources/samples/ApiDemos/src/com/example/android/apis/graphics/CameraPreview.html" rel="nofollow">http://developer.android.com/resources/samples/ApiDemos/src/com/example/android/apis/graphics/CameraPreview.html</a> which include a copyright. Damn you.</p>

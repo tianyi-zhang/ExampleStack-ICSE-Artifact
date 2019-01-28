@@ -1,0 +1,140 @@
+<p>yes, you can access information in the accountManager and authenticate the user using registered google account (for example) without her entering password.</p>
+
+<p>the code below is a functional  mix and match from examples by <a href="http://blog.notdot.net/2010/05/Authenticating-against-App-Engine-from-an-Android-app">nick johnson</a> and by <a href="http://www.toxicbakery.com/android-development/getting-google-auth-sub-tokens-in-your-android-applications/">tencent</a></p>
+
+<p>start with your main activity:</p>
+
+<pre><code>    package com.tg.auth;
+
+import android.accounts.Account;
+import android.accounts.AccountManager;
+import android.app.ListActivity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.ListView;
+
+public class ZAuth02aActivity extends ListActivity {
+    protected AccountManager accountManager;
+    protected Intent intent;
+    String TAG = "TGtracker";
+
+    /** Called when the activity is first created. */
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        accountManager = AccountManager.get(getApplicationContext());
+        Account[] accounts = accountManager.getAccountsByType("com.google");
+        this.setListAdapter(new ArrayAdapter&lt;Account&gt;(this, R.layout.list_item, accounts));        
+
+    }
+
+    @Override
+    protected void onListItemClick(ListView l, View v, int position, long id) {
+        Account account = (Account)getListView().getItemAtPosition(position);
+        Intent intent = new Intent(this, AppInfo.class);
+        intent.putExtra("account", account);
+        startActivity(intent);
+    }
+}
+</code></pre>
+
+<p>create an AppInfo class:</p>
+
+<pre><code>    package com.tg.auth;
+
+
+import org.apache.http.impl.client.DefaultHttpClient;
+
+import android.accounts.Account;
+import android.accounts.AccountManager;
+import android.accounts.AccountManagerFuture;
+import android.app.Activity;
+import android.os.Bundle;
+import android.util.Log;
+
+public class AppInfo extends Activity {
+    DefaultHttpClient http_client = new DefaultHttpClient();
+    Activity activity;
+    String TAG = "TGtracker";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.app_info);
+        activity = this;
+
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        //Log.v(TAG, "resuming activity");
+        AccountManager accountManager = AccountManager.get(getApplicationContext());
+        //if result is null, you might not have a valid internet connection
+        Log.i(TAG, "got token, yipee: "+updateToken(accountManager, true));
+    }
+
+
+    private String updateToken(AccountManager am, boolean invalidateToken) {
+        String authToken = "null";
+        try {
+            Account[] accounts = am.getAccountsByType("com.google");
+            AccountManagerFuture&lt;Bundle&gt; accountManagerFuture;
+            if(activity == null){//this is used when calling from an interval thread
+                accountManagerFuture = am.getAuthToken(accounts[0], "android", false, null, null);
+            } else {
+                accountManagerFuture = am.getAuthToken(accounts[0], "android", null, activity, null, null);
+            }
+            Bundle authTokenBundle = accountManagerFuture.getResult();
+            authToken = authTokenBundle.getString(AccountManager.KEY_AUTHTOKEN).toString();
+            Log.v(TAG, "newToken preinvalidate: "+authToken);
+
+            if(invalidateToken) {
+                am.invalidateAuthToken("com.google", authToken);
+                authToken = updateToken(am, false);
+
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "the exception was: "+e.toString());
+            e.printStackTrace();
+        }
+        return authToken;
+    }
+}
+</code></pre>
+
+<p>use a manifest file, somewhat like this (must declare activities + permissions):</p>
+
+<pre><code>    &lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.tg.auth"
+    android:versionCode="1"
+    android:versionName="1.0" &gt;
+
+    &lt;uses-sdk android:minSdkVersion="7" /&gt;
+    &lt;uses-permission android:name="android.permission.MANAGE_ACCOUNTS"&gt;&lt;/uses-permission&gt;
+    &lt;uses-permission android:name="android.permission.GET_ACCOUNTS"&gt;&lt;/uses-permission&gt;
+    &lt;uses-permission android:name="android.permission.USE_CREDENTIALS"&gt;&lt;/uses-permission&gt;
+    &lt;uses-permission android:name="android.permission.INTERNET"&gt;&lt;/uses-permission&gt;
+    &lt;application
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name" &gt;
+        &lt;activity
+            android:name=".ZAuth02aActivity"
+            android:label="@string/app_name" &gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+        &lt;activity android:name=".AppInfo"&gt;&lt;/activity&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;
+</code></pre>
+
+<p>use nick johnson's layout files that you can download <a href="https://github.com/Arachnid/AEAuth">here</a></p>

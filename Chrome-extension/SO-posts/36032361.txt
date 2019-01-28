@@ -1,0 +1,183 @@
+<p>I have created a service that can play your audio it is similar to the demo of official exoplayer. <a href="https://github.com/google/ExoPlayer" rel="nofollow">exoplayer github</a></p>
+
+<p>I have created a PlayerService just similar to PlayerActivity of the official demo. I have tested only  with the option  Google play (MP3 Audio) in MISC section.
+Please do not comment on the code style it is done to try this out.</p>
+
+<pre><code>public class PlayService extends Service implements
+    DemoPlayer.Listener, AudioCapabilitiesReceiver.Listener,
+    DemoPlayer.CaptionListener, DemoPlayer.Id3MetadataListener {
+
+
+
+// For use within demo app code.
+public static final String CONTENT_ID_EXTRA = "content_id";
+public static final String CONTENT_TYPE_EXTRA = "content_type";
+public static final String PROVIDER_EXTRA = "provider";
+
+
+private DemoPlayer player;
+
+
+// For use when launching the demo app using adb.
+private static final String CONTENT_EXT_EXTRA = "type";
+private static final String TAG = "PlayerService";
+private static final int MENU_GROUP_TRACKS = 1;
+private static final int ID_OFFSET = 2;
+
+
+private EventLogger eventLogger;
+private MediaController mediaController;
+private long playerPosition;
+private boolean enableBackgroundAudio;
+
+private Uri contentUri;
+private int contentType;
+private String contentId;
+private String provider;
+
+private AudioCapabilitiesReceiver audioCapabilitiesReceiver;
+private boolean playerNeedsPrepare;
+
+public PlayService() {
+}
+
+@Override
+public IBinder onBind(Intent intent) {
+    // TODO: Return the communication channel to the service.
+    throw new UnsupportedOperationException("Not yet implemented");
+}
+
+@Override
+public int onStartCommand(Intent intent, int flags, int startId) {
+
+    audioCapabilitiesReceiver = new AudioCapabilitiesReceiver(this, this);
+    audioCapabilitiesReceiver.register();
+
+    contentUri = intent.getData();
+    contentType = intent.getIntExtra(CONTENT_TYPE_EXTRA,
+            inferContentType(contentUri, intent.getStringExtra(CONTENT_EXT_EXTRA)));
+    contentId = intent.getStringExtra(CONTENT_ID_EXTRA);
+    provider = intent.getStringExtra(PROVIDER_EXTRA);
+
+    preparePlayer(true);
+
+
+    return START_STICKY;
+}
+
+
+private static int inferContentType(Uri uri, String fileExtension) {
+    String lastPathSegment = !TextUtils.isEmpty(fileExtension) ? "." + fileExtension
+            : uri.getLastPathSegment();
+    return Util.inferContentType(lastPathSegment);
+}
+
+@Override
+public void onStateChanged(boolean playWhenReady, int playbackState) {
+
+}
+
+@Override
+public void onError(Exception e) {
+
+}
+
+@Override
+public void onVideoSizeChanged(int width, int height, int unappliedRotationDegrees, float pixelWidthHeightRatio) {
+
+}
+
+
+private void releasePlayer() {
+    if (player != null) {
+        playerPosition = player.getCurrentPosition();
+        player.release();
+        player = null;
+        eventLogger.endSession();
+        eventLogger = null;
+    }
+}
+
+private DemoPlayer.RendererBuilder getRendererBuilder() {
+    String userAgent = Util.getUserAgent(this, "ExoPlayerDemo");
+    switch (contentType) {
+        case Util.TYPE_SS:
+            return new SmoothStreamingRendererBuilder(this, userAgent, contentUri.toString(),
+                    new SmoothStreamingTestMediaDrmCallback());
+        case Util.TYPE_DASH:
+            return new DashRendererBuilder(this, userAgent, contentUri.toString(),
+                    new WidevineTestMediaDrmCallback(contentId, provider));
+        case Util.TYPE_HLS:
+            return new HlsRendererBuilder(this, userAgent, contentUri.toString());
+        case Util.TYPE_OTHER:
+            return new ExtractorRendererBuilder(this, userAgent, contentUri);
+        default:
+            throw new IllegalStateException("Unsupported type: " + contentType);
+    }
+}
+
+private void preparePlayer(boolean playWhenReady) {
+    if (player == null) {
+        player = new DemoPlayer(getRendererBuilder());
+        player.setBackgrounded(true);
+        player.addListener(this);
+        player.setCaptionListener(this);
+        player.setMetadataListener(this);
+        player.seekTo(playerPosition);
+        playerNeedsPrepare = true;
+        //mediaController.setMediaPlayer(player.getPlayerControl());
+        //mediaController.setEnabled(true);
+        eventLogger = new EventLogger();
+        eventLogger.startSession();
+        player.addListener(eventLogger);
+        player.setInfoListener(eventLogger);
+        player.setInternalErrorListener(eventLogger);
+    }
+    player.setBackgrounded(true);
+    if (playerNeedsPrepare) {
+        player.prepare();
+        playerNeedsPrepare = false;
+    }
+    player.setBackgrounded(true);
+    player.setPlayWhenReady(playWhenReady);
+}
+
+@Override
+public void onAudioCapabilitiesChanged(AudioCapabilities audioCapabilities) {
+    if (player == null) {
+        return;
+    }
+    boolean backgrounded = player.getBackgrounded();
+    boolean playWhenReady = player.getPlayWhenReady();
+    releasePlayer();
+    preparePlayer(playWhenReady);
+    player.setBackgrounded(backgrounded);
+}
+
+@Override
+public void onCues(List&lt;Cue&gt; cues) {
+
+}
+
+@Override
+public void onId3Metadata(List&lt;Id3Frame&gt; id3Frames) {
+    for (Id3Frame id3Frame : id3Frames) {
+        if (id3Frame instanceof TxxxFrame) {
+            TxxxFrame txxxFrame = (TxxxFrame) id3Frame;
+            Log.i(TAG, String.format("ID3 TimedMetadata %s: description=%s, value=%s", txxxFrame.id,
+                    txxxFrame.description, txxxFrame.value));
+        } else if (id3Frame instanceof PrivFrame) {
+            PrivFrame privFrame = (PrivFrame) id3Frame;
+            Log.i(TAG, String.format("ID3 TimedMetadata %s: owner=%s", privFrame.id, privFrame.owner));
+        } else if (id3Frame instanceof GeobFrame) {
+            GeobFrame geobFrame = (GeobFrame) id3Frame;
+            Log.i(TAG, String.format("ID3 TimedMetadata %s: mimeType=%s, filename=%s, description=%s",
+                    geobFrame.id, geobFrame.mimeType, geobFrame.filename, geobFrame.description));
+        } else {
+            Log.i(TAG, String.format("ID3 TimedMetadata %s", id3Frame.id));
+        }
+    }
+}
+</code></pre>
+
+<p>}</p>

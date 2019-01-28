@@ -1,0 +1,528 @@
+<p>I've made a Int2DMap implementation based on the standard Java HashMap. I find it is faster than using an IntPair as key. However it will need to be synchronized.</p>
+
+<pre><code>import java.io.*;
+import java.util.*;
+
+public class Int2DMap implements Map, Serializable {
+    private static final int DEFAULT_INITIAL_CAPACITY = 16;
+    private static final int MAXIMUM_CAPACITY = 1 &lt;&lt; 30;
+    private static final float DEFAULT_LOAD_FACTOR = 0.75f;
+    protected Entry[] table;
+    protected int size;
+    protected int threshold;
+    protected float loadFactor;
+    protected transient volatile int modCount;
+
+    public Int2DMap(int initialCapacity, float loadFactor) {
+     if (initialCapacity &lt; 0)
+      throw new IllegalArgumentException("Illegal initial capacity: " + initialCapacity);
+     if (initialCapacity &gt; MAXIMUM_CAPACITY)
+      initialCapacity = MAXIMUM_CAPACITY;
+     if (loadFactor &lt;= 0 || Float.isNaN(loadFactor))
+      throw new IllegalArgumentException("Illegal load factor: " + loadFactor);
+     // Find a power of 2 &gt;= initialCapacity
+     int capacity = 1;
+     while (capacity &lt; initialCapacity) {
+      capacity &lt;&lt;= 1;
+     }
+     this.loadFactor = loadFactor;
+     this.threshold = (int) (capacity * loadFactor);
+     this.table = new Entry[capacity];
+    }
+
+    public Int2DMap(int initialCapacity) {
+     this(initialCapacity, DEFAULT_LOAD_FACTOR);
+    }
+
+    public Int2DMap() {
+     this(DEFAULT_INITIAL_CAPACITY, DEFAULT_LOAD_FACTOR);
+    }
+
+    public boolean containsKey(Object key) {
+     int[] xy = (int[]) key;
+     return containsKey(xy[0], xy[1]);
+    }
+
+    public Object get(Object key) {
+     int[] xy = (int[]) key;
+     return get(xy[0], xy[1]);
+    }
+
+    public Object put(Object key, Object value) {
+     int[] xy = (int[]) key;
+     return put(xy[0], xy[1], value);
+    }
+
+    public Object remove(Object key) {
+     int[] xy = (int[]) key;
+     return remove(xy[0], xy[1]);
+    }
+
+    public int size() {
+     return size;
+    }
+
+    public boolean isEmpty() {
+     return size == 0;
+    }
+
+    protected static final int indexFor(int x, int y, int length) {
+     return (x * 31 + y) &amp; (length - 1);
+    }
+
+    public Object get(int x, int y) {
+     for (Entry e = table[indexFor(x, y, table.length)]; e != null; e = e.next) {
+      if (e.x == x &amp;&amp; e.y == y) {
+       return e.value;
+      }
+     }
+     return null;
+    }
+
+    public boolean containsKey(int x, int y) {
+     return getEntry(x, y) != null;
+    }
+
+    protected Entry getEntry(int x, int y) {
+     for (Entry e = table[indexFor(x, y, table.length)]; e != null; e = e.next) {
+      if (e.x == x &amp;&amp; e.y == y) {
+       return e;
+      }
+     }
+     return null;
+    }
+
+    public Object put(int x, int y, Object value) {
+     int i = indexFor(x, y, table.length);
+     for (Entry e = table[i]; e != null; e = e.next) {
+      if (e.x == x &amp;&amp; e.y == y) {
+       Object oldValue = e.value;
+       e.value = value;
+       e.recordAccess(this);
+       return oldValue;
+      }
+     }
+     modCount++;
+     addEntry(x, y, value, i);
+     return null;
+    }
+
+    protected void resize(int newCapacity) {
+     Entry[] oldTable = table;
+     int oldCapacity = oldTable.length;
+     if (oldCapacity == MAXIMUM_CAPACITY) {
+      threshold = Integer.MAX_VALUE;
+      return;
+     }
+     Entry[] newTable = new Entry[newCapacity];
+     transfer(newTable);
+     table = newTable;
+     threshold = (int) (newCapacity * loadFactor);
+    }
+
+    protected void transfer(Entry[] newTable) {
+     Entry[] src = table;
+     int newCapacity = newTable.length;
+     for (int j = 0; j &lt; src.length; j++) {
+      Entry e = src[j];
+      if (e != null) {
+       src[j] = null;
+       do {
+        Entry next = e.next;
+        int i = indexFor(e.x, e.y, newCapacity);
+        e.next = newTable[i];
+        newTable[i] = e;
+        e = next;
+       } while (e != null);
+      }
+     }
+    }
+
+    public void putAll(Map m) {
+     int numKeysToBeAdded = m.size();
+     if (numKeysToBeAdded == 0) {
+      return;
+     }
+     if (numKeysToBeAdded &gt; threshold) {
+      int targetCapacity = (int) (numKeysToBeAdded / loadFactor + 1);
+      if (targetCapacity &gt; MAXIMUM_CAPACITY)
+       targetCapacity = MAXIMUM_CAPACITY;
+      int newCapacity = table.length;
+      while (newCapacity &lt; targetCapacity)
+       newCapacity &lt;&lt;= 1;
+      if (newCapacity &gt; table.length)
+       resize(newCapacity);
+     }
+     for (Iterator i = m.entrySet().iterator(); i.hasNext();) {
+      Map.Entry e = (Map.Entry) i.next();
+      put(e.getKey(), e.getValue());
+     }
+    }
+
+    public Object remove(int x, int y) {
+     Entry e = removeEntryForKey(x, y);
+     return (e == null ? null : e.value);
+    }
+
+    protected Entry removeEntryForKey(int x, int y) {
+     int i = indexFor(x, y, table.length);
+     Entry prev = table[i];
+     Entry e = prev;
+     while (e != null) {
+      Entry next = e.next;
+      Object k;
+      if (e.x == x &amp;&amp; e.y == y) {
+       modCount++;
+       size--;
+       if (prev == e)
+        table[i] = next;
+       else
+        prev.next = next;
+       e.recordRemoval(this);
+       return e;
+      }
+      prev = e;
+      e = next;
+     }
+     return e;
+    }
+
+    protected Entry removeMapping(Object o) {
+     if (!(o instanceof Entry))
+      return null;
+     Entry entry = (Entry) o;
+     int x = entry.x;
+     int y = entry.y;
+     int i = indexFor(x, y, table.length);
+     Entry prev = table[i];
+     Entry e = prev;
+     while (e != null) {
+      Entry next = e.next;
+      if (e.x == x &amp;&amp; e.y == y) {
+       modCount++;
+       size--;
+       if (prev == e)
+        table[i] = next;
+       else
+        prev.next = next;
+       e.recordRemoval(this);
+       return e;
+      }
+      prev = e;
+      e = next;
+     }
+     return e;
+    }
+
+    public void clear() {
+     modCount++;
+     Entry[] tab = table;
+     for (int i = 0; i &lt; tab.length; i++)
+      tab[i] = null;
+     size = 0;
+    }
+
+    public boolean containsValue(Object value) {
+     Entry[] tab = table;
+     for (int i = 0; i &lt; tab.length; i++)
+      for (Entry e = tab[i]; e != null; e = e.next)
+       if (value.equals(e.value))
+        return true;
+     return false;
+    }
+
+    static class Entry implements Map.Entry {
+     final int x;
+     final int y;
+     Object value;
+     Entry next;
+
+     Entry(int x, int y, Object value, Entry next) {
+      this.x = x;
+      this.y = y;
+      this.value = value;
+      this.next = next;
+     }
+
+     public final Object getKey() {
+      return new int[] { x, y };
+     }
+
+     public final Object getValue() {
+      return value;
+     }
+
+     public final Object setValue(Object newValue) {
+      Object oldValue = value;
+      value = newValue;
+      return oldValue;
+     }
+
+     public final boolean equals(Object o) {
+      if (!(o instanceof Map.Entry))
+       return false;
+      Map.Entry e = (Map.Entry) o;
+      int[] xy = (int[])e.getKey();
+      if (x == xy[0] &amp;&amp; y == xy[1]) {
+       Object v1 = getValue();
+       Object v2 = e.getValue();
+       if (v1 == v2 || (v1 != null &amp;&amp; v1.equals(v2)))
+        return true;
+      }
+      return false;
+     }
+
+     public final int hashCode() {
+      return ((31 + x) * 31 + y);
+     }
+
+     public final String toString() {
+      return "[" + x + ", " + y + "]=" + value;
+     }
+
+     /**
+      * This method is invoked whenever the value in an entry is overwritten by
+      * an invocation of put(k,v) for a key k that's already in the HashMap.
+      */
+     void recordAccess(Int2DMap m) {
+     }
+
+     /**
+      * This method is invoked whenever the entry is removed from the table.
+      */
+     void recordRemoval(Int2DMap m) {
+     }
+    }
+
+    void addEntry(int x, int y, Object value, int bucketIndex) {
+     Entry e = table[bucketIndex];
+     table[bucketIndex] = new Entry(x, y, value, e);
+     if (size++ &gt;= threshold)
+      resize(2 * table.length);
+    }
+
+
+    private abstract class HashIterator implements Iterator {
+     Entry next; // next entry to return
+     int expectedModCount; // For fast-fail
+     int index; // current slot
+     Entry current; // current entry
+
+     HashIterator() {
+      expectedModCount = modCount;
+      if (size &gt; 0) { // advance to first entry
+       Entry[] t = table;
+       while (index &lt; t.length &amp;&amp; (next = t[index++]) == null)
+        ;
+      }
+     }
+
+     public final boolean hasNext() {
+      return next != null;
+     }
+
+     final Entry nextEntry() {
+      if (modCount != expectedModCount)
+       throw new ConcurrentModificationException();
+      Entry e = current = next;
+      if (e == null)
+       throw new NoSuchElementException();
+      if ((next = e.next) == null) {
+       Entry[] t = table;
+       while (index &lt; t.length &amp;&amp; (next = t[index++]) == null)
+        ;
+      }
+      return e;
+     }
+
+     public void remove() {
+      if (current == null)
+       throw new IllegalStateException();
+      if (modCount != expectedModCount)
+       throw new ConcurrentModificationException();
+      int x = current.x;
+      int y = current.y;
+      current = null;
+      Int2DMap.this.removeEntryForKey(x, y);
+      expectedModCount = modCount;
+     }
+    }
+
+    private final class ValueIterator extends HashIterator {
+     public Object next() {
+      return nextEntry().value;
+     }
+    }
+
+    private final class KeyIterator extends HashIterator {
+     public Object next() {
+      return nextEntry().getKey();
+     }
+    }
+
+    private final class EntryIterator extends HashIterator {
+     public Map.Entry next() {
+      return nextEntry();
+     }
+    }
+
+    // Subclass overrides these to alter behavior of views' iterator() method
+    Iterator newKeyIterator() {
+     return new KeyIterator();
+    }
+
+    Iterator newValueIterator() {
+     return new ValueIterator();
+    }
+
+    Iterator newEntryIterator() {
+     return new EntryIterator();
+    }
+
+    public Set keySet() {
+     return new KeySet();
+    }
+
+    private final class KeySet extends AbstractSet {
+     public Iterator iterator() {
+      return newKeyIterator();
+     }
+
+     public int size() {
+      return size;
+     }
+
+     public boolean contains(Object o) {
+      return containsKey(o);
+     }
+
+     public boolean remove(Object o) {
+      int[] xy = (int[]) o;
+      return Int2DMap.this.removeEntryForKey(xy[0], xy[1]) != null;
+     }
+
+     public void clear() {
+      Int2DMap.this.clear();
+     }
+    }
+
+    public Collection values() {
+     return new Values();
+    }
+
+    private final class Values extends AbstractCollection {
+     public Iterator iterator() {
+      return newValueIterator();
+     }
+
+     public int size() {
+      return size;
+     }
+
+     public boolean contains(Object o) {
+      return containsValue(o);
+     }
+
+     public void clear() {
+      Int2DMap.this.clear();
+     }
+    }
+
+    public Set entrySet() {
+     return new EntrySet();
+    }
+
+    private final class EntrySet extends AbstractSet {
+
+     public Iterator iterator() {
+      return newEntryIterator();
+     }
+
+     public boolean contains(Object o) {
+      if (!(o instanceof Map.Entry))
+       return false;
+      Entry e = (Entry) o;
+      Entry candidate = getEntry(e.x, e.y);
+      return candidate != null &amp;&amp; candidate.equals(e);
+     }
+
+     public boolean remove(Object o) {
+      return removeMapping(o) != null;
+     }
+
+     public int size() {
+      return size;
+     }
+
+     public void clear() {
+      Int2DMap.this.clear();
+     }
+    }
+
+    public static void main(String[] args) {    
+     try {
+
+      Int2DMap map = new Int2DMap();
+
+      map.put(20, 6000, "Test");
+      System.out.println(map.size() == 1);
+
+      System.out.println(map.get(20, 6000) != null);
+
+      System.out.println("Test".equals(map.get(20, 6000)));
+
+      for (Iterator iter = map.values().iterator(); iter.hasNext();) {
+       System.out.println("Test".equals(iter.next()));
+      }
+
+      for (Iterator iter = map.keySet().iterator(); iter.hasNext();) {
+       int[] key = (int[])iter.next();
+       System.out.println(key[0] == 20 &amp;&amp; key[1] == 6000);
+      }
+
+      for (Iterator iter = map.entrySet().iterator(); iter.hasNext();) {
+       Map.Entry e = (Map.Entry)iter.next();
+       System.out.println(e.toString().equals("[20, 6000]=Test"));
+      }
+
+      map.remove(20, 6000);
+      System.out.println(map.size() == 0 &amp;&amp; map.get(20, 6000) == null);
+
+
+      long start = System.nanoTime();
+      int max = 40000000;
+      for (int i = 0; i &lt; 500000; i++) {
+       int x = (int)(Math.random() * max);
+       int y = (int)(Math.random() * max);
+       map.put(x, y, "");
+
+       int x2 = (int)(Math.random() * max);
+       int y2 = (int)(Math.random() * max);
+       Object o = map.get(x2, y2);
+
+      }
+      System.out.println(map.size());
+      System.out.println((System.nanoTime() - start) / 1000000);
+
+
+      Map map2 = new HashMap();
+      start = System.nanoTime();
+
+      for (int i = 0; i &lt; 500000; i++) {
+       String key = "" + (int)(Math.random() * max) + "," + (int)(Math.random() * max);
+       map2.put(key, "");
+
+       String key2 = "" + (int)(Math.random() * max) + "," + (int)(Math.random() * max);
+       Object o = map2.get(key2);
+
+      }
+      System.out.println(map2.size());
+      System.out.println((System.nanoTime() - start) / 1000000);
+
+
+     } catch (Throwable t) {
+      t.printStackTrace();
+     }
+    }
+}
+</code></pre>

@@ -1,0 +1,165 @@
+<p>The image you are trying to save returns you jest the thumbnail of the actual image that is why you are getting low quality image. You should pass the image name to the intent to save the high quality image when it is captured
+Following Helper class that I use for image capture may be of some help to you</p>
+
+<pre><code>public class CaptureImageHelper {
+
+    private static final int DEFAULT_WIDTH = 1024;        // min pixels
+    private static final int DEFAULT_HEIGHT = 768;        // min pixels
+    private static final String TEMP_IMAGE_NAME = "tempImage";
+
+
+    public static Intent getImageCaptureIntent(Context context, String title) {
+        Intent chooserIntent = null;
+        List&lt;Intent&gt; intentList = new ArrayList&lt;&gt;();
+        Intent takePhotoIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        takePhotoIntent.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(getTempFile(context)));
+        intentList = addIntentsToList(context, intentList, takePhotoIntent);
+        if (intentList.size() &gt; 0) {
+            chooserIntent = Intent.createChooser(intentList.remove(intentList.size() - 1), title);
+            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentList.toArray(new Parcelable[]{}));
+        }
+        return chooserIntent;
+
+    }
+
+    private static File getTempFile(Context context) {
+        //Note you can change the path here according to your need
+        File imageFile = new File(Environment.getExternalStorageDirectory(), TEMP_IMAGE_NAME);
+        imageFile.getParentFile().mkdirs();
+        return imageFile;
+    }
+
+    private static List&lt;Intent&gt; addIntentsToList(Context context, List&lt;Intent&gt; list, Intent intent) {
+        List&lt;ResolveInfo&gt; resInfo = context.getPackageManager().queryIntentActivities(intent, 0);
+        for (ResolveInfo resolveInfo : resInfo) {
+            String packageName = resolveInfo.activityInfo.packageName;
+            Intent targetedIntent = new Intent(intent);
+            targetedIntent.setPackage(packageName);
+            list.add(targetedIntent);
+        }
+        return list;
+    }
+
+    public static Bitmap getImageFromResult(Context context, int resultCode, Intent imageReturnedIntent) {
+        return getImageFromResult(context, DEFAULT_WIDTH, DEFAULT_HEIGHT, resultCode, imageReturnedIntent);
+    }
+
+    public static Bitmap getImageFromResult(Context context, int width, int height, int resultCode, Intent imageReturnedIntent) {
+        Bitmap bm = null;
+        if (resultCode == Activity.RESULT_OK) {
+            Uri selectedImage;
+            File imageFile = getTempFile(context);
+            selectedImage = Uri.fromFile(imageFile);
+            bm = getImageResized(context, selectedImage, width, height);
+            int rotation = getRotation(context, selectedImage, true);
+            bm = rotate(bm, rotation);
+        }
+        return bm;
+    }
+
+    private static Bitmap getImageResized(Context context, Uri selectedImage, int reqWidth, int reqHeight) {
+        // First decode with inJustDecodeBounds=true to check dimensions
+        System.gc();
+        final BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        Bitmap actuallyUsableBitmap = null;
+        AssetFileDescriptor fileDescriptor = null;
+        try {
+            fileDescriptor = context.getContentResolver().openAssetFileDescriptor(selectedImage, "r");
+        } catch (FileNotFoundException e) {
+        }
+        if (null != fileDescriptor) {
+            BitmapFactory.decodeFileDescriptor(fileDescriptor.getFileDescriptor(), null, options);
+            // Calculate inSampleSize
+            options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
+            // Decode bitmap with inSampleSize set
+            options.inJustDecodeBounds = false;
+            actuallyUsableBitmap = BitmapFactory.decodeFileDescriptor(fileDescriptor.getFileDescriptor(), null, options);
+        }
+        return actuallyUsableBitmap;
+    }
+
+    private static Bitmap getImageResized(Context context, Uri selectedImage) {
+        return getImageResized(context, selectedImage, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    }
+
+    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        // Raw height and width of image
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+
+        if (height &gt; reqHeight || width &gt; reqWidth) {
+
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+
+            // Calculate the largest inSampleSize value that is a power of 2 and keeps both
+            // height and width larger than the requested height and width.
+            while ((halfHeight / inSampleSize) &gt; reqHeight
+                    &amp;&amp; (halfWidth / inSampleSize) &gt; reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+
+        return inSampleSize;
+    }
+
+    private static int getRotation(Context context, Uri imageUri, boolean isCamera) {
+        int rotation;
+        if (isCamera) {
+            rotation = getRotationFromCamera(context, imageUri);
+        } else {
+            rotation = getRotationFromGallery(context, imageUri);
+        }
+        return rotation;
+    }
+
+    private static int getRotationFromCamera(Context context, Uri imageFile) {
+        int rotate = 0;
+        try {
+            context.getContentResolver().notifyChange(imageFile, null);
+            ExifInterface exif = new ExifInterface(imageFile.getPath());
+            int orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL);
+
+            switch (orientation) {
+                case ExifInterface.ORIENTATION_ROTATE_270:
+                    rotate = 270;
+                    break;
+                case ExifInterface.ORIENTATION_ROTATE_180:
+                    rotate = 180;
+                    break;
+                case ExifInterface.ORIENTATION_ROTATE_90:
+                    rotate = 90;
+                    break;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return rotate;
+    }
+
+    private static int getRotationFromGallery(Context context, Uri imageUri) {
+        int orientation = 0;
+        String[] columns = {MediaStore.Images.Media.ORIENTATION};
+        Cursor cursor = context.getContentResolver().query(imageUri, columns, null, null, null);
+        if (null != cursor &amp;&amp; cursor.moveToFirst()) {
+            int orientationColumnIndex = cursor.getColumnIndex(columns[0]);
+            orientation = cursor.getInt(orientationColumnIndex);
+            cursor.close();
+        }
+        return orientation;
+    }
+
+    private static Bitmap rotate(Bitmap bm, int rotation) {
+        if (rotation != 0) {
+            Matrix matrix = new Matrix();
+            matrix.postRotate(rotation);
+            return Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), matrix, true);
+        }
+        return bm;
+    }
+}
+</code></pre>

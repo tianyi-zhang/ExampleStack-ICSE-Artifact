@@ -1,0 +1,134 @@
+<p>You ware close. Your mistakes ware:</p>
+
+<ul>
+<li>trying to reset <code>sb</code> instead of removing only its last character </li>
+<li><p>way you want to reset <code>sb</code>:</p>
+
+<ul>
+<li>by using <code>sb = new StringBuilder();</code> you are reassigning <code>sb</code> which is local variable of <strong>current</strong> method, not variable of method which invoked it (Java is not pass-by-reference but pass-by-value).</li>
+<li><p>your almost correct attempt ware commented <code>sb.delete(sb.length(), sb.length() + 1);</code> but here you are actually trying to remove characters starting from position <code>sb.length()</code>, but just like arrays indexes of character in StringBuilder are from <code>0</code> till <code>sb.length() <strong>- 1</strong></code> so is trying to remove one character after last character which effectively can't remove anything.  </p>
+
+<p>What you needed here is </p>
+
+<pre><code>sb.delete(sb.length() - 1, sb.length());
+</code></pre>
+
+<p>or more readable </p>
+
+<pre><code>sb.deleteCharAt(sb.length() - 1);
+</code></pre>
+
+<p>but probably best approach in terms of performance <code>setLength</code> (described at bottom of answer)</p>
+
+<pre><code>sb.setLength(sb.length() - 1); 
+</code></pre></li>
+</ul></li>
+<li><p>your logic of <strong>when</strong> to remove characters from StringBuilder is also flawed </p>
+
+<ul>
+<li><p>you are doing it only in one place which ends (backtracks) recursive calls: after finding correct results. But what about other cases like <code>if (left &lt; right)</code> or <strong><em>most importantly, if method will end normally</em></strong> like </p>
+
+<pre><code>generate(3, 1, 1, ')');
+generate(3, 1, 2, ')');//here we stop and backtrack
+</code></pre>
+
+<p>Here <code>generate(3, 1, 2, ')');</code> ends and removes last character from <code>sb</code>, but shouldn't previous method <code>generate(3, 1, 1, ')')</code> also remove its own <code>)</code> added to StringBuilder?</p></li>
+</ul>
+
+<p>In other words you shouldn't remove last character only at end of successful condition in recursive call, but after each recursive call, to make sure that method will also remove character it adds.</p></li>
+</ul>
+
+<p>So change your code to something like </p>
+
+<pre><code>public static void generate(int n, int left, int right, ArrayList&lt;String&gt; result,
+        StringBuilder sb) {
+
+    if (left &lt; right) {
+        return;
+    }
+    if (left == n &amp;&amp; right == n) {
+        result.add(sb.toString());
+        return;
+    }
+    if (left == n) {
+        generate(n, left, right + 1, result, sb.append(')'));
+        sb.deleteCharAt(sb.length() - 1);// &lt;--
+        return;
+    }
+    generate(n, left + 1, right, result, sb.append('('));
+    sb.deleteCharAt(sb.length() - 1);// &lt;--
+    generate(n, left, right + 1, result, sb.append(')'));
+    sb.deleteCharAt(sb.length() - 1);// &lt;--
+}
+</code></pre>
+
+<p>or try writing something probably more readable like</p>
+
+<pre><code>public static void generate(int maxLength, int left, int right,
+        ArrayList&lt;String&gt; result, StringBuilder sb) {
+    if (left + right == maxLength) {
+        if (left == right)
+            result.add(sb.toString());
+    } else if (left &gt;= right) {
+        generate(maxLength, left + 1, right, result, sb.append('('));
+        sb.deleteCharAt(sb.length() - 1);
+
+        generate(maxLength, left, right + 1, result, sb.append(')'));
+        sb.deleteCharAt(sb.length() - 1);
+    }
+}
+</code></pre>
+
+<p>but while invoking you would need to set <code>maxLength</code> as <code>2*n</code> since it is the max length StringBuilder should contain, so you would also have to change <code>generateParenthesis(int n)</code> to:</p>
+
+<pre><code>public static ArrayList&lt;String&gt; generateParenthesis(int n) {
+
+    ArrayList&lt;String&gt; result = new ArrayList&lt;String&gt;();
+    StringBuilder sb = new StringBuilder(2 * n);
+
+    generate(2 * n, 0, 0, result, sb);
+    //       ^^^^^
+    return result;
+}
+</code></pre>
+
+<hr>
+
+<p><strong>Farther improvement:</strong></p>
+
+<p>If you are aiming for performance then you probably don't want to use <code>delete</code> or <code>deleteCharAt</code> because each time it creates new array and fills it with copy of values from without ones you don't want.  </p>
+
+<p>Instead you can use <code>setLength</code> method. If you will pass value which is smaller than number of currently stored characters it will set <code>count</code> to value passed in this method, which will effectively make characters after them irrelevant. In other words this characters will be no longer used in for instance <code>toString()</code> even if they will be still in StringBuilder buffer array.</p>
+
+<p>Example:</p>
+
+<pre><code>StringBuilder sb = new StringBuilder("abc");  // 1
+sb.setLength(2);                              // 2
+System.out.println(sb);                       // 3
+sb.append('d');                               // 4
+System.out.println(sb);                       // 5
+</code></pre>
+
+<ul>
+<li><p>In line 1 <code>StringBuilder</code> will allocate array for at least <code>3</code> characters (by default it uses <code>str.length() + 16</code> to determine size of buffered array of characters it will store for now) and will place there characters from passed String, so it will contain</p>
+
+<pre><code>['a', 'b', 'c', '\0', '\0', ... , '\0']
+                 ^^^ - it will put next character here 
+</code></pre>
+
+<p>Index of position where next character should be placed is stored in <code>count</code> field and for now it is equal to <code>3</code>.</p></li>
+<li><p>In line 2 value of <code>count</code> will be set to <code>2</code>, but our array will not be changed so it will still look like </p>
+
+<pre><code>['a', 'b', 'c', '\0', '\0', ... , '\0']
+           ^^^ - it will put next character here 
+</code></pre></li>
+<li><p>In line 3 new String will be created and printed, but it will be filled only with characters placed before index stored in <code>count</code>, which means that it will contain only <code>a</code> and <code>b</code> (array will still be unchanged).</p></li>
+<li><p>In line 4 you will add new character to buffer and it will be placed after "important" characters. Since number of important characters is stored in <code>count</code> field (and they are placed at beginning of array), next irrelevant character must be at position pointed by <code>count</code>, which means <code>d</code> will be placed at position with index <code>2</code> which means now array will look like </p>
+
+<pre><code>['a', 'b', 'd', '\0', '\0', ... , '\0']
+                 ^^^ - it will put next character here 
+</code></pre>
+
+<p>and value of <code>count</code> will be incremented (we added only one character so <code>count</code> will now become <code>3</code>).</p></li>
+<li>In line 5 we will create and print string containing first <code>3</code> characters from array used by <code>StringBuilder</code> so we will see <code>abd</code>.</li>
+</ul>

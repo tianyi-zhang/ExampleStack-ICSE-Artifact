@@ -1,0 +1,227 @@
+<h1>Bingo! i have found the bug!</h1>
+
+<p>Thanks @izht for providing the link of the <a href="http://www.java2s.com/Open-Source/Android/android-core/platform-libcore/java/lang/String.java.htm" rel="nofollow">source code</a>. i have located the bug regarding this problem.</p>
+
+<p>This only happens when the String's <a href="http://developer.android.com/reference/java/lang/String.html#backing_array" rel="nofollow">backing array</a> is having a different (longer) value than the actual String. In particular, when the <code>String.offset</code> (private variable) is larger than zero.</p>
+
+<p>Here's the fix:</p>
+
+<pre><code>public String replace(CharSequence target, CharSequence replacement) {
+    if (target == null) {
+        throw new NullPointerException("target == null");
+    }
+    if (replacement == null) {
+        throw new NullPointerException("replacement == null");
+    }
+
+    String targetString = target.toString();
+    int matchStart = indexOf(targetString, 0);
+    if (matchStart == -1) {
+        // If there's nothing to replace, return the original string untouched.
+        return this;
+    }
+
+    String replacementString = replacement.toString();
+
+    // The empty target matches at the start and end and between each character.
+    int targetLength = targetString.length();
+    if (targetLength == 0) {
+        int resultLength = (count + 2) * replacementString.length();
+        StringBuilder result = new StringBuilder(resultLength);
+        result.append(replacementString);
+//        for (int i = offset; i &lt; count; ++i) {             // original, bug
+        for (int i = offset; i &lt; (count + offset); ++i) {    // fix
+            result.append(value[i]);
+            result.append(replacementString);
+        }
+        return result.toString();
+    }
+
+    StringBuilder result = new StringBuilder(count);
+    int searchStart = 0;
+    do {
+        // Copy characters before the match...
+        result.append(value, offset + searchStart, matchStart - searchStart);
+        // Insert the replacement...
+        result.append(replacementString);
+        // And skip over the match...
+        searchStart = matchStart + targetLength;
+    } while ((matchStart = indexOf(targetString, searchStart)) != -1);
+    // Copy any trailing chars...
+    result.append(value, offset + searchStart, count - searchStart);
+    return result.toString();
+}
+</code></pre>
+
+<p>i am not sure why Android has to alter (and altered wrongly) the <code>replace()</code> in this way. The original Java implementation doesn't have this issue.</p>
+
+<p>By-the-way, <strong>what's now?</strong> What can i do with it? (other than using <code>replace()</code> with extra care, or throw away my Android phones :-/)</p>
+
+<hr>
+
+<p>Btw i m quite sure my LG E720 Optimus Chic (Android 2.2) is using a different source code than <a href="http://www.java2s.com/Open-Source/Android/android-core/platform-libcore/java/lang/String.java.htm" rel="nofollow">that one</a>. It keeps halting (suspect infinite looping) upon <code>String.replace()</code> with an <em>empty</em> target string. Lately i found it throws this error message:</p>
+
+<pre><code>05-10 16:41:13.155: E/AndroidRuntime(9384): FATAL EXCEPTION: main
+05-10 16:41:13.155: E/AndroidRuntime(9384): java.lang.OutOfMemoryError
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.AbstractStringBuilder.enlargeBuffer(AbstractStringBuilder.java:97)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.AbstractStringBuilder.append0(AbstractStringBuilder.java:157)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.StringBuilder.append(StringBuilder.java:217)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.String.replace(String.java:1497)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at com.example.testprojectnew.MainActivity.onCreate(MainActivity.java:22)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1047)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:2627)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:2679)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.ActivityThread.access$2300(ActivityThread.java:125)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2033)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.os.Handler.dispatchMessage(Handler.java:99)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.os.Looper.loop(Looper.java:123)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at android.app.ActivityThread.main(ActivityThread.java:4627)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.reflect.Method.invokeNative(Native Method)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at java.lang.reflect.Method.invoke(Method.java:521)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at com.android.internal.os.ZygoteInit$MethodAndArgsCaller.run(ZygoteInit.java:878)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:636)
+05-10 16:41:13.155: E/AndroidRuntime(9384):   at dalvik.system.NativeStart.main(Native Method)
+</code></pre>
+
+<hr>
+
+<p>At a second thought, if that for-loop thingy <em>is</em> the bug. It should be a compile time issue. Why would it act differently in different phones (different versions of Android)?</p>
+
+<hr>
+
+<h1>Complete Workaround</h1>
+
+<p>Got <a href="https://code.google.com/p/android/issues/detail?id=55129#c5" rel="nofollow">an update</a> from Google, that they have patched it, and will correct it <a href="https://android-review.googlesource.com/58393" rel="nofollow">in the future release</a>.</p>
+
+<p>Meanwhile, i have written a patched method, based on <a href="https://android-review.googlesource.com/#/c/58393/1/luni/src/main/java/java/lang/String.java" rel="nofollow">their code</a>:</p>
+
+<p><em>(This is necessary because (1) we still have to wait for the correct release, (2) we need to take care of devices that didnt make that fixed update)</em></p>
+
+<pre><code>/** Patch for the String.replace(CharSequence target, CharSequence replacement),
+ *  because the original is buggy when CharSequence target is empty, i.e. "".
+ *  Patched by Google Android: https://android-review.googlesource.com/58393
+ */
+public static String replacePatched(final String string, final CharSequence target, final CharSequence replacement) {
+    if (target == null) {
+        throw new NullPointerException("target == null");
+    }
+    if (replacement == null) {
+        throw new NullPointerException("replacement == null");
+    }
+
+    final String targetString = target.toString();
+    int matchStart = string.indexOf(targetString, 0);
+    if (matchStart == -1) {
+        // If there's nothing to replace, return the original string untouched.
+        return new String(string);
+    }
+
+    final char[] value = string.toCharArray();                              // required in patch
+    final int count = value.length;                                         // required in patch
+
+    final String replacementString = replacement.toString();
+
+    // The empty target matches at the start and end and between each character.
+    if (targetString.length() == 0) {
+        // The result contains the original 'count' characters, a copy of the
+        // replacement string before every one of those characters, and a final
+        // copy of the replacement string at the end.
+        final StringBuilder result = new StringBuilder(count + (count + 1) * replacementString.length());
+        result.append(replacementString);
+        for (int i = 0; i &lt; count; ++i) {
+            result.append(value[i]);
+            result.append(replacementString);
+        }
+        return new String(result);      // StringBuilder.toString() does not give exact length
+    }
+
+    final StringBuilder result = new StringBuilder(count);
+    int searchStart = 0;
+    do {
+        // Copy characters before the match...
+        result.append(value, searchStart, matchStart - searchStart);
+        // Insert the replacement...
+        result.append(replacementString);
+        // And skip over the match...
+        searchStart = matchStart + targetString.length();
+    } while ((matchStart = string.indexOf(targetString, searchStart)) != -1);
+    // Copy any trailing chars...
+    result.append(value, searchStart, count - searchStart);
+    return new String(result);          // StringBuilder.toString() does not give exact length
+}
+</code></pre>
+
+<p>The verbose version:</p>
+
+<pre><code>/** Patch for the String.replace(CharSequence target, CharSequence replacement),
+ *  because the original is buggy when CharSequence target is empty, i.e. "".
+ *  Patched by Google Android: https://android-review.googlesource.com/58393
+ */
+public static String replacePatched(final String string, final CharSequence target, final CharSequence replacement) {
+    if (target == null) {
+        throw new NullPointerException("target == null");
+    }
+    if (replacement == null) {
+        throw new NullPointerException("replacement == null");
+    }
+
+//    String targetString = target.toString();                                    // original
+    final String targetString = target.toString();
+//    int matchStart = indexOf(targetString, 0);                                  // original
+    int matchStart = string.indexOf(targetString, 0);
+    if (matchStart == -1) {
+        // If there's nothing to replace, return the original string untouched.
+//        return this;                                                            // original
+        return new String(string);
+    }
+
+    final char[] value = string.toCharArray();                              // required in patch
+    final int count = value.length;                                         // required in patch
+
+//    String replacementString = replacement.toString();                          // original
+    final String replacementString = replacement.toString();
+
+    // The empty target matches at the start and end and between each character.
+//    int targetLength = targetString.length();                                   // original
+//    if (targetLength == 0) {                                                    // original
+    if (targetString.length() == 0) {
+//        int resultLength = (count + 2) * replacementString.length();            // original
+//        // The result contains the original 'count' characters, a copy of the
+//        // replacement string before every one of those characters, and a final
+//        // copy of the replacement string at the end.
+//        int resultLength = count + (count + 1) * replacementString.length();    // patched by Google Android
+//        StringBuilder result = new StringBuilder(resultLength);                 // original
+        final StringBuilder result = new StringBuilder(count + (count + 1) * replacementString.length());
+        result.append(replacementString);
+//        for (int i = offset; i &lt; count; ++i) {                                  // original
+//        int end = offset + count;                                               // patched by Google Android
+//        for (int i = offset; i != end; ++i) {                                   // patched by Google Android
+        for (int i = 0; i &lt; count; ++i) {
+            result.append(value[i]);
+            result.append(replacementString);
+        }
+//        return result.toString();                                               // original
+        return new String(result);      // StringBuilder.toString() does not give exact length
+    }
+
+//    StringBuilder result = new StringBuilder(count);                            // original
+    final StringBuilder result = new StringBuilder(count);
+    int searchStart = 0;
+    do {
+        // Copy characters before the match...
+//        result.append(value, offset + searchStart, matchStart - searchStart);   // original
+        result.append(value, searchStart, matchStart - searchStart);
+        // Insert the replacement...
+        result.append(replacementString);
+        // And skip over the match...
+//        searchStart = matchStart + targetLength;                                // original
+        searchStart = matchStart + targetString.length();
+//    } while ((matchStart = indexOf(targetString, searchStart)) != -1);          // original
+    } while ((matchStart = string.indexOf(targetString, searchStart)) != -1);
+    // Copy any trailing chars...
+//    result.append(value, offset + searchStart, count - searchStart);            // original
+    result.append(value, searchStart, count - searchStart);
+//    return result.toString();                                                   // original
+    return new String(result);          // StringBuilder.toString() does not give exact length
+}
+</code></pre>

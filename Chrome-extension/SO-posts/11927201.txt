@@ -1,0 +1,210 @@
+<p>The main problem you're having is you're trying to perform blocking actions in the <a href="http://docs.oracle.com/javase/tutorial/uiswing/concurrency/dispatch.html" rel="nofollow">Event Dispatching Thread</a>.  This will prevent the UI from been updated as repaint requests are not reaching the repaint manager until AFTER you've finished.</p>
+
+<p>To over come this, you're going to need to off load the blocking work (ie the back up process) to a separate thread.</p>
+
+<p>For this I suggest you have a read through the <a href="http://docs.oracle.com/javase/tutorial/uiswing/concurrency/index.html" rel="nofollow">Concurrency in Swing Trail</a> which will provide you with some useful strategies to solve your particular problem.  In particular, you'll probably benifit from using a <a href="http://docs.oracle.com/javase/7/docs/api/javax/swing/SwingWorker.html" rel="nofollow">SwingWorker</a></p>
+
+<p>Take a close look at <a href="http://docs.oracle.com/javase/7/docs/api/javax/swing/SwingWorker.html#doInBackground%28%29" rel="nofollow">doInBackground</a> and the <a href="http://docs.oracle.com/javase/7/docs/api/javax/swing/SwingWorker.html#process%28java.util.List%29" rel="nofollow">process</a> methods</p>
+
+<p><strong>UPDATED with Example</strong></p>
+
+<p>Okay, so this is a REALLY simple example.  This basically walks you C:\ drive to 3 directories deep and dumps the content to the supplied <code>JTextArea</code></p>
+
+<pre><code>public class BackgroundWorker extends SwingWorker&lt;Object, File&gt; {
+
+    private JTextArea textArea;
+
+    public BackgroundWorker(JTextArea textArea) {
+
+        this.textArea = textArea;
+
+    }
+
+    @Override
+    protected Object doInBackground() throws Exception {
+
+        list(new File("C:\\"), 0);
+
+        return null;
+
+    }
+
+    @Override
+    protected void process(List&lt;File&gt; chunks) {
+
+        for (File file : chunks) {
+
+            textArea.append(file.getPath() + "\n");
+
+        }
+
+        textArea.setCaretPosition(textArea.getText().length() - 1);
+
+    }
+
+    protected void list(File path, int level) {
+
+        if (level &lt; 4) {
+
+            System.out.println(level + " - Listing " + path);
+
+            File[] files = path.listFiles(new FileFilter() {
+
+                @Override
+                public boolean accept(File pathname) {
+
+                    return pathname.isFile();
+
+                }
+            });
+
+            publish(path);
+            for (File file : files) {
+
+                System.out.println(file);
+                publish(file);
+
+            }
+
+            files = path.listFiles(new FileFilter() {
+
+                @Override
+                public boolean accept(File pathname) {
+
+                    return pathname.isDirectory() &amp;&amp; !pathname.isHidden();
+
+                }
+            });
+
+            for (File folder : files) {
+
+                list(folder, level + 1);
+
+            }
+
+        }
+
+    }
+
+}
+</code></pre>
+
+<p>You would simply call <code>new BackgroundWorker(textField).execute()</code> and walk away :D</p>
+
+<p><strong>UPDATED with explicit example</strong></p>
+
+<pre><code>public class BackgroundWorker extends SwingWorker&lt;Object, String&gt; {
+
+    private JTextArea textArea;
+    private File sourceDir;
+    private File destDir;
+
+    public BackgroundWorker(JTextArea textArea, File sourceDir, File destDir) {
+
+        this.textArea = textArea;
+        this.sourceDir = sourceDir;
+        this.destDir = destDirl
+
+    }
+
+    @Override
+    protected Object doInBackground() throws Exception {
+
+        if (sourceDir.isDirectory()) {
+
+            // if directory not exists, create it
+            if (!destDir.exists()) {
+                destDir.mkdir();
+                publish("Folder " + sourceDir.getName() + " was created");
+            }
+
+            // list all the directory contents
+            String files[] = sourceDir.list();
+
+            for (String file : files) {
+                // construct the src and dest file structure
+                File srcFile = new File(sourceDir, file);
+                File destFile = new File(destDir, file);
+                // recursive copy
+                copyFolder(srcFile, destFile);
+            }
+
+        } else {
+            try {
+                copyFile(sourceDir, destDir);
+            } catch (Exception e) {
+            }
+        }
+
+        return null;
+
+    }
+
+    public void copyFolder(File src, File dest) throws IOException {
+
+        if (src.isDirectory()) {
+
+            // if directory not exists, create it
+            if (!dest.exists()) {
+
+                publish("Folder " + src.getName() + " was created");
+            }
+
+            // list all the directory contents
+            String files[] = src.list();
+
+            for (String file : files) {
+                // construct the src and dest file structure
+                File srcFile = new File(src, file);
+                File destFile = new File(dest, file);
+                // recursive copy
+                copyFolder(srcFile, destFile);
+            }
+
+        } else {
+            try {
+                copyFile(src, dest);
+            } catch (Exception e) {
+            }
+        }
+    }
+
+    public void copyFile(File src, File dest) throws Exception {
+        // if file, then copy it
+        // Use bytes stream to support all file types
+        InputStream in = new FileInputStream(src);
+        OutputStream out = new FileOutputStream(dest);
+
+        byte[] buffer = new byte[1024];
+
+        int length;
+        // copy the file content in bytes
+        while ((length = in.read(buffer)) &gt; 0) {
+            out.write(buffer, 0, length);
+        }
+
+        in.close();
+        out.close();
+        publish("File copied " + src.getName());
+
+    }
+
+    @Override
+    protected void process(List&lt;String&gt; chunks) {
+
+        for (String msg : chunks) {
+
+            textArea.append(msg + "\n");
+
+        }
+
+        textArea.setCaretPosition(textArea.getText().length() - 1);
+
+    }
+}
+</code></pre>
+
+<p>Now to run...</p>
+
+<pre><code>new BackgroundWorker(textArea, sourceDir, destDir).execute();
+</code></pre>

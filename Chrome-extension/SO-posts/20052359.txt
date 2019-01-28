@@ -1,0 +1,361 @@
+<p>// File cache class</p>
+
+<pre><code>package com.imageloader;
+
+import java.io.File;
+import android.content.Context;
+
+public class FileCache {
+
+    private File cacheDir;
+
+    public FileCache(Context context){
+        //Find the dir to save cached images
+        if (android.os.Environment.getExternalStorageState().equals(android.os.Environment.MEDIA_MOUNTED))
+            cacheDir=new File(android.os.Environment.getExternalStorageDirectory(),"LazyList");
+        else
+            cacheDir=context.getCacheDir();
+        if(!cacheDir.exists())
+            cacheDir.mkdirs();
+    }
+
+    public File getFile(String url){
+        //I identify images by hashcode. Not a perfect solution, good for the demo.
+        String filename=String.valueOf(url.hashCode());
+        //Another possible solution (thanks to grantland)
+        //String filename = URLEncoder.encode(url);
+        File f = new File(cacheDir, filename);
+        return f;
+
+    }
+
+    public void clear(){
+        File[] files=cacheDir.listFiles();
+        if(files==null)
+            return;
+        for(File f:files)
+            f.delete();
+    }
+
+}
+</code></pre>
+
+<p>// ImageLoader class</p>
+
+<pre><code>package com.imageloader;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.widget.ImageView;
+
+public class ImageLoader {
+
+    MemoryCache memoryCache=new MemoryCache();
+    FileCache fileCache;
+    private Map&lt;ImageView, String&gt; imageViews=Collections.synchronizedMap(new WeakHashMap&lt;ImageView, String&gt;());
+    ExecutorService executorService; 
+
+    public ImageLoader(Context context){
+        fileCache=new FileCache(context);
+        executorService=Executors.newFixedThreadPool(5);
+    }
+
+    final int stub_id = R.drawable.ic_launcher;
+    public void DisplayImage(String url, ImageView imageView)
+    {
+        imageViews.put(imageView, url);
+        Bitmap bitmap=memoryCache.get(url);
+        if(bitmap!=null)
+            imageView.setImageBitmap(bitmap);
+        else
+        {
+            queuePhoto(url, imageView);
+            imageView.setImageResource(stub_id);
+        }
+    }
+
+    private void queuePhoto(String url, ImageView imageView)
+    {
+        PhotoToLoad p=new PhotoToLoad(url, imageView);
+        executorService.submit(new PhotosLoader(p));
+    }
+
+    private Bitmap getBitmap(String url) 
+    {
+        File f=fileCache.getFile(url);
+
+        //from SD cache
+        Bitmap b = decodeFile(f);
+        if(b!=null)
+            return b;
+
+        //from web
+        try {
+            Bitmap bitmap=null;
+            URL imageUrl = new URL(url);
+            HttpURLConnection conn = (HttpURLConnection)imageUrl.openConnection();
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(true);
+            InputStream is=conn.getInputStream();
+            OutputStream os = new FileOutputStream(f);
+            Utils.CopyStream(is, os);
+            os.close();
+            bitmap = decodeFile(f);
+            return bitmap;
+        } catch (Exception ex){
+           ex.printStackTrace();
+           return null;
+        }
+    }
+
+    //decodes image and scales it to reduce memory consumption
+    private Bitmap decodeFile(File f){
+        try {
+            //decode image size
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(new FileInputStream(f),null,o);
+
+            //Find the correct scale value. It should be the power of 2.
+            final int REQUIRED_SIZE=70;
+            int width_tmp=o.outWidth, height_tmp=o.outHeight;
+            int scale=1;
+            while(true){
+                if(width_tmp/2&lt;REQUIRED_SIZE || height_tmp/2&lt;REQUIRED_SIZE)
+                    break;
+                width_tmp/=2;
+                height_tmp/=2;
+                scale*=2;
+            }
+
+            //decode with inSampleSize
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize=scale;
+            return BitmapFactory.decodeStream(new FileInputStream(f), null, o2);
+        } catch (FileNotFoundException e) {}
+        return null;
+    }
+
+    //Task for the queue
+    private class PhotoToLoad
+    {
+        public String url;
+        public ImageView imageView;
+        public PhotoToLoad(String u, ImageView i){
+            url=u; 
+            imageView=i;
+        }
+    }
+
+    class PhotosLoader implements Runnable {
+        PhotoToLoad photoToLoad;
+        PhotosLoader(PhotoToLoad photoToLoad){
+            this.photoToLoad=photoToLoad;
+        }
+
+        public void run() {
+            if(imageViewReused(photoToLoad))
+                return;
+            Bitmap bmp=getBitmap(photoToLoad.url);
+            memoryCache.put(photoToLoad.url, bmp);
+            if(imageViewReused(photoToLoad))
+                return;
+            BitmapDisplayer bd=new BitmapDisplayer(bmp, photoToLoad);
+            Activity a=(Activity)photoToLoad.imageView.getContext();
+            a.runOnUiThread(bd);
+        }
+    }
+
+    boolean imageViewReused(PhotoToLoad photoToLoad){
+        String tag=imageViews.get(photoToLoad.imageView);
+        if(tag==null || !tag.equals(photoToLoad.url))
+            return true;
+        return false;
+    }
+
+    //Used to display bitmap in the UI thread
+    class BitmapDisplayer implements Runnable
+    {
+        Bitmap bitmap;
+        PhotoToLoad photoToLoad;
+        public BitmapDisplayer(Bitmap b, PhotoToLoad p){bitmap=b;photoToLoad=p;}
+        public void run()
+        {
+            if(imageViewReused(photoToLoad))
+                return;
+            if(bitmap!=null)
+                photoToLoad.imageView.setImageBitmap(bitmap);
+            else
+                photoToLoad.imageView.setImageResource(stub_id);
+        }
+    }
+
+    public void clearCache() {
+        memoryCache.clear();
+        fileCache.clear();
+    }
+
+}
+</code></pre>
+
+<p>// MemoryCache Class</p>
+
+<pre><code>package com.imageloader;
+
+import java.lang.ref.SoftReference;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import android.graphics.Bitmap;
+
+public class MemoryCache {
+    private Map&lt;String, SoftReference&lt;Bitmap&gt;&gt; cache=Collections.synchronizedMap(new HashMap&lt;String, SoftReference&lt;Bitmap&gt;&gt;());
+
+    public Bitmap get(String id){
+        if(!cache.containsKey(id))
+            return null;
+        SoftReference&lt;Bitmap&gt; ref=cache.get(id);
+        return ref.get();
+    }
+
+    public void put(String id, Bitmap bitmap){
+        cache.put(id, new SoftReference&lt;Bitmap&gt;(bitmap));
+    }
+
+    public void clear() {
+        cache.clear();
+    }
+}
+</code></pre>
+
+<p>// Utils class</p>
+
+<pre><code>package com.imageloader;
+
+import java.io.InputStream;
+import java.io.OutputStream;
+
+public class Utils {
+    public static void CopyStream(InputStream is, OutputStream os)
+    {
+        final int buffer_size=1024;
+        try
+        {
+            byte[] bytes=new byte[buffer_size];
+            for(;;)
+            {
+              int count=is.read(bytes, 0, buffer_size);
+              if(count==-1)
+                  break;
+              os.write(bytes, 0, count);
+            }
+        }
+        catch(Exception ex){}
+    }
+}
+</code></pre>
+
+<p>// Getting images from url in BaseAdapter for listview and GridView</p>
+
+<pre><code>package com.inflater;
+
+import java.util.ArrayList;
+import android.content.Context;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+import com.globaldata.Utilities;
+import com.imageloader.ImageLoader;
+
+public class MyAdapter extends BaseAdapter {
+
+    private Context mContext;
+    private ImageLoader mImageLoader;
+    private ArrayList&lt;Model&gt; mArrayList = new ArrayList&lt;Model&gt;();
+    private LayoutInflater mLayoutInflater;
+
+    public VideoArrangeAdapter(Context ctx, ArrayList&lt;Model&gt; mData) {
+
+        this.mContext = ctx;
+        this.mArrayList = mData;
+        this.mImageLoader = new ImageLoader(this.mContext);
+        this.mLayoutInflater = (LayoutInflater) this.mContext
+                .getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+    }
+
+    @Override
+    public int getCount() {
+
+        return mArrayList.size();
+    }
+
+    @Override
+    public Object getItem(int position) {
+
+        return mArrayList.get(position);
+    }
+
+    @Override
+    public long getItemId(int arg0) {
+
+        return arg0;
+    }
+
+    private class ViewHolder {
+        private ImageView iv_image;
+        private TextView textview_title;
+
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+
+        ViewHolder holder = null;
+
+        if (convertView == null) {
+
+            holder = new ViewHolder();
+            convertView = mLayoutInflater.inflate(R.layout.item_of_listview,
+                    null);
+            holder.iv_image = (ImageView) convertView
+                    .findViewById(R.id.iv_image);
+            holder.textview_title = (TextView) convertView
+                    .findViewById(R.id.textview_title);
+
+            convertView.setTag(holder);
+        } else {
+            holder = (ViewHolder) convertView.getTag();
+        }
+
+        holder.textview_title.setText(mArrayList.get(position).get_title());
+        mImageLoader.DisplayImage(mArrayList.get(position).get_thumb(),
+                holder.iv_image);
+
+        notifyDataSetChanged();
+
+        return convertView;
+
+    }
+
+}
+</code></pre>

@@ -1,0 +1,114 @@
+<p>So... After a few days of banging my head and trying to make sure that it's not my code that is wrong, I looked for the solution in the Android code and I found it in a few minutes. The lesson is that from now on, I should actually look in the Android issue tracker first...</p>
+
+<p>I found directions to my answer here: <a href="https://code.google.com/p/android/issues/detail?id=22564&amp;q=fragment%20did%20not%20create%20a%20view&amp;colspec=ID%20Type%20Status%20Owner%20Summary%20Stars" rel="nofollow">https://code.google.com/p/android/issues/detail?id=22564&amp;q=fragment%20did%20not%20create%20a%20view&amp;colspec=ID%20Type%20Status%20Owner%20Summary%20Stars</a></p>
+
+<p>As you can see from my example, I have two layouts for the different orientations. What happens is that when the activity is created for portrait, only one UI fragment is added and another one, which is headless. Headless fragments are added to a <strong>viewId == 0</strong>. This is a really important point for understanding what is going on.</p>
+
+<p>Now have a look at the support-v4/r7 code, and more specifically <strong>lines 225 to lines 303</strong> of the FragmentActivity class:</p>
+
+<pre><code>@Override
+public View onCreateView(String name, Context context, AttributeSet attrs) {
+    if (!"fragment".equals(name)) {
+        return super.onCreateView(name, context, attrs);
+    }
+
+    String fname = attrs.getAttributeValue(null, "class");
+    TypedArray a =  context.obtainStyledAttributes(attrs, FragmentTag.Fragment);
+    if (fname == null) {
+        fname = a.getString(FragmentTag.Fragment_name);
+    }
+    int id = a.getResourceId(FragmentTag.Fragment_id, View.NO_ID);
+    String tag = a.getString(FragmentTag.Fragment_tag);
+    a.recycle();
+
+    View parent = null; // NOTE: no way to get parent pre-Honeycomb.
+    int containerId = parent != null ? parent.getId() : 0;
+    if (containerId == View.NO_ID &amp;&amp; id == View.NO_ID &amp;&amp; tag == null) {
+        throw new IllegalArgumentException(attrs.getPositionDescription()
+                + ": Must specify unique android:id, android:tag, or have a parent with an id for " + fname);
+    }
+
+    // If we restored from a previous state, we may already have
+    // instantiated this fragment from the state and should use
+    // that instance instead of making a new one.
+    Fragment fragment = id != View.NO_ID ? mFragments.findFragmentById(id) : null;
+    if (fragment == null &amp;&amp; tag != null) {
+        fragment = mFragments.findFragmentByTag(tag);
+    }
+    if (fragment == null &amp;&amp; containerId != View.NO_ID) {
+        fragment = mFragments.findFragmentById(containerId);
+    }
+
+    if (FragmentManagerImpl.DEBUG) Log.v(TAG, "onCreateView: id=0x"
+            + Integer.toHexString(id) + " fname=" + fname
+            + " existing=" + fragment);
+    if (fragment == null) {
+        fragment = Fragment.instantiate(this, fname);
+        fragment.mFromLayout = true;
+        fragment.mFragmentId = id != 0 ? id : containerId;
+        fragment.mContainerId = containerId;
+        fragment.mTag = tag;
+        fragment.mInLayout = true;
+        fragment.mFragmentManager = mFragments;
+        fragment.onInflate(this, attrs, fragment.mSavedFragmentState);
+        mFragments.addFragment(fragment, true);
+
+    } else if (fragment.mInLayout) {
+        // A fragment already exists and it is not one we restored from
+        // previous state.
+        throw new IllegalArgumentException(attrs.getPositionDescription()
+                + ": Duplicate id 0x" + Integer.toHexString(id)
+                + ", tag " + tag + ", or parent id 0x" + Integer.toHexString(containerId)
+                + " with another fragment for " + fname);
+    } else {
+        // This fragment was retained from a previous instance; get it
+        // going now.
+        fragment.mInLayout = true;
+        // If this fragment is newly instantiated (either right now, or
+        // from last saved state), then give it the attributes to
+        // initialize itself.
+        if (!fragment.mRetaining) {
+            fragment.onInflate(this, attrs, fragment.mSavedFragmentState);
+        }
+        mFragments.moveToState(fragment);
+    }
+
+    if (fragment.mView == null) {
+        throw new IllegalStateException("Fragment " + fname
+                + " did not create a view.");
+    }
+    if (id != 0) {
+        fragment.mView.setId(id);
+    }
+    if (fragment.mView.getTag() == null) {
+        fragment.mView.setTag(tag);
+    }
+    return fragment.mView;
+}
+</code></pre>
+
+<p>This is the <strong>onCreateView</strong> method. Now take a deeper look at the following line:</p>
+
+<pre><code>int containerId = parent != null ? parent.getId() : 0;
+</code></pre>
+
+<p>Let's imagine that we started the app in portrait mode. This means that we have two fragments in our activity: the TeaserListFragment with its ID and the headless fragment. If we now switch the orientation, we will have to add another fragment - the ArticleFragment, which is the second one in the landscape layout file. Here is what will happen:</p>
+
+<ol>
+<li>The TeaserListFragment will be found by the ID, because it was already created.</li>
+<li>Since the ArticleFragment was not created we will get to the shown line above and a few lines later, based on the logic, we will have the following call:</li>
+</ol>
+
+<p>Line 255:</p>
+
+<pre><code>fragment = mFragments.findFragmentById(containerId);
+</code></pre>
+
+<p>This will return the headless fragment (because of the viewId mentioned above) instead of <strong>null</strong> and this is why the error will occur. I managed to debug it and change the value of the containerId to -1 and it worked fine. In general, the solution would be to comment out the following code:</p>
+
+<pre><code>if (fragment == null &amp;&amp; containerId != View.NO_ID) {
+    fragment = mFragments.findFragmentById(containerId);
+}
+</code></pre>
+
+<p>These are lines 254 to 256. Also having the default value for the containerId being -1 should be fine, but I believe removing the redundant <strong>if</strong> is better in order to preserve the check for not set IDs...</p>

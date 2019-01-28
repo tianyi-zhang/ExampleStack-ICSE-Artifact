@@ -1,0 +1,71 @@
+<p>This is really more of an addition to the above post about using <a href="https://github.com/FasterXML/jackson-dataformat-csv" rel="nofollow">Jackson CSV</a>.  One issue I ran into is that it would raise any error on any properties in the object that were not in the CSV schema when I was doing it programatically and not using any annotations.  Here is some example code that may be helpful.  If you want to know more about why the filter and annotation introspector is necessary see <a href="http://stackoverflow.com/questions/26509033/how-to-include-only-specific-properties-when-serializing-with-jackson">here</a>.</p>
+
+<pre><code>public class CsvWriter {
+
+private final static String CSV_FILTER_NAME = "csvFilter";
+
+public void writeObjects( OutputStream outputStream,
+                          List&lt;?&gt; objects,
+                          CsvSchema csvSchema ) throws IOException
+{
+    HashSet&lt;String&gt; columnNames = new HashSet&lt;String&gt;();
+    for (CsvSchema.Column column : csvSchema) {
+        columnNames.add( column.getName() );
+    }
+
+    SimpleBeanPropertyFilter csvReponseFilter =
+            new SimpleBeanPropertyFilter.FilterExceptFilter(columnNames);
+    FilterProvider filterProvider = new SimpleFilterProvider().addFilter( CSV_FILTER_NAME, csvReponseFilter );
+
+    CsvMapper csvMapper = new CsvMapper();
+    csvMapper.setFilters( filterProvider );
+    csvMapper.setAnnotationIntrospector( new CsvAnnotationIntrospector() );
+
+    ObjectWriter objectWriter = csvMapper.writer(csvSchema);
+    objectWriter.writeValue( outputStream, objects);
+}
+
+private class CsvAnnotationIntrospector extends JacksonAnnotationIntrospector {
+    @Override
+    public Object findFilterId(Annotated a) {
+        return CSV_FILTER_NAME;
+    }
+}
+
+}
+</code></pre>
+
+<p>and here is an example of how it can be used:</p>
+
+<pre><code>public class CsvWriterTest extends TestCase {
+
+public void testWriteObjects() throws Exception {
+    Vector &lt;Entity&gt; entities = new Vector&lt;Entity&gt;();
+    entities.add( new Entity("Test entity 1", "Test description 1", "Test unused field"));
+    entities.add(new Entity("Test entity 2", "Test description 2", "Test unused field"));
+
+    CsvSchema csvSchema = CsvSchema.builder()
+            .addColumn("name")
+            .addColumn("description")
+            .setUseHeader( true )
+            .build()
+            .withLineSeparator("\r\n");
+
+    CsvWriter csvWriter = new CsvWriter();
+    csvWriter.writeObjects(System.out, entities, csvSchema);
+}
+
+public class Entity {
+    private String name;
+    private String description;
+    private String unusedField;
+    // constructor, getter and setter methods omitted for brevity
+}
+
+}
+</code></pre>
+
+<p>Output from the test method is:
+<BR>name,description
+<BR>"Test entity 1","Test description 1"
+<BR>"Test entity 2","Test description 2"</p>

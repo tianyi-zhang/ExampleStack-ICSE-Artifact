@@ -1,0 +1,246 @@
+<h1>Update</h1>
+
+<p>The plugin is up and ready and can be downloaded in IDEA -> Settings -> Plugins. Source code is available at: <a href="http://alp82.github.com/idea-tabsession">http://alp82.github.com/idea-tabsession</a></p>
+
+<h1>Short Answer</h1>
+
+<p>To read which tabs are open right now, use the <code>EditorFactory</code> and <code>FileDocumentManager</code> Singletons:</p>
+
+<pre><code>    Editor[] editors = EditorFactory.getInstance().getAllEditors();
+    FileDocumentManager fileDocManager = FileDocumentManager.getInstance();
+    for(Editor editor : editors) {
+        VirtualFile vf = fileDocManager.getFile(editor.getDocument());
+        String path = vf.getCanonicalPath();
+        System.out.println("path = " + path);
+    }
+</code></pre>
+
+<p>To open tabs use the <code>FileEditorManager</code> singleton (<code>files</code> being a String Array of canonical paths):</p>
+
+<pre><code>    FileEditorManager fileEditorManager = FileEditorManager.getInstance(project);
+    for(String path : files) {
+        System.out.println("path = " + path);
+        VirtualFile vf = LocalFileSystem.getInstance().findFileByPath(path);
+        fileEditorManager.openFile(vf, true, true);
+    }
+</code></pre>
+
+<h1>Long Answer</h1>
+
+<h2>Prerequisites</h2>
+
+<ol>
+<li>Activate the Plugin Development, Groovy and UI Designer plugins</li>
+<li>New Project ->  IntelliJ IDEA Plugin</li>
+<li><p><a href="http://www.jetbrains.org/pages/viewpage.action?pageId=983225">Checkout IDEA Community Edition sources</a> to any folder:</p>
+
+<pre><code>git clone git://git.jetbrains.org/idea/community.git idea
+</code></pre></li>
+<li><p><a href="http://confluence.jetbrains.com/display/IDEADEV/Getting+Started+with+Plugin+Development#GettingStartedwithPluginDevelopment-anchor2">Configure IDEA SDK and create plugin</a></p></li>
+</ol>
+
+<h2>Plugin Structure</h2>
+
+<p>After you have created your plugin you need to edit your plugin.xml located in the META-INF folder. Modify the <code>id</code>, <code>name</code> and <code>description</code>.</p>
+
+<p>We need a configuration file for persistant storage. Create a <code>mystorage.xml</code> file in your <code>src</code> folder. It's now time to create the needed files:</p>
+
+<p>SessionComponent.java (create it with the <code>Add Project Component</code> wizard to automatically create the needed xml settings):</p>
+
+<pre><code>@State(
+    name = "SessionComponent",
+    storages = {
+        @Storage(id = "default", file = StoragePathMacros.PROJECT_FILE),
+        @Storage(id = "dir", file = StoragePathMacros.PROJECT_CONFIG_DIR + "/mystorage.xml", scheme = StorageScheme.DIRECTORY_BASED)
+    }
+)
+public class SessionComponent implements ProjectComponent, PersistentStateComponent&lt;SessionState&gt; {
+
+    Project project;
+    SessionState sessionState;
+
+    public SessionComponent(Project project) {
+        this.project = project;
+        sessionState = new SessionState();
+    }
+
+    public void initComponent() {
+        // TODO: insert component initialization logic here
+    }
+
+    @Override
+    public void loadState(SessionState sessionState) {
+        System.out.println("load sessionState = " + sessionState);
+        this.sessionState = sessionState;
+    }
+
+    public void projectOpened() {
+        // called when project is opened
+    }
+
+    public void projectClosed() {
+        // called when project is being closed
+    }
+
+    @Nullable
+    @Override
+    public SessionState getState() {
+        System.out.println("save sessionState = " + sessionState);
+        return sessionState;
+    }
+
+    public void disposeComponent() {
+        // TODO: insert component disposal logic here
+    }
+
+    @NotNull
+    public String getComponentName() {
+        return "SessionComponent";
+    }
+
+    public int saveCurrentTabs() {
+        Editor[] editors = getOpenEditors();
+        FileEditorManager fileEditorManager = FileEditorManager.getInstance(project);
+        VirtualFile[] selectedFiles = fileEditorManager.getSelectedFiles();
+
+        FileDocumentManager fileDocManager = FileDocumentManager.getInstance();
+        sessionState.files = new String[editors.length];
+        int i = 0;
+        for(Editor editor : editors) {
+            VirtualFile vf = fileDocManager.getFile(editor.getDocument());
+            String path = vf.getCanonicalPath();
+            System.out.println("path = " + path);
+            if(path.equals(selectedFiles[0].getCanonicalPath())) {
+                sessionState.focusedFile = path;
+            }
+            sessionState.files[i] = path;
+            i++;
+        }
+
+        return editors.length;
+    }
+
+    public int loadSession() {
+        closeCurrentTabs();
+        FileEditorManager fileEditorManager = FileEditorManager.getInstance(project);
+        for(String path : sessionState.files) {
+            System.out.println("path = " + path);
+            VirtualFile vf = LocalFileSystem.getInstance().findFileByPath(path);
+            fileEditorManager.openFile(vf, true, true);
+        }
+
+        return sessionState.files.length;
+    }
+
+    public void closeCurrentTabs() {
+        Editor[] editors = getOpenEditors();
+        FileEditorManager fileEditorManager = FileEditorManager.getInstance(project);
+        FileDocumentManager fileDocManager = FileDocumentManager.getInstance();
+        for(Editor editor : editors) {
+            System.out.println("editor = " + editor);
+            VirtualFile vf = fileDocManager.getFile(editor.getDocument());
+            fileEditorManager.closeFile(vf);
+        }
+    }
+
+    public void showMessage(String htmlText) {
+        StatusBar statusBar = WindowManager.getInstance().getStatusBar(project);
+        JBPopupFactory.getInstance()
+            .createHtmlTextBalloonBuilder(htmlText, MessageType.INFO, null)
+            .setFadeoutTime(7500)
+            .createBalloon()
+            .show(RelativePoint.getCenterOf(statusBar.getComponent()), Balloon.Position.atRight);
+    }
+
+    private Editor[] getOpenEditors() {
+        return EditorFactory.getInstance().getAllEditors();
+    }
+
+}
+</code></pre>
+
+<p>We also need the storage class:</p>
+
+<pre><code>public class SessionState {
+    public String[] files = new String[0];
+    public String focusedFile = "";
+
+    public String toString() {
+        String result = "";
+        for (String file : files) {
+            result += file + ", ";
+        }
+        result += "selected: " + focusedFile;
+        return result;
+    }
+}
+</code></pre>
+
+<p>The component class should have an entry in your plugin.xml like this one:</p>
+
+<pre><code>&lt;project-components&gt;
+  &lt;component&gt;
+    &lt;implementation-class&gt;my.package.SessionComponent&lt;/implementation-class&gt;
+  &lt;/component&gt;
+&lt;/project-components&gt;
+</code></pre>
+
+<p>The component class offers all needed functionality, but is never be used. Therefore, we need actions to perform loading and saving:</p>
+
+<p>Save.java:</p>
+
+<pre><code>public class Save extends AnAction {
+
+    public Save() {
+        super();
+    }
+
+    public void actionPerformed(AnActionEvent event) {
+        Project project = event.getData(PlatformDataKeys.PROJECT);
+        SessionComponent sessionComponent = project.getComponent(SessionComponent.class);
+
+        int tabCount = sessionComponent.saveCurrentTabs();
+        String htmlText = "Saved " + String.valueOf(tabCount) + " tabs";
+        sessionComponent.showMessage(htmlText);
+    }
+
+}
+</code></pre>
+
+<p>Load.java:</p>
+
+<pre><code>public class Load extends AnAction {
+
+    public Load() {
+        super();
+    }
+
+    public void actionPerformed(AnActionEvent event) {
+        Project project = event.getData(PlatformDataKeys.PROJECT);
+        SessionComponent sessionComponent = project.getComponent(SessionComponent.class);
+
+        int tabCount = sessionComponent.loadSession();
+        String htmlText = "Loaded " + String.valueOf(tabCount) + " tabs";
+        sessionComponent.showMessage(htmlText);
+    }
+
+}
+</code></pre>
+
+<h2>Aaand... Action!</h2>
+
+<p>Last thing we need is the user interface to select those actions. Simply put this in your <code>plugin.xml</code>:</p>
+
+<pre><code>  &lt;actions&gt;
+    &lt;!-- Add your actions here --&gt;
+      &lt;group id="MyPlugin.SampleMenu" text="_Sample Menu" description="Sample menu"&gt;
+          &lt;add-to-group group-id="MainMenu" anchor="last"  /&gt;
+          &lt;action id="MyPlugin.Save" class="my.package.Save" text="_Save" description="A test menu item" /&gt;
+          &lt;action id="MyPlugin.Load" class="my.package.Load" text="_Load" description="A test menu item" /&gt;
+      &lt;/group&gt;
+  &lt;/actions&gt;
+</code></pre>
+
+<h2>Plugin Deployment</h2>
+
+<p>The basic functionality is ready. I will add support for multiple sessions and some other neat stuff before deploying this plugin and releasing it to the open-source community. Link will be posted here, when it's online.</p>

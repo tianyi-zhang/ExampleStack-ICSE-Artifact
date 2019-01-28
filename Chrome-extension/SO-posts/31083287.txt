@@ -1,0 +1,154 @@
+<p>I was interested in doing something similar to this requirement myself so I played around with some stuff. As a result this code isn't just a short snippet / quick fix.</p>
+
+<p>I created my own <code>CustomArrayAdapter</code> which extends <code>BaseAdapter</code> and is mostly based on the source code for <a href="https://android.googlesource.com/platform/frameworks/base/+/refs/heads/master/core/java/android/widget/ArrayAdapter.java" rel="nofollow">ArrayAdapter</a>. I havent implemented methods that add, remove or modify items in the adapter's list but those methods can easily be copied / adapted from the source (NOTE those methods use <code>synchronize</code> to make the adapter thread-safe - be sure to follow that model).</p>
+
+<p>The key thing is to create your own <code>Filter</code> which in <code>ArrayAdapter</code> is an inner private class so it's not just a simple case of extending <code>ArrayAdapter</code> directly.</p>
+
+<p>The answer from chntgomez points in the right direction - the <code>Filter</code> for <code>ArrayAdapter</code> simply uses <code>startsWith(...)</code> to match the constraint. It first tries it on the start of the complete string and then attempts to split the string (using space char as a delimiter) to check to see if multi-word strings <code>startWith(...)</code> the constraint (prefix).</p>
+
+<p>By changing the use of <code>startsWith(...)</code> to <code>contains(...)</code> you can achieve a 'match' on an individual char or sequence of characters. The code to split any multi-word strings can also be removed as it's not necessary.</p>
+
+<p>The following <code>CustomArrayAdapter</code> and its <code>Filter</code> works with <code>Activity</code> posted in the original question (obviously changing <code>ArrayAdapter</code> to be <code>CustomArrayAdapter</code> instead).</p>
+
+<pre><code>public class CustomArrayAdapter&lt;T&gt; extends BaseAdapter implements Filterable {
+
+    private List&lt;T&gt; mObjects;
+    private final Object mLock = new Object();
+    private ArrayList&lt;T&gt; mOriginalValues;
+    private Filter mFilter;
+    private int mResource;
+    private int mDropDownResource;
+    private int mFieldId = 0;
+    private boolean mNotifyOnChange = true;
+    private Context mContext;
+    private LayoutInflater mInflater;
+
+    public CustomArrayAdapter(Context context, int resource, int textViewResourceId, T[] objects) {
+        init(context, resource, textViewResourceId, Arrays.asList(objects));
+    }
+
+    private void init(Context context, int resource, int textViewResourceId, List&lt;T&gt; objects) {
+        mContext = context;
+        mInflater = (LayoutInflater)context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        mResource = mDropDownResource = resource;
+        mObjects = objects;
+        mFieldId = textViewResourceId;
+    }
+
+    @Override
+    public void notifyDataSetChanged() {
+        super.notifyDataSetChanged();
+        mNotifyOnChange = true;
+    }
+
+    @Override
+    public Filter getFilter() {
+        if (mFilter == null) {
+            mFilter = new CustomArrayFilter();
+        }
+        return mFilter;
+    }
+
+    @Override
+    public int getCount() {
+        return mObjects.size();
+    }
+
+    @Override
+    public T getItem(int position) {
+        return mObjects.get(position);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        return position;
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+        return createViewFromResource(position, convertView, parent, mResource);
+    }
+
+    private View createViewFromResource(int position, View convertView, ViewGroup parent, int resource) {
+        View view;
+        TextView text;
+        if (convertView == null) {
+            view = mInflater.inflate(resource, parent, false);
+        } else {
+            view = convertView;
+        }
+        try {
+            if (mFieldId == 0) {
+                //  If no custom field is assigned, assume the whole resource is a TextView
+                text = (TextView) view;
+            } else {
+                //  Otherwise, find the TextView field within the layout
+                text = (TextView) view.findViewById(mFieldId);
+            }
+        } catch (ClassCastException e) {
+            Log.e("CustomArrayAdapter", "You must supply a resource ID for a TextView");
+            throw new IllegalStateException(
+                    "CustomArrayAdapter requires the resource ID to be a TextView", e);
+        }
+        T item = getItem(position);
+        if (item instanceof CharSequence) {
+            text.setText((CharSequence)item);
+        } else {
+            text.setText(item.toString());
+        }
+        return view;
+    }
+
+    private class CustomArrayFilter extends Filter {
+
+        @Override
+        protected FilterResults performFiltering(CharSequence matchChars) {
+            FilterResults results = new FilterResults();
+            if (mOriginalValues == null) {
+                synchronized (mLock) {
+                    mOriginalValues = new ArrayList&lt;T&gt;(mObjects);
+                }
+            }
+            if (matchChars == null || matchChars.length() == 0) {
+                ArrayList&lt;T&gt; list;
+                synchronized (mLock) {
+                    list = new ArrayList&lt;T&gt;(mOriginalValues);
+                }
+                results.values = list;
+                results.count = list.size();
+            } else {
+                String matchString = matchChars.toString().toLowerCase();
+                ArrayList&lt;T&gt; values;
+                synchronized (mLock) {
+                    values = new ArrayList&lt;T&gt;(mOriginalValues);
+                }
+                final int count = values.size();
+                final ArrayList&lt;T&gt; newValues = new ArrayList&lt;T&gt;();
+                for (int i = 0; i &lt; count; i++) {
+                    final T value = values.get(i);
+                    final String valueText = value.toString().toLowerCase();
+
+                    if (valueText.contains(matchString)) {
+                        newValues.add(value);
+                    }
+                }
+                results.values = newValues;
+                results.count = newValues.size();
+            }
+            return results;
+        }
+
+        @Override
+        protected void publishResults(CharSequence constraint, FilterResults results) {
+            mObjects = (List&lt;T&gt;) results.values;
+            if (results.count &gt; 0) {
+                notifyDataSetChanged();
+            } else {
+                notifyDataSetInvalidated();
+            }
+        }
+
+    }
+
+}
+</code></pre>

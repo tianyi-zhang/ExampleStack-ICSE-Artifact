@@ -1,0 +1,127 @@
+<p>Maybe the following code might be useful for you?</p>
+
+<pre><code>protected &lt;T&gt; List&lt;T&gt; queryPagingList(final String query, final PagingQueryContext context, final ParameterizedRowMapper&lt;T&gt; mapper, final SqlParameter... parameters) throws DataAccessException {
+    final Integer count = context.getCount();
+    final Integer beginIndex = context.getBeginIndex();
+    final List&lt;SqlParameter&gt; parameterList = Arrays.asList(parameters);
+    final PreparedStatementCreatorFactory preparedStatementCreatorFactory = new PreparedStatementCreatorFactory(query, parameterList);
+    preparedStatementCreatorFactory.setResultSetType(ResultSet.TYPE_SCROLL_INSENSITIVE);
+    preparedStatementCreatorFactory.setNativeJdbcExtractor(new NativeJdbcExtractorAdapter() {
+        @Override
+        public PreparedStatement getNativePreparedStatement(final PreparedStatement ps) throws SQLException {
+            ps.setFetchSize(count + 1);
+            ps.setMaxRows((beginIndex * count) + 1);
+            return ps;
+        }
+
+        @Override
+        public Statement getNativeStatement(final Statement stmt) throws SQLException {
+            stmt.setFetchSize(count + 1);
+            stmt.setMaxRows((beginIndex * count) + 1);
+            return stmt;
+        }
+    });
+    final PreparedStatementCreator psc = preparedStatementCreatorFactory.newPreparedStatementCreator(parameterList);
+    final ResultSetExtractor&lt;List&lt;T&gt;&gt; rse = new ResultSetExtractor&lt;List&lt;T&gt;&gt;() {
+        public List&lt;T&gt; extractData(final ResultSet rs) throws SQLException {
+            if (count &gt; 0) {
+                rs.setFetchSize(count + 1);
+                if (beginIndex &gt; 0) {
+                    rs.absolute((beginIndex - 1) * count);
+                }
+            }
+            rs.setFetchDirection(ResultSet.FETCH_FORWARD);
+            final List&lt;T&gt; results = new ArrayList&lt;T&gt;(count + 1);
+            for (int rowNumber = 0; rs.next(); ++rowNumber) {
+                if (count &gt; 0 &amp;&amp; rowNumber &gt; count) {
+                    break;
+                }
+                results.add(mapper.mapRow(rs, rowNumber));
+                rs.last();
+                context.setTotalResults(rs.getRow());
+           }
+            return results;
+        }
+    };
+    return this.simpleJbcTemplate.query(psc, null, rse);
+}
+</code></pre>
+
+<p>Here is PagingQueryContext:</p>
+
+<pre><code>public class PagingQueryContext implements Serializable {
+    private static final long serialVersionUID = -1887527330745224117L;
+
+    private Integer beginIndex = 0;
+    private Integer count = -1;
+    private Integer totalResults = -1;
+
+    public PagingQueryContext() {
+    }
+
+    public Integer getBeginIndex() {
+        return beginIndex;
+    }
+
+    public void setBeginIndex(final Integer beginIndex) {
+        this.beginIndex = beginIndex;
+    }
+
+    public Integer getCount() {
+        return count;
+    }
+
+    public void setCount(final Integer count) {
+        this.count = count;
+    }
+
+    public Integer getTotalResults() {
+        return totalResults;
+    }
+
+    public void setTotalResults(final Integer totalResults) {
+        this.totalResults = totalResults;
+    }
+
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + ((beginIndex == null) ? 0 : beginIndex.hashCode());
+        result = prime * result + ((count == null) ? 0 : count.hashCode());
+        return result;
+    }
+
+    @Override
+    public boolean equals(final Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
+            return false;
+        }
+        if (!(obj instanceof PagingQueryContext)) {
+            return false;
+        }
+        final PagingQueryContext other = (PagingQueryContext) obj;
+        if (beginIndex == null) {
+            if (other.beginIndex != null) {
+                return false;
+            }
+        } else if (!beginIndex.equals(other.beginIndex)) {
+            return false;
+        }
+        if (count == null) {
+            if (other.count != null) {
+                return false;
+            }
+        } else if (!count.equals(other.count)) {
+            return false;
+        }
+        return true;
+    }
+
+}
+</code></pre>
+
+<p>It adds one to the fetch size so that you can peek to see if there will be more results. Also, depending on how the JDBC driver you are using implements <code>rs.last()</code>, you might not want to use that call in the <code>ResultSetExtractor</code> and forgo using <code>totalRows</code>. Some drivers might load all of the data when <code>last()</code> is invoked.</p>

@@ -1,0 +1,110 @@
+<p>I think what you want to achieve is already done by ACRA. Here's what I see in my abd logcat : </p>
+
+<pre><code>01-23 12:15:28.056: D/ACRA(614): Writing crash report file.
+01-23 12:15:28.136: D/ACRA(614): Mark all pending reports as approved.
+01-23 12:15:28.136: D/ACRA(614): Looking for error files in /data/data/com.ybi/files
+01-23 12:15:28.136: V/ACRA(614): About to start ReportSenderWorker from #handleException
+01-23 12:15:28.146: D/ACRA(614): Add user comment to null
+01-23 12:15:28.146: D/ACRA(614): #checkAndSendReports - start
+01-23 12:15:28.146: D/ACRA(614): Looking for error files in /data/data/com.ybi/files
+</code></pre>
+
+<p>First thing that ACRA does is creating a report on a file on the inner storage of your app. 
+Then if you're online and the errorreporter is correctly initialized, it sends the report.
+Otherwise, the reports are kept in the data storage (for a later sending).</p>
+
+<p>I didn't look into the data but I'm currently working on a custom logger. So if you want to do the same things than ACRA, it's easy : </p>
+
+<pre><code>    ACRA.init(this);
+
+    // a custom reporter for your very own purposes
+    ErrorReporter.getInstance().setReportSender(new LocalReportSender(this));
+</code></pre>
+
+<p>And then : </p>
+
+<pre><code>import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
+
+import org.acra.ACRA;
+import org.acra.CrashReportData;
+import org.acra.ReportField;
+import org.acra.sender.ReportSender;
+import org.acra.sender.ReportSenderException;
+
+import android.content.Context;
+
+import de.akquinet.android.androlog.Log;
+
+public class LocalReportSender implements ReportSender {
+
+private final Map&lt;ReportField, String&gt; mMapping = new HashMap&lt;ReportField, String&gt;() ;
+private FileOutputStream crashReport = null; 
+
+public LocalReportSender(Context ctx) {
+    // the destination
+    try {
+        crashReport = ctx.openFileOutput("crashReport", Context.MODE_WORLD_READABLE);
+    } catch (FileNotFoundException e) {
+        Log.e("TAG", "IO ERROR",e);
+    }
+}
+
+@Override
+public void send(CrashReportData report) throws ReportSenderException {
+
+    final Map&lt;String, String&gt; finalReport = remap(report);
+
+    try {
+        OutputStreamWriter osw = new OutputStreamWriter(crashReport);
+
+        Set set = finalReport.entrySet();
+        Iterator i = set.iterator();
+
+        while (i.hasNext()) {
+            Map.Entry&lt;String,String&gt; me = (Map.Entry) i.next();
+            osw.write("[" + me.getKey() + "]=" + me.getValue());
+        }
+
+        osw.flush();
+        osw.close();
+    } catch (IOException e) {
+        Log.e("TAG", "IO ERROR",e);
+    }
+
+}
+
+private static boolean isNull(String aString) {
+    return aString == null || ACRA.NULL_VALUE.equals(aString);
+}
+
+private Map&lt;String, String&gt; remap(Map&lt;ReportField, String&gt; report) {
+
+    ReportField[] fields = ACRA.getConfig().customReportContent();
+    if (fields.length == 0) {
+        fields = ACRA.DEFAULT_REPORT_FIELDS;
+    }
+
+    final Map&lt;String, String&gt; finalReport = new HashMap&lt;String, String&gt;(
+            report.size());
+    for (ReportField field : fields) {
+        if (mMapping == null || mMapping.get(field) == null) {
+            finalReport.put(field.toString(), report.get(field));
+        } else {
+            finalReport.put(mMapping.get(field), report.get(field));
+        }
+    }
+    return finalReport;
+}
+
+}
+</code></pre>
+
+<p>I didn't fully tested it yet but you get the idea. Hope it helps.</p>

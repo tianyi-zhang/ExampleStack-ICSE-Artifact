@@ -1,0 +1,577 @@
+<p>I implemented this using the three approaches suggested which came with detailed code example (I am a novice with thread programming and these example codes were invaluable -- I would still be scratching my head as to how to do this if it was just explained in English without code).</p>
+
+<p>I implemented the utility class I'm using for this with the three methods for executing a command with a timeout like so:</p>
+
+<pre><code>package com.abc.network.lifecycle.util;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+/**
+ * Utility class for performing process related functions such as command line processing.
+ */
+public class ProcessUtility
+{
+
+    static Log log = LogFactory.getLog(ProcessUtility.class);
+
+    /**
+     * Thread class to be used as a worker
+     */
+    private static class Worker
+        extends Thread
+    {
+        private final Process process;
+        private Integer exitValue;
+
+        Worker(final Process process)
+        {
+            this.process = process;
+        }
+
+        public Integer getExitValue()
+        {
+            return exitValue;
+        }
+
+        @Override
+        public void run()
+        {
+            try
+            {
+                exitValue = process.waitFor();
+            }
+            catch (InterruptedException ignore)
+            {
+                return;
+            }
+        }
+    }
+
+    /**
+     * Executes a command.
+     * 
+     * @param command
+     * @param printOutput
+     * @param printError
+     * @param timeOut
+     * @return
+     * @throws java.io.IOException
+     * @throws java.lang.InterruptedException
+     */
+    public static int executeCommandWithExecutors(final String command,
+                                                  final boolean printOutput,
+                                                  final boolean printError,
+                                                  final long timeOut)
+    {
+        // validate the system and command line and get a system-appropriate command line 
+        String massagedCommand = validateSystemAndMassageCommand(command);
+
+        try
+        {
+            // create the process which will run the command
+            Runtime runtime = Runtime.getRuntime();
+            final Process process = runtime.exec(massagedCommand);
+
+            // consume and display the error and output streams
+            StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "OUTPUT", printOutput);
+            StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "ERROR", printError);
+            outputGobbler.start();
+            errorGobbler.start();
+
+            // create a Callable for the command's Process which can be called by an Executor 
+            Callable&lt;Integer&gt; call = new Callable&lt;Integer&gt;()
+            {
+                public Integer call()
+                    throws Exception
+                {
+                    process.waitFor();
+                    return process.exitValue();
+                }
+            };
+
+            // submit the command's call and get the result from a 
+            Future&lt;Integer&gt; futureResultOfCall = Executors.newSingleThreadExecutor().submit(call);
+            try
+            {
+                int exitValue = futureResultOfCall.get(timeOut, TimeUnit.MILLISECONDS);
+                return exitValue;
+            }
+            catch (TimeoutException ex)
+            {
+                String errorMessage = "The command [" + command + "] timed out.";
+                log.error(errorMessage, ex);
+                throw new RuntimeException(errorMessage, ex);
+            }
+            catch (ExecutionException ex)
+            {
+                String errorMessage = "The command [" + command + "] did not complete due to an execution error.";
+                log.error(errorMessage, ex);
+                throw new RuntimeException(errorMessage, ex);
+            }
+        }
+        catch (InterruptedException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an unexpected interruption.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+        catch (IOException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an IO error.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+    }
+
+    /**
+     * Executes a command.
+     * 
+     * @param command
+     * @param printOutput
+     * @param printError
+     * @param timeOut
+     * @return
+     * @throws java.io.IOException
+     * @throws java.lang.InterruptedException
+     */
+    public static int executeCommandWithSleep(final String command,
+                                              final boolean printOutput,
+                                              final boolean printError,
+                                              final long timeOut)
+    {
+        // validate the system and command line and get a system-appropriate command line 
+        String massagedCommand = validateSystemAndMassageCommand(command);
+
+        try
+        {
+            // create the process which will run the command
+            Runtime runtime = Runtime.getRuntime();
+            Process process = runtime.exec(massagedCommand);
+
+            // consume and display the error and output streams
+            StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "OUTPUT", printOutput);
+            StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "ERROR", printError);
+            outputGobbler.start();
+            errorGobbler.start();
+
+            // run a thread which will set a flag once it has slept for the timeout period
+            final boolean[] flags = { true };
+            new Thread()
+            {
+                @Override
+                public void run()
+                {
+                    try
+                    {
+                        Thread.sleep(timeOut);
+                    }
+                    catch (InterruptedException ex)
+                    {
+                        String errorMessage = "Timeout loop thread unexpectedly interrupted.";
+                        log.error(errorMessage, ex);
+                        throw new RuntimeException(errorMessage, ex);
+                    }
+                    flags[0] = false;
+                }
+            }.start();
+
+            // execute the command and wait 
+            int returnValue = -1;
+            while (flags[0] &amp;&amp; (returnValue &lt; 0))
+            {
+                returnValue = process.waitFor();
+            }
+
+            // if the command timed out then log it
+            if (returnValue &lt; 0)
+            {
+                log.warn("The command [" + command + "] did not complete before the timeout period expired (timeout: " +
+                         timeOut + " ms)");
+            }
+
+            return returnValue;
+        }
+        catch (InterruptedException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an unexpected interruption.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+        catch (IOException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an IO error.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+    }
+
+    /**
+     * Executes a command.
+     * 
+     * @param command
+     * @param printOutput
+     * @param printError
+     * @param timeOut
+     * @return
+     * @throws java.io.IOException
+     * @throws java.lang.InterruptedException
+     */
+    public static int executeCommandWithWorker(final String command,
+                                               final boolean printOutput,
+                                               final boolean printError,
+                                               final long timeOut)
+    {
+        // validate the system and command line and get a system-appropriate command line 
+        String massagedCommand = validateSystemAndMassageCommand(command);
+
+        try
+        {
+            // create the process which will run the command
+            Runtime runtime = Runtime.getRuntime();
+            Process process = runtime.exec(massagedCommand);
+
+            // consume and display the error and output streams
+            StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "OUTPUT", printOutput);
+            StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "ERROR", printError);
+            outputGobbler.start();
+            errorGobbler.start();
+
+            // create and start a Worker thread which this thread will join for the timeout period 
+            Worker worker = new Worker(process);
+            worker.start();
+            try
+            {
+                worker.join(timeOut);
+                Integer exitValue = worker.getExitValue();
+                if (exitValue != null)
+                {
+                    // the worker thread completed within the timeout period
+                    return exitValue;
+                }
+
+                // if we get this far then we never got an exit value from the worker thread as a result of a timeout 
+                String errorMessage = "The command [" + command + "] timed out.";
+                log.error(errorMessage);
+                throw new RuntimeException(errorMessage);
+            }
+            catch (InterruptedException ex)
+            {
+                worker.interrupt();
+                Thread.currentThread().interrupt();
+                throw ex;
+            }
+        }
+        catch (InterruptedException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an unexpected interruption.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+        catch (IOException ex)
+        {
+            String errorMessage = "The command [" + command + "] did not complete due to an IO error.";
+            log.error(errorMessage, ex);
+            throw new RuntimeException(errorMessage, ex);
+        }
+    }
+
+    /**
+     * Validates that the system is running a supported OS and returns a system-appropriate command line.
+     * 
+     * @param originalCommand
+     * @return
+     */
+    private static String validateSystemAndMassageCommand(final String originalCommand)
+    {
+        // make sure that we have a command
+        if (originalCommand.isEmpty() || (originalCommand.length() &lt; 1))
+        {
+            String errorMessage = "Missing or empty command line parameter.";
+            log.error(errorMessage);
+            throw new RuntimeException(errorMessage);
+        }
+
+        // make sure that we are running on a supported system, and if so set the command line appropriately
+        String massagedCommand;
+        String osName = System.getProperty("os.name");
+        if (osName.equals("Windows XP"))
+        {
+            massagedCommand = "cmd.exe /C " + originalCommand;
+        }
+        else if (osName.equals("Solaris") || osName.equals("SunOS") || osName.equals("Linux"))
+        {
+            massagedCommand = originalCommand;
+        }
+        else
+        {
+            String errorMessage = "Unable to run on this system which is not Solaris, Linux, or Windows XP (actual OS type: \'" +
+                                  osName + "\').";
+            log.error(errorMessage);
+            throw new RuntimeException(errorMessage);
+        }
+
+        return massagedCommand;
+    }
+}
+</code></pre>
+
+<p>I created a class to consume and display the output and error streams from a command (taken from <a href="http://www.javaworld.com/javaworld/jw-12-2000/jw-1229-traps.html?page=4" rel="nofollow">http://www.javaworld.com/javaworld/jw-12-2000/jw-1229-traps.html?page=4</a>):</p>
+
+<pre><code>package com.abc.network.lifecycle.util;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+/**
+ * Utility thread class which consumes and displays stream input.
+ * 
+ * Original code taken from http://www.javaworld.com/javaworld/jw-12-2000/jw-1229-traps.html?page=4
+ */
+class StreamGobbler
+    extends Thread
+{
+    static private Log log = LogFactory.getLog(StreamGobbler.class);
+    private InputStream inputStream;
+    private String streamType;
+    private boolean displayStreamOutput;
+
+    /**
+     * Constructor.
+     * 
+     * @param inputStream the InputStream to be consumed
+     * @param streamType the stream type (should be OUTPUT or ERROR)
+     * @param displayStreamOutput whether or not to display the output of the stream being consumed
+     */
+    StreamGobbler(final InputStream inputStream,
+                  final String streamType,
+                  final boolean displayStreamOutput)
+    {
+        this.inputStream = inputStream;
+        this.streamType = streamType;
+        this.displayStreamOutput = displayStreamOutput;
+    }
+
+    /**
+     * Consumes the output from the input stream and displays the lines consumed if configured to do so.
+     */
+    @Override
+    public void run()
+    {
+        try
+        {
+            InputStreamReader inputStreamReader = new InputStreamReader(inputStream);
+            BufferedReader bufferedReader = new BufferedReader(inputStreamReader);
+            String line = null;
+            while ((line = bufferedReader.readLine()) != null)
+            {
+                if (displayStreamOutput)
+                {
+                    System.out.println(streamType + "&gt;" + line);
+                }
+            }
+        }
+        catch (IOException ex)
+        {
+            log.error("Failed to successfully consume and display the input stream of type " + streamType + ".", ex);
+            ex.printStackTrace();
+        }
+    }
+}
+</code></pre>
+
+<p>I created a test command which takes roughly 10 seconds to complete:</p>
+
+<pre><code>#!/bin/bash
+sleep 10
+echo 'TEST COMMAND RAN OK'
+</code></pre>
+
+<p>Then I created a test program to test the three different methods, calling each with a timeout value of 5 seconds (command should fail) and with a timeout value of 15 seconds (command should succeed):</p>
+
+<pre><code>package com.abc.network.lifecycle.util;
+
+public class ProcessUtilityTester
+{
+
+    /**
+     * @param args
+     */
+    public static void main(final String[] args)
+    {
+        try
+        {
+            String command = args[0];
+            int exitValue = -1;
+            System.out.println("\n\n5000ms timeout With Executors:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithExecutors(command, true, true, 5000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+            System.out.println("\n\n5000ms timeout With Sleep:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithSleep(command, true, true, 5000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+            System.out.println("\n\n5000ms timeout With Worker:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithWorker(command, true, true, 5000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+            System.out.println("\n\n15000ms timeout With Executors:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithExecutors(command, true, true, 15000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+            System.out.println("\n\n15000ms timeout With Sleep:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithSleep(command, true, true, 15000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+            System.out.println("\n\n15000ms timeout With Worker:");
+            try
+            {
+                exitValue = -1;
+                exitValue = ProcessUtility.executeCommandWithWorker(command, true, true, 15000);
+            }
+            catch (Exception ex)
+            {
+                ex.printStackTrace();
+            }
+            finally
+            {
+                System.out.println("\nExit value:" + exitValue);
+            }
+        }
+        catch (Exception ex)
+        {
+            ex.printStackTrace();
+        }
+        finally
+        {
+            System.exit(0);
+        }
+    }
+
+}
+</code></pre>
+
+<p>Here's what I see when I run the test program:</p>
+
+<pre><code>5000ms timeout With Executors:
+May 1, 2009 1:55:19 AM com.abc.network.lifecycle.util.ProcessUtility executeCommandWithExecutors
+SEVERE: The command [/tmp/testcmd.sh] timed out.
+java.util.concurrent.TimeoutException
+        at java.util.concurrent.FutureTask$Sync.innerGet(FutureTask.java:228)
+        at java.util.concurrent.FutureTask.get(FutureTask.java:91)
+        at com.abc.network.lifecycle.util.ProcessUtility.executeCommandWithExecutors(ProcessUtility.java:179)
+        at com.abc.network.lifecycle.util.ProcessUtilityTester.main(ProcessUtilityTester.java:19)
+java.lang.RuntimeException: The command [/tmp/testcmd.sh] timed out.
+        at com.abc.network.lifecycle.util.ProcessUtility.executeCommandWithExecutors(ProcessUtility.java:186)
+        at com.abc.network.lifecycle.util.ProcessUtilityTester.main(ProcessUtilityTester.java:19)
+Caused by: java.util.concurrent.TimeoutException
+        at java.util.concurrent.FutureTask$Sync.innerGet(FutureTask.java:228)
+        at java.util.concurrent.FutureTask.get(FutureTask.java:91)
+        at com.abc.network.lifecycle.util.ProcessUtility.executeCommandWithExecutors(ProcessUtility.java:179)
+        ... 1 more
+
+Exit value:-1
+
+
+5000ms timeout With Sleep:
+OUTPUT&gt;TEST COMMAND RAN OK
+OUTPUT&gt;TEST COMMAND RAN OK
+
+Exit value:0
+
+
+5000ms timeout With Worker:
+May 1, 2009 1:55:34 AM com.abc.network.lifecycle.util.ProcessUtility executeCommandWithWorker
+SEVERE: The command [/tmp/testcmd.sh] timed out.
+java.lang.RuntimeException: The command [/tmp/testcmd.sh] timed out.
+        at com.abc.network.lifecycle.util.ProcessUtility.executeCommandWithWorker(ProcessUtility.java:338)
+        at com.abc.network.lifecycle.util.ProcessUtilityTester.main(ProcessUtilityTester.java:47)
+
+Exit value:-1
+
+
+15000ms timeout With Executors:
+OUTPUT&gt;TEST COMMAND RAN OK
+OUTPUT&gt;TEST COMMAND RAN OK
+
+Exit value:0
+
+
+15000ms timeout With Sleep:
+OUTPUT&gt;TEST COMMAND RAN OK
+
+Exit value:0
+
+
+15000ms timeout With Worker:
+OUTPUT&gt;TEST COMMAND RAN OK
+
+Exit value:0
+</code></pre>
+
+<p>So from what I can tell the approach using a Worker thread class works the best, in that it gives the expected results in both cases. The approach using Executors works as expected as well, with the caveat that it appears to be running the command twice in the 15000ms timout case (i.e. I see the output for the command twice). The approach using the sleep() method does not timeout the command as expected in the 5000ms timeout case, and displays the output twice, but runs the command as expected in the 15000ms timeout case.</p>

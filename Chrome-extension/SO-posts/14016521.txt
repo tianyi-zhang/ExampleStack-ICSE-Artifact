@@ -1,0 +1,42 @@
+<p>For some reason, it appears a text selection with a negative start index is attempted to be made. At least, that's what the stracktrace tells you.:</p>
+
+<p>Line 67 in <code>Selection</code>:</p>
+
+<pre><code>text.setSpan(SELECTION_START, start, start, Spanned.SPAN_POINT_POINT|Spanned.SPAN_INTERMEDIATE);
+</code></pre>
+
+<p>So apparently <code>start</code> has a value of <code>-4</code>. It gets passed in as a parameter and if you follow the trace back up, that value is parsed out of a <code>DO_SET_SELECTION</code> message.</p>
+
+<p>I'm guessing that the error could occur if the text that's selected in the <code>WebView</code> changes while the selection is taking place, but without any extra details that's going to be difficult to confirm.</p>
+
+<p>Interestingly, <code>BaseInputConnection.setSelection(int, int)</code> does contain an interesting code comment that makes my earier guess more plausible:</p>
+
+<pre><code>/**
+ * The default implementation changes the selection position in the
+ * current editable text.
+ */
+public boolean setSelection(int start, int end) {
+    if (DEBUG) Log.v(TAG, "setSelection " + start + ", " + end);
+    final Editable content = getEditable();
+    if (content == null) return false;
+    int len = content.length();
+    if (start &gt; len || end &gt; len) {
+        // If the given selection is out of bounds, just ignore it.
+        // Most likely the text was changed out from under the IME,
+        // the the IME is going to have to update all of its state
+        // anyway.
+        return true;
+    }
+    if (start == end &amp;&amp; MetaKeyKeyListener.getMetaState(content,
+            MetaKeyKeyListener.META_SELECTING) != 0) {
+        // If we are in selection mode, then we want to extend the
+        // selection instead of replacing it.
+        Selection.extendSelection(content, start);
+    } else {
+        Selection.setSelection(content, start, end);
+    }
+    return true;
+}
+</code></pre>
+
+<p>There's an out of bounds check, but only on the upper bound, not the lower bound. Adding a check for <code>start &lt; 0 || end &lt; 0</code> would probably prevent the <code>IndexOutOfBoundsException</code> as shown in your stracktrace from being thrown. Unfortunately that's probably not really going to help you, as it's unlikely you're going to be able to control the event flow from the <code>WebView</code>...</p>

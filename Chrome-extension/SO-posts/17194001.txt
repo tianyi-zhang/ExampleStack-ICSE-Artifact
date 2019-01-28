@@ -1,0 +1,46 @@
+<p>If we look at the code <a href="http://grepcode.com/file_/repository.grepcode.com/java/root/jdk/openjdk/6-b14/java/util/concurrent/LinkedBlockingQueue.java/?v=source" rel="nofollow">here</a> we can see that a lock must be taken before taking an element. If lots of threads are taking then there will be contention on this lock - the threads aren't waiting for something to appear but for other threads to take things.</p>
+
+<pre><code> public E take() throws InterruptedException {
+        E x;
+        int c = -1;
+        final AtomicInteger count = this.count;
+        final ReentrantLock takeLock = this.takeLock;
+        takeLock.lockInterruptibly();
+        try {
+            try {
+                while (count.get() == 0)
+                    notEmpty.await();
+            } catch (InterruptedException ie) {
+                notEmpty.signal(); // propagate to a non-interrupted thread
+                throw ie;
+            }
+
+            x = extract();
+            c = count.getAndDecrement();
+            if (c &gt; 1)
+                notEmpty.signal();
+        } finally {
+            takeLock.unlock();
+        }
+        if (c == capacity)
+            signalNotFull();
+        return x;
+    }
+</code></pre>
+
+<p><strong>EDIT</strong></p>
+
+<p>In the case where you have one taker and lots of putters and the queue keeps getting full the bottleneck will become <code>signalNotFull()</code> given by this code</p>
+
+<pre><code>private void signalNotFull() {
+    final ReentrantLock putLock = this.putLock;
+    putLock.lock();
+    try {
+        notFull.signal();
+    } finally {
+        putLock.unlock();
+    }
+}
+</code></pre>
+
+<p>This needs to take the <code>putLock</code> to signal the fact that there is now space in the queue.</p>

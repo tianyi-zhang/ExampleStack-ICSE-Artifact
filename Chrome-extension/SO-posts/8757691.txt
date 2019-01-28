@@ -1,0 +1,79 @@
+<p>You are right Mark, this is an class-loader issue.</p>
+
+<p>It happens in the requestfactory-client.jar, here the relevant source:</p>
+
+<pre><code>class InProcessRequestFactory extends AbstractRequestFactory {
+
+    //...
+
+    public InProcessRequestFactory(Class&lt;? extends RequestFactory&gt; requestFactoryInterface) {
+        this.requestFactoryInterface = requestFactoryInterface;
+        deobfuscator =
+            Deobfuscator.Builder.load(requestFactoryInterface,
+                Thread.currentThread().getContextClassLoader()).build();
+    }
+
+    //...
+
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>public class Deobfuscator {
+
+    //...
+
+    public static class Builder {
+        public static Builder load(Class&lt;?&gt; clazz, ClassLoader resolveClassesWith) {
+            Throwable ex;
+            try {
+                Class&lt;?&gt; found;
+                try {
+                    // Used by the server
+                    found = Class.forName(clazz.getName() + GENERATED_SUFFIX, false, resolveClassesWith);
+                } catch (ClassNotFoundException ignored) {
+                    // Used by JRE-only clients
+                    found = Class.forName(clazz.getName() + GENERATED_SUFFIX_LITE, false, resolveClassesWith);
+                }
+                Class&lt;? extends Builder&gt; builderClass = found.asSubclass(Builder.class);
+                Builder builder = builderClass.newInstance();
+                return builder;
+            } catch (ClassNotFoundException e) {
+                throw new RuntimeException("The RequestFactory ValidationTool must be run for the "
+                    + clazz.getCanonicalName() + " RequestFactory type");
+            } catch (InstantiationException e) {
+            ex = e;
+        } catch (IllegalAccessException e) {
+            ex = e;
+        }
+        throw new RuntimeException(ex);
+    }
+
+    //...
+
+}
+</code></pre>
+
+<p>The problem is that Thread.currentThread().getContextClassLoader() seems to return a null value when called from the sync adapter on Android, because the Sync Adapter thread is created by the System, not by your application.</p>
+
+<p>I solved this by calling manually calling setContextClassLoader in the onPerformSync method before creating a requestfactory instance:</p>
+
+<pre><code>@Override
+public void onPerformSync(final Account account, Bundle extras,
+        String authority, final ContentProviderClient provider,
+        final SyncResult syncResult) {
+
+    Thread.currentThread().setContextClassLoader(mContext.getClassLoader());
+
+    // ...
+
+    MyRequestFactory requestFactory = Util.getRequestFactory(mContext,
+            MyRequestFactory.class, acsidToken);
+
+    // ...
+}
+</code></pre>
+
+<p>I hope this makes sense.
+Andreas</p>

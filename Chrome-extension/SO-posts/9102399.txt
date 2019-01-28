@@ -1,0 +1,106 @@
+<p>Maybe something like this. I've not tested it, but the idea of using a <a href="http://docs.oracle.com/javase/1.5.0/docs/api/java/util/concurrent/ScheduledExecutorService.html" rel="nofollow"><code>ScheduledExecutorService</code></a> should be what you're after.</p>
+
+<pre><code>public class SMS extends Activity {
+    private final static OnClickListener EMPTY_ON_CLICK_LISTENER = new EmptyOnClickListener();
+    TextView smsamount;
+
+    // ---sends an SMS message---
+    private void sendSMS(String phoneNumber, String message) {
+        // just making 10 the default if the EditText has an invalid value
+        int amount = 10;
+
+        try {
+            amount = Integer.parseInt(smsamount.getText().toString());
+        } catch (NumberFormatException smsamount) {
+            // Ignore
+        }
+
+        sendSMS(phoneNumber, message, amount);
+    }
+
+    // ---sends an SMS message---
+    private void sendSMS(String phoneNumber, String message, int count) {
+        if (count &gt;= 501) {
+            new AlertDialog.Builder(SMS.this).setTitle("Maximum amount of messages exceeded!")
+                    .setMessage("Please enter 500 or less for the amount of messages")
+                    .setNeutralButton("Ok", EMPTY_ON_CLICK_LISTENER).show();
+            // Quit early when we know we can't go any further.
+            return;
+        }
+
+        String SENT = "SMS_SENT";
+        PendingIntent sentPI = PendingIntent.getBroadcast(this, 0, new Intent(SENT), 0);
+        // ---when the SMS has been sent---
+        registerReceiver(new SmsSentBroadcastReceiver(getBaseContext()), new IntentFilter(SENT));
+
+        int delaySeconds = 3;
+        ScheduledExecutorService scheduler = new SmsScheduler().sendSmsMessages(phoneNumber, message, sentPI, delaySeconds,
+                count);
+
+        // You may cancel the scheduled messages with the scheduler.
+        // scheduler.shutdownNow();
+
+        new AlertDialog.Builder(SMS.this).setTitle("Attention!")
+                .setMessage("Your messages will start sending shortly, please do not press the send sms button again")
+                .setNeutralButton("Ok", EMPTY_ON_CLICK_LISTENER).show();
+    }
+
+    private static class SmsSentBroadcastReceiver extends BroadcastReceiver {
+        Context context;
+
+        public SmsSentBroadcastReceiver(Context context) {
+            this.context = context;
+        }
+
+        @Override
+        public void onReceive(Context arg0, Intent arg1) {
+            switch (getResultCode()) {
+            case Activity.RESULT_OK:
+                Toast.makeText(context, "SMS sent", Toast.LENGTH_SHORT).show();
+                break;
+            case SmsManager.RESULT_ERROR_GENERIC_FAILURE:
+                Toast.makeText(context, "Generic failure", Toast.LENGTH_SHORT).show();
+                break;
+            case SmsManager.RESULT_ERROR_NO_SERVICE:
+                Toast.makeText(context, "No service", Toast.LENGTH_SHORT).show();
+                break;
+            case SmsManager.RESULT_ERROR_NULL_PDU:
+                Toast.makeText(context, "Null PDU", Toast.LENGTH_SHORT).show();
+                break;
+            case SmsManager.RESULT_ERROR_RADIO_OFF:
+                Toast.makeText(context, "Radio off", Toast.LENGTH_SHORT).show();
+                break;
+            }
+        }
+    }
+
+    private static class EmptyOnClickListener implements OnClickListener {
+        public void onClick(DialogInterface dialog, int which) {
+            // Does nothing
+        }
+    }
+
+    private static class SmsScheduler {
+        public ScheduledExecutorService sendSmsMessages(final String phoneNumber, final String message,
+                final PendingIntent sentIntent, int count, int delaySeconds) {
+            final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+            final SmsManager sms = SmsManager.getDefault();
+
+            // Create the task that will send a SMS message
+            final Runnable sender = new Runnable() {
+                public void run() {
+                    sms.sendTextMessage(phoneNumber, null, message, sentIntent, null);
+                }
+            };
+
+            // Schedule the messages to be sent at intervals of delaySeconds.
+            for (int i = 0; i &lt; count; i++) {
+                scheduler.schedule(sender, delaySeconds * i, TimeUnit.SECONDS);
+            }
+
+            return scheduler;
+        }
+    }
+}
+</code></pre>

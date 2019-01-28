@@ -1,0 +1,208 @@
+<p>When user scrolls the list, getView gets called on the adapter. Make sure that you dont do same things repeatedly, for example generating thumbnail. If number of items is limited (for example video content), then you can create all views and keep it ready for get view. Otherwise you may have to implement cacheing.</p>
+
+<p>Below code shows an adapter and listView implementation, where in all listviews are created and stored in memory. Since this is meant for video browsing, memory does not pose any issue. (limited number of content, max 100)</p>
+
+<p><strong>Video List Adapter</strong></p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.Formatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+
+import android.content.ContentResolver;
+import android.content.Context;
+import android.content.res.Resources;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.provider.MediaStore;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.LinearLayout.LayoutParams;
+
+public class VideoListAdapter extends BaseAdapter {
+    private Context mContext = null;
+    private HashMap&lt;String, VideoListItem&gt; mHashedItems = new HashMap&lt;String, VideoListItem&gt;(); 
+    private static final String TAG = "VideoListAdapter";
+
+    public static final int VIDEO_CONTENT_ID       = 0;
+    public static final int VIDEO_CONTENT_TITLE    = 1;
+    public static final int VIDEO_CONTENT_DURATION = 2;
+    public static final int VIDEO_CONTENT_RESOLUTION = 3;
+    public static final int VIDEO_CONTENT_MIME = 4;
+
+    private Cursor mCursorForVideoList = null;
+    private ContentResolver mContentResolver = null;
+    private int mListCount = 0;
+
+    VideoListAdapter(Context context, ContentResolver cr) {
+        mContext         = context;
+        mContentResolver = cr;
+        Log.i(TAG, "In the Constructor");
+
+        mCursorForVideoList = 
+            mContentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, 
+                                  new String[] { MediaStore.MediaColumns._ID, 
+                                                 MediaStore.MediaColumns.TITLE, 
+                                                 MediaStore.Video.VideoColumns.DURATION,
+                                                 MediaStore.Video.VideoColumns.RESOLUTION
+                                               }, 
+                                  null, 
+                                  null,  
+                                  null);
+        mListCount = mCursorForVideoList.getCount();
+    }
+
+    @Override
+    public int getCount() {
+        return mListCount;
+    }
+
+    @Override
+    public Object getItem(int arg0) {
+        return getVideoListItem(arg0);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        //Log.i(TAG, "position : " + position);
+        return position;
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+        //Log.i(TAG, "GetView :: Position : " + position);
+        return getVideoListItem(position);
+    }
+
+    private VideoListItem getVideoListItem(int position)
+    {
+        //Log.i(TAG, "getVideoListItem :: Position : " + position);
+        String key = Integer.toString(position);
+        VideoListItem item = mHashedItems.get(key);
+        if(item == null)
+        {
+            //Log.i(TAG, "New getVideoListItem :: Position : " + position);
+            mCursorForVideoList.moveToPosition(position);
+            mHashedItems.put(key, new VideoListItem(mContext, mContentResolver, mCursorForVideoList));
+        }
+        return mHashedItems.get(key);
+    }
+
+};
+</code></pre>
+
+<p><strong>Video List View</strong> </p>
+
+<pre><code>import java.util.Formatter;
+import java.util.Locale;
+
+import android.content.ContentResolver;
+import android.content.Context;
+import android.content.res.Resources;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.provider.MediaStore;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TableLayout;
+import android.widget.TextView;
+import android.widget.LinearLayout.LayoutParams;
+
+class VideoListItem extends LinearLayout
+{
+    private static final String TAG = "VideoListAdapter";
+
+    private ImageView mThumbnail = null;
+    private TextView mDuration   = null;
+    private TextView mTitle      = null;
+    private TextView mResolution = null;
+
+    private LayoutInflater mLayoutFactory = null;
+
+    private long mContentId = 0;
+
+    public VideoListItem(Context context, ContentResolver cr, Cursor cursor) {
+        super(context);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT);
+        params.setMargins(10, 10, 10, 10);
+
+        mLayoutFactory = LayoutInflater.from(context);
+        View thisView = mLayoutFactory.inflate(R.layout.videolistitem, null);
+        addView(thisView);
+
+        mThumbnail  = (ImageView) findViewById(R.id.thumbnail); 
+        mDuration   = (TextView)  findViewById(R.id.DDuration);
+        mTitle      = (TextView)  findViewById(R.id.DTitle);
+        mResolution = (TextView)  findViewById(R.id.DResolution);
+
+        mThumbnail.setLayoutParams(new LinearLayout.LayoutParams(144, 144));
+
+        Resources r = this.getResources();
+        Bitmap bMap = MediaStore.Video.Thumbnails.getThumbnail(cr, cursor.getLong(VideoListAdapter.VIDEO_CONTENT_ID), MediaStore.Video.Thumbnails.MINI_KIND, null);
+        if(bMap != null)
+        {
+            mThumbnail.setImageBitmap(Bitmap.createScaledBitmap(bMap, 128, 128, true)); 
+        }
+        else
+        {
+            mThumbnail.setImageDrawable(r.getDrawable(R.drawable.error));
+        }
+        mThumbnail.setPadding(16, 16, 16, 16);
+        mTitle.setText(cursor.getString(VideoListAdapter.VIDEO_CONTENT_TITLE));
+        mTitle.setSingleLine();
+        mTitle.setTextColor(Color.GREEN);
+
+        mResolution.setText(cursor.getString(VideoListAdapter.VIDEO_CONTENT_RESOLUTION));
+        mResolution.setSingleLine();
+        mResolution.setTextColor(Color.RED);
+
+        mDuration.setText(stringForTime(cursor.getInt(VideoListAdapter.VIDEO_CONTENT_DURATION)));
+        mDuration.setSingleLine();
+        mDuration.setTextColor(Color.CYAN);
+
+        mContentId = cursor.getLong(VideoListAdapter.VIDEO_CONTENT_ID);
+    }
+
+    public long getContentId()
+    {
+        return mContentId;
+    }
+
+    private StringBuilder mFormatBuilder = null;
+    private Formatter mFormatter = null;
+
+    private String stringForTime(int timeMs) {
+        int totalSeconds = timeMs / 1000;
+
+        mFormatBuilder = new StringBuilder();
+        mFormatter = new Formatter(mFormatBuilder, Locale.getDefault());
+
+        int seconds = totalSeconds % 60;
+        int minutes = (totalSeconds / 60) % 60;
+        int hours   = totalSeconds / 3600;
+
+        mFormatBuilder.setLength(0);
+        if (hours &gt; 0) {
+            return mFormatter.format("%d:%02d:%02d", hours, minutes, seconds).toString();
+        } else {
+            return mFormatter.format("%02d:%02d", minutes, seconds).toString();
+        }
+    }
+
+};
+</code></pre>
+
+<p>Shash</p>

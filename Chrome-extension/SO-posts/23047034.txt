@@ -1,0 +1,150 @@
+<blockquote>
+  <p>Or, how can I ensure error.networkResponse is non-null in
+  onErrorResponse?</p>
+</blockquote>
+
+<p>My first thought would be to check if the object is null.</p>
+
+<pre><code>@Override
+public void onErrorResponse(VolleyError error) {
+    NetworkResponse networkResponse = error.networkResponse;
+    if (networkResponse != null &amp;&amp; networkResponse.statusCode == HttpStatus.SC_UNAUTHORIZED) {
+        // HTTP Status Code: 401 Unauthorized
+    }
+}
+</code></pre>
+
+<p>Alternatively, you could also try grabbing the Status Code by extending the <code>Request</code> class and overriding <code>parseNetworkResponse</code>.  </p>
+
+<p>For example, if extending the abstract <code>Request&lt;T&gt;</code> class</p>
+
+<pre><code>public class GsonRequest&lt;T&gt; extends Request&lt;T&gt; {
+
+    ...
+    private int mStatusCode;
+
+    public int getStatusCode() {
+        return mStatusCode;
+    }
+    ...
+
+    @Override
+    protected Response&lt;T&gt; parseNetworkResponse(NetworkResponse response) {
+
+        mStatusCode = response.statusCode;
+        try {
+            Log.d(TAG, "[raw json]: " + (new String(response.data)));
+            Gson gson = new Gson();
+            String json = new String(response.data, HttpHeaderParser.parseCharset(response.headers));
+            return Response.success(gson.fromJson(json, mClazz),
+                HttpHeaderParser.parseCacheHeaders(response));
+
+        } catch (UnsupportedEncodingException e) {
+            return Response.error(new ParseError(e));
+        } catch (JsonSyntaxException e) {
+            return Response.error(new ParseError(e));
+        }
+    }
+    ...
+}
+</code></pre>
+
+<p>Or, if you are using one of the toolbox classes that already extend the abstract <code>Request&lt;T&gt;</code> class and you don't want to muddle up the implementation for <code>parseNetworkResponse(NetworkResponse networkResponse)</code>, continue overriding the method but return the super's implementation via <code>super.parseNetworkResponse(networkResponse)</code></p>
+
+<p>e.g. <code>StringResponse</code></p>
+
+<pre><code>public class MyStringRequest extends StringRequest {
+
+    private int mStatusCode;
+
+    public MyStringRequest(int method, String url, Listener&lt;String&gt; listener,
+            ErrorListener errorListener) {
+        super(method, url, listener, errorListener);
+    }
+
+    public int getStatusCode() {
+        return mStatusCode;
+    }
+
+    @Override
+    protected Response&lt;String&gt; parseNetworkResponse(NetworkResponse response) {
+        mStatusCode = response.statusCode;
+        return super.parseNetworkResponse(response);
+    }
+}
+</code></pre>
+
+<p>usage:</p>
+
+<pre><code>public class myClazz extends FragmentActivity {
+
+
+    private Request mMyRequest;
+    ...
+
+    public void makeNetworkCall() {
+    mMyRequest = new MyNetworkRequest(
+            Method.GET, 
+            BASE_URL + Endpoint.USER,
+            new Listener&lt;String&gt;() {
+
+                @Override
+                public void onResponse(String response) {
+                    // Success
+
+                }
+            }, 
+            new ErrorListener() {
+
+                @Override
+                public void onErrorResponse(VolleyError error) {
+                    if (mMyRequest.getStatusCode() == 401) {
+                        // HTTP Status Code: 401 Unauthorized
+                    }
+                }
+            });
+
+    MyVolley.getRequestQueue().add(request);
+}
+</code></pre>
+
+<p>Of course, the option to override the method inline is available too</p>
+
+<pre><code>public class MyClazz extends FragmentActivity {
+
+    private int mStatusCode;
+
+    ...
+
+    public void makeNetworkCall() {
+
+        StringRequest request = new StringRequest(
+                Method.GET, 
+                BASE_URL + Endpoint.USER,
+                new Listener&lt;String&gt;() {
+
+                    @Override
+                    public void onResponse(String response) {
+                        // Success
+
+                    }
+                }, 
+                new ErrorListener() {
+
+                    @Override
+                    public void onErrorResponse(VolleyError error) {
+                        if (mStatusCode == 401) {
+                            // HTTP Status Code: 401 Unauthorized
+                        }
+                    }
+                }) {
+
+                    @Override
+                    protected Response&lt;String&gt; parseNetworkResponse(NetworkResponse response) {
+                        mStatusCode = response.statusCode;
+                        return super.parseNetworkResponse(response);
+                    }
+                };
+    MyVolley.getRequestQueue.add(request);
+}
+</code></pre>

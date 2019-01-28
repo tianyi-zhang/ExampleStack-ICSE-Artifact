@@ -1,0 +1,84 @@
+<p>Check your logcat for something similar to this, right before your exception:</p>
+
+<pre><code>11-02 09:25:44.305: ERROR/QualcommCameraHardware(56): failed to construct master heap for pmem pool /dev/pmem_adsp
+11-02 09:25:44.305: ERROR/QualcommCameraHardware(56): initPreview X: could not initialize preview heap.
+11-02 09:25:44.305: ERROR/QualcommCameraHardware(56): startPreview X initPreview failed.  Not starting preview.
+</code></pre>
+
+<p>This happens on my phone in landscape orientation, when I try to set a preview size of 1024x768. The getSupportedPreviewSizes() method says this size is supported, however the OS appears to fail to allocate enough memory for a preview this large. Setting a smaller size does work. </p>
+
+<p>Also, try the code below. You should call startPreview() from the surfaceChanged() method, at that point the dimensions of your SurfaceView are known. Calling it from surfaceCreated() is too early.</p>
+
+<p>Use this to determine the optimal preview size for a given size of your SurfaceView (adapted from the Google CameraPreview sample)</p>
+
+<pre><code>static Size getOptimalPreviewSize(List&lt;Size&gt; sizes, int w, int h) {
+    final double ASPECT_TOLERANCE = 0.1;
+    final double MAX_DOWNSIZE = 1.5;
+
+    double targetRatio = (double) w / h;
+    if (sizes == null) return null;
+
+    Size optimalSize = null;
+    double minDiff = Double.MAX_VALUE;
+
+    int targetHeight = h;
+
+    // Try to find an size match aspect ratio and size
+    for (Size size : sizes) {
+        double ratio = (double) size.width / size.height;
+        double downsize = (double) size.width / w;
+        if (downsize &gt; MAX_DOWNSIZE) {
+            //if the preview is a lot larger than our display surface ignore it
+            //reason - on some phones there is not enough heap available to show the larger preview sizes 
+            continue;
+        }
+        if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE) continue;
+        if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+            optimalSize = size;
+            minDiff = Math.abs(size.height - targetHeight);
+        }
+    }
+
+    // Cannot find the one match the aspect ratio, ignore the requirement
+    //keep the max_downsize requirement
+    if (optimalSize == null) {
+        minDiff = Double.MAX_VALUE;
+        for (Size size : sizes) {
+            double downsize = (double) size.width / w;
+            if (downsize &gt; MAX_DOWNSIZE) {
+                continue;
+            }
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+    }
+    //everything else failed, just take the closest match
+    if (optimalSize == null) {
+        minDiff = Double.MAX_VALUE;
+        for (Size size : sizes) {
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+    }
+
+    return optimalSize;
+}
+</code></pre>
+
+<p>You would call it from your surfaceChanged() method, like this:</p>
+
+<pre><code>public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    Camera.Parameters parameters = camera.getParameters();
+    List&lt;Size&gt; supportedPreviewSizes = parameters.getSupportedPreviewSizes();
+    Size optimalPreviewSize = getOptimalPreviewSize(supportedPreviewSizes, w, h);
+    if (optimalPreviewSize != null) {
+        parameters.setPreviewSize(optimalPreviewSize.width, optimalPreviewSize.height);
+        camera.setParameters(parameters);
+        camera.startPreview();
+    }
+}
+</code></pre>

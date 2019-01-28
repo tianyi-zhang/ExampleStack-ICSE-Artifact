@@ -1,0 +1,145 @@
+<h1>Lock-free solution(?)</h1>
+
+<p>I had the same issue, but I wanted a solution that didn't use locks.</p>
+
+<p>Problem: I have at most one thread consuming from a queue. Multiple producer threads are constantly inserting into the queue and need to notify the consumer if it's waiting. The queue is lock-free so using locks for notification causes unnecessary blocking in producer threads. Each producer thread needs to acquire the lock before it can notify the waiting consumer. I believe I came up with a lock-free solution using <a href="http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/LockSupport.html" rel="nofollow"><code>LockSupport</code></a> and <a href="http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/atomic/AtomicReferenceFieldUpdater.html" rel="nofollow"><code>AtomicReferenceFieldUpdater</code></a>. If a lock-free barrier exists within the JDK, I couldn't find it. Both <code>CyclicBarrier</code> and <code>CoundDownLatch</code> use locks internally from what I could find.</p>
+
+<p>This is my slightly abbreviated code. Just to be clear, this code will only allow <em><strong>one</strong></em> thread to wait at a time. It could be modified to allow for multiple awaiters/consumers by using some type of atomic collection to store multiple owner (a <code>ConcurrentMap</code> may work).</p>
+
+<p>I have used this code and it seems to work. I have not tested it extensively. I suggest you read the documentation for <a href="http://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/LockSupport.html" rel="nofollow"><code>LockSupport</code></a> before use.</p>
+
+<pre><code>/* I release this code into the public domain.
+ * http://unlicense.org/UNLICENSE
+ */
+
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.locks.LockSupport;
+
+/**
+ * A simple barrier for awaiting a signal.
+ * Only one thread at a time may await the signal.
+ */
+public class SignalBarrier {
+    /**
+     * The Thread that is currently awaiting the signal.
+     * !!! Don't call this directly !!!
+     */
+    @SuppressWarnings("unused")
+    private volatile Thread _owner;
+
+    /** Used to update the owner atomically */
+    private static final AtomicReferenceFieldUpdater&lt;SignalBarrier, Thread&gt; ownerAccess =
+        AtomicReferenceFieldUpdater.newUpdater(SignalBarrier.class, Thread.class, "_owner");
+
+    /** Create a new SignalBarrier without an owner. */
+    public SignalBarrier() {
+        _owner = null;
+    }
+
+    /**
+     * Signal the owner that the barrier is ready.
+     * This has no effect if the SignalBarrer is unowned.
+     */
+    public void signal() {
+        // Remove the current owner of this barrier.
+        Thread t = ownerAccess.getAndSet(this, null);
+
+        // If the owner wasn't null, unpark it.
+        if (t != null) {
+            LockSupport.unpark(t);
+        }
+    }
+
+    /**
+     * Claim the SignalBarrier and block until signaled.
+     *
+     * @throws IllegalStateException If the SignalBarrier already has an owner.
+     * @throws InterruptedException If the thread is interrupted while waiting.
+     */
+    public void await() throws InterruptedException {
+        // Get the thread that would like to await the signal.
+        Thread t = Thread.currentThread();
+
+        // If a thread is attempting to await, the current owner should be null.
+        if (!ownerAccess.compareAndSet(this, null, t)) {
+            throw new IllegalStateException("A second thread tried to acquire a signal barrier that is already owned.");
+        }
+
+        // The current thread has taken ownership of this barrier.
+        // Park the current thread until the signal. Record this
+        // signal barrier as the 'blocker'.
+        LockSupport.park(this);
+        // If a thread has called #signal() the owner should already be null.
+        // However the documentation for LockSupport.unpark makes it clear that
+        // threads can wake up for absolutely no reason. Do a compare and set
+        // to make sure we don't wipe out a new owner, keeping in mind that only
+        // thread should be awaiting at any given moment!
+        ownerAccess.compareAndSet(this, t, null);
+
+        // Check to see if we've been unparked because of a thread interrupt.
+        if (t.isInterrupted())
+            throw new InterruptedException();
+    }
+
+    /**
+     * Claim the SignalBarrier and block until signaled or the timeout expires.
+     *
+     * @throws IllegalStateException If the SignalBarrier already has an owner.
+     * @throws InterruptedException If the thread is interrupted while waiting.
+     *
+     * @param timeout The timeout duration in nanoseconds.
+     * @return The timeout minus the number of nanoseconds that passed while waiting.
+     */
+    public long awaitNanos(long timeout) throws InterruptedException {
+        if (timeout &lt;= 0)
+            return 0;
+        // Get the thread that would like to await the signal.
+        Thread t = Thread.currentThread();
+
+        // If a thread is attempting to await, the current owner should be null.
+        if (!ownerAccess.compareAndSet(this, null, t)) {
+            throw new IllegalStateException("A second thread tried to acquire a signal barrier is already owned.");
+        }
+
+        // The current thread owns this barrier.
+        // Park the current thread until the signal. Record this
+        // signal barrier as the 'blocker'.
+        // Time the park.
+        long start = System.nanoTime();
+        LockSupport.parkNanos(this, timeout);
+        ownerAccess.compareAndSet(this, t, null);
+        long stop = System.nanoTime();
+
+        // Check to see if we've been unparked because of a thread interrupt.
+        if (t.isInterrupted())
+            throw new InterruptedException();
+
+        // Return the number of nanoseconds left in the timeout after what we
+        // just waited.
+        return Math.max(timeout - stop + start, 0L);
+    }
+}
+</code></pre>
+
+<p>To give a vague example of usage, I'll adopt james large's example:</p>
+
+<pre><code>SignalBarrier barrier = new SignalBarrier();
+</code></pre>
+
+<p>Consumer thread (singular, <em>not plural!</em>):</p>
+
+<pre><code>try {
+    while(!conditionIsTrue()) {
+        barrier.await();
+    }
+    doSomethingThatRequiresConditionToBeTrue();
+} catch (InterruptedException e) {
+    handleInterruption();
+}
+</code></pre>
+
+<p>Producer thread(s):</p>
+
+<pre><code>doSomethingThatMakesConditionTrue();
+barrier.signal();
+</code></pre>

@@ -1,0 +1,564 @@
+<p>Thanks again to all who provided input.  I ended up coding my own <code>HashedLinkedBlockingQueue</code> implementation.  Getting the synchronization correct by using the decorator pattern proved much more difficult than anticipated.  Adding synchronization to the decorator caused deadlocks to occur under heavy load (particularly, <code>put(E element)</code> and <code>take()</code> introduced hold-and-wait conditions that previously didn't exist).  When coupled with decreased performance because of unnecessary synchronization, it became apparent that I'd need to spend the time to get it right from scratch.</p>
+
+<p>Performance in <code>add</code>/<code>remove</code>/<code>contains</code> is O(1) but comes with roughly double the synchronization cost of the original <code>LinkedBlockingQueue</code> - I say "roughly double" because the LBQ uses two locks - one for inserts and one for removes when the queue size is sufficiently large to allow concurrent modification of head and tail.  My implementation uses a single lock, so removes must wait for adds to complete and vice versa.  Here's the source code for the class - I have tested each method in both multi-threaded and single-threaded modes, but outside of using this class in my own application, I have not come up with a super-complicated, generalized test.  Use at your own risk!  Just because it works in my app doesn't mean there aren't still bugs:</p>
+
+<pre><code>import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.NoSuchElementException;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Provides a single-lock queuing algorithm with fast contains(Object o) and
+ * remove(Object o), at the expense of higher synchronization cost when
+ * compared to {@link LinkedBlockingQueue}.  This queue implementation does not
+ * allow for duplicate entries.
+ * 
+ * &lt;p&gt;Use of this particular {@link BlockingQueue} implementation is encouraged
+ * when the cost of calling 
+ * &lt;code&gt;{@link BlockingQueue#contains(Object o)}&lt;/code&gt; or 
+ * &lt;code&gt;{@link BlockingQueue#remove(Object o)}&lt;/code&gt; outweighs the throughput
+ * benefit if using a {@link LinkedBlockingQueue}.  This queue performs best
+ * when few threads require simultaneous access to it.
+ * 
+ * &lt;p&gt;The basic operations this queue provides and their associated run times
+ * are as follows, where &lt;i&gt;n&lt;/i&gt; is the number of elements in this queue and
+ * &lt;i&gt;m&lt;/i&gt; is the number of elements in the specified collection, if any such
+ * collection is specified:
+ * 
+ * &lt;ul&gt;
+ * &lt;li&gt;&lt;b&gt;add(E element)&lt;/b&gt; - &lt;i&gt;O(1)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;addAll(Collection&lt;? extends E&gt; c)&lt;/b&gt; - &lt;i&gt;O(m)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;drainTo(Collection&lt;? extends E&gt; c, int maxElements)&lt;/b&gt;
+ *  - &lt;i&gt;O(maxElements*O(&lt;/i&gt;&lt;code&gt;c.add(Object o)&lt;/code&gt;&lt;i&gt;))&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;contains(E element)&lt;/b&gt; - &lt;i&gt;O(1)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;offer(E element)&lt;/b&gt; - &lt;i&gt;O(1)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;poll()&lt;/b&gt; - &lt;i&gt;O(1)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;remove(E element)&lt;/b&gt; - &lt;i&gt;O(1)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;removeAll(Collection&lt;? extends E&gt; c)&lt;/b&gt; - &lt;i&gt;O(m)&lt;/i&gt;&lt;/li&gt;
+ * &lt;li&gt;&lt;b&gt;retainAll(Collection&lt;? extends E&gt; c)&lt;/b&gt; - &lt;i&gt;O(n*O(
+ *  &lt;/i&gt;&lt;code&gt;c.contains(Object o)&lt;/code&gt;&lt;i&gt;))&lt;/i&gt;&lt;/li&gt;
+ * &lt;/ul&gt;
+ * 
+ * @param &lt;E&gt; type of element this queue will handle.  It is strongly
+ * recommended that the underlying element overrides &lt;code&gt;hashCode()&lt;/code&gt; 
+ * and &lt;code&gt;equals(Object o)&lt;/code&gt; in an efficient manner.
+ * 
+ * @author CodeBlind
+ */
+@SuppressWarnings("unused")
+public class HashedLinkedBlockingQueue&lt;E&gt; implements BlockingQueue&lt;E&gt;{
+    /** Polling removes the head, offering adds to the tail. */
+    private Node head, tail;
+    /** Required for constant-time lookups and removals. */
+    private HashMap&lt;E,Node&gt; contents;
+    /** Allows the user to artificially limit the capacity of this queue. */
+    private final int maxCapacity;
+
+    //Constructors: -----------------------------------------------------------
+
+    /**
+     * Creates an empty queue with max capacity equal to
+     * {@link Integer#MAX_VALUE}.
+     */
+    public HashedLinkedBlockingQueue(){ this(null,Integer.MAX_VALUE); }
+
+    /**
+     * Creates an empty queue with max capacity equals to the specified value.
+     * @param capacity (1 to {@link Integer#MAX_VALUE})
+     */
+    public HashedLinkedBlockingQueue(int capacity){
+        this(null,Math.max(1,capacity)); 
+    }
+
+    /**
+     * Creates a new queue and initializes it to the contents of the specified
+     * collection, queued in the order returned by its iterator, with a max
+     * capacity of {@link Integer#MAX_VALUE}.
+     * @param c collection of elements to add
+     */
+    public HashedLinkedBlockingQueue(Collection&lt;? extends E&gt; c){
+        this(c,Integer.MAX_VALUE);
+    }
+
+    /**
+     * Creates a new queue and initializes it to the contents of the specified
+     * collection, queued in the order returned by its iterator, with a max
+     * capacity equal to the specified value.
+     * @param c collection of elements to add
+     * @param capacity (1 to {@link Integer#MAX_VALUE})
+     */
+    public HashedLinkedBlockingQueue(Collection&lt;? extends E&gt; c, int capacity){
+        maxCapacity = capacity;
+        contents = new HashMap&lt;E,Node&gt;();
+
+        if(c == null || c.isEmpty()){
+            head = null;
+            tail = null;
+        }
+        else for(E e : c) enqueue(e);
+    }
+
+    //Private helper methods: -------------------------------------------------
+
+    private E dequeue(){
+        if(contents.isEmpty()) return null;
+
+        Node n = head;
+        contents.remove(n.element);
+
+        if(contents.isEmpty()){
+            head = null;
+            tail = null;
+        }
+        else{
+            head.next.prev = null;
+            head = head.next;
+            n.next = null;
+        }
+
+        return n.element;
+    }
+
+    private void enqueue(E e){
+        if(contents.containsKey(e)) return;
+
+        Node n = new Node(e);
+        if(contents.isEmpty()){
+            head = n;
+            tail = n;
+        }
+        else{
+            tail.next = n;
+            n.prev = tail;
+            tail = n;
+        }
+
+        contents.put(e,n);
+    }
+
+    private void removeNode(Node n, boolean notify){
+        if(n == null) return;
+        if(n == head) dequeue();
+        else if(n == tail){
+            tail.prev.next = null;
+            tail = tail.prev;
+            n.prev = null;
+        }
+        else{
+            n.prev.next = n.next;
+            n.next.prev = n.prev;
+            n.prev = null;
+            n.next = null;
+        }
+
+        contents.remove(n.element);
+        if(notify) synchronized(this){ contents.notifyAll(); }
+    }
+
+    //Public instance methods: ------------------------------------------------
+
+    public void print(){
+        Node n = head;
+        int i = 1;
+        while(n != null){
+            System.out.println(i+": "+n);
+            n = n.next;
+            i++;
+        }
+    }
+
+    //Overridden methods: -----------------------------------------------------
+
+    @Override
+    public boolean add(E e){
+        synchronized(this){
+            if(remainingCapacity() &lt; 1) throw new IllegalStateException();
+            enqueue(e);
+            contents.notifyAll();
+        }
+
+        return true;
+    }
+
+    @Override
+    public boolean addAll(Collection&lt;? extends E&gt; c){
+        boolean changed = true;
+        synchronized(this){
+            for(E e : c){
+                if(remainingCapacity() &lt; 1) throw new IllegalStateException();
+                enqueue(e);
+            }
+
+            contents.notifyAll();
+        }
+        return changed;
+    }
+
+    @Override
+    public void clear(){
+        synchronized(this){
+            if(isEmpty()) return;
+            head = null;
+            tail = null;
+            contents.clear();
+            contents.notifyAll();
+        }
+    }
+
+    @Override
+    public boolean contains(Object o){
+        synchronized(this){ return contents.containsKey(o); }
+    }
+
+    @Override
+    public boolean containsAll(Collection&lt;?&gt; c) {
+        synchronized(this){
+            for(Object o : c) if(!contents.containsKey(o)) return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    public int drainTo(Collection&lt;? super E&gt; c) {
+        return drainTo(c,maxCapacity);
+    }
+
+    @Override
+    public int drainTo(Collection&lt;? super E&gt; c, int maxElements) {
+        if(this == c) throw new IllegalArgumentException();
+        int transferred = 0;
+
+        synchronized(this){
+            while(!isEmpty() &amp;&amp; transferred &lt; maxElements)
+                if(c.add(dequeue())) transferred++;
+            if(transferred &gt; 0) contents.notifyAll();
+        }
+
+        return transferred;
+    }
+
+    @Override
+    public E element(){
+        E e = peek();
+        if(e == null) throw new IllegalStateException();
+        return e;
+    }
+
+    @Override
+    public boolean isEmpty() {
+        synchronized(this){ return contents.isEmpty(); }
+    }
+
+    @Override
+    public Iterator&lt;E&gt; iterator(){ return new Itr(); }
+
+    @Override
+    public boolean offer(E e){
+        synchronized(this){
+            if(contents.containsKey(e)) return false;
+            enqueue(e);
+            contents.notifyAll();
+        }
+
+        return true;
+    }
+
+    @Override
+    public boolean offer(E e, long timeout, TimeUnit unit)
+            throws InterruptedException{
+        long remainingSleep = -1;
+        long millis = unit.toMillis(timeout);
+        long methodCalled = System.currentTimeMillis();
+
+        synchronized(this){
+            while((remainingSleep = 
+                    (methodCalled+millis)-System.currentTimeMillis()) &gt; 0 &amp;&amp;
+                    (remainingCapacity() &lt; 1 || contents.containsKey(e))){
+                contents.wait(remainingSleep);
+            }
+
+            if(remainingSleep &lt; 1) return false;
+            enqueue(e);
+            contents.notifyAll();
+        }
+
+        return true;
+    }
+
+    @Override
+    public E peek(){
+        synchronized(this){ return (head != null) ? head.element : null; }
+    }
+
+    @Override
+    public E poll(){
+        synchronized(this){
+            E e = dequeue();
+            if(e != null) contents.notifyAll();
+            return e;
+        }
+    }
+
+    @Override
+    public E poll(long timeout, TimeUnit unit) throws InterruptedException{
+        E e = null;
+        long remainingSleep = -1;
+        long millis = unit.toMillis(timeout);
+        long methodCalled = System.currentTimeMillis();
+
+        synchronized(this){
+            e = dequeue();
+
+            while(e == null &amp;&amp; (remainingSleep = (methodCalled+millis)-
+                    System.currentTimeMillis()) &gt; 0){
+                contents.wait(remainingSleep);
+                e = dequeue();
+            }
+
+            if(e == null) e = dequeue();
+            if(e != null) contents.notifyAll();
+        }
+
+        return e;
+    }
+
+    @Override
+    public void put(E e) throws InterruptedException{
+        synchronized(this){
+            while(remainingCapacity() &lt; 1) contents.wait();
+            enqueue(e);
+            contents.notifyAll();
+        }
+    }
+
+    @Override
+    public int remainingCapacity(){ return maxCapacity-size(); }
+
+    @Override
+    public E remove(){
+        E e = poll();
+        if(e == null) throw new IllegalStateException();
+        return e;
+    }
+
+    @Override
+    public boolean remove(Object o){
+        synchronized(this){
+            Node n = contents.get(o);
+            if(n == null) return false;
+            removeNode(n,true);
+        }
+
+        return true;
+    }
+
+    @Override
+    public boolean removeAll(Collection&lt;?&gt; c){
+        if(this == c){
+            synchronized(this){
+                if(isEmpty()){
+                    clear();
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        boolean changed = false;
+
+        synchronized(this){
+            for(Object o : c){
+                Node n = contents.get(o);
+                if(n == null) continue;
+                removeNode(n,false);
+                changed = true;
+            }
+
+            if(changed) contents.notifyAll();
+        }
+
+        return changed;
+    }
+
+    @Override
+    public boolean retainAll(Collection&lt;?&gt; c){
+        boolean changed = false;
+        if(this == c) return changed;
+
+        synchronized(this){
+            for(E e : new LinkedList&lt;E&gt;(contents.keySet())){
+                if(!c.contains(e)){
+                    Node n = contents.get(e);
+                    if(n != null){
+                        removeNode(n,false);
+                        changed = true;
+                    }
+                }
+            }
+
+            if(changed) contents.notifyAll();
+        }
+
+        return changed;
+    }
+
+    @Override
+    public int size(){ synchronized(this){ return contents.size(); }}
+
+    @Override
+    public E take() throws InterruptedException{
+        synchronized(this){
+            while(contents.isEmpty()) contents.wait();
+            return dequeue();
+        }
+    }
+
+    @Override
+    public Object[] toArray(){
+        synchronized(this){ return toArray(new Object[size()]); }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public &lt;T&gt; T[] toArray(T[] a) {
+        synchronized(this){
+            //Estimate size of array; be prepared to see more or fewer elements
+            int size = size();
+            T[] r = a.length &gt;= size ? a :
+                (T[])java.lang.reflect.Array
+                .newInstance(a.getClass().getComponentType(), size);
+            Iterator&lt;E&gt; it = iterator();
+
+            for (int i = 0; i &lt; r.length; i++) {
+                if (! it.hasNext()) { // fewer elements than expected
+                    if (a != r)
+                        return Arrays.copyOf(r, i);
+                    r[i] = null; // null-terminate
+                    return r;
+                }
+                r[i] = (T)it.next();
+            }
+            return it.hasNext() ? finishToArray(r, it) : r;
+        }
+    }
+
+    //Static helper methods: --------------------------------------------------
+
+    @SuppressWarnings("unchecked")
+    private static &lt;T&gt; T[] finishToArray(T[] r, Iterator&lt;?&gt; it) {
+        int i = r.length;
+
+        while (it.hasNext()) {
+            int cap = r.length;
+            if (i == cap) {
+                int newCap = ((cap / 2) + 1) * 3;
+                if (newCap &lt;= cap) { // integer overflow
+                    if (cap == Integer.MAX_VALUE)
+                        throw new OutOfMemoryError
+                        ("Required array size too large");
+                    newCap = Integer.MAX_VALUE;
+                }
+                r = Arrays.copyOf(r, newCap);
+            }
+            r[i++] = (T)it.next();
+        }
+        // trim if overallocated
+        return (i == r.length) ? r : Arrays.copyOf(r, i);
+    }
+
+    //Private inner classes: --------------------------------------------------
+
+    /**
+     * Provides a weak iterator that doesn't check for concurrent modification
+     * but also fails elegantly.  A race condition exists when simultaneously
+     * iterating over the queue while the queue is being modified, but this is
+     * allowable per the Java specification for Iterators.
+     * @author CodeBlind
+     */
+    private class Itr implements Iterator&lt;E&gt;{
+        private Node current;
+        private E currentElement;
+
+        private Itr(){
+            synchronized(HashedLinkedBlockingQueue.this){
+                current = head;
+                if(current != null) currentElement = current.element;
+                else currentElement = null;
+            }
+        }
+
+        @Override
+        public boolean hasNext(){
+            return currentElement != null;
+        }
+
+        @Override
+        public E next(){
+            if(currentElement == null) throw new NoSuchElementException();
+
+            synchronized(HashedLinkedBlockingQueue.this){
+                E e = currentElement;
+
+                current = current.next;
+                if(current == null || !contents.containsKey(current.element)){
+                    current = null;
+                    currentElement = null;
+                }
+                else currentElement = current.element;
+
+                return e;
+            }
+        }
+
+        @Override
+        public void remove(){
+            synchronized(HashedLinkedBlockingQueue.this){
+                if(current == null || !contents.containsKey(current.element))
+                    throw new NoSuchElementException();
+
+                Node n = current;
+                current = current.next;
+                if(current != null &amp;&amp; contents.containsKey(current.element))
+                    currentElement = current.element;
+                else currentElement = null;
+
+                removeNode(n,true);
+            }
+        }
+    }
+
+    /**
+     * This class provides a simple implementation for a node in a double-
+     * linked list.  It supports constant-time, in-place removals.
+     * @author CodeBlind
+     */
+    private class Node{
+        private Node(E e){
+            element = e;
+            prev = null;
+            next = null;
+        }
+
+        private E element;
+        private Node prev, next;
+
+        @Override
+        public String toString(){
+            StringBuilder sb = new StringBuilder("Node[prev.element=");
+            if(prev == null) sb.append("null,element=");
+            else sb.append(prev.element+",element=");
+            sb.append(element+",next.element=");
+            if(next == null) sb.append("null]");
+            else sb.append(next.element+"]");
+            return sb.toString();
+        }
+    }
+}
+</code></pre>

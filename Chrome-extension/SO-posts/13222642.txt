@@ -1,0 +1,207 @@
+<p>I came to the same problem as you did: </p>
+
+<ul>
+<li>I wanted an async task executed (as service)</li>
+<li>I wanted to be able to rotate the device, be able to update the UI even if the task finished while the screen was off and I got no notification.</li>
+</ul>
+
+<p>I came up with something like:</p>
+
+<pre><code>public class DatabaseIncompleteActivity extends RoboActivity {
+private BroadcastReceiver       receiver;
+private ProgressDialog          progressDialog;
+
+@Inject
+private DatabaseSetManager      databaseSetManager;
+@Inject
+private DatabaseDownloadLogger  databaseDownloadLogger;
+
+private LocalBroadcastManager   localBroadcastManager;
+private String                  jobId;
+
+private static final int        ERROR_RETRY_DIALOG  = 1;
+private static final String     ERROR_MESSAGE       = "errorMsg";
+
+@Override
+protected void onCreate( Bundle savedInstanceState ) {
+    super.onCreate( savedInstanceState );
+    localBroadcastManager = LocalBroadcastManager.getInstance( this );
+
+    showProgressDialog();
+    if ( getLastNonConfigurationInstance() == null ) {
+        startService();
+    }
+}
+
+private void showProgressDialog() {
+    progressDialog = new ProgressDialog( this );
+    progressDialog.setMessage( getString( R.string.please_wait ) );
+    progressDialog.setProgressStyle( ProgressDialog.STYLE_HORIZONTAL );
+    progressDialog.setIndeterminate( true );
+    progressDialog.setCancelable( false );
+    progressDialog.show();
+}
+
+private void startService() {
+    this.jobId = UUID.randomUUID().toString();
+    Intent intent = new Intent( this, ClientDatabaseDroidService.class );
+    intent.putExtra(    ClientDatabaseDroidService.JOB_ID,
+                        jobId );
+    intent.putExtra(    ClientDatabaseDroidService.INTERACTIVE,
+                        true );
+    startService( intent );
+}
+
+private void registerListenerReceiver() {
+    if ( receiver != null ) {
+        return;
+    }
+    localBroadcastManager.registerReceiver( this.receiver = new ClientDatabaseBroadcastReceiver(),
+                                            new IntentFilter( ClientDatabaseDroidService.PROGRESS_NOTIFICATION ) );
+}
+
+@Override
+protected void onPause() {
+    super.onPause();
+    unregisterListenerReceiver();
+}
+
+@Override
+protected void onResume() {
+    super.onResume();
+
+    DatabaseDownloadLogEntry logEntry = databaseDownloadLogger.findByJobId( jobId );
+    // check if service finished while we were not listening
+    if ( logEntry != null ) {
+        if ( logEntry.isSuccess() )
+            onFinish();
+        else {
+            Bundle bundle = new Bundle();
+            bundle.putString(   ERROR_MESSAGE,
+                                logEntry.getErrorMessage() );
+            onError( bundle );
+        }
+        return;
+    }
+
+    registerListenerReceiver();
+}
+
+@Override
+public Object onRetainNonConfigurationInstance() {
+    return Boolean.TRUE;
+}
+
+final class ClientDatabaseBroadcastReceiver extends BroadcastReceiver {
+    @Override
+    public void onReceive( Context context, Intent intent ) {
+        Bundle extras = intent.getExtras();
+
+        int eventType = extras.getInt( ClientDatabaseDroidService.EVENT_TYPE );
+
+        switch ( eventType ) {
+        case ClientDatabaseDroidService.EVENT_TYPE_DOWNLOADING:
+            onDownloading( extras );
+            break;
+        case ClientDatabaseDroidService.EVENT_TYPE_FINISHED:
+            onFinish();
+            break;
+        case ClientDatabaseDroidService.EVENT_TYPE_ERROR:
+            Bundle bundle = new Bundle();
+            bundle.putString(   ERROR_MESSAGE,
+                                extras.getString( ClientDatabaseDroidService.EXTRA_ERROR_MESSAGE ) );
+            onError( bundle );
+            break;
+        default:
+            throw new RuntimeException( "should not happen" );
+        }
+    }
+
+}
+
+private void unregisterListenerReceiver() {
+    if ( receiver != null ) {
+        localBroadcastManager.unregisterReceiver( receiver );
+        receiver = null;
+    }
+}
+
+private void onError( Bundle extras ) {
+    progressDialog.dismiss();
+    showDialog( ERROR_RETRY_DIALOG,
+                extras );
+}
+
+private void onFinish() {
+    progressDialog.dismiss();
+    setResult( RESULT_OK );
+    finish();
+}
+
+@Override
+protected Dialog onCreateDialog( final int id, Bundle args ) {
+    if ( id == ERROR_RETRY_DIALOG ) {
+        Builder builder = new AlertDialog.Builder( this );
+        builder.setTitle( R.string.error );
+        builder.setMessage( "" );
+        builder.setPositiveButton(  R.string.yes,
+                                    new OnClickListener() {
+                                        @Override
+                                        public void onClick( DialogInterface dialog, int which ) {
+                                            showProgressDialog();
+                                            startService();
+                                        }
+                                    } );
+        builder.setNegativeButton(  R.string.no,
+                                    new OnClickListener() {
+                                        @Override
+                                        public void onClick( DialogInterface dialog, int which ) {
+                                            setResult( RESULT_CANCELED );
+                                            finish();
+                                        }
+                                    } );
+        return builder.create();
+    }
+
+    return super.onCreateDialog(    id,
+                                    args );
+}
+
+@Override
+protected void onPrepareDialog( int id, Dialog dialog, Bundle args ) {
+    if ( id == ERROR_RETRY_DIALOG ) {
+        ( (AlertDialog) dialog ).setMessage( String.format( "%s\n\n%s",
+                                                            args.getString( ERROR_MESSAGE ),
+                                                            getString( R.string.do_you_wish_to_retry ) ) );
+        return;
+    }
+
+    super.onPrepareDialog(  id,
+                            dialog );
+}
+
+private void onDownloading( Bundle extras ) {
+    String currentDatabase = extras.getString( ClientDatabaseDroidService.EXTRA_CURRENT_CLASSIFIER );
+    Progress databaseProgress = extras.getParcelable( ClientDatabaseDroidService.EXTRA_DATABASE_PROGRESS );
+    Progress downloadProgress = extras.getParcelable( ClientDatabaseDroidService.EXTRA_DOWNLOAD_PROGRESS );
+    progressDialog.setIndeterminate( false );
+    progressDialog.setMessage( String.format(   "[%d/%d] %s",
+                                                databaseProgress.getProcessed(),
+                                                databaseProgress.getSize(),
+                                                currentDatabase ) );
+    progressDialog.setProgress( (int) downloadProgress.getProcessed() );
+    progressDialog.setMax( (int) downloadProgress.getSize() );
+}
+</code></pre>
+
+<p>} </p>
+
+<p>The main idea is:</p>
+
+<ul>
+<li>The activity communicates with service via broadcast. The following events are dispatched from service to UI: download progress (reported each x bytes), download finished, error occured</li>
+<li>Each activity start is being assigned a unique job ID which is kept for screen rotation. </li>
+<li>Each job result is being persisted into database (or any other persistent storage). This way I can get the job result even if broadcast received was not listening at the moment (screen was off).</li>
+</ul>
+
+<p>hope that helps.</p>

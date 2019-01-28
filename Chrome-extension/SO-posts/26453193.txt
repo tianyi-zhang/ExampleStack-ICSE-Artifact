@@ -1,0 +1,103 @@
+<p>An alternative to using one file per country code (as described in <a href="http://stackoverflow.com/a/5427995/1845976">Andrew White's</a> and <a href="http://stackoverflow.com/a/9911319/1845976">PJ_Finnegan's</a> answers) is to define the HTML only once (e.g. in the <code>assets</code> folder) and use <code>@string</code> IDs in it, like so</p>
+
+<pre><code>&lt;html&gt;
+&lt;body&gt;
+    &lt;p&gt;@string/message_text&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+
+<p>After loading the asset into a string you could pass its content to <code>replaceResourceStrings()</code>:</p>
+
+<pre><code>/**
+ * Regex that matches a resource string such as &lt;code&gt;@string/a-b_c1&lt;/code&gt;.
+ */
+private static final String REGEX_RESOURCE_STRING = "@string/([A-Za-z0-9-_]*)";
+
+/** Name of the resource type "string" as in &lt;code&gt;@string/...&lt;/code&gt; */
+private static final String DEF_TYPE_STRING = "string";
+
+/**
+ * Recursively replaces resources such as &lt;code&gt;@string/abc&lt;/code&gt; with
+ * their localized values from the app's resource strings (e.g.
+ * &lt;code&gt;strings.xml&lt;/code&gt;) within a &lt;code&gt;source&lt;/code&gt; string.
+ * 
+ * Also works recursively, that is, when a resource contains another
+ * resource that contains another resource, etc.
+ * 
+ * @param source
+ * @return &lt;code&gt;source&lt;/code&gt; with replaced resources (if they exist)
+ */
+public static String replaceResourceStrings(Context context, String source) {
+    // Recursively resolve strings
+    Pattern p = Pattern.compile(REGEX_RESOURCE_STRING);
+    Matcher m = p.matcher(source);
+    StringBuffer sb = new StringBuffer();
+    while (m.find()) {
+        String stringFromResources = getStringByName(context, m.group(1));
+        if (stringFromResources == null) {
+            Log.w(Constants.LOG,
+                    "No String resource found for ID \"" + m.group(1)
+                            + "\" while inserting resources");
+            /*
+             * No need to try to load from defaults, android is trying that
+             * for us. If we're here, the resource does not exist. Just
+             * return its ID.
+             */
+            stringFromResources = m.group(1);
+        }
+        m.appendReplacement(sb, // Recurse
+                replaceResourceStrings(context, stringFromResources));
+    }
+    m.appendTail(sb);
+    return sb.toString();
+}
+
+/**
+ * Returns the string value of a string resource (e.g. defined in
+ * &lt;code&gt;values.xml&lt;/code&gt;).
+ * 
+ * @param name
+ * @return the value of the string resource or &lt;code&gt;null&lt;/code&gt; if no
+ *         resource found for id
+ */
+public static String getStringByName(Context context, String name) {
+    int resourceId = getResourceId(context, DEF_TYPE_STRING, name);
+    if (resourceId != 0) {
+        return context.getString(resourceId);
+    } else {
+        return null;
+    }
+}
+
+/**
+ * Finds the numeric id of a string resource (e.g. defined in
+ * &lt;code&gt;values.xml&lt;/code&gt;).
+ * 
+ * @param defType
+ *            Optional default resource type to find, if "type/" is not
+ *            included in the name. Can be null to require an explicit type.
+ * 
+ * @param name
+ *            the name of the desired resource
+ * @return the associated resource identifier. Returns 0 if no such resource
+ *         was found. (0 is not a valid resource ID.)
+ */
+private static int getResourceId(Context context, String defType,
+        String name) {
+    return context.getResources().getIdentifier(name, defType,
+            context.getPackageName());
+}
+</code></pre>
+
+<p>The nice thing about this approach is that you have to specify the structure of the HTML only once and use <a href="http://developer.android.com/guide/topics/resources/localization.html" rel="nofollow">android's localization mechanism</a>. In addition, it allows recursively referencing strings in strings.xml, which is not supported by <a href="http://developer.android.com/reference/android/content/Context.html#getString%28int%29" rel="nofollow"><code>Context.getResources()</code></a>. For example:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+    &lt;string name="message_text"&gt;Some string @string/another_one.&lt;/string&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p>The downside is that the parsing is done at runtime, so specifying a dedicated HTML for each language has a better performance when used within the app.</p>
+
+<p>For an example that uses this code to convert HTML from an asset file to a "stylable" <code>CharSequence</code> (using <a href="http://stackoverflow.com/a/17365740/1845976">Kuitsi's TagHandler</a>) that can be displayed in a <code>TextView</code> see <a href="https://github.com/schnatterer/nusic/blob/24e111c5a0b416bafe12bd96bb86ed87226874d7/Nusic/src/info/schnatterer/nusic/android/util/TextUtil.java#L73" rel="nofollow"><code>TextUtil</code></a>.</p>

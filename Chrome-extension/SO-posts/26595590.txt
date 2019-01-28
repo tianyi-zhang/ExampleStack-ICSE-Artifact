@@ -1,0 +1,74 @@
+<p><code>LayoutAnimationController</code> is coupled into <code>ViewGroup</code> and both <code>ListView</code> and <code>GridView</code> extend the method below to provide the child's <code>animationParams</code>. The issue is that <code>GridLayoutAnimationController</code> requires its own <code>AnimationParameters</code> that cannot be class-casted. </p>
+
+<pre><code>    /**
+     * Subclasses should override this method to set layout animation
+     * parameters on the supplied child.
+     *
+     * @param child the child to associate with animation parameters
+     * @param params the child's layout parameters which hold the animation
+     *        parameters
+     * @param index the index of the child in the view group
+     * @param count the number of children in the view group
+     */
+    protected void attachLayoutAnimationParameters(View child,
+            LayoutParams params, int index, int count) {
+        LayoutAnimationController.AnimationParameters animationParams =
+                    params.layoutAnimationParameters;
+        if (animationParams == null) {
+            animationParams = new LayoutAnimationController.AnimationParameters();
+            params.layoutAnimationParameters = animationParams;
+        }
+
+        animationParams.count = count;
+        animationParams.index = index;
+    }
+</code></pre>
+
+<p>Since this method by default adds a <code>LayoutAnimationController.AnimationParameters</code> instead of <code>GridLayoutAnimationController.AnimationParameters</code>, the fix should be to create and attach one beforehand. What we need to implement is what <code>GridView</code> already does:</p>
+
+<pre><code>@Override
+protected void attachLayoutAnimationParameters(View child,
+        ViewGroup.LayoutParams params, int index, int count) {
+
+    GridLayoutAnimationController.AnimationParameters animationParams =
+            (GridLayoutAnimationController.AnimationParameters) params.layoutAnimationParameters;
+
+    if (animationParams == null) {
+        animationParams = new GridLayoutAnimationController.AnimationParameters();
+        params.layoutAnimationParameters = animationParams;
+    }
+
+    animationParams.count = count;
+    animationParams.index = index;
+    animationParams.columnsCount = mNumColumns;
+    animationParams.rowsCount = count / mNumColumns;
+
+    if (!mStackFromBottom) {
+        animationParams.column = index % mNumColumns;
+        animationParams.row = index / mNumColumns;
+    } else {
+        final int invertedIndex = count - 1 - index;
+
+        animationParams.column = mNumColumns - 1 - (invertedIndex % mNumColumns);
+        animationParams.row = animationParams.rowsCount - 1 - invertedIndex / mNumColumns;
+    }
+}
+</code></pre>
+
+<p>To replicate <code>GridView</code>, the closest thing we can do is shoehorn the modifications into <code>onBindViewHolder()</code> which allows them to run before <code>dispatchDraw</code>, the call that triggers animations.</p>
+
+<pre><code>ViewGroup.LayoutParams params = holder.itemView.getLayoutParams();
+        GridLayoutAnimationController.AnimationParameters animationParams = new GridLayoutAnimationController.AnimationParameters();
+        params.layoutAnimationParameters = animationParams;
+
+        animationParams.count = 9;
+        animationParams.columnsCount = 3;
+        animationParams.rowsCount = 3;
+        animationParams.index = position;
+        animationParams.column = position / animationParams.columnsCount;
+        animationParams.row = position % animationParams.columnsCount;
+</code></pre>
+
+<p>If using <code>RecyclerView</code>'s new <code>GridLayoutManager</code>, try getting parameters from that. The sample above is a proof of concept to show that it works. I've hardcoded values that don't exactly work for my application as well. </p>
+
+<p>Since this is an API that's been around since API 1 with no real documentation or samples, I would highly suggest against using it, considering there are many ways to replicate its functionality. </p>

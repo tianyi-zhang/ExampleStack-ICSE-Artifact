@@ -1,0 +1,183 @@
+<p>This is how I would <em>(or did)</em> write an efficient circular buffer in Java.  It's backed by a simple array.  For my particular use case, I needed high concurrent throughput, so I used CAS for allocation of the index.  I then created mechanisms for reliable copies including a CAS copy of the entire buffer.  I used this in a case which is outlined in greater detail in <a href="http://www.blisted.org/wiki/papers/tutorials/java/100lines/FastCircularBuffer" rel="nofollow">short article</a>.</p>
+
+<pre><code>import java.util.concurrent.atomic.AtomicLong;
+import java.lang.reflect.Array;
+
+/**
+ * A circular array buffer with a copy-and-swap cursor.
+ *
+ * &lt;p&gt;This class provides an list of T objects who's size is &lt;em&gt;unstable&lt;/em&gt;.
+ * It's intended for capturing data where the frequency of sampling greatly
+ * outweighs the frequency of inspection (for instance, monitoring).&lt;/p&gt;
+ *
+ * &lt;p&gt;This object keeps in memory a fixed size buffer which is used for
+ * capturing objects.  It copies the objects to a snapshot array which may be
+ * worked with.  The size of the snapshot array will vary based on the
+ * stability of the array during the copy operation.&lt;/p&gt;
+ *
+ * &lt;p&gt;Adding buffer to the buffer is &lt;em&gt;O(1)&lt;/em&gt;, and lockless.  Taking a
+ * stable copy of the sample is &lt;em&gt;O(n)&lt;/em&gt;.&lt;/p&gt;
+ */
+public class ConcurrentCircularBuffer &lt;T&gt; {
+    private final AtomicLong cursor = new AtomicLong();
+    private final T[]      buffer;
+    private final Class&lt;T&gt; type;
+
+    /**
+     * Create a new concurrent circular buffer.
+     *
+     * @param type The type of the array.  This is captured for the same reason
+     * it's required by {@link java.util.List.toArray()}.
+     *
+     * @param bufferSize The size of the buffer.
+     *
+     * @throws IllegalArgumentException if the bufferSize is a non-positive
+     * value.
+     */
+    public ConcurrentCircularBuffer (final Class &lt;T&gt; type, 
+                                     final int bufferSize) 
+    {
+        if (bufferSize &lt; 1) {
+            throw new IllegalArgumentException(
+                "Buffer size must be a positive value"
+                );
+        }
+
+        this.type    = type;
+        this.buffer = (T[]) new Object [ bufferSize ];
+    }
+
+    /**
+     * Add a new object to this buffer.
+     *
+     * &lt;p&gt;Add a new object to the cursor-point of the buffer.&lt;/p&gt;
+     *
+     * @param sample The object to add.
+     */
+    public void add (T sample) {
+        buffer[(int) (cursor.getAndIncrement() % buffer.length)] = sample;
+    }
+
+    /**
+     * Return a stable snapshot of the buffer.
+     *
+     * &lt;p&gt;Capture a stable snapshot of the buffer as an array.  The snapshot
+     * may not be the same length as the buffer, any objects which were
+     * unstable during the copy will be factored out.&lt;/p&gt;
+     * 
+     * @return An array snapshot of the buffer.
+     */
+    public T[] snapshot () {
+        T[] snapshots = (T[]) new Object [ buffer.length ];
+
+        /* Determine the size of the snapshot by the number of affected
+         * records.  Trim the size of the snapshot by the number of records
+         * which are considered to be unstable during the copy (the amount the
+         * cursor may have moved while the copy took place).
+         *
+         * If the cursor eliminated the sample (if the sample size is so small
+         * compared to the rate of mutation that it did a full-wrap during the
+         * copy) then just treat the buffer as though the cursor is
+         * buffer.length - 1 and it was not changed during copy (this is
+         * unlikley, but it should typically provide fairly stable results).
+         */
+        long before = cursor.get();
+
+        /* If the cursor hasn't yet moved, skip the copying and simply return a
+         * zero-length array.
+         */
+        if (before == 0) {
+            return (T[]) Array.newInstance(type, 0);
+        }
+
+        System.arraycopy(buffer, 0, snapshots, 0, buffer.length);
+
+        long after          = cursor.get();
+        int  size           = buffer.length - (int) (after - before);
+        long snapshotCursor = before - 1;
+
+        /* Highly unlikely, but the entire buffer was replaced while we
+         * waited...so just return a zero length array, since we can't get a
+         * stable snapshot...
+         */
+        if (size &lt;= 0) {
+            return (T[]) Array.newInstance(type, 0);
+        }
+
+        long start = snapshotCursor - (size - 1);
+        long end   = snapshotCursor;
+
+        if (snapshotCursor &lt; snapshots.length) {
+            size   = (int) snapshotCursor + 1;
+            start  = 0;
+        }
+
+        /* Copy the sample snapshot to a new array the size of our stable
+         * snapshot area.
+         */
+        T[] result = (T[]) Array.newInstance(type, size);
+
+        int startOfCopy = (int) (start % snapshots.length);
+        int endOfCopy   = (int) (end   % snapshots.length);
+
+        /* If the buffer space wraps the physical end of the array, use two
+         * copies to construct the new array.
+         */
+        if (startOfCopy &gt; endOfCopy) {
+            System.arraycopy(snapshots, startOfCopy,
+                             result, 0, 
+                             snapshots.length - startOfCopy);
+            System.arraycopy(snapshots, 0,
+                             result, (snapshots.length - startOfCopy),
+                             endOfCopy + 1);
+        }
+        else {
+            /* Otherwise it's a single continuous segment, copy the whole thing
+             * into the result.
+             */
+            System.arraycopy(snapshots, startOfCopy,
+                             result, 0, endOfCopy - startOfCopy + 1);
+        }
+
+        return (T[]) result;
+    }
+
+    /**
+     * Get a stable snapshot of the complete buffer.
+     *
+     * &lt;p&gt;This operation fetches a snapshot of the buffer using the algorithm
+     * defined in {@link snapshot()}.  If there was concurrent modification of
+     * the buffer during the copy, however, it will retry until a full stable
+     * snapshot of the buffer was acquired.&lt;/p&gt;
+     *
+     * &lt;p&gt;&lt;em&gt;Note, for very busy buffers on large symmetric multiprocessing
+     * machines and supercomputers running data processing intensive
+     * applications, this operation has the potential of being fairly
+     * expensive.  In practice on commodity hardware, dualcore processors and
+     * non-processing intensive systems (such as web services) it very rarely
+     * retries.&lt;/em&gt;&lt;/p&gt;
+     *
+     * @return A full copy of the internal buffer.
+     */
+    public T[] completeSnapshot () {
+        T[] snapshot = snapshot();
+
+        /* Try again until we get a snapshot that's the same size as the
+         * buffer...  This is very often a single iteration, but it depends on
+         * how busy the system is.
+         */
+        while (snapshot.length != buffer.length) {
+            snapshot = snapshot();
+        }
+
+        return snapshot;
+    }
+
+    /**
+     * The size of this buffer.
+     */
+    public int size () {
+        return buffer.length;
+    }
+}
+</code></pre>

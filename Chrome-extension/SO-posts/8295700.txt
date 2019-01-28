@@ -1,0 +1,156 @@
+<p>There is a bug in Java with animated GIF images. There is no memory increase with other images.</p>
+
+<p>Edit;</p>
+
+<p>Below example runs without memory leak; but you need <a href="http://www.eclipse.org/downloads/download.php?file=/eclipse/downloads/drops/R-3.6.2-201102101200/swt-3.6.2-win32-win32-x86.zip" rel="nofollow">Eclipse SWT library</a> from <a href="http://www.eclipse.org/downloads/download.php?file=/eclipse/downloads/drops/R-3.6.2-201102101200/swt-3.6.2-win32-win32-x86.zip" rel="nofollow">Eclipse's site</a></p>
+
+<pre><code>import org.eclipse.swt.SWT;
+import org.eclipse.swt.SWTException;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.ImageLoader;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.FileDialog;
+import org.eclipse.swt.widgets.Shell;
+
+public class GIFExample {
+    static Display display;
+    static Shell shell;
+    static GC shellGC;
+    static Color shellBackground;
+    static ImageLoader loader;
+    static ImageData[] imageDataArray;
+    static Thread animateThread;
+    static Image image;
+    static final boolean useGIFBackground = false;
+
+    public static void main(String[] args) {
+        display = new Display();
+        shell = new Shell(display);
+        shell.setSize(300, 300);
+        shell.open();
+        shellGC = new GC(shell);
+        shellBackground = shell.getBackground();
+
+        FileDialog dialog = new FileDialog(shell);
+        dialog.setFilterExtensions(new String[] {"*.gif"});
+        String fileName = dialog.open();
+        if (fileName != null) {
+            loader = new ImageLoader();
+            try {
+                imageDataArray = loader.load(fileName);
+                if (imageDataArray.length &gt; 1) {
+                    animateThread = new Thread("Animation") {
+                        @Override
+                        public void run() {
+                            /* Create an off-screen image to draw on, and fill it with the shell background. */
+                            Image offScreenImage = new Image(display, loader.logicalScreenWidth, loader.logicalScreenHeight);
+                            GC offScreenImageGC = new GC(offScreenImage);
+                            offScreenImageGC.setBackground(shellBackground);
+                            offScreenImageGC.fillRectangle(0, 0, loader.logicalScreenWidth, loader.logicalScreenHeight);
+
+                            try {
+                                /* Create the first image and draw it on the off-screen image. */
+                                int imageDataIndex = 0;  
+                                ImageData imageData = imageDataArray[imageDataIndex];
+                                if (image != null &amp;&amp; !image.isDisposed()) image.dispose();
+                                image = new Image(display, imageData);
+                                offScreenImageGC.drawImage(
+                                        image,
+                                        0,
+                                        0,
+                                        imageData.width,
+                                        imageData.height,
+                                        imageData.x,
+                                        imageData.y,
+                                        imageData.width,
+                                        imageData.height);
+
+                                /* Now loop through the images, creating and drawing each one
+                                 * on the off-screen image before drawing it on the shell. */
+                                int repeatCount = loader.repeatCount;
+                                while (loader.repeatCount == 0 || repeatCount &gt; 0) {
+                                    switch (imageData.disposalMethod) {
+                                    case SWT.DM_FILL_BACKGROUND:
+                                        /* Fill with the background color before drawing. */
+                                        Color bgColor = null;
+                                        if (useGIFBackground &amp;&amp; loader.backgroundPixel != -1) {
+                                            bgColor = new Color(display, imageData.palette.getRGB(loader.backgroundPixel));
+                                        }
+                                        offScreenImageGC.setBackground(bgColor != null ? bgColor : shellBackground);
+                                        offScreenImageGC.fillRectangle(imageData.x, imageData.y, imageData.width, imageData.height);
+                                        if (bgColor != null) bgColor.dispose();
+                                        break;
+                                    case SWT.DM_FILL_PREVIOUS:
+                                        /* Restore the previous image before drawing. */
+                                        offScreenImageGC.drawImage(
+                                                image,
+                                                0,
+                                                0,
+                                                imageData.width,
+                                                imageData.height,
+                                                imageData.x,
+                                                imageData.y,
+                                                imageData.width,
+                                                imageData.height);
+                                        break;
+                                    }
+
+                                    imageDataIndex = (imageDataIndex + 1) % imageDataArray.length;
+                                    imageData = imageDataArray[imageDataIndex];
+                                    image.dispose();
+                                    image = new Image(display, imageData);
+                                    offScreenImageGC.drawImage(
+                                            image,
+                                            0,
+                                            0,
+                                            imageData.width,
+                                            imageData.height,
+                                            imageData.x,
+                                            imageData.y,
+                                            imageData.width,
+                                            imageData.height);
+
+                                    /* Draw the off-screen image to the shell. */
+                                    shellGC.drawImage(offScreenImage, 0, 0);
+
+                                    /* Sleep for the specified delay time (adding commonly-used slow-down fudge factors). */
+                                    try {
+                                        int ms = imageData.delayTime * 10;
+                                        if (ms &lt; 20) ms += 30;
+                                        if (ms &lt; 30) ms += 10;
+                                        Thread.sleep(ms);
+                                    } catch (InterruptedException e) {
+                                    }
+
+                                    /* If we have just drawn the last image, decrement the repeat count and start again. */
+                                    if (imageDataIndex == imageDataArray.length - 1) repeatCount--;
+                                }
+                            } catch (SWTException ex) {
+                                System.out.println("There was an error animating the GIF");
+                            } finally {
+                                if (offScreenImage != null &amp;&amp; !offScreenImage.isDisposed()) offScreenImage.dispose();
+                                if (offScreenImageGC != null &amp;&amp; !offScreenImageGC.isDisposed()) offScreenImageGC.dispose();
+                                if (image != null &amp;&amp; !image.isDisposed()) image.dispose();
+                            }
+                        }
+                    };
+                    animateThread.setDaemon(true);
+                    animateThread.start();
+                }
+            } catch (SWTException ex) {
+                System.out.println("There was an error loading the GIF");
+            }
+        }
+
+        while (!shell.isDisposed()) {
+            if (!display.readAndDispatch()) display.sleep();
+        }
+        display.dispose();
+    }
+}
+</code></pre>
+
+<p><a href="http://www.java2s.com/Code/Java/SWT-JFace-Eclipse/DisplayananimatedGIF.htm" rel="nofollow">Code Source</a></p>

@@ -1,0 +1,105 @@
+<p>You are getting the <code>NullPointerException</code> most likely because you are using a JRE and not a JDK. <a href="http://www.oracle.com/technetwork/java/javase/downloads/index.html?ssSourceSiteId=otnjp">Download</a> a JDK and add it to the buildpath.</p>
+
+<p>Secondly, you are just compiling the files. You then need to create a jar file and add the .class files to it. it is important that they have the same package structure in the jar. In the jar you will also need:</p>
+
+<p><strong>Manifest file</strong></p>
+
+<p><strong>Dependant jars</strong></p>
+
+<p><strong>Classloader</strong></p>
+
+<p>The manifest file describes which class contains the <code>main</code> method and info on the classpath.
+Dependant jars(selenium) also need to be present for obvious reasons.
+a classloader is needed to load the classes in the dependant jar. below is my implementation:</p>
+
+<pre><code>public void actionPerformed(ActionEvent e){
+        System.out.println("The Button Works");
+        String file1ToCompile = "src" + java.io.File.separator + "test" + java.io.File.separator + "Main.java";
+        String file2ToCompile = "src" + java.io.File.separator + "test" + java.io.File.separator + "Selenium.java";
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        int compilationResult = compiler.run(null, null, null, file1ToCompile, file2ToCompile);
+        if (compilationResult == 0) {
+            System.out.println("Compilation is successful");
+        } else {
+            System.out.println("Compilation Failed");
+        }
+
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().put(new Name("Rsrc-Class-Path"), "./ selenium-server-standalone-2.39.0.jar");
+        manifest.getMainAttributes().put(Attributes.Name.CLASS_PATH, ".");
+        manifest.getMainAttributes().put(new Name("Rsrc-Main-Class"), "test.Main");
+        manifest.getMainAttributes().put(Attributes.Name.MAIN_CLASS, "org.eclipse.jdt.internal.jarinjarloader.JarRsrcLoader");
+        try{
+            JarOutputStream target = new JarOutputStream(new FileOutputStream("output.jar"), manifest);
+            add(new File("src" + java.io.File.separator + "test" + java.io.File.separator + "Main.class"), target);
+            add(new File("src" + java.io.File.separator + "test" + java.io.File.separator + "Selenium.class"), target);
+            add(new File("org"), target);
+            add(new File("selenium-server-standalone-2.39.0.jar"), target);
+            target.close();
+        }catch(Exception ex){
+            ex.printStackTrace();
+        }
+    }
+
+    private void add(File source, JarOutputStream target) throws IOException
+    {
+        BufferedInputStream in = null;
+        try
+        {
+            if (source.isDirectory())
+            {
+                String name = source.getPath().replace("\\", "/");
+                if (!name.isEmpty())
+                {
+                    if (!name.endsWith("/"))
+                        name += "/";
+                    JarEntry entry = new JarEntry(name);
+                    entry.setTime(source.lastModified());
+                    target.putNextEntry(entry);
+                    target.closeEntry();
+                }
+                for (File nestedFile: source.listFiles())
+                    add(nestedFile, target);
+                return;
+            }
+
+            JarEntry entry = null;
+
+            if(source.getPath().contains("jarinjarloader")){
+                entry = new JarEntry(source.getPath());
+            }
+            else if(source.getName().endsWith(".class")){
+                entry = new JarEntry("test/"+source.getName());
+            }else if(source.getName().endsWith(".classpath")){
+                entry = new JarEntry(source.getName());
+            }else if(source.getName().endsWith(".jar")){
+                entry = new JarEntry(source.getName());
+            }
+            entry.setTime(source.lastModified());
+            target.putNextEntry(entry);
+            in = new BufferedInputStream(new FileInputStream(source));
+
+            byte[] buffer = new byte[1024];
+            while (true)
+            {
+                int count = in.read(buffer);
+                if (count == -1)
+                    break;
+                target.write(buffer, 0, count);
+            }
+            target.closeEntry();
+        }
+        finally
+        {
+            if (in != null)
+                in.close();
+        }
+    }
+</code></pre>
+
+<p>I used Eclipse's <code>jarinjarloader</code> for my classloader which I obtained by creating a runnable jar in eclipse and extracting the <code>org</code> folder and copying it into my project directory.</p>
+
+<p><img src="http://i.stack.imgur.com/iMPrw.jpg" alt="enter image description here"></p>
+
+<p>There is a slight problem with this but i suspect i am missing something small. output.jar will run fine if the classloader files are in the same directory as the jar. I am currently trying to fix this so that it can find the classloader from within the jar.</p>

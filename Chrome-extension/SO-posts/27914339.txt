@@ -1,0 +1,186 @@
+<p>This is an old question, but I couldn't find anyone else who had tried to do this. I was able to subclass FriendPickerFragment to specify the user IDs, by overriding the graph request and its handler. It's a bit hacky but it seems to work.</p>
+
+<pre><code>// Has to be in this package so we can access package-private members on the superclass.
+package com.facebook.widget;
+
+import android.os.Bundle;
+import android.text.TextUtils;
+
+import com.facebook.Request;
+import com.facebook.Response;
+import com.facebook.Session;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphUser;
+
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Created by Derek on 1/11/2015.
+ */
+public class MyFriendPickerFragment extends FriendPickerFragment {
+    private List&lt;String&gt; userIds;
+
+    public void setUserIds(List&lt;String&gt; userIds) {
+        this.userIds = userIds;
+    }
+
+    @Override
+    Request getRequestForLoadData(Session session) {
+        if (userIds == null) {
+            return super.getRequestForLoadData(session);
+        } else {
+            return createRequest(extraFields, session);
+        }
+    }
+
+    private Request createRequest(Set&lt;String&gt; extraFields, Session session) {
+        Request request = Request.newGraphPathRequest(session, "", null);
+
+        Set&lt;String&gt; fields = new HashSet&lt;String&gt;(extraFields);
+        String[] requiredFields = new String[]{
+                "id",
+                "name"
+        };
+        fields.addAll(Arrays.asList(requiredFields));
+
+        String pictureField = adapter.getPictureFieldSpecifier();
+        if (pictureField != null) {
+            fields.add(pictureField);
+        }
+
+        Bundle parameters = request.getParameters();
+        parameters.putString("fields", TextUtils.join(",", fields));
+        parameters.putString("ids", TextUtils.join(",", userIds));
+        request.setParameters(parameters);
+
+        return request;
+    }
+
+    @Override
+    public void loadData(boolean forceReload) {
+        if(userIds == null) {
+            super.loadData(forceReload);
+        } else {
+            Request request = getRequestForLoadData(getSession());
+            request.setCallback(
+                    new Request.Callback() {
+                        @Override
+                        public void onCompleted(Response response) {
+                            if (response.getError() == null) {
+                                Map&lt;String, Object&gt; map = response.getGraphObject().asMap();
+                                final List&lt;GraphUser&gt; users = new ArrayList&lt;&gt;();
+                                for (Map.Entry&lt;String, Object&gt; entry : map.entrySet()) {
+                                    JSONObject jsonObject = (JSONObject)entry.getValue();
+                                    GraphUser user = GraphObject.Factory.create(jsonObject, GraphUser.class);
+                                    users.add(user);
+                                }
+
+                                adapter.changeCursor(new GraphObjectCursor&lt;GraphUser&gt;() {
+                                    private int position = 0;
+
+                                    @Override
+                                    public boolean isFromCache() {
+                                        return false;
+                                    }
+
+                                    @Override
+                                    public boolean areMoreObjectsAvailable() {
+                                        return position &lt; getCount() - 1;
+                                    }
+
+                                    @Override
+                                    public int getCount() {
+                                        return users.size();
+                                    }
+
+                                    @Override
+                                    public int getPosition() {
+                                        return position;
+                                    }
+
+                                    @Override
+                                    public boolean move(int offset) {
+                                        return moveToPosition(position + offset);
+                                    }
+
+                                    @Override
+                                    public boolean moveToPosition(int newPosition) {
+                                        if (newPosition &gt;= 0 &amp;&amp; newPosition &lt; getCount()) {
+                                            position = newPosition;
+                                            return true;
+                                        }
+                                        return false;
+                                    }
+
+                                    @Override
+                                    public boolean moveToFirst() {
+                                        position = 0;
+                                        return true;
+                                    }
+
+                                    @Override
+                                    public boolean moveToLast() {
+                                        position = getCount() - 1;
+                                        return true;
+                                    }
+
+                                    @Override
+                                    public boolean moveToNext() {
+                                        return move(1);
+                                    }
+
+                                    @Override
+                                    public boolean moveToPrevious() {
+                                        return move(-1);
+                                    }
+
+                                    @Override
+                                    public boolean isFirst() {
+                                        return position == 0;
+                                    }
+
+                                    @Override
+                                    public boolean isLast() {
+                                        return position == getCount() - 1;
+                                    }
+
+                                    @Override
+                                    public boolean isBeforeFirst() {
+                                        return position &lt; 0;
+                                    }
+
+                                    @Override
+                                    public boolean isAfterLast() {
+                                        return position &gt;= getCount();
+                                    }
+
+                                    @Override
+                                    public GraphUser getGraphObject() {
+                                        return users.get(position);
+                                    }
+
+                                    @Override
+                                    public void close() {
+                                    }
+
+                                    @Override
+                                    public boolean isClosed() {
+                                        return false;
+                                    }
+                                });
+                            }
+                        }
+                    }
+            );
+            request.executeAsync();
+        }
+    }
+}
+</code></pre>

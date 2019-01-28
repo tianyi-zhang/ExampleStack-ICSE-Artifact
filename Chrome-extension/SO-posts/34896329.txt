@@ -1,0 +1,88 @@
+<p>I ran into a similar issue using Shiro 1.2.4. Your Shiro configuration is probably OK and the problem lies in ActiveDirectory configuration.  </p>
+
+<p>In my setup some users had the <strong>userPrincipalName</strong> attribute set, while other users hadn't. You can check your in AD server with <a href="https://technet.microsoft.com/en-us/sysinternals/adexplorer.aspx" rel="nofollow">Sysinternals Active Directory Explorer</a> for example.<br>
+This attribute is the one used by Shiro to search for a particular user, then it looks for groups defined in the <strong>memberOf</strong> attribute.<br>
+Take a look at <a href="http://svn.apache.org/repos/asf/shiro/trunk/core/src/main/java/org/apache/shiro/realm/activedirectory/ActiveDirectoryRealm.java" rel="nofollow">ActiveDirectoryRealm.java</a> source code, method <code>Set&lt;String&gt; getRoleNamesForUser(String username, LdapContext ldapContext)</code> the exact query used is<br>
+<code>String searchFilter = "(&amp;(objectClass=*)(userPrincipalName={0}))";</code></p>
+
+<p>So you have two solutions:</p>
+
+<ul>
+<li>Set <strong>userPrincipalName</strong> attribute on every user</li>
+<li>Change how Shiro searches for users</li>
+</ul>
+
+<p>I went for the second solution. Changing the search query is harder than it should be: you have to customize <code>queryForAuthorizationInfo</code> and <code>getRoleNamesForUser</code> (because its private) methods of <code>ActiveDirectoryRealm</code> class. This is how I did it:</p>
+
+<pre><code>public class CustomActiveDirectoryRealm extends ActiveDirectoryRealm {
+
+    @Override
+    protected AuthorizationInfo queryForAuthorizationInfo(PrincipalCollection principals, LdapContextFactory ldapContextFactory) throws NamingException {
+        String username = (String) getAvailablePrincipal(principals);
+
+        // Perform context search
+        LdapContext ldapContext = ldapContextFactory.getSystemLdapContext();
+
+        Set&lt;String&gt; roleNames = null;
+
+        try {
+            roleNames = getRoleNamesForUser(username, ldapContext);
+
+        } finally {
+            LdapUtils.closeContext(ldapContext);
+        }
+
+        return buildAuthorizationInfo(roleNames);
+    }
+
+    // Customize your search query here
+    private static final String USER_SEARCH_FILTER = "(&amp;(objectClass=*)(sn={0}))";
+    private Set&lt;String&gt; getRoleNamesForUser(String username, LdapContext ldapContext) throws NamingException {
+        Set&lt;String&gt; roleNames;
+        roleNames = new LinkedHashSet&lt;String&gt;();
+
+        SearchControls searchCtls = new SearchControls();
+        searchCtls.setSearchScope(SearchControls.SUBTREE_SCOPE);
+
+        String userPrincipalName = username.replace("acegas\\", "");
+        if (principalSuffix != null) {
+            userPrincipalName += principalSuffix;
+        }
+
+        Object[] searchArguments = new Object[]{userPrincipalName};
+
+        NamingEnumeration answer = ldapContext.search(searchBase, USER_SEARCH_FILTER, searchArguments, searchCtls);
+
+        while (answer.hasMoreElements()) {
+            SearchResult sr = (SearchResult) answer.next();
+
+            Attributes attrs = sr.getAttributes();
+
+            if (attrs != null) {
+                NamingEnumeration ae = attrs.getAll();
+                while (ae.hasMore()) {
+                    Attribute attr = (Attribute) ae.next();
+
+                    if (attr.getID().equals("memberOf")) {
+
+                        Collection&lt;String&gt; groupNames = LdapUtils.getAllAttributeValues(attr);
+
+                        Collection&lt;String&gt; rolesForGroups = getRoleNamesForGroups(groupNames);
+                        roleNames.addAll(rolesForGroups);
+                    }
+                }
+            }
+        }
+        return roleNames;
+    }
+}
+</code></pre>
+
+<p>And then of course use this class as Realm in shiro.ini</p>
+
+<pre><code>[main]
+realm = your.package.CustomActiveDirectoryRealm
+realm.ldapContextFactory = $contextFactory 
+realm.searchBase = "OU=&lt;APPDIR&gt;,DC=&lt;COMPANY&gt;,DC=lcl" 
+realm.groupRolesMap = "CN=&lt;ROLE&gt;,OU=&lt;APPDIR&gt;,DC=&lt;COMPANY&gt;,DC=lcl":"Admin"
+</code></pre>

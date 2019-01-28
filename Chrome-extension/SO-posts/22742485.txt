@@ -1,0 +1,67 @@
+<p>using <code>viewScope</code> is recommended. avoid using view root (component in general) attributes for two reasons:</p>
+
+<ol>
+<li><p>in theory, there exists the possibility that you overwrite a view root component attribute. in practice it is not possible since attribute keys are implemented with an <code>enum</code> (at least in mojarra)</p></li>
+<li><p><code>UIComponentBase.getAttributes</code> returns a particular <code>Map</code> implementation: <code>AttributesMap</code>. this implementation, at first, checks if exists a <strong>method</strong> with the same name of map key, in the component. and if not not, it checks the internal map. if again it is not found, it checks the component <code>ValueExpression</code> map. so it is not efficient at all, and, in very particular case, can lead to infinite recursion.</p></li>
+</ol>
+
+<p>take a look at <code>AttributesMap.get</code>, in example: </p>
+
+<pre><code>public Object get(Object keyObj) {
+    String key = (String) keyObj;
+    Object result = null;
+    if (key == null) {
+        throw new NullPointerException();
+    }
+    if (ATTRIBUTES_THAT_ARE_SET_KEY.equals(key)) {
+        result = component.getStateHelper().get(UIComponent.PropertyKeysPrivate.attributesThatAreSet);
+    }
+    Map&lt;String,Object&gt; attributes = (Map&lt;String,Object&gt;)
+          component.getStateHelper().get(PropertyKeys.attributes);
+    if (null == result) {
+        PropertyDescriptor pd =
+                getPropertyDescriptor(key);
+        if (pd != null) {
+            try {
+                Method readMethod = pd.getReadMethod();
+                if (readMethod != null) {
+                    result = (readMethod.invoke(component,
+                            EMPTY_OBJECT_ARRAY));
+                } else {
+                    throw new IllegalArgumentException(key);
+                }
+            } catch (IllegalAccessException e) {
+                throw new FacesException(e);
+            } catch (InvocationTargetException e) {
+                throw new FacesException(e.getTargetException());
+            }
+        } else if (attributes != null) {
+            if (attributes.containsKey(key)) {
+                result = attributes.get(key);
+            }
+        }
+    }
+    if (null == result) {
+        ValueExpression ve = component.getValueExpression(key);
+        if (ve != null) {
+            try {
+                result = ve.getValue(component.getFacesContext().getELContext());
+            } catch (ELException e) {
+                throw new FacesException(e);
+            }
+        }
+    }
+
+    return result;
+}
+</code></pre>
+
+<hr>
+
+<p>thinking about your requisite, it makes little sense, at least from a webapp point of view. view state remembers component states: component model values that are changed from inital state and are to be processed next. if these values have not to be processed then there's no need to be rembered for a long time. we can think about them as "transient". conversely, if they have to be processed and remembered for a long time, persistence is the way. indeed i can't think a single case for this kind of data to survive for a longer time than session, and shorter than forever (persistence).</p>
+
+<p>can you tell us a real life example?</p>
+
+<p>the best example that comes in my mind is remember the active index for a tabView or an accordion, but this value can (and should) be persisted, if it is important.</p>
+
+<p>however every problem has a solution, the first thing i can think is that you may implement a custom scope that stores these values in application scope using a specific cookie (client) value as key.</p>

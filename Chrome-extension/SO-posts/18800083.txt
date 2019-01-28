@@ -1,0 +1,64 @@
+<p>Since your title does not really match your questions, I'm trying to answer as much as I can.</p>
+
+<p>Gyroscopes don't give an absolute orientation (as the <a href="http://developer.android.com/guide/topics/sensors/sensors_motion.html#sensors-motion-rotate">ROTATION_VECTOR</a>) but only rotational velocities around those axis they are built to 'rotate' around. This is due to the design and construction of a <a href="http://en.wikipedia.org/wiki/Gyroscope">gyroscope</a>. Imagine the construction below. The golden thing is rotating and due to the <a href="http://en.wikipedia.org/wiki/Moment_of_inertia">laws of physics</a> it does not want to change its rotation. Now you can rotate the frame and measure these rotations.</p>
+
+<p><img src="http://i.stack.imgur.com/bEPN3.png" alt="Illustration of a Gyroscope"></p>
+
+<p>Now if you want to obtain something as the 'current rotational state' from the Gyroscope, you will have to start with an initial rotation, call it <code>q0</code> and constantly add those tiny little rotational differences that the gyroscope is measuring around the axis to it: <code>q1 = q0 + gyro0</code>, <code>q2 = q1 + gyro1</code>, ...</p>
+
+<p>In other words: The Gyroscope gives you the difference it has rotated around the three constructed axis, so you are not composing absolute values but small deltas.</p>
+
+<p>Now this is very general and leaves a couple of questions unanswered:</p>
+
+<ol>
+<li>Where do I get an initial position from? Answer: Have a look at the Rotation Vector Sensor - you can use the Quaternion obtained from there as an initialisation</li>
+<li>How to 'sum' q and gyro?</li>
+</ol>
+
+<p>Depending on the current representation of a rotation: If you use a rotation matrix, a simple matrix multiplication should do the job, as suggested in the comments (note that this matrix-multiplication implementation is not efficient!):</p>
+
+<pre><code>/**
+ * Performs naiv n^3 matrix multiplication and returns C = A * B
+ * 
+ * @param A Matrix in the array form (e.g. 3x3 =&gt; 9 values)
+ * @param B Matrix in the array form (e.g. 3x3 =&gt; 9 values)
+ * @return A * B
+ */
+public float[] naivMatrixMultiply(float[] B, float[] A) {
+    int mA, nA, mB, nB;
+    mA = nA = (int) Math.sqrt(A.length);
+    mB = nB = (int) Math.sqrt(B.length);
+
+    if (nA != mB)
+        throw new RuntimeException("Illegal matrix dimensions.");
+
+    float[] C = new float[mA * nB];
+    for (int i = 0; i &lt; mA; i++)
+        for (int j = 0; j &lt; nB; j++)
+            for (int k = 0; k &lt; nA; k++)
+                C[i + nA * j] += (A[i + nA * k] * B[k + nB * j]);
+    return C;
+}
+</code></pre>
+
+<p>To use this method, imagine that <code>mRotationMatrix</code> holds the current state, these two lines do the job:</p>
+
+<pre><code>SensorManager.getRotationMatrixFromVector(deltaRotationMatrix, deltaRotationVector);
+mRotationMatrix = naivMatrixMultiply(mRotationMatrix, deltaRotationMatrix);
+// Apply rotation matrix in OpenGL
+gl.glMultMatrixf(mRotationMatrix, 0);
+</code></pre>
+
+<p>If you chose to use Quaternions, imagine again that <code>mQuaternion</code> contains the current state:</p>
+
+<pre><code>// Perform Quaternion multiplication
+mQuaternion.multiplyByQuat(deltaRotationVector);
+// Apply Quaternion in OpenGL
+gl.glRotatef((float) (2.0f * Math.acos(mQuaternion.getW()) * 180.0f / Math.PI),mQuaternion.getX(),mQuaternion.getY(), mQuaternion.getZ());
+</code></pre>
+
+<p>Quaternion multiplication is described <a href="http://mathworld.wolfram.com/Quaternion.html">here - equation (23)</a>. Make sure, you apply the multiplication correctly, since it is not commutative!</p>
+
+<p>If you want to simply know rotation of your device (I assume this is what you ultimately want) I strongly recommend the ROTATION_VECTOR-Sensor. On the other hand Gyroscopes are quite precise for measuring rotational velocity and have a very good dynamic response, but suffer from drift and don't give you an absolute orientation (to magnetic north or according to gravity). </p>
+
+<p><strong>UPDATE</strong>: If you want to see a full example, you can download the source-code for a simple <a href="https://play.google.com/store/apps/details?id=org.hitlabnz.sensor_fusion_demo">demo-app</a> from <a href="https://bitbucket.org/apacha/sensor-fusion-demo">https://bitbucket.org/apacha/sensor-fusion-demo</a>.</p>

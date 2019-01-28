@@ -1,0 +1,91 @@
+<p>The first answer to your question is that you aren't setting a click listener on your TextView which is consuming click events as user2558882 points out. After you set a click listener on your TextView, you'll see that areas outside the ClickableSpans's touch area will work as expected. However, you'll then find that when you click on one of your ClickableSpans, the TextView's onClick callback will be fired as well. That leads us to a difficult issue if having both fire is an issue for you. user2558882's reply can't guarantee that your ClickableSpan's onClick callback will be fired before your TextView's. Here's some solutions from <a href="http://stackoverflow.com/questions/5183645/android-clickablespan-in-clickable-textview?rq=1">a similar thread</a> that are better implemented and an explanation from the source. The accepted answer that thread should work on most devices, but the comments for that answer mention certain devices having issues. It looks like some devices with custom carrier/manufacturer UIs are to blame, but that's speculation. </p>
+
+<p>So why can't you guarantee onClick callback order? If you take a look at the source for TextView (Android 4.3), you'll notice that in the onTouchEvent method,  <code>boolean superResult = super.onTouchEvent(event);</code> (super is View) is called before <code>handled |= mMovement.onTouchEvent(this, (Spannable) mText, event);</code> which is the call to your movement method which then calls your ClickableSpan's onClick. Taking a look at super's (View) onTouchEvent(..), you'll notice:</p>
+
+<pre><code>    // Use a Runnable and post this rather than 
+    // performClick directly. This lets other visual 
+    // of the view update before click actions start.
+    if (mPerformClick == null) {
+        mPerformClick = new PerformClick();
+    }
+    if (!post(mPerformClick)) { // &lt;---- In the case that this won't post, 
+        performClick();         //    it'll fallback to calling it directly
+    }
+</code></pre>
+
+<p>performClick() calls the click listener set, which in this case is our TextView's click listener. What this means, is that you won't know in what order your onClick callbacks are going to fire. What you DO know, is that your ClickableSpan and TextView click listeners WILL be called. The solution on the thread I mentioned previously, helps ensure the order so you can use flags. </p>
+
+<p>If ensuring compatibility with a lot of devices is a priority, you are best served by taking a second look at your layout to see if you can avoid being stuck in this situation. There are usually lots of layout options to skirt cases like this. </p>
+
+<p><strong>Edit for comment answer:</strong></p>
+
+<p>When your TextView executes onTouchEvent, it calls your LinkMovementMethod's onTouchEvent so that it can handle calls to your various ClickableSpan's onClick methods. Your LinkMovementMethod does the following in its onTouchEvent:</p>
+
+<pre><code>    @Override
+    public boolean onTouchEvent(TextView widget, Spannable buffer,
+                            MotionEvent event) {
+        int action = event.getAction();
+
+        if (action == MotionEvent.ACTION_UP ||
+            action == MotionEvent.ACTION_DOWN) {
+            int x = (int) event.getX();
+            int y = (int) event.getY();
+
+            x -= widget.getTotalPaddingLeft();
+            y -= widget.getTotalPaddingTop();
+
+            x += widget.getScrollX();
+            y += widget.getScrollY();
+
+            Layout layout = widget.getLayout();
+            int line = layout.getLineForVertical(y);
+            int off = layout.getOffsetForHorizontal(line, x);
+
+            ClickableSpan[] link = buffer.getSpans(off, off, ClickableSpan.class);
+
+            if (link.length != 0) {
+                if (action == MotionEvent.ACTION_UP) {
+                    link[0].onClick(widget);
+                } else if (action == MotionEvent.ACTION_DOWN) {
+                    Selection.setSelection(buffer,
+                                           buffer.getSpanStart(link[0]),
+                                           buffer.getSpanEnd(link[0]));
+                }
+
+                return true;
+            } else {
+                Selection.removeSelection(buffer);
+
+            }
+         }
+
+        return super.onTouchEvent(widget, buffer, event);
+    }
+</code></pre>
+
+<p>You'll notice that it takes the MotionEvent, gets the action (ACTION_UP: lifting finger, ACTION_DOWN: pressing down finger), the x and y coordinates of where the touch originated and then finds which line number and offset (position in the text) the touch hit. Finally, if there are ClickableSpans that encompass that point, they are retrieved and their onClick methods are called. Since we want to pass on any touches to your parent layout, you could either call your layouts onTouchEvent if you want it to do everything it does when touched, or you could call it's click listener if that implements your needed functionality. Here's where do to that:</p>
+
+<pre><code>         if (link.length != 0) {
+                if (action == MotionEvent.ACTION_UP) {
+                    link[0].onClick(widget);
+                } else if (action == MotionEvent.ACTION_DOWN) {
+                    Selection.setSelection(buffer,
+                                           buffer.getSpanStart(link[0]),
+                                           buffer.getSpanEnd(link[0]));
+                }
+
+                return true;
+            } else {
+                Selection.removeSelection(buffer);
+
+                // Your call to your layout's onTouchEvent or it's 
+                //onClick listener depending on your needs
+
+            }
+         }
+</code></pre>
+
+<p>So to review, you'll create a new class that extends LinkMovementMethod, override it's onTouchEvent method, copy and paste this source with your calls in the correct position where I commented, ensure you're setting your TextView's movement method to this new subclass and you should be set.</p>
+
+<p><strong>Edited again for possible side effect avoidance</strong>
+Take a look at ScrollingMovementMethod's source (LinkMovementMethod's parent) and you'll see that it's a delegate method which calls a static method <code>return Touch.onTouchEvent(widget, buffer, event);</code>  This means that you can just add that as your last line in the method and avoid calling super's (LinkMovementMethod's) onTouchEvent implementation which would duplicate what you're pasting in and other events can fall through as expected.</p>

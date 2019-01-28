@@ -1,0 +1,104 @@
+<p>Increasing the stack size will only serve as a temporary bandage. As others have pointed out, what you really want is tail call elimination, and Java does not have this for various reasons. However, you can cheat if you want.</p>
+
+<p>Red pill in hand? OK, this way please.</p>
+
+<p>There are ways in which you can exchange stack for heap. For example, instead of making a recursive call within a function, have it return a <strong>lazy datastructure</strong> that makes the call when evaluated. You can then unwind the "stack" with Java's for-construct. I'll demonstrate with an example. Consider this Haskell code:</p>
+
+<pre><code>map :: (a -&gt; b) -&gt; [a] -&gt; [b]
+map _ [] = []
+map f (x:xs) = (f x) : map f xs
+</code></pre>
+
+<p>Note that this function never evaluates the tail of the list. So the function doesn't actually need to make a recursive call. In Haskell, it actually returns a <em>thunk</em> for the tail, which is called if it's ever needed. We can do the same thing in Java (this uses classes from <a href="http://functionaljava.org" rel="nofollow">Functional Java</a>):</p>
+
+<pre><code>public &lt;B&gt; Stream&lt;B&gt; map(final F&lt;A, B&gt; f, final Stream&lt;A&gt; as)
+  {return as.isEmpty()
+     ? nil()
+     : cons(f.f(as.head()), new P1&lt;Stream&lt;A&gt;&gt;()
+         {public Stream&lt;A&gt; _1()
+           {return map(f, as.tail);}});}
+</code></pre>
+
+<p>Note that <code>Stream&lt;A&gt;</code> consists of a value of type <code>A</code> and a value of type <code>P1</code> which is like a thunk that returns the rest of the stream when _1() is called. While it certainly looks like recursion, the recursive call to map is not made, but becomes part of the Stream datastructure.</p>
+
+<p>This can then be unwound with a regular for-construct.</p>
+
+<pre><code>for (Stream&lt;B&gt; b = bs; b.isNotEmpty(); b = b.tail()._1())
+  {System.out.println(b.head());}
+</code></pre>
+
+<p>Here's another example, since you were talking about Project Euler. This program uses mutually recursive functions and does not blow the stack, even for millions of calls:</p>
+
+<pre><code>import fj.*; import fj.data.Natural;
+import static fj.data.Enumerator.naturalEnumerator;
+import static fj.data.Natural.*; import static fj.pre.Ord.naturalOrd;
+import fj.data.Stream; import fj.data.vector.V2;
+import static fj.data.Stream.*; import static fj.pre.Show.*;
+
+public class Primes
+  {public static Stream&lt;Natural&gt; primes()
+    {return cons(natural(2).some(), new P1&lt;Stream&lt;Natural&gt;&gt;()
+       {public Stream&lt;Natural&gt; _1()
+         {return forever(naturalEnumerator, natural(3).some(), 2)
+                 .filter(new F&lt;Natural, Boolean&gt;()
+                   {public Boolean f(final Natural n)
+                      {return primeFactors(n).length() == 1;}});}});}
+
+   public static Stream&lt;Natural&gt; primeFactors(final Natural n)
+     {return factor(n, natural(2).some(), primes().tail());}
+
+   public static Stream&lt;Natural&gt; factor(final Natural n, final Natural p,
+                                        final P1&lt;Stream&lt;Natural&gt;&gt; ps)
+     {for (Stream&lt;Natural&gt; ns = cons(p, ps); true; ns = ns.tail()._1())
+          {final Natural h = ns.head();
+           final P1&lt;Stream&lt;Natural&gt;&gt; t = ns.tail();
+           if (naturalOrd.isGreaterThan(h.multiply(h), n))
+              return single(n);
+           else {final V2&lt;Natural&gt; dm = n.divmod(h);
+                 if (naturalOrd.eq(dm._2(), ZERO))
+                    return cons(h, new P1&lt;Stream&lt;Natural&gt;&gt;()
+                      {public Stream&lt;Natural&gt; _1()
+                        {return factor(dm._1(), h, t);}});}}}
+
+   public static void main(final String[] a)
+     {streamShow(naturalShow).println(primes().takeWhile
+       (naturalOrd.isLessThan(natural(Long.valueOf(a[0])).some())));}}
+</code></pre>
+
+<p>Another thing you can do to exchange stack for heap is to use <strong>multiple threads</strong>. The idea is that instead of making a recursive call, <em>you create a thunk that makes the call, hand this thunk off to a new thread and let the current thread exit the function.</em> This is the idea behind things like Stackless Python.</p>
+
+<p>The following is an example of that in Java. Apologies that it's a bit opaque to look at without the <code>import static</code> clauses:</p>
+
+<pre><code>public static &lt;A, B&gt; Promise&lt;B&gt; foldRight(final Strategy&lt;Unit&gt; s,
+                                          final F&lt;A, F&lt;B, B&gt;&gt; f,
+                                          final B b,
+                                          final List&lt;A&gt; as)
+  {return as.isEmpty()
+     ? promise(s, P.p(b))
+     : liftM2(f).f
+         (promise(s, P.p(as.head()))).f
+         (join(s, new P1&lt;Promise&lt;B&gt;&gt;&gt;()
+            {public Promise&lt;B&gt; _1()
+              {return foldRight(s, f, b, as.tail());}}));}
+</code></pre>
+
+<p><code>Strategy&lt;Unit&gt; s</code> is backed by a thread pool, and the <code>promise</code> function hands a thunk to the thread pool, returning a <code>Promise</code>, which is very much like <code>java.util.concurrent.Future</code>, only better. <a href="http://apocalisp.wordpress.com/2008/09/02/a-better-future/" rel="nofollow">See here.</a> The point is that the method above <em>folds a right-recursive datastructure to the right in O(1) stack</em>, which ordinarily requires tail-call elimination. So we've effectively achived TCE, in exchange for some complexity. You would call this function as follows:</p>
+
+<pre><code>Strategy&lt;Unit&gt; s = Strategy.simpleThreadStrategy();
+int x = foldRight(s, Integers.add, List.nil(), range(1, 10000)).claim();
+System.out.println(x); // 49995000
+</code></pre>
+
+<p>Note that this latter technique works perfectly well for nonlinear recursion. That is, it will run in constant stack even algorithms that don't have tail calls.</p>
+
+<p>Another thing you can do is employ a technique called <strong>trampolining</strong>. A trampoline is a computation, reified as a data structure, that can be stepped through. The <a href="https://github.com/functionaljava/functionaljava/blob/master/core/src/main/java/fj/control/Trampoline.java" rel="nofollow">Functional Java library</a> includes a <a href="https://github.com/functionaljava/functionaljava/blob/master/core/src/main/java/fj/control/Trampoline.java" rel="nofollow"><code>Trampoline</code></a> data type that I wrote, which effectively lets you turn any function call into a tail call. As an example <a href="https://github.com/functionaljava/functionaljava/blob/master/core/src/main/java/fj/data/List.java#L635" rel="nofollow">here is a trampolined <code>foldRightC</code> that folds to the right in constant stack:</a></p>
+
+<pre><code>public final &lt;B&gt; Trampoline&lt;B&gt; foldRightC(final F2&lt;A, B, B&gt; f, final B b)
+  {return Trampoline.suspend(new P1&lt;Trampoline&lt;B&gt;&gt;()
+    {public Trampoline&lt;B&gt; _1()
+      {return isEmpty()
+         ? Trampoline.pure(b)
+         : tail().foldRightC(f, b).map(f.f(head()));}});}
+</code></pre>
+
+<p>It's the same principle as using multiple threads, except that instead of invoking each step in its own thread, we construct each step on the heap, very much like using a <code>Stream</code>, and then we run all the steps in a single loop with <code>Trampoline.run</code>.</p>

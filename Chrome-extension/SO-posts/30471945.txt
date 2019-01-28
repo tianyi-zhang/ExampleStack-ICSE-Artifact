@@ -1,0 +1,50 @@
+<p>This answer is going to be tough if we do this using <code>ECPublicKeySpec</code>. So lets cheat a bit:</p>
+
+<pre><code>private static byte[] P256_HEAD = Base64.getDecoder().decode("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE");
+
+public static ECPublicKey convertP256Key(byte[] w) throws InvalidKeySpecException {
+    byte[] encodedKey = new byte[P256_HEAD.length + w.length];
+    System.arraycopy(P256_HEAD, 0, encodedKey, 0, P256_HEAD.length);
+    System.arraycopy(w, 0, encodedKey, P256_HEAD.length, w.length);
+    KeyFactory eckf;
+    try {
+        eckf = KeyFactory.getInstance("EC");
+    } catch (NoSuchAlgorithmException e) {
+        throw new IllegalStateException("EC key factory not present in runtime");
+    }
+    X509EncodedKeySpec ecpks = new X509EncodedKeySpec(encodedKey);
+    return (ECPublicKey) eckf.generatePublic(ecpks);
+}
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>ECPublicKey key = convertP256Key(w);
+System.out.println(key);
+</code></pre>
+
+<p>I generated the head using:</p>
+
+<pre><code>private static byte[] createHeadForNamedCurve(String name, int size)
+        throws NoSuchAlgorithmException,
+        InvalidAlgorithmParameterException, IOException {
+    KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC");
+    ECGenParameterSpec m = new ECGenParameterSpec(name);
+    kpg.initialize(m);
+    KeyPair kp = kpg.generateKeyPair();
+    byte[] encoded = kp.getPublic().getEncoded();
+    return Arrays.copyOf(encoded, encoded.length - 2 * (size / Byte.SIZE));
+}
+</code></pre>
+
+<p>called by:</p>
+
+<pre><code>String name = "NIST P-256";
+int size = 256;
+byte[] head = createHeadForNamedCurve(name, size);
+System.out.println(Base64.getEncoder().encodeToString(head));
+</code></pre>
+
+<p>The idea behind this is to create an X509 encoded key, which happily ends with the public point <code>w</code> at the end (the bytes before that contain the ASN.1 DER encoding of the OID of the named curve and structural overhead, ending with byte <code>04</code> indicating an uncompressed point). Then we replace the "random" point <code>w</code> at the end with your <code>w</code> and we decode it again.  </p>
+
+<p>Java 7 required for the EC functionality and Java 8 for the Base 64 encoder / decoder, no additional libraries and stuff. Note that this will actually display the public key as a <em>named curve</em> when printed out, something the other solutions won't do.</p>

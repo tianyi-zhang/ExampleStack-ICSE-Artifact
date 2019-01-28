@@ -1,0 +1,247 @@
+<p>This seems to be an issue with <code>Image.getScaledInstance</code> (and may also be related to gray scaled images).  I tried several other hints but had the same result.</p>
+
+<p>Instead, I employed my own scaling algorithm (which I stole from the Internet), which uses a divide and conquer approach, which generally produces better results...</p>
+
+<p>So, original ontop, <code>Image#getScaledInstance</code> on the left, custom scaled on the right</p>
+
+<p><img src="http://i.stack.imgur.com/HRD1t.png" alt="enter image description here"></p>
+
+<p>nb: This uses some of my own personal library code, so it might not be entirely suitable for you, but this presents the basics...</p>
+
+<pre><code>import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.RenderingHints;
+import java.awt.Transparency;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+
+public class ImageScaleTest {
+
+    public static void main(String[] args) {
+        new ImageScaleTest();
+    }
+
+    public ImageScaleTest() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame("Testing");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new TestPane());
+                frame.pack();
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public static enum RenderQuality {
+
+        High,
+        Medium,
+        Low
+    }
+
+    public class TestPane extends JPanel {
+
+        private BufferedImage original;
+        private BufferedImage scaled2;
+        private Image scaled;
+
+        public TestPane() {
+            try {
+                original = ImageIO.read(new File("/path/to/image"));
+                scaled = original.getScaledInstance(original.getWidth() / 2, original.getHeight() / 2, Image.SCALE_DEFAULT);
+                scaled2 = getScaledInstance(original, 0.5d, RenderQuality.High);
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            return new Dimension(400, 600);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g.create();
+            g2d.drawImage(original, 0, 0, this);
+            g2d.drawImage(scaled, 0, original.getHeight(), this);
+            g2d.drawImage(scaled2, scaled.getWidth(this), original.getHeight(), this);
+            g2d.dispose();
+        }
+    }
+
+    public static BufferedImage getScaledInstance(BufferedImage img, double dScaleFactor, RenderQuality quality) {
+
+        BufferedImage imgBuffer = null;
+
+        if (quality == RenderQuality.High) {
+
+//            System.out.println("Scale high quality...");
+            imgBuffer = getScaledInstance(img, dScaleFactor, RenderingHints.VALUE_INTERPOLATION_BILINEAR, true);
+
+        } else if (quality == RenderQuality.Medium) {
+
+            imgBuffer = getScaledInstance(img, dScaleFactor, RenderingHints.VALUE_INTERPOLATION_BILINEAR, false);
+
+        } else {
+
+//            System.out.println("Scale low quality...");
+            imgBuffer = getScaledInstance(img, dScaleFactor, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR, false);
+
+        }
+
+        return imgBuffer;
+
+    }
+
+    protected static BufferedImage getScaledInstance(BufferedImage img, double dScaleFactor, Object hint, boolean bHighQuality) {
+
+        BufferedImage imgScale = img;
+
+        int iImageWidth = (int) Math.round(img.getWidth() * dScaleFactor);
+        int iImageHeight = (int) Math.round(img.getHeight() * dScaleFactor);
+
+        if (dScaleFactor &lt;= 1.0d) {
+
+            imgScale = getScaledDownInstance(img, iImageWidth, iImageHeight, hint, bHighQuality);
+
+        } else {
+
+            imgScale = getScaledUpInstance(img, iImageWidth, iImageHeight, hint, bHighQuality);
+
+        }
+
+        return imgScale;
+
+    }
+
+    protected static BufferedImage getScaledDownInstance(BufferedImage img,
+            int targetWidth,
+            int targetHeight,
+            Object hint,
+            boolean higherQuality) {
+
+        int type = (img.getTransparency() == Transparency.OPAQUE)
+                ? BufferedImage.TYPE_INT_RGB : BufferedImage.TYPE_INT_ARGB;
+
+        BufferedImage ret = (BufferedImage) img;
+
+        if (targetHeight &gt; 0 || targetWidth &gt; 0) {
+            int w, h;
+            if (higherQuality) {
+                // Use multi-step technique: start with original size, then
+                // scale down in multiple passes with drawImage()
+                // until the target size is reached
+                w = img.getWidth();
+                h = img.getHeight();
+            } else {
+                // Use one-step technique: scale directly from original
+                // size to target size with a single drawImage() call
+                w = targetWidth;
+                h = targetHeight;
+            }
+
+            do {
+                if (higherQuality &amp;&amp; w &gt; targetWidth) {
+                    w /= 2;
+                    if (w &lt; targetWidth) {
+                        w = targetWidth;
+                    }
+                }
+
+                if (higherQuality &amp;&amp; h &gt; targetHeight) {
+                    h /= 2;
+                    if (h &lt; targetHeight) {
+                        h = targetHeight;
+                    }
+                }
+
+                BufferedImage tmp = new BufferedImage(Math.max(w, 1), Math.max(h, 1), type);
+                Graphics2D g2 = tmp.createGraphics();
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, hint);
+                g2.drawImage(ret, 0, 0, w, h, null);
+                g2.dispose();
+
+                ret = tmp;
+            } while (w != targetWidth || h != targetHeight);
+        } else {
+            ret = new BufferedImage(1, 1, type);
+        }
+        return ret;
+    }
+
+    protected static BufferedImage getScaledUpInstance(BufferedImage img,
+            int targetWidth,
+            int targetHeight,
+            Object hint,
+            boolean higherQuality) {
+
+        int type = BufferedImage.TYPE_INT_ARGB;
+
+        BufferedImage ret = (BufferedImage) img;
+        int w, h;
+        if (higherQuality) {
+            // Use multi-step technique: start with original size, then
+            // scale down in multiple passes with drawImage()
+            // until the target size is reached
+            w = img.getWidth();
+            h = img.getHeight();
+        } else {
+            // Use one-step technique: scale directly from original
+            // size to target size with a single drawImage() call
+            w = targetWidth;
+            h = targetHeight;
+        }
+
+        do {
+            if (higherQuality &amp;&amp; w &lt; targetWidth) {
+                w *= 2;
+                if (w &gt; targetWidth) {
+                    w = targetWidth;
+                }
+            }
+
+            if (higherQuality &amp;&amp; h &lt; targetHeight) {
+                h *= 2;
+                if (h &gt; targetHeight) {
+                    h = targetHeight;
+                }
+            }
+
+            BufferedImage tmp = new BufferedImage(w, h, type);
+            Graphics2D g2 = tmp.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, hint);
+            g2.drawImage(ret, 0, 0, w, h, null);
+            g2.dispose();
+
+            ret = tmp;
+            tmp = null;
+        } while (w != targetWidth || h != targetHeight);
+        return ret;
+    }
+}
+</code></pre>
+
+<p>May, also, like to take a look at <a href="https://today.java.net/pub/a/today/2007/04/03/perils-of-image-getscaledinstance.html" rel="nofollow">The Perils of Image.getScaledInstance()</a></p>
+
+<p>ps- I did a quick bit of searching and this seems to be a bug (or feature) in the API</p>

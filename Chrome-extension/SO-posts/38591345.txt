@@ -1,0 +1,566 @@
+<pre><code>        //WeightscaleActivity
+   public class WeightScaleActivity extends Activity {
+    private static final String TAG = "BluetoothHealthActivity";
+    // Use the appropriate IEEE 11073 data types based on the devices used.
+    // Below are some examples. Refer to relevant Bluetooth HDP specifications
+    // for detail.
+    // 0x1007 - blood pressure meter
+    // 0x1008 - body thermometer
+    // 0x100F - body weight scale
+    private static final int HEALTH_WEIGHTSCALE_PROFILE_SOURCE_DATA_TYPE = 0x100F;
+
+    private static final int REQUEST_ENABLE_BT = 1;
+    private BluetoothAdapter mBluetoothAdapter;
+
+    private BluetoothDevice[] mAllBondedDevices;
+    private BluetoothDevice mDevice;
+    private int mDeviceIndex = 0;
+    private Resources mRes;
+    private Messenger mHealthService;
+    private boolean mHealthServiceBound;
+    private double weight;
+    private JSONObject jsonObj;
+    public String weightStr;
+    public boolean wtConnected = false;
+
+    private ProgressDialog progressDialog;
+    private String healthDeviceMac;
+
+    // WeightScale
+    private TextView weight_scale_value;
+    private TextView weight_unit;
+
+    private Handler mIncomingHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+            // Application registration complete.
+            case BtHealthDeviceService.STATUS_HEALTH_APP_REG:
+                System.out.println("In hdpacrtivity handleMessage");
+                break;
+            // Application unregistration complete.
+            case BtHealthDeviceService.STATUS_HEALTH_APP_UNREG:
+                break;
+            // Reading data from HDP device.
+            case BtHealthDeviceService.STATUS_READ_DATA:
+                showIndicator(getResources().getString(
+                        R.string.indicator_start_receive));
+
+                break;
+
+            // Finish reading data from HDP device.
+            case BtHealthDeviceService.STATUS_READ_DATA_DONE:
+
+                if (weight_scale_value != null) {
+                    weight_scale_value.setText("" + weight);
+                }
+
+                dismissIndicator();
+                // Send Data on Cloud
+                sendData();
+                break;
+
+            case BtHealthDeviceService.MSG_MAC_ADDRESS:
+
+                System.out.println("msg.obj.toString()" + msg.obj.toString());
+                System.out.println("In mac address handle" + msg.arg1);
+                healthDeviceMac = msg.obj.toString();
+                break;
+            // Channel creation complete. Some devices will automatically
+            // establish connection.
+            case BtHealthDeviceService.STATUS_CREATE_CHANNEL:
+                Log.d(TAG, "STATUS_CREATE_CHANNEl enabled");
+                break;
+            // Channel destroy complete. This happens when either the device
+            // disconnects or there is extended inactivity.
+            case BtHealthDeviceService.STATUS_DESTROY_CHANNEL:
+                break;
+            case BtHealthDeviceService.RECEIVED_WEIGHT:
+                int weightt = msg.arg1;
+                Log.i(TAG, "msg.arg1 @ sys is " + weightt);
+                String weightStr = "" + weightt / 100 + "." + weightt % 100;
+                weight = Double.parseDouble(weightStr);
+                System.out.println("Weight is:" + weight);
+                System.out.println("Weight:******");
+                break;
+
+            default:
+                super.handleMessage(msg);
+            }
+        }
+    };
+    private final Messenger mMessenger = new Messenger(mIncomingHandler);
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // this code is for solving issue
+        // android.os.NetworkOnMainThreadException
+        if (android.os.Build.VERSION.SDK_INT &gt; 9) {
+            StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder()
+                    .permitAll().build();
+            StrictMode.setThreadPolicy(policy);
+        }
+
+        // Check for Bluetooth availability on the Android platform.
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        if (mBluetoothAdapter == null) {
+            Toast.makeText(this, R.string.bluetooth_not_available,
+                    Toast.LENGTH_LONG);
+            finish();
+            return;
+        }
+
+        setContentView(R.layout.weightscale_toggle);
+
+        mRes = getResources();
+        mHealthServiceBound = false;
+
+        // Weight Scale
+        // mWeight = (TextView) findViewById(R.id.Weight);
+        LinearLayout weightLayout = (LinearLayout) findViewById(R.id.value_layout_weight);
+        weight_scale_value = (TextView) weightLayout
+                .findViewById(R.id.disp_data_ws_value_textview);
+        weight_unit = (TextView) weightLayout
+                .findViewById(R.id.disp_data_ws_unit_textview);
+
+        Resources res = getBaseContext().getResources();
+        weight_unit.setText("Kg");
+        weight_unit.setText(res.getString(R.string.weightscale_unit));
+
+        // Toggle button
+        final ToggleButton weight_scale_connect_app_button = (ToggleButton) findViewById(R.id.weightscale_register_app_button);
+
+        // Initiates application registration through {@link
+        // BluetoothHDPService}.
+
+        // Toggle Button Weightscale
+        weight_scale_connect_app_button
+                .setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton compoundButton,
+                            boolean checked) {
+                        if (checked) {
+                            sendMessage(
+                                    BtHealthDeviceService.MSG_REG_HEALTH_APP,
+                                    HEALTH_WEIGHTSCALE_PROFILE_SOURCE_DATA_TYPE);
+                            System.out.println("in Weight Toggle*****");
+
+                        } else {
+                            sendMessage(
+                                    BtHealthDeviceService.MSG_UNREG_HEALTH_APP,
+                                    0);
+                            System.out.println("in unregister Weight Toggle**");
+
+                        }
+                    }
+                });
+
+        if (weight_scale_connect_app_button.isChecked()) {
+            sendMessage(BtHealthDeviceService.MSG_REG_HEALTH_APP,
+                    HEALTH_WEIGHTSCALE_PROFILE_SOURCE_DATA_TYPE);
+            System.out.println("in Weight Toggle**--");
+
+        } else {
+            sendMessage(BtHealthDeviceService.MSG_UNREG_HEALTH_APP, 0);
+            System.out.println("in  unregister Weight Toggle**--");
+
+        }
+
+        // activity receiver not registered Exception
+        IntentFilter filter = new IntentFilter();
+        registerReceiver(mReceiver, filter);
+
+    }
+
+    // Sets up communication with {@link BluetoothHDPService}.
+    private ServiceConnection mConnection = new ServiceConnection() {
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            mHealthServiceBound = true;
+            System.out.println("In ServiceConnection onServiceConnected");
+            Message msg = Message.obtain(null,
+                    BtHealthDeviceService.MSG_REG_CLIENT);
+            msg.replyTo = mMessenger;
+            mHealthService = new Messenger(service);
+            if (mHealthService == null) {
+                System.out.println("&gt;&gt; mHealthService is null");
+            }
+            try {
+                // 4
+                System.out.println("in ServiceConnection try...");
+                mHealthService.send(msg);
+            } catch (RemoteException e) {
+                Log.w(TAG, "Unable to register client to service.");
+                e.printStackTrace();
+            }
+        }
+
+        public void onServiceDisconnected(ComponentName name) {
+            System.out.println(" in onServiceDisconnected ");
+            mHealthService = null;
+            mHealthServiceBound = false;
+        }
+    };
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mHealthServiceBound)
+            unbindService(mConnection);
+        unregisterReceiver(mReceiver);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // If Bluetooth is not on, request that it be enabled.
+        if (!mBluetoothAdapter.isEnabled()) {
+            Intent enableIntent = new Intent(
+                    BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
+        } else {
+            initialize();
+        }
+    }
+
+    /**
+     * Ensures user has turned on Bluetooth on the Android device.
+     */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        switch (requestCode) {
+        case REQUEST_ENABLE_BT:
+            if (resultCode == Activity.RESULT_OK) {
+                initialize();
+            } else {
+                finish();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Used by {@link SelectDeviceDialogFragment} to record the bonded Bluetooth
+     * device selected by the user.
+     * 
+     * @param position
+     *            Position of the bonded Bluetooth device in the array.
+     */
+    public void setDevice(int position) {
+        mDevice = this.mAllBondedDevices[position];
+        mDeviceIndex = position;
+    }
+
+    private void connectChannel() {
+        sendMessageWithDevice(BtHealthDeviceService.MSG_CONNECT_CHANNEL);
+    }
+
+    private void disconnectChannel() {
+        sendMessageWithDevice(BtHealthDeviceService.MSG_DISCONNECT_CHANNEL);
+    }
+
+    private void initialize() {
+        // Starts health service.
+        Intent intent = new Intent(this, BtHealthDeviceService.class);
+        startService(intent);
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+    }
+
+    // Intent filter and broadcast receive to handle Bluetooth on event.
+    private IntentFilter initIntentFilter() {
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+        return filter;
+    }
+
+    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            final String action = intent.getAction();
+            if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+                if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
+                        BluetoothAdapter.ERROR) == BluetoothAdapter.STATE_ON) {
+                    initialize();
+                }
+
+            }
+        }
+    };
+
+    // Sends a message to {@link BluetoothHDPService}.
+    private void sendMessage(int what, int value) {
+        if (mHealthService == null) {
+            System.out
+                    .println("In HDP activity sendMessage -Health Service not connected.");
+
+            Log.d(TAG, "Health Service not connected.");
+            return;
+        }
+
+        try {
+            System.out.println("hdp activity send message");
+            System.out.println("what******" + what);
+            System.out.println("value*****" + value);
+
+            mHealthService.send(Message.obtain(null, what, value, 0));
+
+        } catch (RemoteException e) {
+            Log.w(TAG, "Unable to reach service.");
+
+            e.printStackTrace();
+        }
+    }
+
+    // Sends an update message, along with an HDP BluetoothDevice object, to
+    // {@link BluetoothHDPService}. The BluetoothDevice object is needed by the
+    // channel creation
+    // method.
+    private void sendMessageWithDevice(int what) {
+        if (mHealthService == null) {
+            Log.d(TAG, "Health Service not connected.");
+            System.out.println("in sendMessageWithDevice");
+            return;
+        }
+
+        try {
+            System.out.println("in sendMessageWithDevice try");
+
+            mHealthService.send(Message.obtain(null, what, mDevice));
+        } catch (RemoteException e) {
+            Log.w(TAG, "Unable to reach service.");
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Dialog to display a list of bonded Bluetooth devices for user to select
+     * from. This is needed only for channel connection initiated from the
+     * application.
+     */
+    public static class SelectDeviceDialogFragment extends DialogFragment {
+
+        public static SelectDeviceDialogFragment newInstance(String[] names,
+                int position) {
+            SelectDeviceDialogFragment frag = new SelectDeviceDialogFragment();
+            Bundle args = new Bundle();
+            args.putStringArray("names", names);
+            args.putInt("position", position);
+            frag.setArguments(args);
+            return frag;
+        }
+
+        @Override
+        public Dialog onCreateDialog(Bundle savedInstanceState) {
+            String[] deviceNames = getArguments().getStringArray("names");
+            int position = getArguments().getInt("position", -1);
+            if (position == -1)
+                position = 0;
+            return new AlertDialog.Builder(getActivity())
+                    .setTitle(R.string.select_device)
+                    .setPositiveButton(R.string.ok,
+                            new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface dialog,
+                                        int which) {
+                                    ((WeightScaleActivity) getActivity())
+                                            .connectChannel();
+                                }
+                            })
+                    .setSingleChoiceItems(deviceNames, position,
+                            new DialogInterface.OnClickListener() {
+                                public void onClick(DialogInterface dialog,
+                                        int which) {
+                                    ((WeightScaleActivity) getActivity())
+                                            .setDevice(which);
+                                }
+                            }).create();
+        }
+    }
+
+    private void sendData() {
+        jsonObj = new JSONObject();
+
+        new RestConnection().execute();
+    }
+
+    private class RestConnection extends AsyncTask&lt;Void, Void, String&gt; {
+
+        private String TAG = this.getClass().getName();
+
+        ProgressDialog progressDialog;
+
+        public RestConnection() {
+            super();
+        }
+
+        @Override
+        protected void onPreExecute() {
+        }
+
+        @Override
+        protected String doInBackground(Void... arg0) {
+            String st = jsonObj.toString();
+            String response = "";
+
+            Log.i(TAG, st);
+
+            JSONObject item = null;
+            try {
+                item = new JSONObject(st);
+            } catch (JSONException e) {
+                Log.e(TAG, "Could not parse malformed JSON:" + st);
+            }
+
+            if (item == null) {
+                Log.e(TAG, "Null");
+            }
+
+            // doing the respective post
+            try {
+
+                // POST DATA
+                String url = Constants.getDataPost();
+                HttpClient httpClient = new DefaultHttpClient();
+                HttpPost httpPost = new HttpPost(url);
+                HttpConnectionParams.setConnectionTimeout(
+                        httpClient.getParams(), 10000);
+                JSONObject json = new JSONObject();
+                json.put("siteId", "");
+                if (wtConnected == true) {
+                    json.put("patientId", 5);
+                    json.put("deviceMACId", healthDeviceMac);
+                    json.put("readingType", 103);
+                    json.put("deviceData", Double.toString(weight));
+                    json.put("deviceType", "WeightScale");
+
+                }
+                json.put("assetId", "");
+
+                json.put("geoLocationLatitude", "");
+
+                json.put("clientId", "");
+
+                json.put("timeStamp", System.currentTimeMillis());
+
+                json.put("deviceRawData", "");
+                json.put("geoLocationLongitude", "");
+
+                System.out.println("Json Is:" + json);
+                StringEntity se = new StringEntity(json.toString());
+                se.setContentType(new BasicHeader(HTTP.CONTENT_TYPE,
+                        "application/json"));
+                httpPost.setEntity(se);
+                HttpResponse httpResponse = httpClient.execute(httpPost);
+                Log.i(TAG, "response "
+                        + httpResponse.getStatusLine().getStatusCode());
+                HttpEntity entityPost = httpResponse.getEntity();
+                InputStream is = entityPost.getContent();
+                String response1 = convertStreamToString(is);
+                Log.i(TAG, "response message " + response1);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                Log.e(TAG, "Post error:Error");
+                Log.i(TAG, "Weight" + response);
+            }
+
+            return response;
+
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+        }
+    }
+
+    private static String convertStreamToString(InputStream is) {
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+        StringBuilder sb = new StringBuilder();
+
+        String line = null;
+        try {
+            while ((line = reader.readLine()) != null) {
+                sb.append((line + "\n"));
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                is.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return sb.toString();
+    }
+
+    // Progress Dialog for Data Reading
+
+    private Dialog progress;
+
+    private void showIndicator(String message) {
+        if (progress == null) {
+            progress = new Dialog(WeightScaleActivity.this);
+            // AlertDialog.Builder builder = new AlertDialog.Builder(context);
+            progress.getWindow().setBackgroundDrawable(new ColorDrawable(0));
+            progress.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            progress.setContentView(R.layout.custom_alert);
+            progress.setCancelable(false);
+        }
+
+        setIndicatorMessage(message);
+
+        if (!progress.isShowing()) {
+            progress.show();
+        }
+    }
+
+    private void setIndicatorMessage(String message) {
+        if (progress == null) {
+            return;
+        }
+        TextView syncMessages = (TextView) progress
+                .findViewById(R.id.syncMessages1);
+
+        if (message == null) {
+            message = "";
+        }
+
+        if (syncMessages != null) {
+            syncMessages.setText(message);
+        }
+    }
+
+    private void dismissIndicator() {
+        if (progress == null) {
+            return;
+        }
+
+        progress.dismiss();
+        progress = null;
+    }
+
+    // Are you sure you want to exit? Alert Box
+    @Override
+    public void onBackPressed() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setMessage("Are you sure you want to exit?")
+                .setCancelable(false)
+                .setPositiveButton("Yes",
+                        new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int id) {
+                                WeightScaleActivity.this.finish();
+                            }
+                        })
+                .setNegativeButton("No", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int id) {
+                        dialog.cancel();
+                    }
+                });
+        AlertDialog alert = builder.create();
+        alert.show();
+
+    }
+
+}
+</code></pre>

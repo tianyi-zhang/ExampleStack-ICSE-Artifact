@@ -1,0 +1,102 @@
+<p>There is a class on the stack trace which is hiding the exception. </p>
+
+<p>If you take a look on method <code>public void execute(Target target)</code> from <code>org.hibernate.tool.hbm2ddl.SchemaUpdate</code>. The <code>connectionHelper.getConnection();</code> is on nested try catch blocks. The call to this method produces the SqlException which is catch in the first try/catch block, inside the catch the stack trace is printed and the exception is throw further, however this time is catch by the second try/catch block which hides the exception. The code is shown below:</p>
+
+<pre><code>public void execute(Target target) {
+    LOG.runningHbm2ddlSchemaUpdate();
+
+    Connection connection = null;
+    Statement stmt = null;
+    Writer outputFileWriter = null;
+
+    exceptions.clear();
+
+    try {
+        DatabaseMetadata meta;
+        try {
+            LOG.fetchingDatabaseMetadata();
+            connectionHelper.prepare( true );
+            // THE SQLEXCEPTION IS THROWN &lt;---------------
+            connection = connectionHelper.getConnection();
+            meta = new DatabaseMetadata( connection, dialect, configuration );
+            stmt = connection.createStatement();
+        }
+        catch ( SQLException sqle ) {
+            // THE SQLEXCEPTION IS CATCH &lt;------------
+            exceptions.add( sqle );
+            // PRINTS STACK TRACE &lt;-----------------
+            LOG.unableToGetDatabaseMetadata(sqle);
+            // THE EXCEPTION IS THROWN AGAIN &lt;-----------------
+            throw sqle;
+        }
+
+        LOG.updatingSchema();
+
+        if ( outputFile != null ) {
+            LOG.writingGeneratedSchemaToFile( outputFile );
+            outputFileWriter = new FileWriter( outputFile );
+        }
+
+        List&lt;SchemaUpdateScript&gt; scripts = configuration.generateSchemaUpdateScriptList( dialect, meta );
+        for ( SchemaUpdateScript script : scripts ) {
+            String formatted = formatter.format( script.getScript() );
+            try {
+                if ( delimiter != null ) {
+                    formatted += delimiter;
+                }
+                if ( target.doScript() ) {
+                    System.out.println( formatted );
+                }
+                if ( outputFile != null ) {
+                    outputFileWriter.write( formatted + "\n" );
+                }
+                if ( target.doExport() ) {
+                    LOG.debug( script.getScript() );
+                    stmt.executeUpdate( formatted );
+                }
+            }
+            catch ( SQLException e ) {
+                if (!script.isQuiet()) {
+                    if ( haltOnError ) {
+                        throw new JDBCException( "Error during DDL export", e );
+                    }
+                    exceptions.add( e );
+                    LOG.unsuccessful(script.getScript());
+                    LOG.error(e.getMessage());
+                }
+            }
+        }
+
+        LOG.schemaUpdateComplete();
+
+    }
+    catch ( Exception e ) {
+        // THE EXCEPTION IS CATCH HOWEVER THIS TIME IS NOT THROWN FURTHER           exceptions.add( e );
+        LOG.unableToCompleteSchemaUpdate(e);
+    }
+    finally {
+
+        try {
+            if ( stmt != null ) {
+                stmt.close();
+            }
+            connectionHelper.release();
+        }
+        catch ( Exception e ) {
+            exceptions.add( e );
+            LOG.unableToCloseConnection(e);
+        }
+        try {
+            if( outputFileWriter != null ) {
+                outputFileWriter.close();
+            }
+        }
+        catch(Exception e) {
+            exceptions.add(e);
+            LOG.unableToCloseConnection(e);
+        }
+    }
+}
+</code></pre>
+
+<p>Hope this helps,</p>

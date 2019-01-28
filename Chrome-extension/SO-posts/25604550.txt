@@ -1,0 +1,90 @@
+<p>As I've pointed out to you in other answers and comments - catching an exceptions and then continuing is absolutely wrong and is the most likely reason for your crash.</p>
+
+<p>With that being said, this is a better way to open a URL stream and parse the contents.</p>
+
+<p>And while we are at it, let's separate the downloading of the content separate from the parsing of the content. That makes it easier to debug and easier to test.  To do that, let's define a little helper function, <a href="https://github.com/jselbie/wrekonline/blob/master/src/com/selbie/wrek/ContentDownloader.java" rel="nofollow">one I've used in my own code</a>, to download a file into a String over http.</p>
+
+<pre><code>public class ContentDownloader
+{
+    public static String downloadString(String urlstring) throws IOException
+    {
+        URL url = new URL(urlstring);
+        HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+
+        connection.setReadTimeout(30000);
+        connection.setConnectTimeout(30000);
+
+        connection.connect();
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+
+        StringBuilder sb = new StringBuilder();
+        char [] buffer = new char[5000];
+
+        while (true)
+        {
+            int result = reader.read(buffer);
+            if (result &lt; 0)
+            {
+                break;
+            }
+
+            sb.append(buffer, 0, result);
+        }
+
+        String response = sb.toString();
+        return response;
+    }
+}
+</code></pre>
+
+<p>Now let's define a little parse helper that can convert the downloaded string into multiple lines and splits up each CSV line into columns. You can modify this as needed</p>
+
+<pre><code>public class CSVParser
+{
+    public static ArrayList&lt;String[]&gt; parse(String str)
+    {
+        ArrayList&lt;String[]&gt; parsed_lines = new ArrayList&lt;String[]&gt;();
+
+        String lines [] = str.split("\\r?\\n");
+        for (String row : lines)
+        {
+            row = row.trim();
+            if (row.length == 0)
+            {
+                continue;
+            }
+            String [] columns = row.split(",");
+            for (int x = 0; x &lt; columns.length; x++)
+            {
+                columns[x] = columns[x].trim();
+            }
+            parsed_lines.add(columns);
+        }
+        return parsed_lines;
+    }
+}
+</code></pre>
+
+<p>And so now, your asynctask is just simply this:</p>
+
+<pre><code>protected String doInBackground(String... params) {
+
+    String content = null;
+    ArrayList&lt;String[]&gt; parsed_lines = null;
+
+    try {
+        content = ContentDownloader.downloadString();
+        parsed_lines = CSVParser.parse(content);
+    }
+    catch(IOException ioex) {
+        Log.d(TAG, "IOException", ioex);
+        return;  // DO NOT CONTINUE IF WE FAILED TO DOWNLOAD
+    }
+
+    // if we get to this point here, parsed_lines
+    // will be a parsed CSV file
+}
+</code></pre>
+
+<p>You are welcome.</p>

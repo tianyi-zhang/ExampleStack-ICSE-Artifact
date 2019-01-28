@@ -1,0 +1,256 @@
+<p>if I write text and click on send the application is force closed. I send username, ip and port information to the other activity.</p>
+
+<p>code messageing :</p>
+
+<pre><code>public class Messaging extends Activity {
+
+    private static final int MESSAGE_CANNOT_BE_SENT = 0;
+    public String username;
+    private EditText messageText;
+    private EditText messageHistoryText;
+    private Button sendMessageButton;
+    private IAppManager imService;
+    private FriendInfo friend = new ir.android.chat.FriendInfo();
+    private LocalStorageHandler localstoragehandler; 
+    private Cursor dbCursor;
+    public static String res="";
+
+    private ServiceConnection mConnection = new ServiceConnection() {
+
+
+
+        public void onServiceConnected(ComponentName className, IBinder service) {          
+            imService = ((IMService.IMBinder)service).getService();
+        }
+        public void onServiceDisconnected(ComponentName className) {
+            imService = null;
+            Toast.makeText(Messaging.this, R.string.local_service_stopped,
+                     Toast.LENGTH_SHORT).show();
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) 
+    {
+        // TODO Auto-generated method stub
+        super.onCreate(savedInstanceState);    
+
+        setContentView(R.layout.messaging_screen); //messaging_screen);
+
+        messageHistoryText = (EditText) findViewById(R.id.messageHistory);
+
+        messageText = (EditText) findViewById(R.id.message);
+
+        messageText.requestFocus();         
+
+        sendMessageButton = (Button) findViewById(R.id.sendMessageButton);
+
+        Bundle extras = this.getIntent().getExtras();
+
+
+        friend.userName = extras.getString(FriendInfo.USERNAME);
+        friend.userNamef = extras.getString(FriendInfo.USERNAMEF);
+        friend.ip = extras.getString(FriendInfo.IP);
+        friend.port = extras.getString(FriendInfo.PORT);
+        String msg = extras.getString(MessageInfo.MESSAGETEXT);
+
+
+        setTitle("Messaging with " + friend.userName);
+
+
+    //  EditText friendUserName = (EditText) findViewById(R.id.friendUserName);
+    //  friendUserName.setText(friend.userName);
+
+
+        localstoragehandler = new LocalStorageHandler(this);
+        dbCursor = localstoragehandler.get(friend.userName, IMService.USERNAME );
+
+        if (dbCursor.getCount() &gt; 0){
+        int noOfScorer = 0;
+        dbCursor.moveToFirst();
+            while ((!dbCursor.isAfterLast())&amp;&amp;noOfScorer&lt;dbCursor.getCount()) 
+            {
+                noOfScorer++;
+
+                this.appendToMessageHistory(dbCursor.getString(2) , dbCursor.getString(3));
+                dbCursor.moveToNext();
+            }
+        }
+        localstoragehandler.close();
+
+        if (msg != null) 
+        {
+            this.appendToMessageHistory(friend.userName , msg);
+            ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).cancel((friend.userName+msg).hashCode());
+        }
+
+        sendMessageButton.setOnClickListener(new OnClickListener(){
+            CharSequence message;
+            Handler handler = new Handler();
+            public void onClick(View arg0) {
+                message = messageText.getText();
+                if (message.length()&gt;0) 
+                {       
+                    //appendToMessageHistory(friend.userNamef, message.toString());
+                    appendToMessageHistory(friend.userNamef, message.toString());
+
+                    localstoragehandler.insert(friend.userNamef, friend.userName, message.toString());
+
+                    messageText.setText("");
+                    Thread thread = new Thread(){                   
+                        public void run() {
+                            try {
+                                if (imService.sendMessage(friend.userNamef, friend.userName, message.toString()) == null)
+                                {
+
+
+                                    handler.post(new Runnable(){    
+
+                                        public void run() {
+
+                                            Toast.makeText(getApplicationContext(),R.string.message_cannot_be_sent, Toast.LENGTH_LONG).show();
+
+
+                                            //showDialog(MESSAGE_CANNOT_BE_SENT);                                       
+                                        }
+
+                                    });
+                                }
+                            } catch (UnsupportedEncodingException e) {
+                                Toast.makeText(getApplicationContext(),R.string.message_cannot_be_sent, Toast.LENGTH_LONG).show();
+
+                                e.printStackTrace();
+                            }
+                        }                       
+                    };
+                    thread.start();
+
+                }
+
+            }});
+
+        messageText.setOnKeyListener(new OnKeyListener(){
+            public boolean onKey(View v, int keyCode, KeyEvent event) 
+            {
+                if (keyCode == 66){
+                    sendMessageButton.performClick();
+                    return true;
+                }
+                return false;
+            }
+
+
+        });
+
+    }
+
+    @Override
+    protected Dialog onCreateDialog(int id) {
+        int message = -1;
+        switch (id)
+        {
+        case MESSAGE_CANNOT_BE_SENT:
+            message = R.string.message_cannot_be_sent;
+        break;
+        }
+
+        if (message == -1)
+        {
+            return null;
+        }
+        else
+        {
+            return new AlertDialog.Builder(Messaging.this)       
+            .setMessage(message)
+            .setPositiveButton(R.string.OK, new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface dialog, int whichButton) {
+                    /* User clicked OK so do some stuff */
+                }
+            })        
+            .create();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterReceiver(messageReceiver);
+        unbindService(mConnection);
+
+        FriendController.setActiveFriend(null);
+
+    }
+
+    @Override
+    protected void onResume() 
+    {       
+        super.onResume();
+        bindService(new Intent(Messaging.this, IMService.class), mConnection , Context.BIND_AUTO_CREATE);
+
+        IntentFilter i = new IntentFilter();
+        i.addAction(IMService.TAKE_MESSAGE);
+
+        registerReceiver(messageReceiver, i);
+
+        FriendController.setActiveFriend(friend.userName);      
+
+
+    }
+
+
+    public class  MessageReceiver extends BroadcastReceiver {
+
+        @Override
+        public void onReceive(Context context, Intent intent) 
+        {       
+            Bundle extra = intent.getExtras();
+            String username = extra.getString(MessageInfo.USERID);          
+            String message = extra.getString(MessageInfo.MESSAGETEXT);
+
+            if (username != null &amp;&amp; message != null)
+            {
+                if (friend.userName.equals(username)) {
+                    appendToMessageHistory(username, message);
+                    localstoragehandler.insert(username,friend.userNamef, message);
+
+                }
+                else {
+                    if (message.length() &gt; 15) {
+                        message = message.substring(0, 15);
+                    }
+                    Toast.makeText(Messaging.this,  username + " says '"+
+                                                    message + "'",
+                                                    Toast.LENGTH_SHORT).show();     
+                }
+            }           
+        }
+
+    };
+    private MessageReceiver messageReceiver = new MessageReceiver();
+
+    public  void appendToMessageHistory(String username, String message) {
+        if (username != null &amp;&amp; message != null) {
+            messageHistoryText.append(username + ":\n");                                
+            messageHistoryText.append(message + "\n");
+        }
+    }
+
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (localstoragehandler != null) {
+            localstoragehandler.close();
+        }
+        if (dbCursor != null) {
+            dbCursor.close();
+        }
+    }
+
+
+}
+</code></pre>
+
+<p>log chat :</p>
+
+<p><a href="http://i.stack.imgur.com/USsul.png" rel="nofollow">http://i.stack.imgur.com/USsul.png</a></p>

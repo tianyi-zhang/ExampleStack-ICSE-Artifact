@@ -1,0 +1,125 @@
+<blockquote>
+  <p>Question1 [main]: Is it possible to optimize canonicalSum?</p>
+</blockquote>
+
+<p>Yes, it is. But I have no idea with what factor.</p>
+
+<p>Some things you can do are:</p>
+
+<ul>
+<li><p>use the parallel pipelines introduced in Java 8. The processor has instruction for doing parallel sum of 2 arrays (and more). This can be observed in <code>Octave</code> when you sum two vectors with ".+" (parallel addition) or "+" it is way faster than using a loop.</p></li>
+<li><p>use multithreading. You could use a divide and conquer algorithm. Maybe like this:</p>
+
+<ul>
+<li>divide the array into 2 or more</li>
+<li>keep dividing recursively until you get an array with manageable size for a thread.</li>
+<li>start computing the sum for the sub arrays (divided arrays) with separate threads.</li>
+<li>finally add the sum generated (from all the threads) for all sub arrays together to produce final result</li>
+</ul></li>
+<li><p>maybe unrolling the loop would help a bit, too. By loop unrolling I mean reducing the steps the loop will have to make by doing more operations in the loop manually.</p></li>
+</ul>
+
+<p>An example from <a href="http://en.wikipedia.org/wiki/Loop_unwinding" rel="nofollow">http://en.wikipedia.org/wiki/Loop_unwinding</a> :</p>
+
+<pre><code>for (int x = 0; x &lt; 100; x++)
+{
+    delete(x);
+}
+</code></pre>
+
+<p>becomes</p>
+
+<pre><code>for (int x = 0; x &lt; 100; x+=5)
+{
+    delete(x);
+    delete(x+1);
+    delete(x+2);
+    delete(x+3);
+    delete(x+4);
+}
+</code></pre>
+
+<p>but as mentioned this must be done with caution and profiling since the JIT could do this kind of optimizations itself probably.</p>
+
+<p>A implementation for mathematical operations for the multithreaded approach can be seen <a href="http://www.infoq.com/articles/forkjoin-to-parallel-streams" rel="nofollow">here</a>.</p>
+
+<p>The example implementation with the <em>Fork/Join framework</em> introduced in java 7 that basically does what the divide and conquer algorithm above does would be:</p>
+
+<pre><code>public class ForkJoinCalculator extends RecursiveTask&lt;Double&gt; {
+
+   public static final long THRESHOLD = 1_000_000;
+
+   private final SequentialCalculator sequentialCalculator;
+   private final double[] numbers;
+   private final int start;
+   private final int end;
+
+   public ForkJoinCalculator(double[] numbers, SequentialCalculator sequentialCalculator) {
+     this(numbers, 0, numbers.length, sequentialCalculator);
+   }
+
+   private ForkJoinCalculator(double[] numbers, int start, int end, SequentialCalculator sequentialCalculator) {
+     this.numbers = numbers;
+     this.start = start;
+     this.end = end;
+     this.sequentialCalculator = sequentialCalculator;
+   }
+
+   @Override
+   protected Double compute() {
+     int length = end - start;
+     if (length &lt;= THRESHOLD) {
+         return sequentialCalculator.computeSequentially(numbers, start, end);
+     }
+     ForkJoinCalculator leftTask = new ForkJoinCalculator(numbers, start, start + length/2, sequentialCalculator);
+     leftTask.fork();
+     ForkJoinCalculator rightTask = new ForkJoinCalculator(numbers, start + length/2, end, sequentialCalculator);
+     Double rightResult = rightTask.compute();
+     Double leftResult = leftTask.join();
+     return leftResult + rightResult;
+  }
+}
+</code></pre>
+
+<blockquote>
+  <p>Here we develop a <code>RecursiveTask</code> splitting an array of doubles until
+  the length of a subarray doesn't go below a given threshold. At this
+  point the subarray is processed sequentially applying on it the
+  operation defined by the following interface</p>
+</blockquote>
+
+<p>The interface used is this:</p>
+
+<pre><code>public interface SequentialCalculator {
+  double computeSequentially(double[] numbers, int start, int end);
+}
+</code></pre>
+
+<p>And the usage example:</p>
+
+<pre><code>public static double varianceForkJoin(double[] population){
+   final ForkJoinPool forkJoinPool = new ForkJoinPool();
+   double total = forkJoinPool.invoke(new ForkJoinCalculator(population, new SequentialCalculator() {
+     @Override
+     public double computeSequentially(double[] numbers, int start, int end) {
+       double total = 0;
+       for (int i = start; i &lt; end; i++) {
+         total += numbers[i];
+       }
+       return total;
+     }
+  }));
+  final double average = total / population.length;
+  double variance = forkJoinPool.invoke(new ForkJoinCalculator(population, new SequentialCalculator() {
+    @Override
+    public double computeSequentially(double[] numbers, int start, int end) {
+      double variance = 0;
+      for (int i = start; i &lt; end; i++) {
+        variance += (numbers[i] - average) * (numbers[i] - average);
+      }
+      return variance;
+    }
+ }));
+ return variance / population.length;
+}
+</code></pre>

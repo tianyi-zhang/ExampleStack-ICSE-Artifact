@@ -1,0 +1,99 @@
+<p>I plead guilty:</p>
+
+<pre><code>public void save(HttpServletRequest req, Object obj) {
+    Set&lt;String&gt; names = new HashSet&lt;String&gt;();
+    @SuppressWarnings("unchecked")
+    Enumeration&lt;String&gt; enm = req.getParameterNames();
+    while (enm.hasMoreElements()) {
+        names.add(enm.nextElement());
+    }
+    Class clazz = obj.getClass();
+    while (clazz != Object.class &amp;&amp; !names.isEmpty()) {
+        for (Field f: clazz.getDeclaredFields()) {
+            if (!Modifier.isTransient(f.getModifiers())) {
+                String name = f.getName();
+                if (names.contains(name)) {
+                    try {
+                        names.remove(name);
+                        f.setAccessible(true);
+                        Object val = convertValue(req, f.getType(),
+                                name);
+                        f.set(obj, val);
+                    } catch (ParseException ex) {
+                        LOG.error("Error assigning field", ex);
+                    } catch (IllegalAccessException ex) {
+                        LOG.error("Error assigning field", ex);
+                    }
+                }
+            }
+        }
+        clazz = clazz.getSuperclass();
+    }
+}
+
+private Object convertValue(HttpServletRequest req, Class&lt;?&gt; type,
+        String name) throws ParseException {
+    if (type.isArray()) {
+        Class&lt;?&gt; elemType = type.getComponentType();
+        String strings[] = req.getParameterValues(name);
+        if (strings == null || strings.length == 0) {
+            return new Object[0];
+        }
+        Object array = Array.newInstance(elemType, strings.length);
+        for (int i = 0; i &lt; strings.length; ++i) {
+            Object val = parse(elemType, strings[i]);
+            Array.set(array, i, val);
+        }
+        return array;
+    } else {
+        String s = req.getParameter(name);
+        if (s == null) {
+            return null;
+        }
+        return parse(type, s);
+    }
+}
+
+public static Object parse(Class&lt;?&gt; type, String value)
+        throws ParseException {
+    if (type == String.class) {
+        return value;
+    } else if (value == null || value.length() == 0) {
+        return null;
+    } else if (Enum.class.isAssignableFrom(type)) {
+        @SuppressWarnings("unchecked")
+        Object result = Enum.valueOf((Class&lt;? extends Enum&gt;)type, value);
+        return result;
+    } else if (type == boolean.class || type == Boolean.class) {
+        return "true".equals(value);
+    } else if (type == byte.class || type == Byte.class) {
+        return Byte.valueOf(value);
+    } else if (type == short.class || type == Short.class) {
+        return Short.valueOf(value);
+    } else if (type == int.class || type == Integer.class) {
+        return Integer.valueOf(value);
+    } else if (type == long.class || type == Long.class) {
+        return Long.valueOf(value);
+    } else if (type == float.class || type == Float.class) {
+        return Float.valueOf(value);
+    } else if (type == double.class || type == Double.class) {
+        return Double.valueOf(value);
+    } else if (type == Date.class) {
+            return new SimpleDateFormat("dd/MM/yyyy").parse(value);
+    } else if (type == BigDecimal.class) {
+        DecimalFormat format = getDecimalFormat("0.00");
+        return format.parse(value);
+    } else {
+        throw new RuntimeException("Cannot convert value of type " + type);
+    }
+}
+
+private static DecimalFormat getDecimalFormat(String pattern) {
+    DecimalFormatSymbols symbols = new DecimalFormatSymbols();
+    symbols.setDecimalSeparator('.');
+    DecimalFormat format = new DecimalFormat(pattern);
+    format.setParseBigDecimal(true);
+    format.setDecimalFormatSymbols(symbols);
+    return format;
+}
+</code></pre>

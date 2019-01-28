@@ -1,0 +1,45 @@
+<p>The tutorial is incorrect, but many of the mistakes either cancel each other out or are not obvious in this very limited context (fixed camera centered at (0,0), rotation around Z only).  The rotation is backwards, but otherwise it kind of looks right. (To see why it's wrong, try a less trivial camera: set the eye and lookAt to y=1, for instance.)</p>
+
+<p>One of the things that made this very hard to debug is that the Matrix methods don't do any alias detection on their inputs. The tutorial code makes it seem like you can call Matrix.multiplyMM with the same matrix used as both an input and the result. This isn't true. But because the implementation multiplies a column at a time, it's far less obvious that something is wrong if the right hand side is reused (as in the current code, where mMVPMatrix is the rhs and the result) than if the left hand side is reused. Each column on the left is read before the corresponding column in the result is written, so the output will be correct even if the LHS is overwritten. But if the right-hand side is the same as the result, then its first column will be overwritten before it's finished being read.</p>
+
+<p>So the tutorial code is at a sort of local maximum: it seems like it works, and if you change any one thing, it breaks spectacularly. Which leads one to believe that wrong as it looks, it might just be correct. ;-)</p>
+
+<p>Anyway, here's some replacement code that gets what I think is the intended result. </p>
+
+<p>Java code:</p>
+
+<pre><code>@Override
+public void onDrawFrame(GL10 unused) {
+    float[] scratch = new float[16];
+
+    // Draw background color
+    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+
+    // Set the camera position (View matrix)
+    Matrix.setLookAtM(mVMatrix, 0, 0, 0, -3, 0f, 0f, 0f, 0f, 1.0f, 0.0f);
+
+    // Calculate the projection and view transformation
+    Matrix.multiplyMM(mMVPMatrix, 0, mProjMatrix, 0, mVMatrix, 0);
+
+    // Draw square
+    mSquare.draw(mMVPMatrix);
+
+    // Create a rotation for the triangle
+    Matrix.setRotateM(mRotationMatrix, 0, mAngle, 0, 0, 1.0f);
+
+    // Combine the rotation matrix with the projection and camera view
+    Matrix.multiplyMM(scratch, 0, mMVPMatrix, 0, mRotationMatrix, 0);
+
+    // Draw triangle
+    mTriangle.draw(scratch);
+}
+</code></pre>
+
+<p>Shader code:</p>
+
+<pre><code>gl_Position =  uMVPMatrix * vPosition;
+</code></pre>
+
+<p>NB: these fixes make the projection correct, but they also reverse the direction of rotation. That's because the original code applied the transformations in the wrong order. Think of it this way: instead of rotating the object clockwise, it was rotating the camera counterclockwise. When you fix the order of operations so that the rotation is applied to the object instead of the camera, then the object starts going counterclockwise. It's not the matrix that's wrong; it's the angle that was used to create the matrix.</p>
+
+<p>So to get the 'correct' result, you also need to flip the sign of mAngle.</p>

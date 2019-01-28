@@ -1,0 +1,357 @@
+<p>This was on my mind for some time, and I just implemented it thanks to your question.</p>
+
+<p>To be able to do this, we need to draw the layout that is beneath our blur layout into a bitmap. Than by using a blurring algorithm, we need to blur that bitmap and finally draw blurred bitmap as our blur layout's background. </p>
+
+<p>Luckily android has cached drawing mechanism, so first part is easy. We can simply enable cached drawing for our beneath layout and use <code>getDrawingCache()</code> to acquire the bitmap from it.</p>
+
+<p>Now we need a fast blurring algorithm. I used this <a href="http://stackoverflow.com/a/10028267/3133545">http://stackoverflow.com/a/10028267/3133545</a></p>
+
+<p>Here it is.</p>
+
+<pre><code>import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.Drawable;
+import android.util.Log;
+import android.view.View;
+
+import java.lang.ref.WeakReference;
+import java.util.InputMismatchException;
+
+/**
+ * A drawable that draws the target view as blurred using fast blur
+ * &lt;p/&gt;
+ * &lt;p/&gt;
+ * TODO:we might use setBounds() to draw only part a of the target view
+ * &lt;p/&gt;
+ * Created by 10uR on 24.5.2014.
+ */
+public class BlurDrawable extends Drawable {
+
+    private WeakReference&lt;View&gt; targetRef;
+    private Bitmap blurred;
+    private Paint paint;
+    private int radius;
+
+
+    public BlurDrawable(View target) {
+        this(target, 10);
+    }
+
+    public BlurDrawable(View target, int radius) {
+        this.targetRef = new WeakReference&lt;View&gt;(target);
+        setRadius(radius);
+        target.setDrawingCacheEnabled(true);
+        target.setDrawingCacheQuality(View.DRAWING_CACHE_QUALITY_AUTO);
+        paint = new Paint();
+        paint.setAntiAlias(true);
+        paint.setFilterBitmap(true);
+    }
+
+    @Override
+    public void draw(Canvas canvas) {
+        if (blurred == null) {
+            View target = targetRef.get();
+            if (target != null) {
+                Bitmap bitmap = target.getDrawingCache(true);
+                if (bitmap == null) return;
+                blurred = fastBlur(bitmap, radius);
+            }
+        }
+        if (blurred != null &amp;&amp; !blurred.isRecycled())
+            canvas.drawBitmap(blurred, 0, 0, paint);
+    }
+
+    /**
+     * Set the bluring radius that will be applied to target view's bitmap
+     *
+     * @param radius should be 0-100
+     */
+    public void setRadius(int radius) {
+        if (radius &lt; 0 || radius &gt; 100)
+            throw new InputMismatchException("Radius must be 0 &lt;= radius &lt;= 100 !");
+        this.radius = radius;
+        if (blurred != null) {
+            blurred.recycle();
+            blurred = null;
+        }
+        invalidateSelf();
+    }
+
+
+    public int getRadius() {
+        return radius;
+    }
+
+    @Override
+    public void setAlpha(int alpha) {
+    }
+
+
+    @Override
+    public void setColorFilter(ColorFilter cf) {
+
+    }
+
+    @Override
+    public int getOpacity() {
+        return PixelFormat.TRANSLUCENT;
+    }
+
+    /**
+     * from http://stackoverflow.com/a/10028267/3133545
+     * &lt;p/&gt;
+     * &lt;p/&gt;
+     * &lt;p/&gt;
+     * Stack Blur v1.0 from
+     * http://www.quasimondo.com/StackBlurForCanvas/StackBlurDemo.html
+     * &lt;p/&gt;
+     * Java Author: Mario Klingemann &lt;mario at quasimondo.com&gt;
+     * http://incubator.quasimondo.com
+     * created Feburary 29, 2004
+     * Android port : Yahel Bouaziz &lt;yahel at kayenko.com&gt;
+     * http://www.kayenko.com
+     * ported april 5th, 2012
+     * &lt;p/&gt;
+     * This is a compromise between Gaussian Blur and Box blur
+     * It creates much better looking blurs than Box Blur, but is
+     * 7x faster than my Gaussian Blur implementation.
+     * &lt;p/&gt;
+     * I called it Stack Blur because this describes best how this
+     * filter works internally: it creates a kind of moving stack
+     * of colors whilst scanning through the image. Thereby it
+     * just has to add one new block of color to the right side
+     * of the stack and remove the leftmost color. The remaining
+     * colors on the topmost layer of the stack are either added on
+     * or reduced by one, depending on if they are on the right or
+     * on the left side of the stack.
+     * &lt;p/&gt;
+     * If you are using this algorithm in your code please add
+     * the following line:
+     * &lt;p/&gt;
+     * Stack Blur Algorithm by Mario Klingemann &lt;mario@quasimondo.com&gt;
+     */
+    private static Bitmap fastBlur(Bitmap sentBitmap, int radius) {
+
+
+        Bitmap bitmap = sentBitmap.copy(sentBitmap.getConfig(), true);
+
+        if (radius &lt; 1) {
+            return (null);
+        }
+
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+
+        int[] pix = new int[w * h];
+        Log.e("pix", w + " " + h + " " + pix.length);
+        bitmap.getPixels(pix, 0, w, 0, 0, w, h);
+
+        int wm = w - 1;
+        int hm = h - 1;
+        int wh = w * h;
+        int div = radius + radius + 1;
+
+        int r[] = new int[wh];
+        int g[] = new int[wh];
+        int b[] = new int[wh];
+        int rsum, gsum, bsum, x, y, i, p, yp, yi, yw;
+        int vmin[] = new int[Math.max(w, h)];
+
+        int divsum = (div + 1) &gt;&gt; 1;
+        divsum *= divsum;
+        int dv[] = new int[256 * divsum];
+        for (i = 0; i &lt; 256 * divsum; i++) {
+            dv[i] = (i / divsum);
+        }
+
+        yw = yi = 0;
+
+        int[][] stack = new int[div][3];
+        int stackpointer;
+        int stackstart;
+        int[] sir;
+        int rbs;
+        int r1 = radius + 1;
+        int routsum, goutsum, boutsum;
+        int rinsum, ginsum, binsum;
+
+        for (y = 0; y &lt; h; y++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            for (i = -radius; i &lt;= radius; i++) {
+                p = pix[yi + Math.min(wm, Math.max(i, 0))];
+                sir = stack[i + radius];
+                sir[0] = (p &amp; 0xff0000) &gt;&gt; 16;
+                sir[1] = (p &amp; 0x00ff00) &gt;&gt; 8;
+                sir[2] = (p &amp; 0x0000ff);
+                rbs = r1 - Math.abs(i);
+                rsum += sir[0] * rbs;
+                gsum += sir[1] * rbs;
+                bsum += sir[2] * rbs;
+                if (i &gt; 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+            }
+            stackpointer = radius;
+
+            for (x = 0; x &lt; w; x++) {
+
+                r[yi] = dv[rsum];
+                g[yi] = dv[gsum];
+                b[yi] = dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (y == 0) {
+                    vmin[x] = Math.min(x + radius + 1, wm);
+                }
+                p = pix[yw + vmin[x]];
+
+                sir[0] = (p &amp; 0xff0000) &gt;&gt; 16;
+                sir[1] = (p &amp; 0x00ff00) &gt;&gt; 8;
+                sir[2] = (p &amp; 0x0000ff);
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[(stackpointer) % div];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi++;
+            }
+            yw += w;
+        }
+        for (x = 0; x &lt; w; x++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            yp = -radius * w;
+            for (i = -radius; i &lt;= radius; i++) {
+                yi = Math.max(0, yp) + x;
+
+                sir = stack[i + radius];
+
+                sir[0] = r[yi];
+                sir[1] = g[yi];
+                sir[2] = b[yi];
+
+                rbs = r1 - Math.abs(i);
+
+                rsum += r[yi] * rbs;
+                gsum += g[yi] * rbs;
+                bsum += b[yi] * rbs;
+
+                if (i &gt; 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+
+                if (i &lt; hm) {
+                    yp += w;
+                }
+            }
+            yi = x;
+            stackpointer = radius;
+            for (y = 0; y &lt; h; y++) {
+                // Preserve alpha channel: ( 0xff000000 &amp; pix[yi] )
+                pix[yi] = (0xff000000 &amp; pix[yi]) | (dv[rsum] &lt;&lt; 16) | (dv[gsum] &lt;&lt; 8) | dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (x == 0) {
+                    vmin[y] = Math.min(y + r1, hm) * w;
+                }
+                p = x + vmin[y];
+
+                sir[0] = r[p];
+                sir[1] = g[p];
+                sir[2] = b[p];
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[stackpointer];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi += w;
+            }
+        }
+
+        bitmap.setPixels(pix, 0, w, 0, 0, w, h);
+
+        return (bitmap);
+    }
+
+}
+</code></pre>
+
+<p>Usage : </p>
+
+<pre><code>View beneathView = //the view that beneath blur view
+View blurView= //blur View
+
+BlurDrawable blurDrawable = new BlurDrawable(beneathView, radius);
+
+blurView.setBackgroundDrawable(blurDrawable);
+</code></pre>
+
+<p>And how my test application looked like:</p>
+
+<p><img src="http://i.stack.imgur.com/sxL0Z.gif" alt="test application"></p>
+
+<p><em>I decided not to use this tho, because it is too hacky and not looking as cool as i thought it would be in first place.</em></p>

@@ -1,0 +1,251 @@
+<p>As you all suggested i pulled all my var initiations out of onDraw and put them in the constructor.</p>
+
+<p>This particular piece is needed to clear the canvas when the user undoes or redoes something they have drawn:</p>
+
+<pre><code>mBitmap = Bitmap.createBitmap((int) myWidth, (int) myHeight, Bitmap.Config.ARGB_8888);
+    mCanvas = new Canvas(mBitmap);
+</code></pre>
+
+<p>so i created a new method that i just call on undo/redo:</p>
+
+<pre><code>public void clearCanvasCache() {
+
+        mBitmap = Bitmap.createBitmap((int) myWidth, (int) myHeight, Bitmap.Config.ARGB_8888);
+        mCanvas = new Canvas(mBitmap);
+    }
+</code></pre>
+
+<p>Works great now..</p>
+
+<p>The Whole class:</p>
+
+<pre><code>public class KNDrawingSurfaceView extends View {
+
+    private static final float MINP = 0.25f;
+
+    private static final float MAXP = 0.75f;
+
+    public Bitmap mBitmap;
+
+    public Canvas mCanvas;
+
+    public Path mPath;
+
+    public Paint mBitmapPaint;
+
+    float myWidth;
+
+    float myHeight;
+
+    public Paint mPaint;
+
+    public MaskFilter mEmboss;
+
+    public MaskFilter mBlur;
+
+    public ArrayList&lt;Path&gt; paths = new ArrayList&lt;Path&gt;();
+
+    public ArrayList&lt;Paint&gt; paints = new ArrayList&lt;Paint&gt;();
+
+    public ArrayList&lt;Path&gt; undonePaths = new ArrayList&lt;Path&gt;();
+
+    public ArrayList&lt;Paint&gt; undonePaints = new ArrayList&lt;Paint&gt;();
+
+    private KNSketchBookActivity _parent;
+
+    Paint tile;
+
+    Bitmap tileImage;
+
+    BitmapShader shader;
+
+    public KNDrawingSurfaceView(Context c, float width, float height, KNSketchBookActivity parent) {
+
+        super(c);
+
+        myWidth = width;
+        myHeight = height;
+
+        mBitmap = Bitmap.createBitmap((int) myWidth, (int) myHeight, Bitmap.Config.ARGB_8888);
+        mCanvas = new Canvas(mBitmap);
+
+        _parent = parent;
+        mPaint = new Paint();
+        mPaint.setAntiAlias(true);
+        mPaint.setDither(true);
+        mPaint.setColor(0xFFFF0000);
+        mPaint.setStyle(Paint.Style.STROKE);
+        mPaint.setStrokeJoin(Paint.Join.ROUND);
+        mPaint.setStrokeCap(Paint.Cap.ROUND);
+        mPaint.setStrokeWidth(12);
+
+        mEmboss = new EmbossMaskFilter(new float[] { 1, 1, 1 }, 0.4f, 6, 3.5f);
+
+        mBlur = new BlurMaskFilter(8, BlurMaskFilter.Blur.NORMAL);
+        tile = new Paint();
+
+        tileImage = BitmapFactory.decodeResource(getResources(), R.drawable.checkerpattern);
+        shader = new BitmapShader(tileImage, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+        tile.setShader(shader);
+
+        mPath = new Path();
+
+        mBitmapPaint = new Paint(Paint.DITHER_FLAG);
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+
+        super.onSizeChanged(w, h, oldw, oldh);
+
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+
+        Log.v("onDraw:", "curent paths size:" + paths.size());
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+
+        canvas.drawRect(0, 0, myWidth, myHeight, tile);
+
+        canvas.drawBitmap(mBitmap, 0, 0, mBitmapPaint);
+
+        for (Path p : paths) {
+            canvas.drawPath(p, mPaint);
+        }
+        canvas.drawPath(mPath, mPaint);
+    }
+
+    public void onClickUndo() {
+
+        if (paths.size() &gt; 0) {
+            undonePaths.add(paths.remove(paths.size() - 1));
+            undonePaints.add(paints.remove(paints.size() - 1));
+            clearCanvasCache();
+            invalidate();
+        } else {
+
+        }
+        _parent.checkButtonStates();
+    }
+
+    public void onClickRedo() {
+
+        if (undonePaths.size() &gt; 0) {
+            paths.add(undonePaths.remove(undonePaths.size() - 1));
+            paints.add(undonePaints.remove(undonePaints.size() - 1));
+            clearCanvasCache();
+            invalidate();
+        } else {
+
+        }
+        _parent.checkButtonStates();
+    }
+
+    public void onClickClear() {
+
+        paths.clear();
+        undonePaths.clear();
+        clearCanvasCache();
+        invalidate();
+        _parent.checkButtonStates();
+    }
+
+    public void saveDrawing() {
+
+        FileOutputStream outStream = null;
+        String fileName = "tempTag";
+        try {
+
+            outStream = new FileOutputStream("/sdcard/" + fileName + ".png");
+
+            mBitmap.compress(Bitmap.CompressFormat.PNG, 100, outStream);
+            outStream.close();
+
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+        }
+
+    }
+
+    private float mX, mY;
+
+    private static final float TOUCH_TOLERANCE = 4;
+
+    private void touch_start(float x, float y) {
+
+        undonePaths.clear();
+        mPath.reset();
+        mPath.moveTo(x, y);
+        mX = x;
+        mY = y;
+    }
+
+    private void touch_move(float x, float y) {
+
+        float dx = Math.abs(x - mX);
+        float dy = Math.abs(y - mY);
+        if (dx &gt;= TOUCH_TOLERANCE || dy &gt;= TOUCH_TOLERANCE) {
+            mPath.quadTo(mX, mY, (x + mX) / 2, (y + mY) / 2);
+            mX = x;
+            mY = y;
+        }
+    }
+
+    private void touch_up() {
+
+        mPath.lineTo(mX, mY);
+
+        mCanvas.drawPath(mPath, mPaint);
+
+
+        paths.add(mPath);
+        paints.add(mPaint);
+        _parent.checkButtonStates();
+        mPath = new Path();
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+
+        if (!_parent.isDrawerOpen()) {
+            float x = event.getX();
+            float y = event.getY();
+            if (x &gt; myWidth) {
+                x = myWidth;
+
+            }
+            if (y &gt; myHeight) {
+                y = myHeight;
+
+            }
+            switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                touch_start(x, y);
+                invalidate();
+                break;
+            case MotionEvent.ACTION_MOVE:
+                touch_move(x, y);
+                invalidate();
+                break;
+            case MotionEvent.ACTION_UP:
+                touch_up();
+                invalidate();
+                break;
+            }
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    public void clearCanvasCache() {
+
+        mBitmap = Bitmap.createBitmap((int) myWidth, (int) myHeight, Bitmap.Config.ARGB_8888);
+        mCanvas = new Canvas(mBitmap);
+    }
+}
+</code></pre>

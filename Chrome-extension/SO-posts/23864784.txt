@@ -1,0 +1,106 @@
+<p>The trick is that you need to copy the file from application package to device storage, otherwise you cannot open the MBtiles file. </p>
+
+<ol>
+<li>Put your map.mbtiles file to <strong>/assets</strong> folder, not to res/raw/</li>
+<li>Copy the file during first application start. I'd just call <em>copyAssets()</em> in your <em>onCreate()</em> method. See code below, this copies everything under assets to app private folder. Note that you may want to add handling of typical file write issue cases there: SD card not available, no permission to write (your app must have WRITE_EXTERNAL_STORAGE permission), not enough space, maybe something more.</li>
+<li>Create datasource and layer with right path:</li>
+</ol>
+
+<p>Sample code:</p>
+
+<pre><code>@Override
+public void onCreate(Bundle savedInstanceState) {
+  // create mapview, settings...
+
+    copyAssets();
+    try {
+        MBTilesRasterDataSource dataSource = new MBTilesRasterDataSource(
+            new EPSG3857(), 0, 19, 
+            getExternalFilesDir(null).getAbsolutePath()+"/map.mbtiles",
+            false, this);
+        RasterLayer mbLayer = new RasterLayer(dataSource, 0);
+        // use setBaseLayer() if this is main layer, addLayer() if it is overlay layer
+        mapView.getLayers().setBaseLayer(mbLayer);
+
+        // recenter map to coverage
+        HashMap&lt;String, String&gt; dbMetaData = dataSource.getDatabase().getMetadata();
+
+        String center = dbMetaData.get("center");
+        String bounds = dbMetaData.get("bounds");
+        if(center != null){
+            // format: long,lat,zoom
+            String[] centerParams = center.split(",");
+            mapView.setFocusPoint(mapView.getLayers().getBaseLayer().getProjection().fromWgs84(Double.parseDouble(centerParams[0]), Double.parseDouble(centerParams[1])));
+            mapView.setZoom(Float.parseFloat(centerParams[2]));
+            Log.debug ("center to point "+Arrays.toString(centerParams));
+        }else if(bounds != null){
+            // format: longMin,latMin,longMax,latMax
+            String[] boundsParams = bounds.split(",");
+            MapPos bottomLeft = mapView.getLayers().getBaseProjection().fromWgs84(Double.parseDouble(boundsParams[0]), Double.parseDouble(boundsParams[1]));
+            MapPos topRight = mapView.getLayers().getBaseProjection().fromWgs84(Double.parseDouble(boundsParams[2]), Double.parseDouble(boundsParams[3]));
+            Log.debug ("center to bounds "+bottomLeft.x+","+topRight.y+","+topRight.x+","+bottomLeft.y);
+            mapView.setBoundingBox(new Bounds(bottomLeft.x,topRight.y,topRight.x,bottomLeft.y), false);
+
+            // check that zoom is within given range
+            int[] zoomRange = dataSource.getDatabase().getZoomRange();
+            if(mapView.getZoom() &lt; zoomRange[0]){
+                mapView.setZoom(zoomRange[0]+1);
+            }
+            if(mapView.getZoom() &gt; zoomRange[1]){
+                mapView.setZoom(zoomRange[1]-1);
+            }
+
+        }else{
+            // bulgaria
+            mapView.setFocusPoint(mapView.getLayers().getBaseLayer().getProjection().fromWgs84(26.483230800000037, 42.550218000000044));
+            // zoom - 0 = world, like on most web maps
+            mapView.setZoom(5.0f);
+            Log.debug("center to default");
+        }
+    } catch (IOException e) {
+        Log.error(e.getMessage());
+    }
+
+
+  // ...
+ }
+
+private void copyAssets() {
+    AssetManager assetManager = getAssets();
+    String[] files = null;
+    try {
+        files = assetManager.list("");
+    } catch (IOException e) {
+        Log.error("Failed to get asset file list." + e.getLocalizedMessage());
+    }
+    for(String filename : files) {
+        InputStream in = null;
+        OutputStream out = null;
+        try {
+          in = assetManager.open(filename);
+          File outFile = new File(getExternalFilesDir(null), filename);
+
+          if(!outFile.exists()){
+              out = new FileOutputStream(outFile);
+              copyFile(in, out);
+              out.flush();
+              out.close();
+              out = null;
+          }
+
+          in.close();
+          in = null;
+
+        } catch(IOException e) {
+            Log.error("Failed to copy asset file: " + filename + "\n" + e.getLocalizedMessage());
+        }       
+    }
+}
+private void copyFile(InputStream in, OutputStream out) throws IOException {
+    byte[] buffer = new byte[32 * 1024];
+    int read;
+    while((read = in.read(buffer)) != -1){
+      out.write(buffer, 0, read);
+    }
+}
+</code></pre>

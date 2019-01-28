@@ -1,0 +1,259 @@
+<p>As far as I know you need to rewrite the HostnameVerifier to always return true:</p>
+
+<pre><code>public class MyHostnameVerifier implements HostnameVerifier {
+    @Override
+    public boolean verify(String hostname, SSLSession session) {
+    return true;
+    }
+}
+</code></pre>
+
+<p>I use the HttpsURLConnection method. Therefore you need to create your own Base64 class for the authentication encryption and your own trust manager</p>
+
+<pre><code>//kObjects 
+//
+// Copyright (C) 2001 Stefan Haustein, Oberhausen (Rhld.), Germany
+//
+// Contributors: 
+//
+// License: LGPL
+//
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public License
+// as published by the Free Software Foundation; either version 2.1 of
+// the License, or (at your option) any later version.
+//
+// This library is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+// USA
+
+import java.io.*;
+
+/*
+ * You can now use also javax.mail.internet.MimeUtility
+ * and sun.misc.BASE64Encoder.encode.
+ * There is a non-public class in Java 1.4+ called java.util.prefs.Base64
+ */
+public class MyBase64 {
+
+    static final char[] charTab = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".toCharArray (); 
+
+
+    public static String encode (byte [] data) {
+        return encode (data, 0, data.length, null).toString ();
+    }
+
+
+    /** Encodes the part of the given byte array denoted by start and
+        len to the Base64 format.  The encoded data is appended to the
+        given StringBuffer. If no StringBuffer is given, a new one is
+        created automatically. The StringBuffer is the return value of
+        this method. */
+
+
+    public static StringBuffer encode (byte [] data, int start, int len, StringBuffer buf) {
+
+        if (buf == null) 
+            buf = new StringBuffer (data.length * 3 / 2);
+
+        int end = len - 3;
+        int i = start;
+        int n = 0;
+
+        while (i &lt;= end) {
+            int d = (((data [i]) &amp; 0x0ff) &lt;&lt; 16) 
+                | (((data [i+1]) &amp; 0x0ff) &lt;&lt; 8)
+                | ((data [i+2]) &amp; 0x0ff);
+
+            buf.append (charTab [(d &gt;&gt; 18) &amp; 63]);
+            buf.append (charTab [(d &gt;&gt; 12) &amp; 63]);
+            buf.append (charTab [(d &gt;&gt; 6) &amp; 63]);
+            buf.append (charTab [d &amp; 63]);
+
+            i += 3;
+
+            if (n++ &gt;= 14) {
+                n = 0;
+                buf.append ("\r\n");
+            }
+        }
+
+
+        if (i == start + len - 2) {
+            int d = (((data [i]) &amp; 0x0ff) &lt;&lt; 16) 
+                | (((data [i+1]) &amp; 255) &lt;&lt; 8);
+
+            buf.append (charTab [(d &gt;&gt; 18) &amp; 63]);
+            buf.append (charTab [(d &gt;&gt; 12) &amp; 63]);
+            buf.append (charTab [(d &gt;&gt; 6) &amp; 63]);
+            buf.append ("=");
+        }
+        else if (i == start + len - 1) {
+            int d = ((data [i]) &amp; 0x0ff) &lt;&lt; 16;
+
+            buf.append (charTab [(d &gt;&gt; 18) &amp; 63]);
+            buf.append (charTab [(d &gt;&gt; 12) &amp; 63]);
+            buf.append ("==");
+        }
+
+        return buf;
+    }
+
+
+    static int decode (char c) {
+        if (c &gt;= 'A' &amp;&amp; c &lt;= 'Z') 
+            return c - 65;
+        else if (c &gt;= 'a' &amp;&amp; c &lt;= 'z') 
+            return c - 97 + 26;
+        else if (c &gt;= '0' &amp;&amp; c &lt;= '9')
+            return c - 48 + 26 + 26;
+        else switch (c) {
+        case '+': return 62;
+        case '/': return 63;
+        case '=': return 0;
+        default:
+            throw new RuntimeException (new StringBuffer("unexpected code: ").append(c).toString());
+        }
+    }
+
+
+    /** Decodes the given Base64 encoded String to a new byte array. 
+        The byte array holding the decoded data is returned. */
+
+
+    public static byte [] decode (String s) {
+
+        int i = 0;
+        ByteArrayOutputStream bos = new ByteArrayOutputStream ();
+        int len = s.length ();
+
+        while (true) { 
+            while (i &lt; len &amp;&amp; s.charAt (i) &lt;= ' ') i++;
+
+            if (i == len) break;
+
+            int tri = (decode (s.charAt (i)) &lt;&lt; 18)
+                + (decode (s.charAt (i+1)) &lt;&lt; 12)
+                + (decode (s.charAt (i+2)) &lt;&lt; 6)
+                + (decode (s.charAt (i+3)));
+
+            bos.write ((tri &gt;&gt; 16) &amp; 255);
+            if (s.charAt (i+2) == '=') break;
+            bos.write ((tri &gt;&gt; 8) &amp; 255);
+            if (s.charAt (i+3) == '=') break;
+            bos.write (tri &amp; 255);
+
+            i += 4;
+        }
+        return bos.toByteArray ();
+    }
+
+   /**
+    * java org.xmlBlaster.util.Base64 HelloWorld
+    * java org.xmlBlaster.util.Base64 -decode Q2lBOGEyVjVJRzlwWkQwblNHVnNiRzhuSUdOdmJuUmxiblJOYVcxbFBTZDBaWGgwTDNodGJDY2dZMjl1ZEdWdWRFMXBiV1ZGZUhSbGJtUmxaRDBuTVM0d0p6NEtJQ0E4YjNKbkxuaHRiRUpzWVhOMFpYSStQR1JsYlc4dE16NDhMMlJsYlc4dE16NDhMMjl5Wnk1NGJXeENiR0Z6ZEdWeVBnb2dQQzlyWlhrKw==
+    */
+   public static void main(String[] args) {
+      if (args.length == 2) {
+         if (args[0].equals("-decode")) {
+            String base64 = args[1];
+            byte[] back = MyBase64.decode(base64);
+            System.out.println("Decoded to '" + new String(back) + "'");
+            return;
+         }
+      }
+      {
+         String hello = args.length &gt; 0 ? args[0] : "Hello World";
+         String base64 = MyBase64.encode(hello.getBytes());
+         byte[] back = MyBase64.decode(base64);
+         System.out.println("Before Base64 '" + hello + "' base64='" + (new String(base64)) + "' after '" + new String(back) + "'");
+      }
+   }
+}
+</code></pre>
+
+<p>and</p>
+
+<pre><code>public class MyTrustManager implements X509TrustManager {
+
+    @Override
+    public void checkClientTrusted(X509Certificate[] chain, String authType) {
+    }
+
+    @Override
+    public void checkServerTrusted(X509Certificate[] chain, String authType) {
+    }
+
+    @Override
+    public X509Certificate[] getAcceptedIssuers() {
+        return null;
+    }
+}
+</code></pre>
+
+<p>After that you should be ready to go:</p>
+
+<pre><code>/*
+ * Return the string from a authenticated SSL secured webserver call
+ * */
+public String sendHTTPSPostMessage(String userName, String userPass, String url, String[] postVars) throws NoSuchAlgorithmException, KeyManagementException, MalformedURLException, IOException {
+    StringBuffer sb = new StringBuffer();
+
+    final String serverAuth = userName + ":" + userPass;
+    final String serverAuthBase64 = MyBase64.encode(serverAuth.getBytes());
+
+    SSLContext sc = SSLContext.getInstance("TLS");
+    sc.init(null, new TrustManager[] { new MyTrustManager() }, new SecureRandom());
+    HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+    HttpsURLConnection.setDefaultHostnameVerifier(new MyHostnameVerifier());
+    HttpsURLConnection con = (HttpsURLConnection) new URL(url).openConnection();
+
+    try {
+        StringBuffer urlParameters = new StringBuffer();
+        String[] tmpPair = null;
+
+        for (int i = 0; i &lt; postVars.length; i++) {
+            tmpPair = postVars[i].toString().split("=");
+
+            if (i &gt; 0)
+                urlParameters.append("&amp;" + tmpPair[0] + "=" + URLEncoder.encode(tmpPair[1], "UTF-8"));
+            else
+                urlParameters.append(tmpPair[0] + "=" + URLEncoder.encode(tmpPair[1], "UTF-8"));
+        }
+
+        con.setRequestMethod("POST");
+        con.setRequestProperty("Authorization", "Basic " + serverAuthBase64);
+        con.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        con.setRequestProperty("Content-Length", "" + Integer.toString(urlParameters.toString().getBytes().length));
+        con.setUseCaches(false);
+        con.setDoOutput(true);
+        con.setDoInput(true);
+
+        DataOutputStream wr = new DataOutputStream (con.getOutputStream());
+        wr.writeBytes (urlParameters.toString());
+        wr.flush();
+        wr.close();
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(con.getInputStream()), 8192 );
+        String line;
+        while ( ( line = br.readLine() ) != null ) {
+                sb.append(line);
+        }
+    }
+    catch(Exception e) {
+        Log.e("sendHTTPSPostMessage", e.getLocalizedMessage());
+    }
+    finally {
+        if(con != null) {
+            con.disconnect(); 
+        }
+    }
+    return sb.toString();
+}
+</code></pre>

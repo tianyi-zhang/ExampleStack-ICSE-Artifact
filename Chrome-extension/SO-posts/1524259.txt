@@ -1,0 +1,44 @@
+<p>Hey,
+ I've been playing with your example a bit and debugging the JAXB code. And it seems it's something specific about UTF-8 encoding used. The escapeHandler property of <code>MarshallerImpl</code> seems to be set properly. However it's being used not in every context. If I searched for calls of <code>MarshallerImpl.createEscapeHandler()</code> I found:</p>
+
+<pre><code>public XmlOutput createWriter( OutputStream os, String encoding ) throws JAXBException {
+    // UTF8XmlOutput does buffering on its own, and
+    // otherwise createWriter(Writer) inserts a buffering,
+    // so no point in doing a buffering here.
+
+    if(encoding.equals("UTF-8")) {
+        Encoded[] table = context.getUTF8NameTable();
+        final UTF8XmlOutput out;
+        if(isFormattedOutput())
+            out = new IndentingUTF8XmlOutput(os,indent,table);
+        else {
+            if(c14nSupport)
+                out = new C14nXmlOutput(os,table,context.c14nSupport);
+            else
+                out = new UTF8XmlOutput(os,table);
+        }
+        if(header!=null)
+            out.setHeader(header);
+        return out;
+    }
+
+    try {
+        return createWriter(
+            new OutputStreamWriter(os,getJavaEncoding(encoding)),
+            encoding );
+    } catch( UnsupportedEncodingException e ) {
+        throw new MarshalException(
+            Messages.UNSUPPORTED_ENCODING.format(encoding),
+            e );
+    }
+}
+</code></pre>
+
+<p>Note that in your setup the top section <code>(...equals("UTF-8")...)</code> is taken into consideration. However this one doesn't take the <code>escapeHandler</code>. However if you set the encoding to any other, the bottom part of this method is called (<code>createWriter(OutputStream, String)</code>) and this one uses <code>escapeHandler</code>, so EH plays its role.
+So, adding...</p>
+
+<pre><code>    marshaller.setProperty(Marshaller.JAXB_ENCODING, "ASCII");
+</code></pre>
+
+<p>makes your custom <code>CharacterEscapeHandler</code> be called.
+Not really sure, but I would guess this is kind of bug in JAXB. </p>

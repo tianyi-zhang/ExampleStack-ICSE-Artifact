@@ -1,0 +1,118 @@
+<ul>
+<li>I am currently using <code>hadoop-core-1.0.3.jar</code> and tried to wrote the <code>Map Reduce</code> with the new API, not sure why it didn't work</li>
+<li>This program is part of <a href="http://manning.com/lam/HadoopinAction_source_code.zip" rel="nofollow">Hadoop in Action code</a> and I am learning hadoop with this book.</li>
+<li>When I ran the same <code>map reduce</code> program with <code>old API syntax</code>, it works absolutely fine.</li>
+<li>The code looks like (along with Combiner included, I was testing it before Combiner first)</li>
+</ul>
+
+<blockquote>
+<pre><code>import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.DoubleWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+
+import java.io.IOException;
+import java.util.Iterator;
+
+
+public class AveragingWithCombiner extends Configured implements Tool {
+
+    public static class MapClass extends MapReduceBase
+            implements Mapper&lt;LongWritable, Text, Text, Text&gt; {
+
+        static enum ClaimsCounters { MISSING, QUOTED };
+
+        public void map(LongWritable key, Text value,
+                        OutputCollector&lt;Text, Text&gt; output,
+                        Reporter reporter) throws IOException {
+
+            String fields[] = value.toString().split(",", -20);
+            String country = fields[4];
+            String numClaims = fields[8];
+
+            if (numClaims.length() &gt; 0 &amp;&amp; !numClaims.startsWith("\"")) {
+                output.collect(new Text(country), new Text(numClaims + ",1"));
+            }
+        }
+    }
+
+    public static class Combine extends MapReduceBase
+            implements Reducer&lt;Text, Text, Text, Text&gt; {
+
+        public void reduce(Text key, Iterator&lt;Text&gt; values,
+                           OutputCollector&lt;Text, Text&gt; output,
+                           Reporter reporter) throws IOException {
+
+            double sum = 0;
+            int count = 0;
+            while (values.hasNext()) {
+                String fields[] = values.next().toString().split(",");
+                sum += Double.parseDouble(fields[0]);
+                count += Integer.parseInt(fields[1]);
+            }
+            output.collect(key, new Text(sum + "," + count));
+        }
+    }
+
+    public static class Reduce extends MapReduceBase
+            implements Reducer&lt;Text, Text, Text, DoubleWritable&gt; {
+
+        public void reduce(Text key, Iterator&lt;Text&gt; values,
+                           OutputCollector&lt;Text, DoubleWritable&gt; output,
+                           Reporter reporter) throws IOException {
+
+            double sum = 0;
+            int count = 0;
+            while (values.hasNext()) {
+                String fields[] = values.next().toString().split(",");
+                sum += Double.parseDouble(fields[0]);
+                count += Integer.parseInt(fields[1]);
+            }
+            output.collect(key, new DoubleWritable(sum/count));
+        }
+    }
+
+    public int run(String[] args) throws Exception {
+        // Configuration processed by ToolRunner
+        Configuration conf = getConf();
+
+        // Create a JobConf using the processed conf
+        JobConf job = new JobConf(conf, AveragingWithCombiner.class);
+
+        // Process custom command-line options
+        Path in = new Path(args[0]);
+        Path out = new Path(args[1]);
+        FileInputFormat.setInputPaths(job, in);
+        FileOutputFormat.setOutputPath(job, out);
+
+        // Specify various job-specific parameters
+        job.setJobName("AveragingWithCombiner");
+        job.setMapperClass(MapClass.class);
+        job.setCombinerClass(Combine.class);
+        job.setReducerClass(Reduce.class);
+
+        job.setInputFormat(TextInputFormat.class);
+        job.setOutputFormat(TextOutputFormat.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+
+        // Submit the job, then poll for progress until the job is complete
+        JobClient.runJob(job);
+
+        return 0;
+    }
+
+    public static void main(String[] args) throws Exception {
+        // Let ToolRunner handle generic command-line options
+        int res = ToolRunner.run(new Configuration(), new AveragingWithCombiner(), args);
+
+        System.exit(res);
+    }
+}
+</code></pre>
+</blockquote>

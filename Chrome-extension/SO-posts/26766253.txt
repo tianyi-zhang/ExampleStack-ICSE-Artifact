@@ -1,0 +1,111 @@
+<h1>Fixed in the latest version</h1>
+
+<p>Not sure when this was fixed, but as of <code>1.1.8.RELEASE</code>, this problem no-longer exists since it is using <code>ClassUtils.isAssignableValue</code>. Leaving the original answer here just for information.</p>
+
+<hr>
+
+<p>There seem to be multiple issues at play here, so I'm going to summarize my findings as the answer. I still don't really have a solution for what I'm trying to do, but I'm going to talk to the Spring Boot folks to see if what's happening is intended or not. </p>
+
+<h2><strong>Why is the existing converter being overwritten when I extend <code>MappingJackson2HttpMessageConverter</code>?</strong></h2>
+
+<p>This applies to version <code>1.1.4.RELEASE</code> of Spring Boot; I haven't checked other versions. The constructor of the <code>HttpMessageConverters</code> class is as follows:</p>
+
+<pre><code>/**
+ * Create a new {@link HttpMessageConverters} instance with the specified additional
+ * converters.
+ * @param additionalConverters additional converters to be added. New converters will
+ * be added to the front of the list, overrides will replace existing items without
+ * changing the order. The {@link #getConverters()} methods can be used for further
+ * converter manipulation.
+ */
+public HttpMessageConverters(Collection&lt;HttpMessageConverter&lt;?&gt;&gt; additionalConverters) {
+    List&lt;HttpMessageConverter&lt;?&gt;&gt; converters = new ArrayList&lt;HttpMessageConverter&lt;?&gt;&gt;();
+    List&lt;HttpMessageConverter&lt;?&gt;&gt; defaultConverters = getDefaultConverters();
+    for (HttpMessageConverter&lt;?&gt; converter : additionalConverters) {
+        int defaultConverterIndex = indexOfItemClass(defaultConverters, converter);
+        if (defaultConverterIndex == -1) {
+            converters.add(converter);
+        }
+        else {
+            defaultConverters.set(defaultConverterIndex, converter);
+        }
+    }
+    converters.addAll(defaultConverters);
+    this.converters = Collections.unmodifiableList(converters);
+}
+</code></pre>
+
+<p>Inside the <code>for</code> loop. Notice that it determines an index in the list by calling the <code>indexOfItemClass</code> method. That method looks like this:</p>
+
+<pre><code>private &lt;E&gt; int indexOfItemClass(List&lt;E&gt; list, E item) {
+    Class&lt;? extends Object&gt; itemClass = item.getClass();
+    for (int i = 0; i &lt; list.size(); i++) {
+        if (list.get(i).getClass().isAssignableFrom(itemClass)) {
+            return i;
+        }
+    }
+    return -1;
+}
+</code></pre>
+
+<p>Since my class extends <code>MappingJackson2HttpMessageConverter</code> the <code>if</code> statement returns <code>true</code>. This means that in the constructor, we have a valid index. Spring Boot then <strong>replaces</strong> the existing instance with the new one, which is <strong>exactly</strong> what I am seeing.</p>
+
+<h2>Is this desirable behavior?</h2>
+
+<p>I don't know. It doesn't <em>seem</em> to be and seems very strange to me.</p>
+
+<h2>Is this called out explicitly in Spring Boot documentation anywhere?</h2>
+
+<p>Sort of. See <a href="http://docs.spring.io/spring-boot/docs/current-SNAPSHOT/reference/htmlsingle/#boot-features-spring-mvc-message-converters" rel="nofollow">here</a>. It says:</p>
+
+<blockquote>
+  <p>Any <code>HttpMessageConverter bean</code> that is present in the context will be added to the list of converters. You can also override default converters that way.</p>
+</blockquote>
+
+<p>However, overriding a converter simply because it is a subtype of an existing one doesn't seem like helpful behavior.</p>
+
+<h2>How does Spring HATEOAS get around this Spring Boot issue?</h2>
+
+<p>Spring HATEOAS' lifecycle is separate from Spring Boot. Spring HATEOAS registers its handler for the <code>application/hal+json</code> media-type in the <code>HyperMediaSupportBeanDefinitionRegistrar</code> class. The relevant method is:</p>
+
+<pre><code>private List&lt;HttpMessageConverter&lt;?&gt;&gt; potentiallyRegisterModule(List&lt;HttpMessageConverter&lt;?&gt;&gt; converters) {
+
+    for (HttpMessageConverter&lt;?&gt; converter : converters) {
+        if (converter instanceof MappingJackson2HttpMessageConverter) {
+            MappingJackson2HttpMessageConverter halConverterCandidate = (MappingJackson2HttpMessageConverter) converter;
+            ObjectMapper objectMapper = halConverterCandidate.getObjectMapper();
+            if (Jackson2HalModule.isAlreadyRegisteredIn(objectMapper)) {
+                return converters;
+            }
+        }
+    }
+
+    CurieProvider curieProvider = getCurieProvider(beanFactory);
+    RelProvider relProvider = beanFactory.getBean(DELEGATING_REL_PROVIDER_BEAN_NAME, RelProvider.class);
+    ObjectMapper halObjectMapper = beanFactory.getBean(HAL_OBJECT_MAPPER_BEAN_NAME, ObjectMapper.class);
+
+    halObjectMapper.registerModule(new Jackson2HalModule());
+    halObjectMapper.setHandlerInstantiator(new Jackson2HalModule.HalHandlerInstantiator(relProvider, curieProvider));
+
+    MappingJackson2HttpMessageConverter halConverter = new MappingJackson2HttpMessageConverter();
+    halConverter.setSupportedMediaTypes(Arrays.asList(HAL_JSON)); //HAL_JSON is just a MediaType instance for application/hal+json
+    halConverter.setObjectMapper(halObjectMapper);
+
+    List&lt;HttpMessageConverter&lt;?&gt;&gt; result = new ArrayList&lt;HttpMessageConverter&lt;?&gt;&gt;(converters.size());
+    result.add(halConverter);
+    result.addAll(converters);
+    return result;
+}
+</code></pre>
+
+<p>The <code>converters</code> argument is passed-in via this snippet from the <code>postProcessBeforeInitialization</code> method from the same class. Relevant snippet is:</p>
+
+<pre><code>if (bean instanceof RequestMappingHandlerAdapter) {
+    RequestMappingHandlerAdapter adapter = (RequestMappingHandlerAdapter) bean;
+    adapter.setMessageConverters(potentiallyRegisterModule(adapter.getMessageConverters()));
+}
+</code></pre>
+
+<h2>What is the right way to create a custom media-type converter that represents a semantic media-type that is still basically JSON (and therefore can be serialized and deserialized by <code>MappingJackson2HttpMessageConverter</code>?</h2>
+
+<p>I'm not sure. Sub-classing <code>ExtensibleMappingJackson2HttpMessageConverter&lt;T&gt;</code> (shown in the question) works for the time being. Another option would perhaps be to create a private instance of <code>MappingJackson2HttpMessageConverter</code> inside your custom converter, and simply delegate to that. Either way, I am going to open an issue with the Spring Boot project and get some feedback from them. I'll then update with answer with any new information.</p>

@@ -1,0 +1,200 @@
+<p>Note: this is <em>not</em> an answer - just an extended comment with code :-)</p>
+
+<p>Stripped out a bit from the OPs example, to concentrate on the FlowLayout-issue-with-asym-borders-in-RToL - added a label instead of the rigid area to better (for me :-) see where it is located. The layout is simply going nuts ... </p>
+
+<pre><code>public void run() {
+    MatteBorderCO frame = new MatteBorderCO();
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new FlowLayout()); 
+
+    frame.add(createRToLPanel(50, 100, true));
+    frame.add(createRToLPanel(100, 100, true));
+    frame.add(createRToLPanel(100, 50, true));
+
+    frame.setSize(600, 600);
+    frame.setVisible(true);
+}
+
+private JPanel createRToLPanel(int leftInset, int rightInset, boolean matte) {
+    JPanel outer = new JPanel();
+    Border asymBorder = matte ? 
+            BorderFactory.createMatteBorder(20, leftInset, 20, rightInset, Color.black) :
+            BorderFactory.createEmptyBorder(20, leftInset, 20, rightInset)    ;
+    outer.setBorder(BorderFactory.createCompoundBorder(
+            asymBorder, BorderFactory.createLineBorder(Color.RED)
+    ));
+
+    JPanel inner = new JPanel();
+    inner.setBackground(Color.YELLOW);
+    inner.setBorder(BorderFactory.createLineBorder(Color.BLUE));
+    inner.add(new JLabel("RToL"));
+    outer.add(inner);
+    outer.applyComponentOrientation(ComponentOrientation.RIGHT_TO_LEFT);
+    return outer;
+}
+</code></pre>
+
+<p><strong>Edit</strong></p>
+
+<p>Culprit is an incorrect calculation of location in flowLayout.moveComponents:</p>
+
+<pre><code>   if (ltr) {
+        m.setLocation(x, cy);
+   } else { // RtoL orientation
+        // here's the error: location is adjusted relative to the target width
+        // without taking the insets into account ... 
+        m.setLocation(target.width - x - m.width, cy);
+   }
+</code></pre>
+
+<p><strong>Edit 2</strong></p>
+
+<p>removed the assumed "simple" fix - not good enough ;-)</p>
+
+<p><strong>Edit 3</strong></p>
+
+<p>couldn't resist, here's a FixedFlowLayout (formally untested, just used in the example above which looks fine with it!)</p>
+
+<pre><code>public static class FixedFlowLayout extends FlowLayout {
+
+    /**
+     * C&amp;p mostly - RToL border fix implemented.
+     */
+    protected int moveComponents(Container target, int x, int y, int width,
+            int height, int rowStart, int rowEnd, boolean ltr,
+            boolean useBaseline, int[] ascent, int[] descent) {
+        switch (getAlignment()) {
+        case LEFT:
+            x += ltr ? 0 : width;
+            break;
+        case CENTER:
+            x += width / 2;
+            break;
+        case RIGHT:
+            x += ltr ? width : 0;
+            break;
+        case LEADING:
+            break;
+        case TRAILING:
+            x += width;
+            break;
+        }
+        int maxAscent = 0;
+        int nonbaselineHeight = 0;
+        int baselineOffset = 0;
+        if (useBaseline) {
+            int maxDescent = 0;
+            for (int i = rowStart; i &lt; rowEnd; i++) {
+                Component m = target.getComponent(i);
+                if (m.isVisible()) {
+                    if (ascent[i] &gt;= 0) {
+                        maxAscent = Math.max(maxAscent, ascent[i]);
+                        maxDescent = Math.max(maxDescent, descent[i]);
+                    } else {
+                        nonbaselineHeight = Math.max(m.getHeight(),
+                                nonbaselineHeight);
+                    }
+                }
+            }
+            height = Math.max(maxAscent + maxDescent, nonbaselineHeight);
+            baselineOffset = (height - maxAscent - maxDescent) / 2;
+        }
+
+        int right = target.getWidth() - target.getInsets().right - getHgap();
+
+        for (int i = rowStart; i &lt; rowEnd; i++) {
+            Component m = target.getComponent(i);
+            if (m.isVisible()) {
+                int cy;
+                if (useBaseline &amp;&amp; ascent[i] &gt;= 0) {
+                    cy = y + baselineOffset + maxAscent - ascent[i];
+                } else {
+                    cy = y + (height - m.getHeight()) / 2;
+                }
+                if (ltr) {
+                    m.setLocation(x, cy);
+                    x += m.getWidth() + getHgap();
+                } else {
+                    m.setLocation(right - m.getWidth(), cy);
+                    right -= m.getWidth() + getHgap();
+                }
+            }
+        }
+        return height;
+    }
+
+    /**
+     * C&amp;p, to be able to call the fixed moveComponent.
+     */
+    @Override
+    public void layoutContainer(Container target) {
+        synchronized (target.getTreeLock()) {
+            Insets insets = target.getInsets();
+            int maxwidth = target.getWidth()
+                    - (insets.left + insets.right + getHgap() * 2);
+            int nmembers = target.getComponentCount();
+            int x = 0, y = insets.top + getVgap();
+            int rowh = 0, start = 0;
+
+            boolean ltr = target.getComponentOrientation().isLeftToRight();
+
+            boolean useBaseline = getAlignOnBaseline();
+            int[] ascent = null;
+            int[] descent = null;
+
+            if (useBaseline) {
+                ascent = new int[nmembers];
+                descent = new int[nmembers];
+            }
+
+            for (int i = 0; i &lt; nmembers; i++) {
+                Component m = target.getComponent(i);
+                if (m.isVisible()) {
+                    Dimension d = m.getPreferredSize();
+                    m.setSize(d.width, d.height);
+
+                    if (useBaseline) {
+                        int baseline = m.getBaseline(d.width, d.height);
+                        if (baseline &gt;= 0) {
+                            ascent[i] = baseline;
+                            descent[i] = d.height - baseline;
+                        } else {
+                            ascent[i] = -1;
+                        }
+                    }
+                    if ((x == 0) || ((x + d.width) &lt;= maxwidth)) {
+                        if (x &gt; 0) {
+                            x += getHgap();
+                        }
+                        x += d.width;
+                        rowh = Math.max(rowh, d.height);
+                    } else {
+                        rowh = moveComponents(target, insets.left + getHgap(),
+                                y, maxwidth - x, rowh, start, i, ltr,
+                                useBaseline, ascent, descent);
+                        x = d.width;
+                        y += getVgap() + rowh;
+                        rowh = d.height;
+                        start = i;
+                    }
+                }
+            }
+            moveComponents(target, insets.left + getHgap(), y, maxwidth - x,
+                    rowh, start, nmembers, ltr, useBaseline, ascent,
+                    descent);
+        }
+    }
+
+    public FixedFlowLayout() {
+    }
+
+    public FixedFlowLayout(int align, int hgap, int vgap) {
+        super(align, hgap, vgap);
+    }
+
+    public FixedFlowLayout(int align) {
+        super(align);
+    }
+
+}
+</code></pre>

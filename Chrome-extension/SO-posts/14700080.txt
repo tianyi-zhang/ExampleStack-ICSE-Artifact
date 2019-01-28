@@ -1,0 +1,102 @@
+<p>Figured this one out after reading up a little more on how to implement interfaces. It was actually pretty simple once I figured it out (not sure why I didn't catch it to begin with).</p>
+
+<p>Basically, I modified onCreate() to pass the sharedPreferences as follows (just added "this.myPrefs" as a parameter):</p>
+
+<pre><code>        // ShakeDetector initialization
+    mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+    mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+    mShakeDetector = new ShakeDetector();
+    mShakeDetector.setOnShakeListener(new OnShakeListener() {
+
+        @Override
+        public void onShake(int count) {
+            /*
+             * The following method, "handleShakeEvent(count):" is a stub //
+             * method you would use to setup whatever you want done once the
+             * device has been shook.
+             */
+            handleShakeEvent(count);
+        }
+    }, this.myPrefs); // &lt;&lt;&lt;--- ADDED IT HERE
+</code></pre>
+
+<p>Then I had to modify the setOnShakeListener in the ShakeDetector class to accept myPrefs as a parameter and added everything so that it would correctly handle the variables. Here's what I ended up with:</p>
+
+<pre><code>import android.content.SharedPreferences;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.util.FloatMath;
+import android.util.Log;
+
+public class ShakeDetector implements SensorEventListener {
+
+/*
+ * The gForce that is necessary to register as shake.
+ * Must be greater than 1G (one earth gravity unit).
+ * You can install "G-Force", by Blake La Pierre
+ * from the Google Play Store and run it to see how
+ *  many G's it takes to register a shake
+ */
+private static final String SHAKE_THRESHOLD_GRAVITY = "&lt;replace this with the android:key value you have configured in you preferences XML file.&gt;";
+private static final String SHAKE_COUNT_RESET_TIME_MS = "&lt;replace this with the android:key value you have configured in you preferences XML file.&gt;";
+private static final String SHAKE_SLOP_TIME_MS = "&lt;replace this with the android:key value you have configured in you preferences XML file.&gt;";
+
+private OnShakeListener mListener;
+private long mShakeTimestamp;
+private int mShakeCount;
+private SharedPreferences myPrefs;
+
+public void setOnShakeListener(OnShakeListener listener, SharedPreferences myPrefs) {
+    this.mListener = listener;
+    this.myPrefs = myPrefs;
+}
+
+public interface OnShakeListener {
+    public void onShake(int count);
+}
+
+@Override
+public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    // ignore
+}
+
+@Override
+public void onSensorChanged(SensorEvent event) {
+
+    if (mListener != null) {
+        float x = event.values[0];
+        float y = event.values[1];
+        float z = event.values[2];
+
+        float gX = x / SensorManager.GRAVITY_EARTH;
+        float gY = y / SensorManager.GRAVITY_EARTH;
+        float gZ = z / SensorManager.GRAVITY_EARTH;
+
+        // gForce will be close to 1 when there is no movement.
+        float gForce = FloatMath.sqrt(gX * gX + gY * gY + gZ * gZ);
+
+        if (gForce &gt; Float.parseFloat(myPrefs.getString(SHAKE_THRESHOLD_GRAVITY, "2.7F"))) {
+            final long now = System.currentTimeMillis();
+            // ignore shake events too close to each other (500ms)
+            if (mShakeTimestamp + Integer.parseInt(myPrefs.getString(SHAKE_SLOP_TIME_MS, "500")) &gt; now) {
+                return;
+            }
+
+            // reset the shake count after 3 seconds of no shakes
+            if (mShakeTimestamp + Integer.parseInt(myPrefs.getString(SHAKE_COUNT_RESET_TIME_MS, "3000")) &lt; now) {
+                mShakeCount = 0;
+            }
+
+            mShakeTimestamp = now;
+            mShakeCount++;
+
+            mListener.onShake(mShakeCount);
+        }
+    }
+}
+}
+</code></pre>
+
+<p>Hope that helps if anyone else was wondering.</p>

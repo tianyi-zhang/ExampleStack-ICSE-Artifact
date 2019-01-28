@@ -1,0 +1,204 @@
+<p>1- I have created a activity to start service like this:</p>
+
+<pre><code>package com.android.camerarecorder;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.hardware.Camera;
+import android.os.Bundle;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.widget.Button;
+
+public class CameraRecorder extends Activity implements SurfaceHolder.Callback {
+    private static final String TAG = "Recorder";
+    public static SurfaceView mSurfaceView;
+    public static SurfaceHolder mSurfaceHolder;
+    public static Camera mCamera ;
+    public static boolean mPreviewRunning;
+
+    /** Called when the activity is first created. */
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+
+        mSurfaceView = (SurfaceView) findViewById(R.id.surfaceView1);
+        mSurfaceHolder = mSurfaceView.getHolder();
+        mSurfaceHolder.addCallback(this);
+        mSurfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+
+        Button btnStart = (Button) findViewById(R.id.StartService);
+        btnStart.setOnClickListener(new View.OnClickListener()
+        {
+            public void onClick(View v)
+            {
+                Intent intent = new Intent(CameraRecorder.this, RecorderService.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startService(intent);
+                finish();
+            }
+        });
+
+        Button btnStop = (Button) findViewById(R.id.StopService);
+        btnStop.setOnClickListener(new View.OnClickListener()
+        {
+            public void onClick(View v)
+            {
+                stopService(new Intent(CameraRecorder.this, RecorderService.class));
+            }
+        });
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // TODO Auto-generated method stub
+
+    }
+}
+</code></pre>
+
+<p>2 - Now I have created <strong>a service to record the video in background</strong> like this:</p>
+
+<pre><code>    package com.android.camerarecorder;
+    import java.io.IOException;
+    import java.util.List;
+    import android.app.Service;
+    import android.content.Intent;
+    import android.graphics.PixelFormat;
+    import android.hardware.Camera;
+    import android.hardware.Camera.Size;
+    import android.media.MediaRecorder;
+    import android.os.IBinder;
+    import android.util.Log;
+    import android.view.SurfaceHolder;
+    import android.view.SurfaceView;
+    import android.widget.Toast;
+
+    public class RecorderService extends Service {
+        private static final String TAG = "RecorderService";
+        private SurfaceView mSurfaceView;
+        private SurfaceHolder mSurfaceHolder;
+        private static Camera mServiceCamera;
+        private boolean mRecordingStatus;
+        private MediaRecorder mMediaRecorder;
+
+        @Override
+        public void onCreate() {
+            mRecordingStatus = false;
+            //mServiceCamera = CameraRecorder.mCamera;
+            mServiceCamera = Camera.open(1);
+            mSurfaceView = CameraRecorder.mSurfaceView;
+            mSurfaceHolder = CameraRecorder.mSurfaceHolder;
+
+            super.onCreate();
+            if (mRecordingStatus == false)
+                startRecording();
+        }
+
+        @Override
+        public IBinder onBind(Intent intent) {
+            // TODO Auto-generated method stub
+            return null;
+        }
+
+        @Override
+        public void onDestroy() {
+            stopRecording();
+            mRecordingStatus = false;
+
+            super.onDestroy();
+        }   
+
+        public boolean startRecording(){
+            try {
+                Toast.makeText(getBaseContext(), "Recording Started", Toast.LENGTH_SHORT).show();
+
+                //mServiceCamera = Camera.open();
+                Camera.Parameters params = mServiceCamera.getParameters();
+                mServiceCamera.setParameters(params);
+                Camera.Parameters p = mServiceCamera.getParameters();
+
+                final List&lt;Size&gt; listSize = p.getSupportedPreviewSizes();
+                Size mPreviewSize = listSize.get(2);
+                Log.v(TAG, "use: width = " + mPreviewSize.width 
+                            + " height = " + mPreviewSize.height);
+                p.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
+                p.setPreviewFormat(PixelFormat.YCbCr_420_SP);
+                mServiceCamera.setParameters(p);
+
+                try {
+                    mServiceCamera.setPreviewDisplay(mSurfaceHolder);
+                    mServiceCamera.startPreview();
+                }
+                catch (IOException e) {
+                    Log.e(TAG, e.getMessage());
+                    e.printStackTrace();
+                }
+
+                mServiceCamera.unlock();
+
+                mMediaRecorder = new MediaRecorder();
+                mMediaRecorder.setCamera(mServiceCamera);
+                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+                mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
+                mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+                mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.DEFAULT);
+                mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.DEFAULT);
+                mMediaRecorder.setOutputFile("/sdcard/video.mp4");
+                mMediaRecorder.setVideoFrameRate(30);
+                mMediaRecorder.setVideoSize(mPreviewSize.width, mPreviewSize.height);
+                mMediaRecorder.setPreviewDisplay(mSurfaceHolder.getSurface());
+
+                mMediaRecorder.prepare();
+                mMediaRecorder.start(); 
+
+                mRecordingStatus = true;
+
+                return true;
+            } catch (IllegalStateException e) {
+                Log.d(TAG, e.getMessage());
+                e.printStackTrace();
+                return false;
+            } catch (IOException e) {
+                Log.d(TAG, e.getMessage());
+                e.printStackTrace();
+                return false;
+            }
+        }
+
+        public void stopRecording() {
+            Toast.makeText(getBaseContext(), "Recording Stopped", Toast.LENGTH_SHORT).show();
+            try {
+                mServiceCamera.reconnect();
+            } catch (IOException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+            mMediaRecorder.stop();
+            mMediaRecorder.reset();
+
+            mServiceCamera.stopPreview();
+            mMediaRecorder.release();
+
+            mServiceCamera.release();
+            mServiceCamera = null;
+        }
+    }
+</code></pre>
+
+<p>It will create a file video.mp4 in your sd card. you may change the code for adding more functionality but  the basic functionality is achieved through this code i.e. record video in background.</p>
+
+<p><strong>NOTE: i have started the service through button click in activity but you can start it through any other way also like broadcastreceiver etc.</strong></p>
+
+<p>Hope it helps!! Cheers.</p>

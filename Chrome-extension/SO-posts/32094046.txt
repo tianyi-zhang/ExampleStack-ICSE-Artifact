@@ -1,0 +1,92 @@
+<p>It is possible to delete exactly the row</p>
+
+<pre><code>in001 : group : name -&gt; employee
+</code></pre>
+
+<p>by using: <a href="https://accumulo.apache.org/1.7/apidocs/org/apache/accumulo/core/client/admin/TableOperations.html#compact(java.lang.String,%20org.apache.hadoop.io.Text,%20org.apache.hadoop.io.Text,%20java.util.List,%20boolean,%20boolean)" rel="nofollow"><code>compact</code></a> and a custom filter which excludes exactly this value from compaction. (Not tested but should work.) Use: </p>
+
+<pre><code>IteratorSetting config = new IteratorSetting(10, "excludeTermFilter", ExcludeTermFilter.class);
+config.setTermToExclude("group","name","employee");
+List&lt;IteratorSetting&gt; filterList = new ArrayList&lt;IteratorSetting&gt;();
+filterList.add(config);
+connector.tableOperations().compact(tableName, startRow, endRow, filterList, true, false);
+</code></pre>
+
+<p>with the according values and this custom filter (based on <a href="https://github.com/apache/accumulo/blob/master/core/src/main/java/org/apache/accumulo/core/iterators/user/GrepIterator.java" rel="nofollow">GrepIterator</a>):</p>
+
+<pre><code>public class ExcludeTermFilter extends Filter {    
+  private byte termToExclude[];
+  private byte columnFamily[];
+  private byte columnQualifier[];
+  @Override
+  public boolean accept(Key k, Value v) {
+    return !(match(v.get(),termToExclude) &amp;&amp;
+             match(k.getColumnFamilyData(),columnFamily) &amp;&amp;
+             match(k.getColumnQualifierData(),columnQualifier) 
+            );
+  }
+
+  private boolean match(ByteSequence bs, byte[] term) {
+    return indexOf(bs.getBackingArray(), bs.offset(), bs.length(), term) &gt;= 0;
+  }
+
+  private boolean match(byte[] ba, byte[] term) {
+    return indexOf(ba, 0, ba.length, term) &gt;= 0;
+  }
+
+  // copied code below from java string and modified    
+  private static int indexOf(byte[] source, int sourceOffset, int sourceCount, byte[] target) {
+    byte first = target[0];
+    int targetCount = target.length;
+    int max = sourceOffset + (sourceCount - targetCount);
+
+    for (int i = sourceOffset; i &lt;= max; i++) {
+      /* Look for first character. */
+      if (source[i] != first) {
+        while (++i &lt;= max &amp;&amp; source[i] != first)
+          continue;
+      }
+
+      /* Found first character, now look at the rest of v2 */
+      if (i &lt;= max) {
+        int j = i + 1;
+        int end = j + targetCount - 1;
+        for (int k = 1; j &lt; end &amp;&amp; source[j] == target[k]; j++, k++)
+          continue;
+
+        if (j == end) {
+          /* Found whole string. */
+          return i - sourceOffset;
+        }
+      }
+    }
+    return -1;
+  }
+
+  @Override
+  public SortedKeyValueIterator&lt;Key,Value&gt; deepCopy(IteratorEnvironment env) {
+    GrepIterator copy = (GrepIterator) super.deepCopy(env);
+    copy.termToExclude = Arrays.copyOf(termToExclude, termToExcludelength);
+    copy.columnFamily = Arrays.copyOf(columnFamily, termToExcludelength);
+    copy.columnQualifier = Arrays.copyOf(columnQualifier, termToExcludelength);
+    return copy;
+  }
+
+  @Override
+  public void init(SortedKeyValueIterator&lt;Key,Value&gt; source, Map&lt;String,String&gt; options, IteratorEnvironment env) throws IOException {
+    super.init(source, options, env);
+    termToExclude = options.get("etf.term").getBytes(UTF_8);
+    columnFamily = options.get("etf.family").getBytes(UTF_8);
+    columnQualifier = options.get("etf.qualifier").getBytes(UTF_8);
+  }
+
+  /**
+   * Encode the family, qualifier and termToExclude as an option for a ScanIterator
+   */
+  public static void setTermToExclude(IteratorSetting cfg, String family, String qualifier, String termToExclude) {
+    cfg.addOption("etf.family", family);
+    cfg.addOption("etf.qualifier", qualifier);
+    cfg.addOption("etf.term", termToExclude);
+  }
+}
+</code></pre>

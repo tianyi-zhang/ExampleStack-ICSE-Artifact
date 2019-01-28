@@ -1,0 +1,142 @@
+<p>I have been toying with a solution to this problem for over a week, and it's giving me a ton of problems. I've narrowed the issue down significantly, though. Your solution above did NOT work for me, but my solution below is close. The issue is that it jumps whenever a second finger is pressed down or lifted. I've found that this happens because mPosX and mPosY are not always truly what the variables are <em>supposed</em> to represent. Here's what I mean:</p>
+
+<p>When ACTION_MOVE is called and the code enters the "else" statement (to deal with zoom events), mPosX and mPosY are only changing according to the <strong>change in focus</strong>, <em>not</em> the <strong>change in zoom</strong>. This means that panning with two fingers works, and zooming with two fingers works, but mPosX and mPosY are not changing appropriately with respect to the changing zoom.</p>
+
+<p>I've been trying to figure out ways to fix this using the differential changes in zoom (mScaleDetector.getScaleFactor()) and the differential changes in focus, but I can't seem to work through the logic well enough to find something that works.</p>
+
+<p>Another solution is to move all zoom operations into OnTouchListener, and completely getting rid of the ScaleListener. This means a lot more math, but it would definitely be a solution.</p>
+
+<p>Here is onDraw:</p>
+
+<pre><code>    @Override
+    public void onDraw(Canvas c) {
+        c.save();
+
+        if (mScaleDetector.isInProgress()) {
+            c.scale(mScaleFactor, mScaleFactor, mLastGestureX - mPosX,
+                    mLastGestureY - mPosY);
+        } else {
+            c.scale(mScaleFactor, mScaleFactor, mLastGestureX, mLastGestureY);
+        }
+
+        c.translate(mPosX / mScaleFactor, mPosY / mScaleFactor);
+
+        // drawing instruction here
+
+        c.restore();
+    }
+</code></pre>
+
+<p>Here is how the code reacts to finger presses:</p>
+
+<pre><code>    @Override
+    public boolean onTouchEvent(MotionEvent ev) {
+        mScaleDetector.onTouchEvent(ev);
+
+        final int action = ev.getAction();
+        switch (action &amp; MotionEvent.ACTION_MASK) {
+        case MotionEvent.ACTION_DOWN: {
+            if (!mScaleDetector.isInProgress()) {
+                final float x = ev.getX();
+                final float y = ev.getY();
+
+                mLastTouchX = x;
+                mLastTouchY = y;
+
+                mActivePointerId = ev.getPointerId(0);
+            }
+            break;
+        }
+
+        case MotionEvent.ACTION_POINTER_DOWN: {
+            if (!mScaleDetector.isInProgress()) {
+                final float gx = mScaleDetector.getFocusX();
+                final float gy = mScaleDetector.getFocusY();
+
+                mLastGestureX = gx;
+                mLastGestureY = gy; 
+            }
+            break;
+        }
+
+        case MotionEvent.ACTION_MOVE: {
+            if (!mScaleDetector.isInProgress()) {
+                Log.i("hi", "SD not in progress");
+                final int pointerIndex = ev.findPointerIndex(mActivePointerId);
+                final float x = ev.getX(pointerIndex);
+                final float y = ev.getY(pointerIndex);
+
+                final float dx = x - mLastTouchX;
+                final float dy = y - mLastTouchY;
+
+                mPosX += dx;
+                mPosY += dy;
+
+                invalidate();
+
+                mLastTouchX = x;
+                mLastTouchY = y;
+            } else {
+                Log.i("hi", "SD in progress");
+                final float gx = mScaleDetector.getFocusX();
+                final float gy = mScaleDetector.getFocusY();
+
+                final float gdx = gx - mLastGestureX;
+                final float gdy = gy - mLastGestureY;
+
+                mPosX += gdx;
+                mPosY += gdy;
+
+                // SOMETHING NEEDS TO HAPPEN RIGHT HERE.
+
+                invalidate();
+
+                mLastGestureX = gx;
+                mLastGestureY = gy;
+            }
+
+            break;
+        }
+
+        case MotionEvent.ACTION_POINTER_UP: {
+
+            final int pointerIndex = (ev.getAction() &amp; MotionEvent.ACTION_POINTER_INDEX_MASK) &gt;&gt; MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+            final int pointerId = ev.getPointerId(pointerIndex);
+            if (pointerId == mActivePointerId) {
+                // This was our active pointer going up. Choose a new
+                // active pointer and adjust accordingly.
+                final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
+
+                mLastTouchX = ev.getX(newPointerIndex);
+                mLastTouchY = ev.getY(newPointerIndex);
+
+                mActivePointerId = ev.getPointerId(newPointerIndex);
+            } else {
+                final int tempPointerIndex = ev.findPointerIndex(mActivePointerId);
+
+                mLastTouchX = ev.getX(tempPointerIndex);
+                mLastTouchY = ev.getY(tempPointerIndex);
+            }
+
+            break;
+        }
+        }
+
+        return true;
+    }
+</code></pre>
+
+<p>And although it's mostly unrelated, here's the ScaleListener:</p>
+
+<pre><code>    private class ScaleListener extends ScaleGestureDetector.SimpleOnScaleGestureListener {
+        @Override
+        public boolean onScale(ScaleGestureDetector detector) {
+            mScaleFactor *= detector.getScaleFactor();
+
+            invalidate();
+            return true;
+        }
+    }
+</code></pre>
+
+<p>Again, this code is NOT working perfectly, but it's very close. I've explained the exact issue above and am still having trouble getting it working. I don't know if this will pop up in your notifications, Hank, but hopefully someone will see it and help me out.</p>

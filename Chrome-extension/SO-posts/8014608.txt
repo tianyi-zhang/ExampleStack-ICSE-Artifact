@@ -1,0 +1,206 @@
+<p>check this out <a href="http://developer.android.com/reference/android/media/MediaMetadataRetriever.html">http://developer.android.com/reference/android/media/MediaMetadataRetriever.html</a> but it is on API LEVEL 10</p>
+
+<p>Thank you.</p>
+
+<p>I have done using the thread,not the great solution but it works</p>
+
+<pre><code>public class IcyStreamMeta {
+
+protected URL streamUrl;
+private Map&lt;String, String&gt; metadata;
+private boolean isError;
+
+public IcyStreamMeta(URL streamUrl) {
+    setStreamUrl(streamUrl);
+
+    isError = false;
+}
+
+/**
+ * Get artist using stream's title
+ *
+ * @return String
+ * @throws IOException
+ */
+public String getArtist() throws IOException {
+    Map&lt;String, String&gt; data = getMetadata();
+
+    if (!data.containsKey("StreamTitle"))
+        return "";
+
+    String streamTitle = data.get("StreamTitle");
+    String title = streamTitle.substring(0, streamTitle.indexOf("-"));
+    return title.trim();
+}
+
+/**
+ * Get title using stream's title
+ *
+ * @return String
+ * @throws IOException
+ */
+public String getTitle() throws IOException {
+    Map&lt;String, String&gt; data = getMetadata();
+
+    if (!data.containsKey("StreamTitle"))
+        return "";
+
+    String streamTitle = data.get("StreamTitle");
+    String artist = streamTitle.substring(streamTitle.indexOf("-")+1);
+    return artist.trim();
+}
+
+public Map&lt;String, String&gt; getMetadata() throws IOException {
+    if (metadata == null) {
+        refreshMeta();
+    }
+
+    return metadata;
+}
+
+public void refreshMeta() throws IOException {
+    retreiveMetadata();
+}
+
+private void retreiveMetadata() throws IOException {
+    URLConnection con = streamUrl.openConnection();
+    con.setRequestProperty("Icy-MetaData", "1");
+    con.setRequestProperty("Connection", "close");
+    con.setRequestProperty("Accept", null);
+    con.connect();
+
+    int metaDataOffset = 0;
+    Map&lt;String, List&lt;String&gt;&gt; headers = con.getHeaderFields();
+    InputStream stream = con.getInputStream();
+
+    if (headers.containsKey("icy-metaint")) {
+        // Headers are sent via HTTP
+        metaDataOffset = Integer.parseInt(headers.get("icy-metaint").get(0));
+    } else {
+        // Headers are sent within a stream
+        StringBuilder strHeaders = new StringBuilder();
+        char c;
+        while ((c = (char)stream.read()) != -1) {
+            strHeaders.append(c);
+            if (strHeaders.length() &gt; 5 &amp;&amp; (strHeaders.substring((strHeaders.length() - 4), strHeaders.length()).equals("\r\n\r\n"))) {
+                // end of headers
+                break;
+            }
+        }
+
+        // Match headers to get metadata offset within a stream
+        Pattern p = Pattern.compile("\\r\\n(icy-metaint):\\s*(.*)\\r\\n");
+        Matcher m = p.matcher(strHeaders.toString());
+        if (m.find()) {
+            metaDataOffset = Integer.parseInt(m.group(2));
+        }
+    }
+
+    // In case no data was sent
+    if (metaDataOffset == 0) {
+        isError = true;
+        return;
+    }
+
+    // Read metadata
+    int b;
+    int count = 0;
+    int metaDataLength = 4080; // 4080 is the max length
+    boolean inData = false;
+    StringBuilder metaData = new StringBuilder();
+    // Stream position should be either at the beginning or right after headers
+    while ((b = stream.read()) != -1) {
+        count++;
+
+        // Length of the metadata
+        if (count == metaDataOffset + 1) {
+            metaDataLength = b * 16;
+        }
+
+        if (count &gt; metaDataOffset + 1 &amp;&amp; count &lt; (metaDataOffset + metaDataLength)) {              
+            inData = true;
+        } else {                
+            inData = false;             
+        }               
+        if (inData) {               
+            if (b != 0) {                   
+                metaData.append((char)b);               
+            }           
+        }               
+        if (count &gt; (metaDataOffset + metaDataLength)) {
+            break;
+        }
+
+    }
+
+    // Set the data
+    metadata = IcyStreamMeta.parseMetadata(metaData.toString());
+
+    // Close
+    stream.close();
+}
+
+public boolean isError() {
+    return isError;
+}
+
+public URL getStreamUrl() {
+    return streamUrl;
+}
+
+public void setStreamUrl(URL streamUrl) {
+    this.metadata = null;
+    this.streamUrl = streamUrl;
+    this.isError = false;
+}
+
+public static Map&lt;String, String&gt; parseMetadata(String metaString) {
+    Map&lt;String, String&gt; metadata = new HashMap();
+    String[] metaParts = metaString.split(";");
+    Pattern p = Pattern.compile("^([a-zA-Z]+)=\\'([^\\']*)\\'$");
+    Matcher m;
+    for (int i = 0; i &lt; metaParts.length; i++) {
+        m = p.matcher(metaParts[i]);
+        if (m.find()) {
+            metadata.put((String)m.group(1), (String)m.group(2));
+        }
+    }
+
+    return metadata;
+}
+</code></pre>
+
+<p>}</p>
+
+<p>make thread call each 10 sec</p>
+
+<pre><code>public void startThread(){
+
+    timer = new Timer();
+    timer.schedule(new TimerTask() {
+        public void run() {
+
+            URL url;
+            Message msg = handler.obtainMessage();
+            try {
+                url = new URL(URL);
+                  IcyStreamMeta icy = new IcyStreamMeta(url);
+
+                    Log.d("SONG",icy.getTitle());
+                  msg.obj = icy.getTitle();
+
+                Log.d("ARTITSi",icy.getArtist());
+                handler.sendMessage(msg);
+            } catch (MalformedURLException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }catch (IOException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+
+        }
+    }, 0, 10000);
+
+} 
+</code></pre>

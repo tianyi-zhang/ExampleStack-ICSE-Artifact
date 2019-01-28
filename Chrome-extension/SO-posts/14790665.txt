@@ -1,0 +1,131 @@
+<p>Styling the <code>ListPreference</code> from XML is not directly possible. The problem is that <code>ListPreference</code> (through <code>DialogPreference</code>) calls <code>AlertDialog.Builder(Context)</code> to build its <code>Dialog</code>, rather than <code>AlertDialog.Builder(Context context, int themeResourceId)</code>. While the latter allows for providing a theme, the former does not, causing it to fall back to a default Android theme.</p>
+
+<p>For a project, I needed a <code>ListPreference</code> with a custom title-color, a custom radiobutton-style and a custom ListView-selector (basically, Holo in a different color). I solved this by extending <code>ListPreference</code> and overriding <code>onPrepareDialogBuilder(Builder)</code> and <code>OnCreateDialogView()</code> so I could use a custom ListView with a simple ArrayAdapter, rather than <code>Dialog</code>'s built-in <code>ListView</code> (which doesn't have support for styling). I also had to override <code>onDialogClosed()</code> in order to set the right value to the preference.</p>
+
+<p>In order to use it, all you have to do is replace the classname of the preference in your preferences.xml rom <code>ListPreference</code> to <code>com.your.packagename.ThemedListPreference</code>. Other than that, the implementation is identical to ListPreference.</p>
+
+<pre><code>public class ThemedListPreference extends ListPreference implements OnItemClickListener {
+
+    public static final String TAG = "ThemedListPreference";
+
+    private int mClickedDialogEntryIndex;
+
+    private CharSequence mDialogTitle;
+
+    public ThemedListPreference(Context context, AttributeSet attrs) {
+        super(context, attrs);
+    }
+
+    public ThemedListPreference(Context context) {
+        super(context);
+    }
+
+    @Override
+    protected View onCreateDialogView() {
+        // inflate custom layout with custom title &amp; listview
+        View view = View.inflate(getContext(), R.layout.dialog_settings_updatetime, null);
+
+        mDialogTitle = getDialogTitle();
+        if(mDialogTitle == null) mDialogTitle = getTitle();
+        ((TextView) view.findViewById(R.id.dialog_title)).setText(mDialogTitle);
+
+        ListView list = (ListView) view.findViewById(android.R.id.list);
+        // note the layout we're providing for the ListView entries
+        ArrayAdapter&lt;CharSequence&gt; adapter = new ArrayAdapter&lt;CharSequence&gt;(
+                getContext(), R.layout.btn_radio,
+                getEntries());
+
+        list.setAdapter(adapter);
+        list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        list.setItemChecked(findIndexOfValue(getValue()), true);
+        list.setOnItemClickListener(this);
+
+        return view;
+    }
+
+    @Override
+    protected void onPrepareDialogBuilder(Builder builder) {
+        // adapted from ListPreference
+        if (getEntries() == null || getEntryValues() == null) {
+            // throws exception
+            super.onPrepareDialogBuilder(builder);
+            return;
+        }
+
+        mClickedDialogEntryIndex = findIndexOfValue(getValue());
+
+        // .setTitle(null) to prevent default (blue)
+        // title+divider from showing up
+        builder.setTitle(null);
+
+        builder.setPositiveButton(null, null);
+    }
+
+    @Override
+    public void onItemClick(AdapterView&lt;?&gt; parent, View view, int position,
+            long id) {
+        mClickedDialogEntryIndex = position;
+        ThemedListPreference.this.onClick(getDialog(), DialogInterface.BUTTON_POSITIVE);
+        getDialog().dismiss();
+    }
+
+    @Override
+    protected void onDialogClosed(boolean positiveResult) {
+            // adapted from ListPreference
+        super.onDialogClosed(positiveResult);
+
+        if (positiveResult &amp;&amp; mClickedDialogEntryIndex &gt;= 0
+                &amp;&amp; getEntryValues() != null) {
+            String value = getEntryValues()[mClickedDialogEntryIndex]
+                    .toString();
+            if (callChangeListener(value)) {
+                setValue(value);
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>For my ListView items I used the layout below. Note that drawable/btn_radio_holo_light is an XML-drawable like the one in your android-sdk/platforms/android-x/data/res/drawable folder, only with references to different drawables.</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;CheckedTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/text1"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:checkMark="@drawable/btn_radio_holo_light"
+    android:gravity="center_vertical"
+    android:minHeight="@dimen/list_item_minheight"
+    android:paddingLeft="@dimen/list_item_paddingLeft"
+    android:paddingRight="@dimen/list_item_paddingLeft" /&gt;
+</code></pre>
+
+<p>For my Dialog layout (<code>onCreateDialogView()</code>), I used the following:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical" &gt;
+
+    &lt;TextView
+        android:id="@+id/dialog_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:textColor="@color/title_color"
+        android:textSize="22sp" /&gt;
+
+    &lt;View
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:background="@color/divider_color" /&gt;
+
+    &lt;ListView
+        android:id="@android:id/list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:listSelector="@drawable/list_selector" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>

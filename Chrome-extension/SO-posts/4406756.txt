@@ -1,0 +1,74 @@
+<p>For everyone's benefit, let me summarize the real problem and the solution that worked for me.</p>
+
+<p>As Ryan pointed out, there is a <a href="http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=5041014" rel="nofollow">bug</a> in JVM, which affects Windows Platform. <code>URLClassLoader</code> does not close the open jar files after it opens them for loading classes, effectively locking the jar files. The jar files can't be deleted or replaced.</p>
+
+<p>The solution is simple: close the open jar files after they've been read. However, to get a handle to the open jar files, we need to use reflection since the properties we need to traverse down are not public. So we traverse down this path</p>
+
+<pre><code>URLClassLoader -&gt; URLClassPath ucp -&gt; ArrayList&lt;Loader&gt; loaders
+JarLoader -&gt; JarFile jar -&gt; jar.close()
+</code></pre>
+
+<p>The code to close the open jar files can be added to a close() method in a class extending URLClassLoader:</p>
+
+<pre><code>public class MyURLClassLoader extends URLClassLoader {
+
+public PluginClassLoader(URL[] urls, ClassLoader parent) {
+    super(urls, parent);
+}
+
+    /**
+     * Closes all open jar files
+     */
+    public void close() {
+        try {
+            Class clazz = java.net.URLClassLoader.class;
+            Field ucp = clazz.getDeclaredField("ucp");
+            ucp.setAccessible(true);
+            Object sunMiscURLClassPath = ucp.get(this);
+            Field loaders = sunMiscURLClassPath.getClass().getDeclaredField("loaders");
+            loaders.setAccessible(true);
+            Object collection = loaders.get(sunMiscURLClassPath);
+            for (Object sunMiscURLClassPathJarLoader : ((Collection) collection).toArray()) {
+                try {
+                    Field loader = sunMiscURLClassPathJarLoader.getClass().getDeclaredField("jar");
+                    loader.setAccessible(true);
+                    Object jarFile = loader.get(sunMiscURLClassPathJarLoader);
+                    ((JarFile) jarFile).close();
+                } catch (Throwable t) {
+                    // if we got this far, this is probably not a JAR loader so skip it
+                }
+            }
+        } catch (Throwable t) {
+            // probably not a SUN VM
+        }
+        return;
+    }
+}
+</code></pre>
+
+<p>(This code was taken from the second link that Ryan posted. This code is also posted on the bug report page.)</p>
+
+<p><strong>However, there's a catch:</strong> For this code to work and be able to get a handle to the open jar files to close them, the loader used to load the classes from the file by URLClassLoader implementation has to be a <code>JarLoader</code>. Looking at the <a href="http://www.docjar.com/html/api/sun/misc/URLClassPath.java.html" rel="nofollow">source code</a> of <code>URLClassPath</code> (method <code>getLoader(URL url)</code>), I noticed that it uses a JARLoader only if the file string used to create the URL does not end in "/". So, the URL must be defined like this:</p>
+
+<pre><code>URL jarUrl = new URL("file:" + file.getAbsolutePath());
+</code></pre>
+
+<p>The overall class loading code should look something like this:</p>
+
+<pre><code>void loadAndInstantiate() {
+    MyURLClassLoader cl = null;
+    try {
+        File file = new File("C:\\jars\\sample.jar");
+        String classToLoad = "com.abc.ClassToLoad";
+        URL jarUrl = new URL("file:" + file.getAbsolutePath());
+        cl = new MyURLClassLoader(new URL[] {jarUrl}, getClass().getClassLoader());
+        Class loadedClass = cl.loadClass(classToLoad);
+        Object o = loadedClass.getConstructor().newInstance();
+    } finally {
+        if(cl != null)
+            cl.close();
+    } 
+}
+</code></pre>
+
+<p><strong>Update:</strong> JRE 7 has introduced a <code>close()</code> method in the class <a href="http://docs.oracle.com/javase/7/docs/api/java/net/URLClassLoader.html#close%28%29" rel="nofollow"><code>URLClassLoader</code></a> which may have solved this issue. I haven't verified it.</p>

@@ -1,0 +1,108 @@
+<p>Unfortunately the OP has not provided a sample document to reproduce the issue. Thus, I have to guess.</p>
+
+<p>I assume that the issue is based in objects not immediately linked to the page object but inherited from its parents.</p>
+
+<p>In that case using <code>PDDocument.addPage</code> is the wrong choice as this method only adds the given page object to the target document page tree without consideration of inherited stuff.</p>
+
+<p>Instead one should use <code>PDDocument.importPage</code> which is documented as:</p>
+
+<pre><code>/**
+ * This will import and copy the contents from another location. Currently the content stream is stored in a scratch
+ * file. The scratch file is associated with the document. If you are adding a page to this document from another
+ * document and want to copy the contents to this document's scratch file then use this method otherwise just use
+ * the {@link #addPage} method.
+ * 
+ * Unlike {@link #addPage}, this method does a deep copy. If your page has annotations, and if
+ * these link to pages not in the target document, then the target document might become huge.
+ * What you need to do is to delete page references of such annotations. See
+ * &lt;a href="http://stackoverflow.com/a/35477351/535646"&gt;here&lt;/a&gt; for how to do this.
+ *
+ * @param page The page to import.
+ * @return The page that was imported.
+ * 
+ * @throws IOException If there is an error copying the page.
+ */
+public PDPage importPage(PDPage page) throws IOException
+</code></pre>
+
+<p>Actually even this method might not suffice as is as it does not consider all inherited attributes, but looking at the <code>Splitter</code> utility class one gets an impression what one has to do:</p>
+
+<pre><code>PDPage imported = getDestinationDocument().importPage(page);
+imported.setCropBox(page.getCropBox());
+imported.setMediaBox(page.getMediaBox());
+// only the resources of the page will be copied
+imported.setResources(page.getResources());
+imported.setRotation(page.getRotation());
+// remove page links to avoid copying not needed resources 
+processAnnotations(imported);
+</code></pre>
+
+<p>making use of the helper method</p>
+
+<pre><code>private void processAnnotations(PDPage imported) throws IOException
+{
+    List&lt;PDAnnotation&gt; annotations = imported.getAnnotations();
+    for (PDAnnotation annotation : annotations)
+    {
+        if (annotation instanceof PDAnnotationLink)
+        {
+            PDAnnotationLink link = (PDAnnotationLink)annotation;   
+            PDDestination destination = link.getDestination();
+            if (destination == null &amp;&amp; link.getAction() != null)
+            {
+                PDAction action = link.getAction();
+                if (action instanceof PDActionGoTo)
+                {
+                    destination = ((PDActionGoTo)action).getDestination();
+                }
+            }
+            if (destination instanceof PDPageDestination)
+            {
+                // TODO preserve links to pages within the splitted result  
+                ((PDPageDestination) destination).setPage(null);
+            }
+        }
+        // TODO preserve links to pages within the splitted result  
+        annotation.setPage(null);
+    }
+}
+</code></pre>
+
+<p><strong>As you are <em>trying to split the single PDF into multiple, like 10 page document into 10 single page document,</em> you might want to use this <code>Splitter</code> utility class as is.</strong></p>
+
+<h2>Tests</h2>
+
+<p>To test those methods I used the output of the PDF Clown sample output <a href="https://github.com/mkl-public/testarea-pdfbox2/raw/master/src/test/resources/mkl/testarea/pdfbox2/merge/AnnotationSample.Standard.pdf" rel="nofollow">AnnotationSample.Standard.pdf</a> because that library heavily depends on inheritance of page tree values. Thus, I copied the content of its only page to a new document using either <code>PDDocument.addPage</code>, <code>PDDocument.importPage</code>, or <code>Splitter</code> like this:</p>
+
+<pre><code>PDDocument source = PDDocument.load(resource);
+PDDocument output = new PDDocument();
+PDPage page = source.getPages().get(0);
+output.addPage(page);
+output.save(new File(RESULT_FOLDER, "PageAddedFromAnnotationSample.Standard.pdf"));
+output.close();
+</code></pre>
+
+<p><em>(<a href="https://github.com/mkl-public/testarea-pdfbox2/blob/master/src/test/java/mkl/testarea/pdfbox2/merge/CopyPages.java#L42" rel="nofollow">CopyPages.java</a> test <code>testWithAddPage</code>)</em></p>
+
+<pre><code>PDDocument source = PDDocument.load(resource);
+PDDocument output = new PDDocument();
+PDPage page = source.getPages().get(0);
+output.importPage(page);
+output.save(new File(RESULT_FOLDER, "PageImportedFromAnnotationSample.Standard.pdf"));
+output.close();
+</code></pre>
+
+<p><em>(<a href="https://github.com/mkl-public/testarea-pdfbox2/blob/master/src/test/java/mkl/testarea/pdfbox2/merge/CopyPages.java#L68" rel="nofollow">CopyPages.java</a> test <code>testWithImportPage</code>)</em></p>
+
+<pre><code>PDDocument source = PDDocument.load(resource);
+Splitter splitter = new Splitter();
+List&lt;PDDocument&gt; results = splitter.split(source);
+Assert.assertEquals("Expected exactly one result document from splitting a single page document.", 1, results.size());
+PDDocument output = results.get(0);
+output.save(new File(RESULT_FOLDER, "PageSplitFromAnnotationSample.Standard.pdf"));
+output.close();
+</code></pre>
+
+<p><em>(<a href="https://github.com/mkl-public/testarea-pdfbox2/blob/master/src/test/java/mkl/testarea/pdfbox2/merge/CopyPages.java#L95" rel="nofollow">CopyPages.java</a> test <code>testWithSplitter</code>)</em></p>
+
+<p>Only the final test copied the page faithfully.</p>

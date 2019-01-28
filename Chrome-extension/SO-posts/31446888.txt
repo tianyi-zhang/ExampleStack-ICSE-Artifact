@@ -1,0 +1,343 @@
+<p>This code working perfect in eclipse &amp; android studio...finally i can do it.</p>
+
+<p>MainActivity.java</p>
+
+<pre><code>public class MainActivity extends Activity implements View.OnClickListener{
+
+    //Notification Constant
+    Context context;
+    Button btn_GCMRegister, btn_Post;
+    GoogleCloudMessaging gcm;
+    public static String URL = "192.168.1.39:12069";
+    String regId;
+
+
+    public final String GOOGLE_PROJECT_ID = "your project id";
+
+    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
+    @SuppressLint("NewApi")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        // TODO Auto-generated method stub
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        context = getApplicationContext();
+        init();
+    }
+
+    private void init() {
+
+        btn_GCMRegister = (Button) findViewById(R.id.btn_gcm_register);
+        btn_GCMRegister.setOnClickListener(this);
+        btn_Post = (Button) findViewById(R.id.btn_post_on_server);
+        btn_Post.setOnClickListener(this);
+    }
+
+
+    @Override
+    public void onClick(View v) {
+        // TODO Auto-generated method stub
+        switch (v.getId()) {
+            case R.id.btn_gcm_register:
+                registerGCM();
+                break;
+
+            case R.id.btn_post_on_server:
+                StrictMode.ThreadPolicy policy = new StrictMode.ThreadPolicy.Builder().permitAll().build();
+                StrictMode.setThreadPolicy(policy);
+
+                Map&lt;String, Object&gt; params = new HashMap&lt;String, Object&gt;();
+                params.put("regId", regId);
+                params.put("user_id", 1);
+                String server_url = URL;
+                try {
+                    post(server_url, params);
+                }catch (IOException e){
+                    e.printStackTrace();
+                }
+                break;
+
+            default:
+                break;
+        }
+
+    }
+
+    /*
+     *  Issue a POST request to the server.
+     */
+    private static void post(String endpoint, Map&lt;String, Object&gt; params)
+            throws IOException {
+
+        URL url;
+        try {
+            url = new URL(endpoint);
+
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("invalid url: " + endpoint);
+        }
+
+        StringBuilder bodyBuilder = new StringBuilder();
+        Iterator&lt;Map.Entry&lt;String, Object&gt;&gt; iterator = params.entrySet().iterator();
+
+        // constructs the POST body using the parameters
+        while (iterator.hasNext()) {
+            Map.Entry&lt;String, Object&gt; param = iterator.next();
+            bodyBuilder.append(param.getKey()).append('=')
+                    .append(param.getValue());
+            if (iterator.hasNext()) {
+                bodyBuilder.append('&amp;');
+            }
+        }
+
+        String body = bodyBuilder.toString();
+
+        //Log.v(Config.TAG, "Posting '" + body + "' to " + url);
+
+        byte[] bytes = body.getBytes();
+
+        HttpURLConnection conn = null;
+        try {
+
+            Log.e("URL", "&gt; " + url);
+
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setDoOutput(true);
+            conn.setUseCaches(false);
+            conn.setFixedLengthStreamingMode(bytes.length);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type",
+                    "application/x-www-form-urlencoded;charset=UTF-8");
+            // post the request
+            OutputStream out = conn.getOutputStream();
+
+            out.write(bytes);
+            out.close();
+            // handle the response
+            int status = conn.getResponseCode();
+            System.out.println("Json Data---&gt;" + status);
+
+            // If response is not success
+            if (status != 200) {
+
+                throw new IOException("Post failed with error code " + status);
+            }
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    private void registerGCM() {
+        // TODO Auto-generated method stub
+
+        new AsyncTask&lt;Void, Void, String&gt;() {
+            @Override
+            protected String doInBackground(Void... params) {
+                String msg = "";
+                try {
+                    if (gcm == null) {
+                        gcm = GoogleCloudMessaging.getInstance(context);
+                    }
+                    regId = gcm.register(GOOGLE_PROJECT_ID);
+                    Log.d("Reg Id-----&gt;", "" + regId);
+                    Toast.makeText(MainActivity.this,"Register Key from server : " +regId,Toast.LENGTH_LONG).show();
+                } catch (IOException ex) {
+                    msg = "Error :" + ex.getMessage();
+                    Log.d("MainActivity", "Error: " + msg);
+                }
+                Log.d("MainActivity", "AsyncTask completed: " + msg);
+                return msg;
+            }
+
+            @Override
+            protected void onPostExecute(String msg) {
+                Toast.makeText(getApplicationContext(),
+                        "Registered On GCM Server." + msg, Toast.LENGTH_LONG)
+                        .show();
+            }
+        }.execute(null, null, null);
+    }
+}
+</code></pre>
+
+<p>GCMIntentService.java</p>
+
+<pre><code>public class GCMIntentService extends GCMBaseIntentService {
+
+
+    @Override
+    protected void onError(Context arg0, String arg1) {
+        // TODO Auto-generated method stub
+        Log.e("onError", "gcm...error");
+    }
+
+    public GCMIntentService() {
+        super("your project id");
+    }
+
+
+    @Override
+    protected String[] getSenderIds(Context context) {
+
+        return super.getSenderIds(context);
+    }
+
+    @Override
+    protected void onMessage(Context context, Intent intent) {
+        // TODO Auto-generated method stub
+
+        Log.i(TAG, "Received message");
+        if (intent.getExtras() != null) {
+            String message = intent.getExtras().getString("message");
+            String title = intent.getExtras().getString("title");
+            String ticker = intent.getExtras().getString("ticker");
+            generateNotification(context,message,title,ticker);
+        }
+    }
+
+    @Override
+    protected void onRegistered(Context arg0, String arg1) {
+        // TODO Auto-generated method stub
+        Log.e("onRegistered", "gcm Registered");
+    }
+
+    @Override
+    protected void onUnregistered(Context arg0, String arg1) {
+        // TODO Auto-generated method stub
+        Log.e("onUnregistered", "gcm...Unregistered...");
+    }
+
+    /**
+     * Create a notification to inform the user that server has sent a message.
+     */
+    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+    private static void generateNotification(Context context, String message,String title,String ticker) {
+        int icon = R.drawable.ic_launcher;
+        long when = System.currentTimeMillis();
+        NotificationManager notificationManager = (NotificationManager) context
+                .getSystemService(Context.NOTIFICATION_SERVICE);
+
+        Notification.Builder builder = new Notification.Builder(context);
+
+        Intent notificationIntent = new Intent(context, MainActivity.class);
+        PendingIntent intent = PendingIntent.getActivity(context, 0,
+                notificationIntent, 0);     
+        builder.setContentTitle(title)
+                .setContentText(message)
+                .setLargeIcon(
+                        BitmapFactory.decodeResource(context.getResources(),
+                                icon))
+                .setStyle(new Notification.BigTextStyle().bigText(message))
+                .setContentIntent(intent).setSmallIcon(icon).setTicker(ticker)
+                .setLights(0xff00ff00, 300, 100)
+                .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE).setAutoCancel(true).setWhen(when);
+        Notification notification = builder.build();
+        notificationManager.notify(0, notification);
+
+    }
+
+}
+</code></pre>
+
+<p>AndroidManifest.xml</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.xxx.gcmnotification" &gt;
+
+    &lt;!-- GCM connects to Internet Services. --&gt;
+    &lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+    &lt;uses-permission android:name="android.permission.READ_PHONE_STATE" /&gt;
+
+    &lt;!-- GCM requires a Google account. --&gt;
+    &lt;uses-permission android:name="android.permission.GET_ACCOUNTS" /&gt;
+
+    &lt;!-- Keeps the processor from sleeping when a message is received. --&gt;
+    &lt;uses-permission android:name="android.permission.WAKE_LOCK" /&gt;
+
+    &lt;!-- Creates a custom permission so only this app can receive its messages. --&gt;
+    &lt;permission
+        android:name="com.example.xxx.gcmnotification.permission.C2D_MESSAGE"
+        android:protectionLevel="signature" /&gt;
+
+    &lt;uses-permission android:name="com.example.xxx.gcmnotification.permission.C2D_MESSAGE" /&gt;
+
+    &lt;!-- This app has permission to register and receive data message. --&gt;
+    &lt;uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" /&gt;
+
+
+    &lt;application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme" &gt;
+        &lt;activity
+            android:name=".MainActivity"
+            android:label="@string/app_name" &gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+
+        &lt;receiver
+            android:name="com.google.android.gcm.GCMBroadcastReceiver"
+            android:permission="com.google.android.c2dm.permission.SEND" &gt;
+            &lt;intent-filter&gt;
+
+                &lt;!-- Receives the actual messages. --&gt;
+                &lt;action android:name="com.google.android.c2dm.intent.RECEIVE" /&gt;
+                &lt;!-- Receives the registration id. --&gt;
+                &lt;action android:name="com.google.android.c2dm.intent.REGISTRATION" /&gt;
+
+                &lt;category android:name="com.example.xxx.gcmnotification" /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/receiver&gt;
+
+        &lt;service android:name=".GCMIntentService" /&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;
+</code></pre>
+
+<p>build.gradle(Module:app)</p>
+
+<pre><code>dependencies {
+    compile fileTree(include: ['*.jar'], dir: 'libs')
+    compile 'com.android.support:appcompat-v7:22.2.0'
+    compile 'com.google.android.gms:play-services:+'
+}
+</code></pre>
+
+<p>activity_main.xml</p>
+
+<pre><code>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" android:layout_width="match_parent"
+    android:layout_height="match_parent" android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:paddingBottom="@dimen/activity_vertical_margin" tools:context=".MainActivity"&gt;
+
+
+    &lt;Button
+        android:id="@+id/btn_gcm_register"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dip"
+        android:text="Register On GCM Server" /&gt;
+
+    &lt;Button
+        android:id="@+id/btn_post_on_server"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dip"
+        android:text="Post On Server" /&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>

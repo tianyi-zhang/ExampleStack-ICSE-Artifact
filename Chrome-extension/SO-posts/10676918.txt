@@ -1,0 +1,115 @@
+<p>Paul's suggestion is correct. I got a little bit deeper in that subject and found a reason.</p>
+
+<p>Android apk packaging tool (APKBuilder class from sdklib.jar) ignores different folders while it creates the package (<a href="http://code.google.com/p/maven-android-plugin/issues/detail?id=97#c2" rel="nofollow">source</a>). One of those folders is META-INF - no matter if its in the attached library or in the project's source folder. </p>
+
+<p>Workaround for version 1.8 (and probably other also, but I didn't test it) of Jersey is to provide custom (default one looks up META-INF/services/ which is not present in android apk) implementation for <a href="http://java.net/projects/jersey/sources/svn/content/trunk/jersey/jersey-core/src/main/java/com/sun/jersey/spi/service/ServiceFinder.java?rev=5709" rel="nofollow">ServiceFinder$ServiceIteratorProvider</a> which has hard coded provider class names. I based my implementation on <a href="http://jersey.576304.n2.nabble.com/java-lang-NullPointerException-on-Android-tt4212447.html#a5459910" rel="nofollow">this</a> implementation proposed by Lucas:</p>
+
+<pre><code>import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+
+import android.util.Log;
+
+import com.sun.jersey.spi.service.ServiceFinder.ServiceIteratorProvider;
+
+public class AndroidServiceIteratorProvider&lt;T&gt; extends ServiceIteratorProvider&lt;T&gt; {
+
+    private static final String TAG = AndroidServiceIteratorProvider.class.getSimpleName();
+    private static final String MESSAGE = "Unable to load provider";
+
+    private static final HashMap&lt;String, String[]&gt; SERVICES = new HashMap&lt;String, String[]&gt;();
+
+    private static final String[] com_sun_jersey_spi_HeaderDelegateProvider = {
+            "com.sun.jersey.core.impl.provider.header.MediaTypeProvider",
+            "com.sun.jersey.core.impl.provider.header.StringProvider"
+    };
+
+    private static final String[] com_sun_jersey_spi_inject_InjectableProvider = { 
+    };
+
+    private static final String[] javax_ws_rs_ext_MessageBodyReader = {
+            "com.sun.jersey.core.impl.provider.entity.StringProvider",
+            "com.sun.jersey.core.impl.provider.entity.ReaderProvider"
+    };
+
+    private static final String[] javax_ws_rs_ext_MessageBodyWriter = {
+            "com.sun.jersey.core.impl.provider.entity.StringProvider",
+            "com.sun.jersey.core.impl.provider.entity.ReaderProvider"
+    };
+
+    static {
+        SERVICES.put("com.sun.jersey.spi.HeaderDelegateProvider",
+                com_sun_jersey_spi_HeaderDelegateProvider);
+        SERVICES.put("com.sun.jersey.spi.inject.InjectableProvider",
+                com_sun_jersey_spi_inject_InjectableProvider);
+        SERVICES.put("javax.ws.rs.ext.MessageBodyReader",
+                javax_ws_rs_ext_MessageBodyReader);
+        SERVICES.put("javax.ws.rs.ext.MessageBodyWriter",
+                javax_ws_rs_ext_MessageBodyWriter);
+        SERVICES.put("jersey-client-components", new String[]{});
+        SERVICES.put("com.sun.jersey.client.proxy.ViewProxyProvider", new String[]{});
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public Iterator&lt;Class&lt;T&gt;&gt; createClassIterator(Class&lt;T&gt; service,
+            String serviceName, ClassLoader loader,
+            boolean ignoreOnClassNotFound) {
+
+        String[] classesNames = SERVICES.get(serviceName);
+        int length = classesNames.length;
+        ArrayList&lt;Class&lt;T&gt;&gt; classes = new ArrayList&lt;Class&lt;T&gt;&gt;(length);
+        for (int i = 0; i &lt; length; i++) {
+            try {
+                classes.add((Class&lt;T&gt;) Class.forName(classesNames[i]));
+            } catch (ClassNotFoundException e) {
+                Log.v(TAG, MESSAGE,e);
+            }
+        }
+        return classes.iterator();
+    }
+
+    @Override
+    public Iterator&lt;T&gt; createIterator(Class&lt;T&gt; service, String serviceName,
+            ClassLoader loader, boolean ignoreOnClassNotFound) {
+
+        String[] classesNames = SERVICES.get(serviceName);
+        int length = classesNames.length;
+        ArrayList&lt;T&gt; classes = new ArrayList&lt;T&gt;(length);
+            for (int i = 0; i &amp;lt; length; i++) {
+            try {
+                classes.add(service.cast(Class.forName(classesNames[i])
+                        .newInstance()));
+            } catch (IllegalAccessException e) {
+                Log.v(TAG, MESSAGE,e);
+            } catch (InstantiationException e) {
+                Log.v(TAG, MESSAGE,e);
+            } catch (ClassNotFoundException e) {
+                Log.v(TAG, MESSAGE,e);
+            }
+        }
+
+        return classes.iterator();
+    }
+}
+</code></pre>
+
+<p>I removed most of the classes since I didn't use them and also they were causing verification errors on dalvik vm... </p>
+
+<p><strong>NOTE: It means that with this implementation you can use only subset of headers/types supported by Jersey (I needed only String). To support other types you have to add providers located in META-INF/services folder of jersey-client.jar (or from Lucas' implementation) and check if they don't cause verification errors on Android.</strong> </p>
+
+<p>The above code should be used as follows:</p>
+
+<pre><code>ServiceFinder.setIteratorProvider(new AndroidServiceIteratorProvider());
+Client client = Client.create();
+</code></pre>
+
+<p><strong>EDIT:</strong></p>
+
+<p>It seems that the problem have been <a href="http://code.google.com/p/maven-android-plugin/issues/detail?id=97" rel="nofollow">fixed</a> in android-maven-plugin.</p>
+
+<p><em>mosa...@gmail.com wrote:</em> </p>
+
+<blockquote>
+  <p>The pull request with the fix was merged into master and will be released with 3.2.1:</p>
+</blockquote>

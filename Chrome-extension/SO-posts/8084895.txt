@@ -1,0 +1,101 @@
+<p>If you just need the point connected with a line you do not need the full kml. A much faster way to do it is to just use the JSON returned from Google Maps API with output=dragdir</p>
+
+<pre><code>private String getUrl(String start, String end) {
+    //If params GeoPoint convert to lat,long string here
+    StringBuffer urlString = new StringBuffer();
+    urlString.append("http://maps.google.com/maps?f=d&amp;hl=en");
+    urlString.append("&amp;saddr=");// from
+    urlString.append(start);
+    urlString.append("&amp;daddr=");// to
+    urlString.append(end);
+    urlString.append("&amp;ie=UTF8&amp;0&amp;om=0&amp;output=dragdir"); //DRAGDIR RETURNS JSON
+    Log.i("URLString", urlString.toString());
+    return urlString.toString();
+}
+</code></pre>
+
+<p>This urlString can be used to get a JSON file, which you can easily extract the information using String's split()</p>
+
+<pre><code>private String getConnection(String url) {
+    URL inUrl = new URL(url);
+    URLConnection yc = inUrl.openConnection();
+    BufferedReader in = new BufferedReader( new InputStreamReader(yc.getInputStream()));
+    String inputLine;
+    String encoded = "";
+    while ((inputLine = in.readLine()) != null)
+        encoded = encoded.concat(inputLine);
+    in.close();
+    String polyline = encoded.split("points:")[1].split(",")[0];
+    polyline = polyline.replace("\"", "");
+    polyline = polyline.replace("\\\\", "\\");
+    return polyline;
+}
+</code></pre>
+
+<p>The returned String is a polyline which can be decoded into an list of Geopoints using the method below.</p>
+
+<pre><code>private static ArrayList&lt;GeoPoint&gt; decodePolyline(String encoded) {
+    ArrayList&lt;GeoPoint&gt; geopoints = new ArrayList&lt;GeoPoint&gt;();
+    int index = 0, len = encoded.length();
+    int lat = 0, lng = 0;
+    while (index &lt; len) {
+        int b, shift = 0, result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lat += dlat;
+        shift = 0;
+        result = 0;
+        do {
+            b = encoded.charAt(index++) - 63;
+            result |= (b &amp; 0x1f) &lt;&lt; shift;
+            shift += 5;
+        } while (b &gt;= 0x20);
+        int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+        lng += dlng;
+        GeoPoint p = new GeoPoint((int) (((double) lat / 1E5) * 1E6), (int) (((double) lng / 1E5) * 1E6));
+        geopoints.add(p);
+    }
+ return geopoints;
+}
+</code></pre>
+
+<p>The last step is to draw these points to a mapView, for that we need an overlay item that will handle a ArrayList of GeoPoints.</p>
+
+<pre><code>public class PathOverlay extends Overlay {
+
+    private ArrayList&lt;GeoPoint&gt; pointList;
+
+    public PathOverlay(ArrayList&lt;GeoPoint&gt; pointList) {
+            this.pointList = pointList;     
+    }
+
+    @Override
+    public void draw(Canvas canvas, MapView mapView, boolean shadow) {
+        Point current = new Point();
+        Path path = new Path();
+        Projection projection = mapView.getProjection();
+        Iterator&lt;GeoPoint&gt; iterator = pointList.iterator();
+        if (iterator.hasNext()) {
+            projection.toPixels(iterator.next(), current);
+            path.moveTo((float) current.x, (float) current.y);
+        } else return;
+        while(iterator.hasNext()) {
+            projection.toPixels(iterator.next(), current);
+            path.lineTo((float) current.x, (float) current.y);
+        }
+
+        Paint pathPaint = new Paint();
+        pathPaint.setAntiAlias(true);
+        pathPaint.setStrokeWidth(3.0f);
+        pathPaint.setColor(Color.GREEN);
+        pathPaint.setStyle(Style.STROKE);
+        canvas.drawPath(path, pathPaint);
+    }
+}
+</code></pre>
+
+<p>If your not sure about some of the intermediate steps, such as how to get the overlay onto the MapView or how to set up a router class let me know and I can send you the complete code.</p>

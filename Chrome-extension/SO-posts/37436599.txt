@@ -1,0 +1,111 @@
+<p>You've got most of the code correct. The only issue that I can see is the part where you write the PCM data to the WAV file. This should be quite simple to do because WAV = Metadata + PCM (in that order). This should work:</p>
+
+<pre><code>private void rawToWave(final File rawFile, final File waveFile) throws IOException {
+
+    byte[] rawData = new byte[(int) rawFile.length()];
+    DataInputStream input = null;
+    try {
+        input = new DataInputStream(new FileInputStream(rawFile));
+        input.read(rawData);
+    } finally {
+        if (input != null) {
+            input.close();
+        }
+    }
+
+    DataOutputStream output = null;
+    try {
+        output = new DataOutputStream(new FileOutputStream(waveFile));
+        // WAVE header
+        // see http://ccrma.stanford.edu/courses/422/projects/WaveFormat/
+        writeString(output, "RIFF"); // chunk id
+        writeInt(output, 36 + rawData.length); // chunk size
+        writeString(output, "WAVE"); // format
+        writeString(output, "fmt "); // subchunk 1 id
+        writeInt(output, 16); // subchunk 1 size
+        writeShort(output, (short) 1); // audio format (1 = PCM)
+        writeShort(output, (short) 1); // number of channels
+        writeInt(output, 44100); // sample rate
+        writeInt(output, RECORDER_SAMPLERATE * 2); // byte rate
+        writeShort(output, (short) 2); // block align
+        writeShort(output, (short) 16); // bits per sample
+        writeString(output, "data"); // subchunk 2 id
+        writeInt(output, rawData.length); // subchunk 2 size
+        // Audio data (conversion big endian -&gt; little endian)
+        short[] shorts = new short[rawData.length / 2];
+        ByteBuffer.wrap(rawData).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts);
+        ByteBuffer bytes = ByteBuffer.allocate(shorts.length * 2);
+        for (short s : shorts) {
+            bytes.putShort(s);
+        }
+
+        output.write(fullyReadFileToBytes(rawFile));
+    } finally {
+        if (output != null) {
+            output.close();
+        }
+    }
+}
+    byte[] fullyReadFileToBytes(File f) throws IOException {
+    int size = (int) f.length();
+    byte bytes[] = new byte[size];
+    byte tmpBuff[] = new byte[size];
+    FileInputStream fis= new FileInputStream(f);
+    try { 
+
+        int read = fis.read(bytes, 0, size);
+        if (read &lt; size) {
+            int remain = size - read;
+            while (remain &gt; 0) {
+                read = fis.read(tmpBuff, 0, remain);
+                System.arraycopy(tmpBuff, 0, bytes, size - remain, read);
+                remain -= read;
+            } 
+        } 
+    }  catch (IOException e){
+        throw e;
+    } finally { 
+        fis.close();
+    } 
+
+    return bytes;
+} 
+private void writeInt(final DataOutputStream output, final int value) throws IOException {
+    output.write(value &gt;&gt; 0);
+    output.write(value &gt;&gt; 8);
+    output.write(value &gt;&gt; 16);
+    output.write(value &gt;&gt; 24);
+}
+
+private void writeShort(final DataOutputStream output, final short value) throws IOException {
+    output.write(value &gt;&gt; 0);
+    output.write(value &gt;&gt; 8);
+}
+
+private void writeString(final DataOutputStream output, final String value) throws IOException {
+    for (int i = 0; i &lt; value.length(); i++) {
+        output.write(value.charAt(i));
+    }
+}
+</code></pre>
+
+<p><strong>How to use</strong></p>
+
+<p>It's quite simple to use. Just call it like this:</p>
+
+<pre><code>  File f1 = new File("/sdcard/44100Sampling-16bit-mono-mic.pcm"); // The location of your PCM file
+  File f2 = new File("/sdcard/44100Sampling-16bit-mono-mic.wav"); // The location where you want your WAV file
+  try {
+    rawToWave(f1, f2);
+} catch (IOException e) {
+    e.printStackTrace();
+}
+</code></pre>
+
+<p><strong>How all this works</strong></p>
+
+<p>As you can see, the WAV header is the only difference between WAV and PCM file formats. The assumption is that you are recording 16 bit PCM MONO audio (which according to your code, you are). The rawToWave function just neatly adds headers to the WAV file, so that music players know what to expect when your file is opened, and then after the headers, it just writes the PCM data from the last bit onwards.</p>
+
+<p><strong><em>Cool Tip</em></strong></p>
+
+<p>If you want to shift the pitch of your voice, or make a voice changer app, all you got to do is increase/decrease the value of <code>writeInt(output, 44100); // sample rate</code> in your code. Decreasing it will tell the player to play it at a different rate thereby changing the output pitch. Just a little extra 'good to know' thing. :)</p>

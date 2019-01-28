@@ -1,0 +1,93 @@
+<p>The reason for the NPE is some mig-internal magic related to JTextArea/JEditorPane (details below). This may cause problems in nested containers some parent has a manager that keeps internal state, f.i. in BoxLayout. </p>
+
+<p>Simplest way out: don't nest - MigLayout is designed to control one-big-panel. In the case of adding to pre-fabricated special-case containers like optionPane, that's not an option: here it helps to wrap the textArea/editorPane in a JScrollPane.</p>
+
+<p>Not entirely sure if that's a bug, though manipulating the container hierarchy upwards in mere getter (preferredLayouutSize) looks suspicious.</p>
+
+<p>Details of why the NPE happens: magic's effect is to force the parent container layout on querying the prefSize:</p>
+
+<pre><code>public Dimension preferredLayoutSize(Container parent) {
+    synchronized (parent.getTreeLock()) {
+        if (lastParentSize == null
+                || !parent.getSize().equals(lastParentSize)) {
+            for (ComponentWrapper wrapper : ccMap.keySet()) {
+                Component c = (Component) wrapper.getComponent();
+                if (c instanceof JTextArea
+                        || c instanceof JEditorPane
+                        || (c instanceof JComponent &amp;&amp; Boolean.TRUE
+                                .equals(((JComponent) c)
+                                        .getClientProperty("migLayout.dynamicAspectRatio")))) {
+                    layoutContainer(parent);
+                    break;
+                }
+            }
+        }
+
+        lastParentSize = parent.getSize();
+        return getSizeImpl(parent, LayoutUtil.PREF);
+    }
+}
+</code></pre>
+
+<p>Which in turn re-queries the top-level container's prefSize (down in adjustWindowSize):</p>
+
+<pre><code>private void adjustWindowSize(ContainerWrapper parent) {
+    BoundSize wBounds = lc.getPackWidth();
+    BoundSize hBounds = lc.getPackHeight();
+
+    if (wBounds == null &amp;&amp; hBounds == null)
+        return;
+
+    Window win = ((Window) SwingUtilities.getAncestorOfClass(Window.class,
+            (Component) parent.getComponent()));
+    if (win == null)
+        return;
+
+    Dimension prefSize = win.getPreferredSize();
+    ....
+}
+</code></pre>
+
+<p>When nested inside a BoxLayout, this leads to re-entering the checkTarget:</p>
+
+<pre><code>public Dimension preferredLayoutSize(Container target) {
+    Dimension size;
+    synchronized(this) {
+        checkContainer(target);
+        // checkRequests initializes all internal book-keeping
+        checkRequests();
+        // here's the NPE in the second round
+        size = new Dimension(xTotal.preferred, yTotal.preferred);
+    }
+    ...
+ }
+
+void checkRequests() {
+    // config only if not yet done earlier
+    if (xChildren == null || yChildren == null) {
+        // The requests have been invalidated... recalculate
+        // the request information.
+        int n = target.getComponentCount();
+        //JW: first time around the arrays of sz are initialized
+        xChildren = new SizeRequirements[n];
+        yChildren = new SizeRequirements[n];
+        for (int i = 0; i &lt; n; i++) {
+            Component c = target.getComponent(i);
+            ....
+            Dimension min = c.getMinimumSize();
+            Dimension typ = c.getPreferredSize();
+            ....
+        }
+        .... 
+        // JW: never reached if c.getPref re-enters, that is xTotal remains null
+        if (absoluteAxis == X_AXIS) {
+            xTotal = SizeRequirements.getTiledSizeRequirements(xChildren);
+            yTotal = SizeRequirements.getAlignedSizeRequirements(yChildren);
+        } else {
+            xTotal = SizeRequirements.getAlignedSizeRequirements(xChildren);
+            yTotal = SizeRequirements.getTiledSizeRequirements(yChildren);
+        }
+
+     }
+ }   
+</code></pre>

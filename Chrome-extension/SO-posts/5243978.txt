@@ -1,0 +1,64 @@
+<p>There's no need to "unwrap" the cursor. The problem is, if your content provider is providing results to a client that runs in another process, the Cursor you returned from query() must implement CrossProcessCursor interface. It's not stated in document (AFAICS), but you can see this from your log.</p>
+
+<p>All you need to do is implement CrossProcessCursor interface, and wrap it around your cursor.</p>
+
+<pre><code>// your query statement does not seem right..BTW
+Cursor result = mContentResolver.query(...); 
+// now, you return a CrossProcessCursorWrapper.
+return new CrossProcessCursorWrapper(result);
+</code></pre>
+
+<p>Implementation of CrossProcessCursor methods are ported from AbstractCursor. Some slight modifications are made so the compiler's happy:</p>
+
+<pre><code>public class CrossProcessCursorWrapper extends CursorWrapper implements
+        CrossProcessCursor {
+    public CrossProcessCursorWrapper(Cursor cursor) {
+        super(cursor);
+    }
+
+    @Override
+    public CursorWindow getWindow() {
+        return null;
+    }
+
+    @Override
+    public void fillWindow(int position, CursorWindow window) {
+        if (position &lt; 0 || position &gt; getCount()) {
+            return;
+        }
+        window.acquireReference();
+        try {
+            moveToPosition(position - 1);
+            window.clear();
+            window.setStartPosition(position);
+            int columnNum = getColumnCount();
+            window.setNumColumns(columnNum);
+            while (moveToNext() &amp;&amp; window.allocRow()) {
+                for (int i = 0; i &lt; columnNum; i++) {
+                    String field = getString(i);
+                    if (field != null) {
+                        if (!window.putString(field, getPosition(), i)) {
+                            window.freeLastRow();
+                            break;
+                        }
+                    } else {
+                        if (!window.putNull(getPosition(), i)) {
+                            window.freeLastRow();
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (IllegalStateException e) {
+            // simply ignore it
+        } finally {
+            window.releaseReference();
+        }
+    }
+
+    @Override
+    public boolean onMove(int oldPosition, int newPosition) {
+        return true;
+    }
+}
+</code></pre>

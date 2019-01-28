@@ -1,0 +1,575 @@
+<p>Here is how I had done similar Bluetooth connection and sending commands.I am posting complete demo code please give it a try.</p>
+
+<p><strong>BluetoothService.java</strong> ( same class from BluetoothChat example)<br>
+can be found here <a href="http://stanford.edu/~tpurtell/BluetoothChatService.java" rel="nofollow">http://stanford.edu/~tpurtell/BluetoothChatService.java</a></p>
+
+<p>In My case MacID was already pre given to me.</p>
+
+<p><strong>MainActivity.java</strong></p>
+
+<pre><code>    public class MainActivity extends Activity implements OnClickListener {
+
+
+        // Layout Views
+        private Button bt_on_off;
+        private TextView statuses;
+        private Button connectIt;
+
+        private Button click;
+
+        //Timer timer;
+        private boolean isBTOnOrOff = false;
+
+        // Debugging
+        private static final String TAG = "BluetoothChat";
+        private static final boolean D = true;
+
+        // Message types sent from the BluetoothChatService Handler
+        public static final int MESSAGE_STATE_CHANGE = 1;
+        public static final int MESSAGE_READ = 2;
+        public static final int MESSAGE_WRITE = 3;
+        public static final int MESSAGE_DEVICE_NAME = 4;
+        public static final int MESSAGE_TOAST = 5;
+
+        // Key names received from the BluetoothChatService Handler
+        public static final String DEVICE_NAME = "device_name";
+        public static final String TOAST = "toast";
+
+        // Intent request codes
+        private static final int REQUEST_CONNECT_DEVICE = 1;
+        private static final int REQUEST_ENABLE_BT = 2;
+
+        // Name of the connected device
+        private String mConnectedDeviceName = null;
+        // Array adapter for the conversation thread
+        //private ArrayAdapter&lt;String&gt; mConversationArrayAdapter;
+        // String buffer for outgoing messages
+        private StringBuffer mOutStringBuffer;
+        // Local Bluetooth adapter
+        private BluetoothAdapter mBluetoothAdapter = null;
+        // Member object for the chat services
+        private BluetoothService mChatService = null;
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            setContentView(R.layout.activity_main);
+
+            initViews();
+            enableDissableViews(false);
+            listeners();
+
+            preBTConfigCheck();
+        }
+
+        private void initViews() {
+
+            bt_on_off = (Button) findViewById(R.id.bt_on_off);
+            connectIt= (Button) findViewById(R.id.connect);
+            statuses= (TextView) findViewById(R.id.statuses);
+
+            click= (Button) findViewById(R.id.click);
+
+        }
+
+        private void listeners() {
+            bt_on_off.setOnClickListener(this);
+            connectIt.setOnClickListener(this);
+            click.setOnClickListener(this);
+        }
+
+        // Broadcast reciever for BT
+        private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                final String action = intent.getAction();
+
+                if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
+                    final int state = intent.getIntExtra(
+                            BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
+                    switch (state) {
+                    case BluetoothAdapter.STATE_OFF:
+                        enableDissableViews(false);
+                        isBTOnOrOff=false;
+                        bt_on_off.setText(getResources().getString(
+                                R.string.on_off_status)
+                                + "OFF");
+                        if (D)
+                            Log.d(TAG, "STATE OFF");
+                        break;
+                    case BluetoothAdapter.STATE_TURNING_OFF:
+                        enableDissableViews(false);
+                        bt_on_off.setText(getResources().getString(
+                                R.string.on_off_status)
+                                + "Turning off...");
+                        if (D)
+                            Log.d(TAG, "STATE Turning off...");
+                        break;
+                    case BluetoothAdapter.STATE_ON:
+                        bt_on_off.setText(getResources().getString(
+                                R.string.on_off_status)
+                                + "ON");
+                        if (D)
+                            Log.d(TAG, "STATE ON");
+                        enableDissableViews(true);
+                        isBTOnOrOff=true;
+                        break;
+                    case BluetoothAdapter.STATE_TURNING_ON:
+                        bt_on_off.setText(getResources().getString(
+                                R.string.on_off_status)
+                                + "Turning on...");
+                        if (D)
+                            Log.d(TAG, "STATE Turning on...");
+                        break;
+                    }
+                }
+            }
+        };
+
+        private void preBTConfigCheck() {
+
+            // Register for broadcasts on BluetoothAdapter state change
+            IntentFilter filter = new IntentFilter(
+                    BluetoothAdapter.ACTION_STATE_CHANGED);
+            this.registerReceiver(mReceiver, filter);
+
+            // Get local Bluetooth adapter
+            mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+              // If the adapter is null, then Bluetooth is not supported
+            if (mBluetoothAdapter == null) {
+                // Device does not support Bluetooth
+                Toast.makeText(MainActivity.this,
+                        "BlueTooth Not supported on your device!", 0).show();
+                bt_on_off.setText(getResources().getString(R.string.on_off_status)
+                        + "NOT SUPPORTED");
+                enableDissableViews(false);
+            } else {
+                // status of BT
+                isBTOnOrOff = mBluetoothAdapter.isEnabled();
+                if (D)
+                    Log.d(TAG, "BT status @ preBTConfigCheck() -&gt;" + isBTOnOrOff);
+                if (isBTOnOrOff) {
+                    // Bluetooth is enable,
+                    bt_on_off.setText(getResources().getString(
+                            R.string.on_off_status)
+                            + "ON");
+                    enableDissableViews(isBTOnOrOff);
+                } else {
+                    bt_on_off.setText(getResources().getString(
+                            R.string.on_off_status)
+                            + "OFF");
+                    // User did not enable Bluetooth or an error occurred
+                    if (D)
+                        Log.d(TAG, "BT not enabled");
+                    enableDissableViews(isBTOnOrOff);
+                }
+            }
+        }
+
+
+         @Override
+            public void onStart() {
+                super.onStart();
+                if(D) Log.e(TAG, "++ ON START ++");
+
+                // If BT is not on, request that it be enabled.
+                // setupChat() will then be called during onActivityResult
+                if (!mBluetoothAdapter.isEnabled()) {
+                    Intent enableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+                    startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
+                // Otherwise, setup the chat session
+                } else {
+                    if (mChatService == null) setupCommand();
+                }
+            }
+         @Override
+            public synchronized void onResume() {
+                super.onResume();
+                if(D) Log.e(TAG, "+ ON RESUME +");
+
+                // Performing this check in onResume() covers the case in which BT was
+                // not enabled during onStart(), so we were paused to enable it...
+                // onResume() will be called when ACTION_REQUEST_ENABLE activity returns.
+                if (mChatService != null) {
+                    // Only if the state is STATE_NONE, do we know that we haven't started already
+                    if (mChatService.getState() == BluetoothService.STATE_NONE) {
+                      // Start the Bluetooth chat services
+                      mChatService.start();
+                    }
+                }
+            }
+
+
+         @Override
+            public synchronized void onPause() {
+                super.onPause();
+                if(D) Log.e(TAG, "- ON PAUSE -");
+            }
+
+            @Override
+            public void onStop() {
+                super.onStop();
+                if(D) Log.e(TAG, "-- ON STOP --");
+            }
+
+            @Override
+            public void onDestroy() {
+                super.onDestroy();
+                // Stop the Bluetooth chat services
+                if (mChatService != null) mChatService.stop();
+                this.unregisterReceiver(mReceiver);
+                if(D) Log.e(TAG, "--- ON DESTROY ---");
+            }
+
+         private void setupCommand() {
+                Log.d(TAG, "setupChat()");
+
+                // Initialize the BluetoothService to perform bluetooth connections
+                mChatService = new BluetoothService(this, mHandler);
+
+                // Initialize the buffer for outgoing messages
+                mOutStringBuffer = new StringBuffer("");
+            }
+        private void resultMacId(String address) {
+
+
+              // Performing this check in onResume() covers the case in which BT was
+            // not enabled during onStart(), so we were paused to enable it...
+            // onResume() will be called when ACTION_REQUEST_ENABLE activity returns.
+            if (mChatService != null) {
+                // Only if the state is STATE_NONE, do we know that we haven't started already
+                if (mChatService.getState() == BluetoothService.STATE_NONE) {
+                  // Start the Bluetooth chat services
+                  mChatService.start();
+                }
+            }
+            // Get the BLuetoothDevice object
+            BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(address);
+
+            // Attempt to connect to the device
+            mChatService.connect(device, false);
+        }
+          @Override
+            public boolean onCreateOptionsMenu(Menu menu) {
+                MenuInflater inflater = getMenuInflater();
+                inflater.inflate(R.menu.main, menu);
+                return true;
+            }
+         @Override
+            public boolean onOptionsItemSelected(MenuItem item) 
+            {
+                switch (item.getItemId()) 
+                {
+                case R.id.action_settings:
+                    // Launch the DeviceListActivity to see devices and do scan
+
+                    return true;
+                }
+                return false;
+            }
+        // The Handler that gets information back from the BluetoothChatService
+        private final Handler mHandler = new Handler() {
+            @Override
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                case MESSAGE_STATE_CHANGE:
+                    if(D) Log.i(TAG, "MESSAGE_STATE_CHANGE: " + msg.arg1);
+
+
+
+                    switch (msg.arg1) {
+                    case BluetoothService.STATE_CONNECTED:
+                        statuses.setText("connected to :"+mConnectedDeviceName);
+                       // mTitle.setText(R.string.title_connected_to);
+                        //mTitle.append(mConnectedDeviceName);
+                        //mConversationArrayAdapter.clear();
+
+                        break;
+                    case BluetoothService.STATE_CONNECTING:
+                        statuses.setText("connecting ... ");
+
+                       // mTitle.setText(R.string.title_connecting);
+
+                        break;
+                    case BluetoothService.STATE_LISTEN:
+                    case BluetoothService.STATE_NONE:
+                        statuses.setText("Not Connected");
+                       // mTitle.setText(R.string.title_not_connected);
+                        break;
+                    }
+                    break;
+                case MESSAGE_WRITE:
+                    byte[] writeBuf = (byte[]) msg.obj;
+                    // construct a string from the buffer
+                    String writeMessage = new String(writeBuf);
+                    Log.d(TAG, "MESSAGE_WRITE++++++++"+writeMessage);
+                    //mConversationArrayAdapter.add("Me:  " + writeMessage);
+                    break;
+                case MESSAGE_READ:
+                    byte[] readBuf = (byte[]) msg.obj;
+                    // construct a string from the valid bytes in the buffer
+                    String readMessage = new String(readBuf, 0, msg.arg1);
+                    Log.d(TAG, "MESSAGE_READ++++++++"+readMessage);
+
+                   // mConversationArrayAdapter.add(mConnectedDeviceName+":  " + readMessage);
+                    break;
+                case MESSAGE_DEVICE_NAME:
+                    // save the connected device's name
+                    mConnectedDeviceName = msg.getData().getString(DEVICE_NAME);
+
+                    statuses.setText("Connected to "+ mConnectedDeviceName);
+
+                    Toast.makeText(getApplicationContext(), "Connected to "
+                                   + mConnectedDeviceName, Toast.LENGTH_SHORT).show();
+                    connectIt.setText("Connected to "+ mConnectedDeviceName);
+                    connectIt.setEnabled(false);
+                    break;
+                case MESSAGE_TOAST:
+                    statuses.setText(msg.getData().getString(TOAST));
+
+                    Toast.makeText(getApplicationContext(), msg.getData().getString(TOAST),
+                                   Toast.LENGTH_SHORT).show();
+                    break;
+                }
+            }
+        };
+
+
+        /**
+         * Sends a message.
+         * @param message  A string of text to send.
+         */
+        private void sendMessage(byte[] message) {
+            // Check that we're actually connected before trying anything
+             if (mChatService.getState() != BluetoothService.STATE_CONNECTED) {
+                 Toast.makeText(this, "not_connected", Toast.LENGTH_SHORT).show();
+                return;
+            } 
+
+            // Check that there's actually something to send
+            if (message.length &gt; 0) {
+                // Get the message bytes and tell the BluetoothChatService to write
+
+                mChatService.write(message);
+
+                // Reset out string buffer to zero and clear the edit text field
+                //mOutStringBuffer.setLength(0);
+                 //mOutEditText.setText(mOutStringBuffer);
+            }
+        }
+        private void btOnOffClick() {
+
+            if (D)
+                Log.d(TAG, "BT status @ btOnOffClick() -&gt;" + isBTOnOrOff);
+            if (isBTOnOrOff) {
+                // make BT off &amp; set isBTOnOrOff to false
+                btOFF();
+                isBTOnOrOff = false;
+
+            } else if (!isBTOnOrOff) {
+                // make BT on &amp; set isBTOnOrOff to true
+
+                btON(REQUEST_ENABLE_BT);
+                isBTOnOrOff = true;
+            }
+
+        }
+
+        private void btOFF() {
+            enableDissableViews(false);
+            if (D)
+                Log.d(TAG, "BT status @ btOFF() -&gt; OFF");
+
+            mBluetoothAdapter.disable();
+            bt_on_off.setText(getResources().getString(R.string.on_off_status)
+                    + "OFF");
+        }
+
+        private void btON(int requestType) {
+            if (D)
+                Log.d(TAG, "BT status @ btON() -&gt; Turning on dialog");
+
+            Intent enableBtIntent = new Intent(
+                    BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableBtIntent, requestType);
+
+        }
+        public void onActivityResult(int requestCode, int resultCode, Intent data) {
+            if (D)
+                Log.d(TAG, "onActivityResult " + resultCode);
+            switch (requestCode) {
+            case REQUEST_ENABLE_BT:
+                // When the request to enable Bluetooth returns
+                if (resultCode == Activity.RESULT_OK) {
+                    // Bluetooth is now enabled,
+                    isBTOnOrOff=true;
+                    enableDissableViews(true);
+                    bt_on_off.setText(getResources().getString(
+                            R.string.on_off_status)
+                            + "ON");
+                    if (D)
+                        Log.d(TAG, "onActivityResult - status ON ");
+                } else {
+                    isBTOnOrOff=false;
+                    enableDissableViews(false);
+                    bt_on_off.setText(getResources().getString(
+                            R.string.on_off_status)
+                            + "OFF");
+                    if (D)
+                        Log.d(TAG, "onActivityResult - BT not enabled");
+                    // User did not enable Bluetooth or an error occurred
+                }
+            }
+        }
+
+
+        @Override
+        public void onClick(View v) {
+            switch (v.getId()) {
+            case R.id.bt_on_off:
+                if (D)
+                    Log.d(TAG, "...........ON OFF button clicked ........ ");
+                // check for BT adaptor available then check its on or off
+                try {
+                    if (D)
+                        Log.d(TAG, "Before sleep");
+                    // Thread.sleep(SLEEP_THREAD_FOR_ACTION);
+                    if (D)
+                        Log.d(TAG, "after sleep");
+                    btOnOffClick();
+                    if (D)
+                        Log.d(TAG, "after btn click completed");
+                } catch (Exception e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+
+                break;
+            case R.id.connect:
+                resultMacId("00:08:F4:00:12:A4");
+                break;
+            case R.id.click:
+                sendMessage("commands in bytes".getBytes());
+                break;
+            default:
+                break;
+            }
+
+        }
+
+
+        private void disconnectIt() {
+             if (mChatService != null) mChatService.stop();
+             connectIt.setEnabled(true);
+        }
+
+
+        void enableDissableViews(boolean state)
+        {   
+            if (!state) {
+                connectIt.setText("Not Connected");
+            }
+              connectIt.setEnabled(state);
+        }
+
+    }
+</code></pre>
+
+<p><strong>activity_main.xml</strong></p>
+
+<pre><code>&lt;LinearLayout
+    android:id="@+id/top"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_weight="1"
+    android:background="#bababa"
+    android:gravity="center" &gt;
+
+    &lt;Button
+        android:id="@+id/bt_on_off"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:layout_weight="1"
+        android:text="@string/on_off_status" /&gt;
+
+    &lt;TextView
+        android:id="@+id/statuses"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center_horizontal"
+        android:text="@string/all_status"
+        android:textAppearance="?android:attr/textAppearanceLarge"
+        android:textColor="#FF0000" /&gt;
+
+    &lt;Button
+        android:id="@+id/connect"
+        style="?android:attr/buttonStyleSmall"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:layout_weight="1"
+        android:text="@string/socket_connected_status" /&gt;
+&lt;/LinearLayout&gt;
+
+&lt;LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_below="@+id/top"
+    android:layout_weight="1" &gt;
+
+    &lt;LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:orientation="vertical" &gt;
+
+        &lt;LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" &gt;
+        &lt;/LinearLayout&gt;
+
+        &lt;LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" &gt;
+        &lt;/LinearLayout&gt;
+
+        &lt;LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" &gt;
+        &lt;/LinearLayout&gt;
+    &lt;/LinearLayout&gt;
+
+    &lt;LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:orientation="vertical" &gt;
+
+        &lt;TextView
+            android:id="@+id/TextView01"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="GPS"
+            android:textAppearance="?android:attr/textAppearanceLarge"
+            android:visibility="gone" /&gt;
+    &lt;/LinearLayout&gt;
+
+    &lt;LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:orientation="vertical" &gt;
+
+        &lt;Button
+            android:id="@+id/click"
+            android:layout_width="317dp"
+            android:layout_height="match_parent"
+            android:text="Send" /&gt;
+    &lt;/LinearLayout&gt;
+&lt;/LinearLayout&gt;
+</code></pre>

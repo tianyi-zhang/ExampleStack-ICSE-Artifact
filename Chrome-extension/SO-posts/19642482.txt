@@ -1,0 +1,142 @@
+<p>This seems to be a common question so, for those arriving from Google: there is hope.</p>
+
+<p>The <a href="http://square.github.io/dagger/" rel="nofollow">Dagger</a> DI project is licensed under the Apache 2.0 License and contains some utility methods for working with types in an annotation processor.</p>
+
+<p>In particular, the <code>Util</code> class can be viewed in full on GitHub (<a href="https://github.com/square/dagger/blob/master/compiler/src/main/java/dagger/internal/codegen/Util.java" rel="nofollow">Util.java</a>) and defines a method <code>public static String typeToString(TypeMirror type)</code>. It uses a TypeVisitor and some recursive calls to build up a string representation of a type. Here is a snippet for reference:</p>
+
+<pre><code>public static void typeToString(final TypeMirror type, final StringBuilder result, final char innerClassSeparator)
+{
+    type.accept(new SimpleTypeVisitor6&lt;Void, Void&gt;()
+    {
+        @Override
+        public Void visitDeclared(DeclaredType declaredType, Void v)
+        {
+            TypeElement typeElement = (TypeElement) declaredType.asElement();
+
+            rawTypeToString(result, typeElement, innerClassSeparator);
+
+            List&lt;? extends TypeMirror&gt; typeArguments = declaredType.getTypeArguments();
+            if (!typeArguments.isEmpty())
+            {
+                result.append("&lt;");
+                for (int i = 0; i &lt; typeArguments.size(); i++)
+                {
+                    if (i != 0)
+                    {
+                        result.append(", ");
+                    }
+
+                    // NOTE: Recursively resolve the types
+                    typeToString(typeArguments.get(i), result, innerClassSeparator);
+                }
+
+                result.append("&gt;");
+            }
+
+            return null;
+        }
+
+        @Override
+        public Void visitPrimitive(PrimitiveType primitiveType, Void v) { ... }
+
+        @Override
+        public Void visitArray(ArrayType arrayType, Void v) { ... }
+
+        @Override
+        public Void visitTypeVariable(TypeVariable typeVariable, Void v) 
+        {
+            result.append(typeVariable.asElement().getSimpleName());
+            return null;
+        }
+
+        @Override
+        public Void visitError(ErrorType errorType, Void v) { ... }
+
+        @Override
+        protected Void defaultAction(TypeMirror typeMirror, Void v) { ... }
+    }, null);
+}
+</code></pre>
+
+<p>I am busy with my own project which generates class extensions. The Dagger method works for complex situations, including generic inner classes. I have the following results:</p>
+
+<p>My test class with field to extend:</p>
+
+<pre><code>public class AnnotationTest
+{
+    ...
+
+    public static class A
+    {
+        @MyAnnotation
+        private Set&lt;B&lt;Integer&gt;&gt; _bs;
+    }
+
+    public static class B&lt;T&gt;
+    {
+        private T _value;
+    }
+}
+</code></pre>
+
+<p>Calling the Dagger method on the <code>Element</code> the processor provides for the <code>_bs</code> field:</p>
+
+<pre><code>accessor.type = DaggerUtils.typeToString(element.asType());
+</code></pre>
+
+<p>The generated source (custom, of course). Note the awesome nested generic types.</p>
+
+<pre><code>public java.util.Set&lt;AnnotationTest.B&lt;java.lang.Integer&gt;&gt; AnnotationTest.A.getBsGenerated()
+{
+    return this._bs;
+}
+</code></pre>
+
+<h2>EDIT: adapting the concept to extract a TypeMirror of the first generic argument, null otherwise:</h2>
+
+<pre><code>public static TypeMirror getGenericType(final TypeMirror type)
+{
+    final TypeMirror[] result = { null };
+
+    type.accept(new SimpleTypeVisitor6&lt;Void, Void&gt;()
+    {
+        @Override
+        public Void visitDeclared(DeclaredType declaredType, Void v)
+        {
+            List&lt;? extends TypeMirror&gt; typeArguments = declaredType.getTypeArguments();
+            if (!typeArguments.isEmpty())
+            {
+                result[0] = typeArguments.get(0);
+            }
+            return null;
+        }
+        @Override
+        public Void visitPrimitive(PrimitiveType primitiveType, Void v)
+        {
+            return null;
+        }
+        @Override
+        public Void visitArray(ArrayType arrayType, Void v)
+        {
+            return null;
+        }
+        @Override
+        public Void visitTypeVariable(TypeVariable typeVariable, Void v)
+        {
+            return null;
+        }
+        @Override
+        public Void visitError(ErrorType errorType, Void v)
+        {
+            return null;
+        }
+        @Override
+        protected Void defaultAction(TypeMirror typeMirror, Void v)
+        {
+            throw new UnsupportedOperationException();
+        }
+    }, null);
+
+    return result[0];
+}
+</code></pre>

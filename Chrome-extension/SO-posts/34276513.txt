@@ -1,0 +1,111 @@
+<p>Actually <a href="https://jcifs.samba.org/" rel="nofollow">jcifs</a> is good and you can test easily the <a href="http://www.innovation.ch/personal/ronald/ntlm.html" rel="nofollow">4-way handshake</a> locally with Windows IIS and a keep alive java Socket.</p>
+
+<p>This 2004 Apache <a href="http://alvinalexander.com/java/jwarehouse/commons-httpclient-2.0.1/src/java/org/apache/commons/httpclient/NTLM.java.shtml" rel="nofollow">pseudo code</a> is useful to build the algorithm with jcifs using <code>generateType1Msg()</code> and <code>generateType3Msg()</code>, even Apache promotes an <a href="https://hc.apache.org/httpcomponents-client-ga/ntlm.html" rel="nofollow">example</a> as an alternative to HttpClient.</p>
+
+<p>The old Apache code from 2004 works but authentication is unstable, you get <code>HTTP/1.1 401 Unauthorized</code> frequently, also this <a href="http://www.luigidragone.com/software/ntlm-authentication-in-java/" rel="nofollow">really old</a> code from Luigi Dragone does not work anymore. On the other hand Apache's HttpClient runs smoothly but the handshake is done behind the scene (fyi. HttpClient requires <code>new NTCredentials()</code> to define user's authentication).</p>
+
+<p>Here's an example to test the handshake locally on IIS, on port 81 without a domain. You need to change the <code>host</code>, <code>port</code>, <code>user</code> and <code>password</code> and HTTP headers appropriately, eventually <code>WWW-Authenticate</code> if you are not using IIS.</p>
+
+<p><code>HTTP/1.1 200 OK</code> means the authentication is correct, otherwise you get <code>HTTP/1.1 401 Unauthorized</code>.</p>
+
+<pre><code>import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.net.Socket;
+import java.net.UnknownHostException;
+
+import jcifs.ntlmssp.NtlmFlags;
+import jcifs.ntlmssp.Type1Message;
+import jcifs.ntlmssp.Type2Message;
+import jcifs.ntlmssp.Type3Message;
+import jcifs.util.Base64;
+
+import org.apache.http.impl.auth.NTLMEngineException;
+
+public class TestNTLM {
+
+    public static void main(String[] args) throws UnknownHostException, IOException, NTLMEngineException {
+        Socket s = new Socket("127.0.0.1", 81);
+        s.setKeepAlive(true);
+        InputStream is = s.getInputStream();
+        OutputStream os = s.getOutputStream();
+        BufferedReader r = new BufferedReader(new InputStreamReader(is));
+        BufferedWriter w = new BufferedWriter(new OutputStreamWriter(os));
+
+        String host = "127.0.0.1:81";
+        String hostDomain = "";
+        String user = "My_Windows_Username";
+        String password = "My_Windows_Password";
+
+        w.write("GET http://127.0.0.1:81/ HTTP/1.1\n");
+        w.write("Host: 127.0.0.1:81\n");
+        w.write("Authorization: NTLM " + TestNTLM.generateType1Msg(hostDomain, host) + "\n\n");
+        System.out.println("[First Message Sent]");
+        w.flush();
+
+        String resp = "", line = "";
+        int contentLength = 0;
+        while((line = r.readLine()) != null){
+            if(line.length() == 0)
+                break;
+            System.out.println(line);
+            if(line.startsWith("Content-Length"))
+                contentLength = Integer.parseInt(line.substring(line.indexOf(":") + 1).trim());
+            else if(line.startsWith("WWW-Authenticate"))
+                resp = line.substring(line.indexOf(":") + 1).trim();
+        }
+        r.skip(contentLength);
+
+        System.out.println("\n[Second Message Received]");
+        System.out.println("Proxy-Authenticate: " + resp);
+        resp = resp.substring(resp.indexOf(" ")).trim();
+
+        w.write("GET http://127.0.0.1:81/ HTTP/1.1\n");
+        w.write("Host: 127.0.0.1:81\n");
+        w.write("Authorization: NTLM " + TestNTLM.generateType3Msg(user, password, hostDomain, host, new String(resp)) + "\n\n");
+
+        w.flush();
+        System.out.println("\n[Third Message Sent]");
+
+        while((line = r.readLine()) != null){
+            System.out.println(line);
+            if(line.length() == 0)
+                break;
+        }
+    }
+
+    private static final int TYPE_1_FLAGS = 
+            NtlmFlags.NTLMSSP_NEGOTIATE_56 | 
+            NtlmFlags.NTLMSSP_NEGOTIATE_128 | 
+            NtlmFlags.NTLMSSP_NEGOTIATE_NTLM2 | 
+            NtlmFlags.NTLMSSP_NEGOTIATE_ALWAYS_SIGN | 
+            NtlmFlags.NTLMSSP_REQUEST_TARGET;
+
+    public static String generateType1Msg(final String domain, final String workstation)
+            throws NTLMEngineException {
+        final Type1Message type1Message = new Type1Message(TYPE_1_FLAGS, domain, workstation);
+        return Base64.encode(type1Message.toByteArray());
+    }
+
+    public static String generateType3Msg(final String username, final String password,
+            final String domain, final String workstation, final String challenge)
+                    throws NTLMEngineException {
+        Type2Message type2Message;
+        try {
+            type2Message = new Type2Message(Base64.decode(challenge));
+        } catch (final IOException exception) {
+            throw new NTLMEngineException("Invalid NTLM type 2 message", exception);
+        }
+        final int type2Flags = type2Message.getFlags();
+        final int type3Flags = type2Flags
+                &amp; (0xffffffff ^ (NtlmFlags.NTLMSSP_TARGET_TYPE_DOMAIN | NtlmFlags.NTLMSSP_TARGET_TYPE_SERVER));
+        final Type3Message type3Message = new Type3Message(type2Message, password, domain,
+                username, workstation, type3Flags);
+        return Base64.encode(type3Message.toByteArray());
+    }
+}
+</code></pre>

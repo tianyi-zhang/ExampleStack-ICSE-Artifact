@@ -1,0 +1,186 @@
+<p>I suppose, there is no easy way to get an address of a monitor. Here is how jstack does it</p>
+
+<pre><code>import com.sun.tools.attach.VirtualMachine;
+import sun.tools.attach.HotSpotVirtualMachine;
+
+import java.io.InputStream;
+import java.lang.management.ManagementFactory;
+
+public class Main {
+
+    public static void main(String[] args) throws Exception {
+        VirtualMachine vm = VirtualMachine.attach(getPid());
+
+        HotSpotVirtualMachine hsvm = (HotSpotVirtualMachine) vm;
+        InputStream in = hsvm.remoteDataDump("-l");
+
+        byte b[] = new byte[256];
+        int n;
+        do {
+            n = in.read(b);
+            if (n &gt; 0) {
+                String s = new String(b, 0, n, "UTF-8");
+                System.out.print(s);
+            }
+        } while (n &gt; 0);
+        in.close();
+    }
+
+    private static String getPid() {
+        String name = ManagementFactory.getRuntimeMXBean().getName();
+        int ind = name.indexOf('@');
+        return name.substring(0, ind);
+    }
+
+}
+</code></pre>
+
+<p>To run this snippet don't forget to add <code>$JDK_HOME/lib/tools.jar</code> to the classpath.</p>
+
+<p>Here is the output it produces
+    2012-10-31 08:48:08
+    Full thread dump Java HotSpot(TM) 64-Bit Server VM (20.5-b03 mixed mode):</p>
+
+<pre><code>"Monitor Ctrl-Break" daemon prio=6 tid=0x0000000006b98000 nid=0x1d70 runnable [0x00000000074df000]
+   java.lang.Thread.State: RUNNABLE
+    at java.net.PlainSocketImpl.socketAccept(Native Method)
+    at java.net.PlainSocketImpl.accept(PlainSocketImpl.java:408)
+    - locked &lt;0x00000007d5d53148&gt; (a java.net.SocksSocketImpl)
+    at java.net.ServerSocket.implAccept(ServerSocket.java:462)
+    at java.net.ServerSocket.accept(ServerSocket.java:430)
+    at com.intellij.rt.execution.application.AppMain$1.run(AppMain.java:82)
+    at java.lang.Thread.run(Thread.java:662)
+
+   Locked ownable synchronizers:
+    - None
+
+...
+</code></pre>
+
+<p>Let's look closer at what <code>hsvm.remoteDataDump("-l")</code> does</p>
+
+<pre><code>...
+
+public InputStream remoteDataDump(Object ... args) throws IOException {
+    return executeCommand("threaddump", args);
+}
+
+/*
+ * Execute the given command in the target VM - specific platform
+ * implementation must implement this.
+ */
+abstract InputStream execute(String cmd, Object ... args)
+    throws AgentLoadException, IOException;
+
+/*
+ * Convenience method for simple commands 
+ */
+private InputStream executeCommand(String cmd, Object ... args) throws IOException {
+    try {
+        return execute(cmd, args);
+    } catch (AgentLoadException x) {
+        throw new InternalError("Should not get here");
+    }
+}
+...
+</code></pre>
+
+<p>and here is an implementation of the execute method for windows (you can find it in <code>sun.tools.attach.WindowsVirtualMachine</code>)</p>
+
+<pre><code>InputStream execute(String cmd, Object ... args) 
+        throws AgentLoadException, IOException {
+
+    assert args.length &lt;= 3;        // includes null
+
+    // create a pipe using a random name
+    int r = (new Random()).nextInt();
+    String pipename = "\\\\.\\pipe\\javatool" + r; 
+    long hPipe = createPipe(pipename);
+
+    // check if we are detached - in theory it's possible that detach is invoked 
+    // after this check but before we enqueue the command.
+    if (hProcess == -1) { 
+        closePipe(hPipe);
+        throw new IOException("Detached from target VM");
+    }
+
+    try {
+        // enqueue the command to the process
+        enqueue(hProcess, stub, cmd, pipename, args);
+
+        // wait for command to complete - process will connect with the
+        // completion status
+        connectPipe(hPipe);
+
+        // create an input stream for the pipe
+        PipedInputStream is = new PipedInputStream(hPipe);
+
+        // read completion status
+        int status = readInt(is);
+        if (status != 0) {
+            // special case the load command so that the right exception is thrown
+            if (cmd.equals("load")) {
+                throw new AgentLoadException("Failed to load agent library");
+            } else {
+                throw new IOException("Command failed in target VM");
+            }
+         }      
+
+        // return the input stream
+        return is;
+
+    } catch (IOException ioe) {
+        closePipe(hPipe);
+        throw ioe;
+    }
+} 
+
+static native void init();
+
+static native byte[] generateStub();
+
+static native long openProcess(int pid) throws IOException;
+
+static native void closeProcess(long hProcess) throws IOException;
+
+static native long createPipe(String name) throws IOException;
+
+static native void closePipe(long hPipe) throws IOException;
+
+static native void connectPipe(long hPipe) throws IOException;    
+
+static native int readPipe(long hPipe, byte buf[], int off, int buflen) throws IOException;
+
+static native void enqueue(long hProcess, byte[] stub,
+    String cmd, String pipename, Object ... args) throws IOException; 
+</code></pre>
+
+<p>So basically the named pipe is opened and some command is executed over it and all the magic is in the native code in <code>hotspot/src/share/vm/services/attachListener.cpp</code></p>
+
+<pre><code>// Implementation of "threaddump" command - essentially a remote ctrl-break
+//
+static jint thread_dump(AttachOperation* op, outputStream* out) {
+    bool print_concurrent_locks = false;
+    if (op-&gt;arg(0) != NULL &amp;&amp; strcmp(op-&gt;arg(0), "-l") == 0) {
+        print_concurrent_locks = true;
+    }
+
+    // thread stacks
+    VM_PrintThreads op1(out, print_concurrent_locks);
+    VMThread::execute(&amp;op1);
+
+    // JNI global handles
+    VM_PrintJNI op2(out);
+    VMThread::execute(&amp;op2);
+
+    // Deadlock detection
+    VM_FindDeadlocks op3(out);
+    VMThread::execute(&amp;op3);
+
+    return JNI_OK;
+}
+</code></pre>
+
+<p>Generally speaking if you would like to extract the address of the object you've obtained the monitor of, you can parse the output of the very first snippet and extract the necessary fragment, for example, by thread id.</p>
+
+<p>Other options are attaching to your process in the debug mode and using debugger api or JNI.</p>

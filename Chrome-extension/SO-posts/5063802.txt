@@ -1,0 +1,442 @@
+<p>Why won't you search google on that ? =)
+This is searchable.xml
+    
+    
+    </p>
+
+<p>This is manifest</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"
+      package="com.example.search"
+      android:versionCode="1"
+      android:versionName="1.0"&gt;
+    &lt;application android:icon="@drawable/icon" android:label="@string/app_name"&gt;
+        &lt;activity android:name=".Main"
+                  android:label="@string/app_name"&gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.MAIN" /&gt;
+                &lt;category android:name="android.intent.category.LAUNCHER" /&gt;
+            &lt;/intent-filter&gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name="android.intent.action.SEARCH" /&gt;
+            &lt;/intent-filter&gt;
+            &lt;meta-data 
+                android:name="android.app.searchable"
+                android:resource="@xml/searchable"
+            /&gt;
+        &lt;/activity&gt;
+
+        &lt;activity android:name=".RecordActivity"
+                  android:theme="@android:style/Theme.NoTitleBar" /&gt;
+
+        &lt;provider android:name=".SuggestionProvider"
+                  android:authorities="com.example.search.SuggestionProvider" /&gt;
+
+        &lt;meta-data android:name="android.app.default_searchable"
+                   android:value=".Main" /&gt;
+
+    &lt;/application&gt;
+    &lt;uses-sdk android:minSdkVersion="5" /&gt;
+&lt;/manifest&gt;
+</code></pre>
+
+<p>This is main activity</p>
+
+<pre><code>import android.app.ListActivity;
+import android.app.SearchManager;
+import android.content.Intent;
+import android.database.Cursor;
+import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.SimpleCursorAdapter;
+import android.widget.Toast;
+
+public class Main extends ListActivity {
+
+    private EditText text;
+    private Button add;
+    private RecordsDbHelper mDbHelper;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+    setContentView(R.layout.main);
+    mDbHelper = new RecordsDbHelper(this);
+
+    Intent intent = getIntent();
+
+    if (Intent.ACTION_SEARCH.equals(intent.getAction())) {
+
+        String query = intent.getStringExtra(SearchManager.QUERY);
+
+        showResults(query);
+    } else if (Intent.ACTION_VIEW.equals(intent.getAction())){
+
+                Intent recordIntent = new Intent(this, RecordActivity.class);
+                recordIntent.setData(intent.getData());
+                startActivity(recordIntent);
+                finish();
+    }
+
+    add = (Button) findViewById(R.id.add);
+    text = (EditText) findViewById(R.id.text);
+    add.setOnClickListener(new View.OnClickListener() {
+        public void onClick(View view) {
+            String data = text.getText().toString();
+        if (!data.equals("")) {
+            saveTask(data);
+            text.setText("");
+        }
+        }
+    });
+
+    }
+
+    private void saveTask(String data) {
+        mDbHelper.createRecord(data);
+    }
+
+    private void showResults(String query) {
+
+
+        Cursor cursor = managedQuery(SuggestionProvider.CONTENT_URI, null, null,
+                                new String[] {query}, null);
+        if (cursor == null) {
+            Toast.makeText(this, "There are no results", Toast.LENGTH_SHORT).show();
+        } else {
+            //????????? ???????
+            String[] from = new String[] { RecordsDbHelper.KEY_DATA };
+            int[] to = new int[] { R.id.text1 };
+            SimpleCursorAdapter records = new SimpleCursorAdapter(this, R.layout.record, cursor, from, to);
+            getListView().setAdapter(records);            
+        }        
+    }
+
+
+   // res/menu/main_menu.xml
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.main_menu, menu);
+        return true;    
+    }
+
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.search_record:
+             onSearchRequested();
+            return true;
+            default:
+            return super.onOptionsItemSelected(item);
+        }
+    }
+}
+</code></pre>
+
+<p>Record Activity:</p>
+
+<pre><code>import android.app.Activity;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.widget.TextView;
+
+public class RecordActivity extends Activity {
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.record_activity);
+
+
+        Uri uri = getIntent().getData();
+            Cursor cursor = managedQuery(uri, null, null, null, null);
+
+        if (cursor == null) {
+            finish();
+        } else {
+
+            cursor.moveToFirst();
+
+            TextView record = (TextView) findViewById(R.id.record_header);
+            int rIndex = cursor.getColumnIndexOrThrow(RecordsDbHelper.KEY_DATA);
+
+            record.setText(cursor.getString(rIndex));
+        }
+    }
+
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.main_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.search_record:
+                onSearchRequested();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+}
+</code></pre>
+
+<p>Suggestion provider:</p>
+
+<pre><code>import android.app.SearchManager;
+import android.content.ContentProvider;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.UriMatcher;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.BaseColumns;
+
+public class SuggestionProvider extends ContentProvider{
+
+    private RecordsDbHelper mDbHelper;
+
+    public static String AUTHORITY = "com.example.search.SuggestionProvider";
+    public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/records");
+
+    //MIME ???? ??? getType()
+    public static final String RECORDS_MIME_TYPE = ContentResolver.CURSOR_DIR_BASE_TYPE +
+                                                  "/vnd.example.search";
+    public static final String RECORD_MIME_TYPE = ContentResolver.CURSOR_ITEM_BASE_TYPE +
+                                                  "/vnd.example.search";
+
+    //??? ??????? ?????? URI
+    private static final int SEARCH_RECORDS = 0;
+    private static final int GET_RECORD = 1;
+    private static final int SEARCH_SUGGEST = 2;
+    private static final UriMatcher sURIMatcher = makeUriMatcher();
+
+    @Override
+    public boolean onCreate() {
+        mDbHelper = new RecordsDbHelper(getContext());
+        return true;
+    }
+
+    @Override
+    public Cursor query(Uri uri, String[] projection, String selection,
+            String[] selectionArgs, String sortOrder) {
+        //?????????? UriMatcher, ????? ?????? ????? ??? ??????? ???????. ????? ????????? ??????????????? ?????? ? ??
+        switch (sURIMatcher.match(uri)) {
+            case SEARCH_SUGGEST:
+                if (selectionArgs == null) {
+                    throw new IllegalArgumentException(
+                        "selectionArgs must be provided for the Uri: " + uri);
+                }
+                return getSuggestions(selectionArgs[0]);
+            case SEARCH_RECORDS:
+                if (selectionArgs == null) {
+                    throw new IllegalArgumentException(
+                        "selectionArgs must be provided for the Uri: " + uri);
+                }
+                return search(selectionArgs[0]);
+            case GET_RECORD:
+                return getRecord(uri);
+            default:
+                throw new IllegalArgumentException("Unknown Uri: " + uri);
+        }
+    }
+
+    private Cursor getSuggestions(String query) {
+        query = query.toLowerCase();
+        String[] columns = new String[] {
+             BaseColumns._ID,
+             RecordsDbHelper.KEY_DATA,
+             SearchManager.SUGGEST_COLUMN_INTENT_DATA_ID};
+        return mDbHelper.getRecordMatches(query, columns);
+    }
+
+    private Cursor search(String query) {
+        query = query.toLowerCase();
+        String[] columns = new String[] {
+            BaseColumns._ID,
+            RecordsDbHelper.KEY_DATA};
+
+        return mDbHelper.getRecordMatches(query, columns);
+    }
+
+    private Cursor getRecord(Uri uri) {
+        String rowId = uri.getLastPathSegment();
+        String[] columns = new String[] {
+            RecordsDbHelper.KEY_DATA};
+
+        return mDbHelper.getRecord(rowId, columns);
+    }
+
+
+    private static UriMatcher makeUriMatcher() {
+        UriMatcher matcher =  new UriMatcher(UriMatcher.NO_MATCH);
+        // ??? ???????
+        matcher.addURI(AUTHORITY, "records", SEARCH_RECORDS);
+        matcher.addURI(AUTHORITY, "records/#", GET_RECORD);
+        // ??? ?????????
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_QUERY, SEARCH_SUGGEST);
+        matcher.addURI(AUTHORITY, SearchManager.SUGGEST_URI_PATH_QUERY + "/*", SEARCH_SUGGEST);
+        return matcher;
+    }
+
+    //????????? ?????? (??????????? ?? ?????? ContentProvider)
+    @Override
+    public String getType(Uri uri) {
+        switch (sURIMatcher.match(uri)) {
+            case SEARCH_RECORDS:
+                return RECORDS_MIME_TYPE;
+            case SEARCH_SUGGEST:
+                return SearchManager.SUGGEST_MIME_TYPE;
+            case GET_RECORD:
+                return RECORD_MIME_TYPE;
+            default:
+                throw new IllegalArgumentException("Unknown URL " + uri);
+        }   
+    }
+
+    @Override
+    public int update(Uri uri, ContentValues values, String selection,
+                       String[] selectionArgs) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+        throw new UnsupportedOperationException();
+    }
+
+}
+</code></pre>
+
+<p>DB Helper:</p>
+
+<pre><code>import java.util.HashMap;
+
+import android.app.SearchManager;
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteQueryBuilder;
+import android.provider.BaseColumns;
+import android.util.Log;
+
+public class RecordsDbHelper {
+
+    public static final String KEY_DATA = SearchManager.SUGGEST_COLUMN_TEXT_1;
+
+    private static final String TAG = "RecordsDbHelper";
+    private DatabaseHelper mDbHelper;
+    private SQLiteDatabase mDb;
+
+    private static final String DATABASE_NAME = "datas";
+    private static final String DATABASE_TABLE = "records";
+    private static final int DATABASE_VERSION = 2;
+
+
+    private static final String DATABASE_CREATE =
+        "CREATE VIRTUAL TABLE " + DATABASE_TABLE +
+                " USING fts3 (" + KEY_DATA + ");";  
+
+    private static final HashMap&lt;String,String&gt; mColumnMap = buildColumnMap();
+
+
+    public Cursor getRecord(String rowId, String[] columns) {
+        String selection = "rowid = ?";
+        String[] selectionArgs = new String[] {rowId};
+
+        return query(selection, selectionArgs, columns);
+    }
+
+    public Cursor getRecordMatches(String query, String[] columns) {
+        String selection = KEY_DATA + " MATCH ?";
+        String[] selectionArgs = new String[] {query+"*"};
+
+        return query(selection, selectionArgs, columns);
+    }
+
+    private static HashMap&lt;String,String&gt; buildColumnMap() {
+        HashMap&lt;String,String&gt; map = new HashMap&lt;String,String&gt;();
+        map.put(KEY_DATA, KEY_DATA);
+        map.put(BaseColumns._ID, "rowid AS " +
+                BaseColumns._ID);
+        map.put(SearchManager.SUGGEST_COLUMN_INTENT_DATA_ID, "rowid AS " +
+                SearchManager.SUGGEST_COLUMN_INTENT_DATA_ID);
+        return map;
+    }
+
+    private Cursor query(String selection, String[] selectionArgs, String[] columns) {
+
+        SQLiteQueryBuilder builder = new SQLiteQueryBuilder();
+        builder.setTables(DATABASE_TABLE);
+        builder.setProjectionMap(mColumnMap);
+
+        Cursor cursor = builder.query(mDbHelper.getReadableDatabase(),
+                columns, selection, selectionArgs, null, null, null);
+        if (cursor == null) {
+            return null;
+        } else if (!cursor.moveToFirst()) {
+            cursor.close();
+            return null;
+        }
+        return cursor;
+    }    
+
+
+    private static class DatabaseHelper extends SQLiteOpenHelper {
+
+        DatabaseHelper(Context context) {
+        super(context, DATABASE_NAME, null, DATABASE_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        db.execSQL(DATABASE_CREATE);
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        Log.w(TAG, "Upgrading database from version " + oldVersion + " to "
+            + newVersion + ", which will destroy all old data");
+        db.execSQL("DROP TABLE IF EXISTS records");
+        onCreate(db);
+    }
+    }
+
+    public RecordsDbHelper(Context context) {
+        mDbHelper = new DatabaseHelper(context);
+    }
+
+
+    public long createRecord(String data) {
+        mDb = mDbHelper.getWritableDatabase();
+    ContentValues initialValues = new ContentValues();
+    initialValues.put(KEY_DATA, data);
+    return mDb.insert(DATABASE_TABLE, null, initialValues);
+    }
+
+}
+</code></pre>
+
+<p>Woah! That's all =) Check out teh project on google code <a href="http://code.google.com/p/androidsearchexample/" rel="nofollow">http://code.google.com/p/androidsearchexample/</a>
+Plus for the answer is the best reward =) Good luck!</p>

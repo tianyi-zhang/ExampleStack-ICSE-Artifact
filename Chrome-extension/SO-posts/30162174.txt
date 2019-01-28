@@ -1,0 +1,260 @@
+<p>Here is some working code that uses the Places Web API, this should help you get the functionality you're looking for.</p>
+
+<p>General documentation can be found <a href="https://developers.google.com/places/webservice/search" rel="nofollow">here</a>.</p>
+
+<p>Suported types of Place Types can be found <a href="https://developers.google.com/places/supported_types" rel="nofollow">here</a>.</p>
+
+<p>The following is a simple example.  First, generate your query string for the API:</p>
+
+<pre><code>public StringBuilder sbMethod() {
+
+    //use your current location here
+    double mLatitude = 37.77657;
+    double mLongitude = -122.417506;
+
+    StringBuilder sb = new StringBuilder("https://maps.googleapis.com/maps/api/place/nearbysearch/json?");
+    sb.append("location=" + mLatitude + "," + mLongitude);
+    sb.append("&amp;radius=5000");
+    sb.append("&amp;types=" + "restaurant");
+    sb.append("&amp;sensor=true");
+    sb.append("&amp;key=******* YOUR API KEY****************");
+
+    Log.d("Map", "api: " + sb.toString());
+
+    return sb;
+}
+</code></pre>
+
+<p>Here is the <code>AsyncTask</code> used to query the Places API:</p>
+
+<pre><code>private class PlacesTask extends AsyncTask&lt;String, Integer, String&gt; {
+
+    String data = null;
+
+    // Invoked by execute() method of this object
+    @Override
+    protected String doInBackground(String... url) {
+        try {
+            data = downloadUrl(url[0]);
+        } catch (Exception e) {
+            Log.d("Background Task", e.toString());
+        }
+        return data;
+    }
+
+    // Executed after the complete execution of doInBackground() method
+    @Override
+    protected void onPostExecute(String result) {
+        ParserTask parserTask = new ParserTask();
+
+        // Start parsing the Google places in JSON format
+        // Invokes the "doInBackground()" method of the class ParserTask
+        parserTask.execute(result);
+    }
+}
+</code></pre>
+
+<p>Here is the <code>downloadURL()</code> method:</p>
+
+<pre><code>private String downloadUrl(String strUrl) throws IOException {
+    String data = "";
+    InputStream iStream = null;
+    HttpURLConnection urlConnection = null;
+    try {
+        URL url = new URL(strUrl);
+
+        // Creating an http connection to communicate with url
+        urlConnection = (HttpURLConnection) url.openConnection();
+
+        // Connecting to url
+        urlConnection.connect();
+
+        // Reading data from url
+        iStream = urlConnection.getInputStream();
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(iStream));
+
+        StringBuffer sb = new StringBuffer();
+
+        String line = "";
+        while ((line = br.readLine()) != null) {
+            sb.append(line);
+        }
+
+        data = sb.toString();
+
+        br.close();
+
+    } catch (Exception e) {
+        Log.d("Exception while downloading url", e.toString());
+    } finally {
+        iStream.close();
+        urlConnection.disconnect();
+    }
+    return data;
+}
+</code></pre>
+
+<p><code>ParserTask</code> for parsing the JSON result:</p>
+
+<pre><code>private class ParserTask extends AsyncTask&lt;String, Integer, List&lt;HashMap&lt;String, String&gt;&gt;&gt; {
+
+    JSONObject jObject;
+
+    // Invoked by execute() method of this object
+    @Override
+    protected List&lt;HashMap&lt;String, String&gt;&gt; doInBackground(String... jsonData) {
+
+        List&lt;HashMap&lt;String, String&gt;&gt; places = null;
+        Place_JSON placeJson = new Place_JSON();
+
+        try {
+            jObject = new JSONObject(jsonData[0]);
+
+            places = placeJson.parse(jObject);
+
+        } catch (Exception e) {
+            Log.d("Exception", e.toString());
+        }
+        return places;
+    }
+
+    // Executed after the complete execution of doInBackground() method
+    @Override
+    protected void onPostExecute(List&lt;HashMap&lt;String, String&gt;&gt; list) {
+
+        Log.d("Map", "list size: " + list.size());
+        // Clears all the existing markers;
+        mGoogleMap.clear();
+
+        for (int i = 0; i &lt; list.size(); i++) {
+
+            // Creating a marker
+            MarkerOptions markerOptions = new MarkerOptions();
+
+            // Getting a place from the places list
+            HashMap&lt;String, String&gt; hmPlace = list.get(i);
+
+
+            // Getting latitude of the place
+            double lat = Double.parseDouble(hmPlace.get("lat"));
+
+            // Getting longitude of the place
+            double lng = Double.parseDouble(hmPlace.get("lng"));
+
+            // Getting name
+            String name = hmPlace.get("place_name");
+
+            Log.d("Map", "place: " + name);
+
+            // Getting vicinity
+            String vicinity = hmPlace.get("vicinity");
+
+            LatLng latLng = new LatLng(lat, lng);
+
+            // Setting the position for the marker
+            markerOptions.position(latLng);
+
+            markerOptions.title(name + " : " + vicinity);
+
+            markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_MAGENTA));
+
+            // Placing a marker on the touched position
+            Marker m = mGoogleMap.addMarker(markerOptions);
+
+        }
+    }
+}
+</code></pre>
+
+<p><code>Place_JSON</code> class which is used in <code>ParserTask</code>:</p>
+
+<pre><code>public class Place_JSON {
+
+    /**
+     * Receives a JSONObject and returns a list
+     */
+    public List&lt;HashMap&lt;String, String&gt;&gt; parse(JSONObject jObject) {
+
+        JSONArray jPlaces = null;
+        try {
+            /** Retrieves all the elements in the 'places' array */
+            jPlaces = jObject.getJSONArray("results");
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        /** Invoking getPlaces with the array of json object
+         * where each json object represent a place
+         */
+        return getPlaces(jPlaces);
+    }
+
+    private List&lt;HashMap&lt;String, String&gt;&gt; getPlaces(JSONArray jPlaces) {
+        int placesCount = jPlaces.length();
+        List&lt;HashMap&lt;String, String&gt;&gt; placesList = new ArrayList&lt;HashMap&lt;String, String&gt;&gt;();
+        HashMap&lt;String, String&gt; place = null;
+
+        /** Taking each place, parses and adds to list object */
+        for (int i = 0; i &lt; placesCount; i++) {
+            try {
+                /** Call getPlace with place JSON object to parse the place */
+                place = getPlace((JSONObject) jPlaces.get(i));
+                placesList.add(place);
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+        return placesList;
+    }
+
+    /**
+     * Parsing the Place JSON object
+     */
+    private HashMap&lt;String, String&gt; getPlace(JSONObject jPlace) {
+
+        HashMap&lt;String, String&gt; place = new HashMap&lt;String, String&gt;();
+        String placeName = "-NA-";
+        String vicinity = "-NA-";
+        String latitude = "";
+        String longitude = "";
+        String reference = "";
+
+        try {
+            // Extracting Place name, if available
+            if (!jPlace.isNull("name")) {
+                placeName = jPlace.getString("name");
+            }
+
+            // Extracting Place Vicinity, if available
+            if (!jPlace.isNull("vicinity")) {
+                vicinity = jPlace.getString("vicinity");
+            }
+
+            latitude = jPlace.getJSONObject("geometry").getJSONObject("location").getString("lat");
+            longitude = jPlace.getJSONObject("geometry").getJSONObject("location").getString("lng");
+            reference = jPlace.getString("reference");
+
+            place.put("place_name", placeName);
+            place.put("vicinity", vicinity);
+            place.put("lat", latitude);
+            place.put("lng", longitude);
+            place.put("reference", reference);
+
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        return place;
+    }
+}
+</code></pre>
+
+<p>Lastly, invoke the process like this:</p>
+
+<pre><code>    StringBuilder sbValue = new StringBuilder(sbMethod());
+    PlacesTask placesTask = new PlacesTask();
+    placesTask.execute(sbValue.toString());
+</code></pre>
+
+<p>Result:</p>
+
+<p><img src="http://i.stack.imgur.com/hVbcH.png" alt="enter image description here"></p>

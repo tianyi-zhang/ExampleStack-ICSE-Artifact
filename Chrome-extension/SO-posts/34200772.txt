@@ -1,0 +1,99 @@
+<p>I've also run into this problem, and thanks to the source code @KMDev mentioned, I've came up with a much cleaner approach.</p>
+
+<p>First, since I'm only having a <code>TextView</code> that is to be made partially clickable, in fact I don't need most of the functionalities <code>LinkMovementMethod</code> (and its super class <code>ScrollingMovementMethod</code>) which adds ability to handle key press, scrolling, etc.</p>
+
+<p>Instead, create a custom <code>MovementMethod</code> that uses the <code>OnTouch()</code> code from <code>LinkMovementMethod</code>:</p>
+
+<p>ClickableMovementMethod.java</p>
+
+<pre><code>package com.example.yourapplication;
+
+import android.text.Layout;
+import android.text.Selection;
+import android.text.Spannable;
+import android.text.method.BaseMovementMethod;
+import android.text.method.LinkMovementMethod;
+import android.text.style.ClickableSpan;
+import android.view.MotionEvent;
+import android.widget.TextView;
+
+/**
+ * A movement method that traverses links in the text buffer and fires clicks. Unlike
+ * {@link LinkMovementMethod}, this will not consume touch events outside {@link ClickableSpan}s.
+ */
+public class ClickableMovementMethod extends BaseMovementMethod {
+
+    private static ClickableMovementMethod sInstance;
+
+    public static ClickableMovementMethod getInstance() {
+        if (sInstance == null) {
+            sInstance = new ClickableMovementMethod();
+        }
+        return sInstance;
+    }
+
+    @Override
+    public boolean canSelectArbitrarily() {
+        return false;
+    }
+
+    @Override
+    public boolean onTouchEvent(TextView widget, Spannable buffer, MotionEvent event) {
+
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
+
+            int x = (int) event.getX();
+            int y = (int) event.getY();
+            x -= widget.getTotalPaddingLeft();
+            y -= widget.getTotalPaddingTop();
+            x += widget.getScrollX();
+            y += widget.getScrollY();
+
+            Layout layout = widget.getLayout();
+            int line = layout.getLineForVertical(y);
+            int off = layout.getOffsetForHorizontal(line, x);
+
+            ClickableSpan[] link = buffer.getSpans(off, off, ClickableSpan.class);
+            if (link.length &gt; 0) {
+                if (action == MotionEvent.ACTION_UP) {
+                    link[0].onClick(widget);
+                } else {
+                    Selection.setSelection(buffer, buffer.getSpanStart(link[0]),
+                            buffer.getSpanEnd(link[0]));
+                }
+                return true;
+            } else {
+                Selection.removeSelection(buffer);
+            }
+        }
+
+        return false;
+    }
+
+    @Override
+    public void initialize(TextView widget, Spannable text) {
+        Selection.removeSelection(text);
+    }
+}
+</code></pre>
+
+<p>Then using this <code>ClickableMovementMethod</code>, touch event will not be consumed by movement method any more. However, <code>TextView.setMovementMethod()</code> which calls <code>TextView.fixFocusableAndClickableSettings()</code> will set clickable, long-clickable and focusable to true which will make <code>View.onTouchEvent()</code> consume the touch event. To fix for this, simply reset the three attributes.</p>
+
+<p>So the final utility method, to accompany the <code>ClickableMovementMethod</code>, is here:</p>
+
+<pre><code>public static void setTextViewLinkClickable(TextView textView) {
+    textView.setMovementMethod(ClickableMovementMethod.getInstance());
+    // Reset for TextView.fixFocusableAndClickableSettings(). We don't want View.onTouchEvent()
+    // to consume touch events.
+    textView.setFocusable(false);
+    textView.setClickable(false);
+    textView.setLongClickable(false);
+}
+</code></pre>
+
+<p>This works like a charm for me.</p>
+
+<p>Click events on <code>ClickableSpan</code>s are fired, and click outside them are passed throught to parent layout listener.</p>
+
+<p>Note that if your are making your <code>TextView</code> selectable, I haven't tested for that case, and maybe you need to dig into the source yourself :P</p>

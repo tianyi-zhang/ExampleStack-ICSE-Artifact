@@ -1,0 +1,228 @@
+<p>I've seen your code and I totally agree with Travor - you're using a static member, that is replaced every time you create a new Adapter (and so it gets just the last page data). I've modified your project a little bit, to make it work properly. Take a look at it, hope it can be useful.</p>
+
+<p>EventFragment: replace getFragmentManager with getChildFragmentManager since you need EventListFragment to be handle by EventFragment fragment manager and not by the activity fragment manager</p>
+
+<pre><code>public class EventFragment extends Fragment {
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_event, container, false);
+
+        // Get and set up viewpager
+        final ViewPager viewPager = (ViewPager) view.findViewById(R.id.event_view_pager);
+        EventFragmentAdapter eventFragmentAdapter = new EventFragmentAdapter(getChildFragmentManager(), getEventDates());
+        viewPager.setAdapter(eventFragmentAdapter);
+
+        // Get and set up tablayout
+        final TabLayout tabLayout = (TabLayout) view.findViewById(R.id.event_tabs);
+        tabLayout.setTabGravity(TabLayout.GRAVITY_FILL);
+
+        tabLayout.post(new Runnable() {
+            @Override
+            public void run() {
+                tabLayout.setupWithViewPager(viewPager);
+            }
+        });
+
+        return view;
+    }
+
+    /**
+     * Retrieves the event dates for the hackathon so that the proper events can be displayed.
+     * @return
+     */
+    private List&lt;LocalDate&gt; getEventDates(){
+        List&lt;LocalDate&gt; eventDates = new ArrayList&lt;&gt;();
+
+        eventDates.add(new LocalDate(2015, 10, 17));
+        eventDates.add(new LocalDate(2015, 10, 18));
+
+        return eventDates;
+    }
+}
+</code></pre>
+
+<p>EventListFragment - I've modified the query, since the sqlite query doesn't work with my locale (italian)</p>
+
+<pre><code>public class EventListFragment extends Fragment{
+
+    private EventAdapter mEventAdapter;
+
+    private static final String TAG = EventListFragment.class.getSimpleName();
+
+    private static final String DATE_ARG = "eventDate";
+
+    public static EventListFragment newInstance(LocalDate date){
+        EventListFragment eventListFragment = new EventListFragment();
+        Bundle args = new Bundle();
+        args.putSerializable(DATE_ARG, date);
+        eventListFragment.setArguments(args);
+        return eventListFragment;
+    }
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_event_list, container, false);
+
+        // Setup recyclerview
+        RecyclerView eventRecyclerView = (RecyclerView) view.findViewById(R.id.event_recycler_view);
+        LinearLayoutManager layoutManager = new LinearLayoutManager(getActivity());
+        layoutManager.setOrientation(LinearLayoutManager.VERTICAL);
+        eventRecyclerView.setLayoutManager(layoutManager);
+
+        // Get date
+        LocalDate eventDate = (LocalDate) getArguments().getSerializable(DATE_ARG);
+
+        // Set adapter
+        mEventAdapter = new EventAdapter(getEvents(eventDate));
+        eventRecyclerView.setAdapter(mEventAdapter);
+
+        Log.v(TAG, eventRecyclerView.toString());
+
+        return view;
+    }
+
+    /**
+     * Retrieves the events for the given date for the fragment.
+     */
+    private List&lt;Event&gt; getEvents(LocalDate date){
+        List&lt;Event&gt; returnList = new ArrayList&lt;&gt;();
+
+        String dateString = Utility.getDBDateString(date);
+        List&lt;String&gt; dateList = new ArrayList&lt;&gt;();
+
+        Cursor cursor = getActivity().getContentResolver().query(
+                GHContract.EventEntry.CONTENT_URI,
+                new String[]{ "*", "substr(" + GHContract.EventEntry.COLUMN_TIME + ",0,11)" },
+                "substr(" + GHContract.EventEntry.COLUMN_TIME + ",0,11) = ? ",
+                new String[]{dateString},
+                GHContract.EventEntry.COLUMN_TIME
+        );
+
+        while(cursor.moveToNext()){
+            returnList.add(new Event(cursor));
+            dateList.add(cursor.getString(cursor.getColumnIndex(GHContract.EventEntry.COLUMN_TIME)));
+        }
+
+        cursor.close();
+
+        return returnList;
+    }
+}
+</code></pre>
+
+<p>EventAdapter - removed the static keyword and the reference to the activity context (you need to get the context somewhere else)</p>
+
+<pre><code>public class EventAdapter extends RecyclerView.Adapter&lt;EventAdapter.ViewHolder&gt; {
+    private List&lt;Event&gt; mEvents;
+
+    public EventAdapter(List&lt;Event&gt; events){
+        mEvents = events;
+    }
+
+    /**
+     * Inflates the view for Event items.
+     */
+    @Override
+    public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.list_item_event, parent, false);
+        return new ViewHolder(view);
+    }
+
+    /**
+     * Binds the data for an event to its view.
+     */
+    @Override
+    public void onBindViewHolder(ViewHolder holder, int position) {
+        Event event = mEvents.get(position);
+        holder.timeView.setText(Utility.getTimeString(event.getTime()));
+        holder.titleView.setText(event.getTitle());
+        holder.locationView.setText(event.getLocation());
+
+        // If reminder time is not null, show check mark. If it is, show plus.
+        if(event.getReminderTime() != null){
+            holder.alarmView.setImageDrawable(holder.itemView.getResources().getDrawable(R.drawable.ic_alarm_on));
+        } else{
+            holder.alarmView.setImageDrawable(holder.itemView.getResources().getDrawable(R.drawable.ic_add_alarm));
+        }
+    }
+
+    /**
+     * Returns the size of the adapter.
+     */
+    @Override
+    public int getItemCount() {
+        return mEvents.size();
+    }
+
+    /**
+     * Retains a reference to the view so `findViewById` calls are only made once for the adapter.
+     */
+    public class ViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener{
+        public final TextView timeView;
+        public final TextView titleView;
+        public final TextView locationView;
+        public final ImageView alarmView;
+
+        public ViewHolder(View view){
+            super(view);
+            timeView = (TextView) view.findViewById(R.id.event_time);
+            titleView = (TextView) view.findViewById(R.id.event_title);
+            locationView = (TextView) view.findViewById(R.id.event_location);
+            alarmView = (ImageView) view.findViewById(R.id.event_add_reminder);
+            alarmView.setOnClickListener(this);
+        }
+
+        /**
+         * Handles the click a user makes on the alarm image view.
+         */
+        @Override
+        public void onClick(View v) {
+            OnEventReminderClickListener activity = (OnEventReminderClickListener) v.getContext();
+            activity.onEventReminderClicked(mEvents.get(getPosition()));
+        }
+    }
+
+    /**
+     * Interface to call back to the activity when an alarm is clicked for an event item.
+     */
+    public interface OnEventReminderClickListener{
+        void onEventReminderClicked(Event event);
+    }
+}
+</code></pre>
+
+<p>And finally the app/build.gradle, since you need to get the same version for all support libraries (recycler, card and so on)</p>
+
+<pre><code>apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 22
+    buildToolsVersion "22.0.1"
+
+    defaultConfig {
+        applicationId "com.adammcneilly.grizzhacks"
+        minSdkVersion 15
+        targetSdkVersion 22
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    compile fileTree(dir: 'libs', include: ['*.jar'])
+    compile 'com.android.support:appcompat-v7:22.2.1'
+    compile 'joda-time:joda-time:2.7'
+    compile 'com.android.support:recyclerview-v7:22.2.1'
+    compile 'com.android.support:cardview-v7:22.2.1'
+    compile 'com.android.support:design:22.2.1'
+}
+</code></pre>

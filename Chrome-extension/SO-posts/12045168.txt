@@ -1,0 +1,63 @@
+<blockquote>
+  <p>Synchronize the PoolingClientConnectionManager or not?</p>
+</blockquote>
+
+<p>Yes and no. If you want <code>getHttpClient()</code> to be a singleton (IMO a good idea) you have to make it thread safe. That requires the <code>synchronized</code>. Without <code>synchronized</code> two thread can enter the if block at the same time (because <code>customHttpClient == null</code> is true for both threads) and create two instances.</p>
+
+<p>But there are better (as in faster) ways without <code>synchronized</code> to create thread-safe singletons. I like the <a href="http://stackoverflow.com/a/71683/995891">Singleton Holder</a> approach for example.</p>
+
+<p>But regardless of the singleton you use here you should not get connection timeouts. It should also work if you use new <code>HttpClient</code> instances for each thread.</p>
+
+<hr>
+
+<p>If a connection timeout happens then one of your threads did not manage to connect to the server within the time limit you have set with <code>HttpConnectionParams.setConnectionTimeout(params, 5000);</code> = 5 seconds.</p>
+
+<p>That can have several reasons. For example if you are on a slow &amp; instable connection it may take longer because it can happen that your connection is dead for several seconds. Or if your server can't handle more connections either due to the configuration (e.g. a connection limit per IP) or because the hardware can't handle more you can see this problem too. Basically anything that prevents the <code>HttpClient</code> to send and receive packets to / from the server can trigger that problem. Means your problem is either on the device or in the network or on the server.</p>
+
+<p>I don't know your network setup but you could try to increase the timeout and see if that has any effect. The <a href="http://developer.android.com/reference/android/net/http/AndroidHttpClient.html" rel="nofollow"><code>AndroidHttpClient</code></a> for example sets those timeouts to 60 seconds. That is much more than required if you are on WiFi and have a stable connection but is good when the connection is really weak. </p>
+
+<p>You could also check if the other settings that <code>AndroidHttpClient</code> applies help.</p>
+
+<p>Setup of <code>AndroidHttpClient</code> below</p>
+
+<pre><code>// Default connection and socket timeout of 60 seconds.  Tweak to taste.
+private static final int SOCKET_OPERATION_TIMEOUT = 60 * 1000;
+
+// ---------------------------------------------------------------------- //
+HttpParams params = new BasicHttpParams();
+
+// Turn off stale checking.  Our connections break all the time anyway,
+// and it's not worth it to pay the penalty of checking every time.
+HttpConnectionParams.setStaleCheckingEnabled(params, false);
+
+HttpConnectionParams.setConnectionTimeout(params, SOCKET_OPERATION_TIMEOUT);
+HttpConnectionParams.setSoTimeout(params, SOCKET_OPERATION_TIMEOUT);
+HttpConnectionParams.setSocketBufferSize(params, 8192);
+
+// Don't handle redirects -- return them to the caller.  Our code
+// often wants to re-POST after a redirect, which we must do ourselves.
+HttpClientParams.setRedirecting(params, false);
+
+// Use a session cache for SSL sockets
+SSLSessionCache sessionCache = context == null ? null : new SSLSessionCache(context);
+
+// Set the specified user agent and register standard protocols.
+HttpProtocolParams.setUserAgent(params, userAgent);
+SchemeRegistry schemeRegistry = new SchemeRegistry();
+schemeRegistry.register(new Scheme("http",
+        PlainSocketFactory.getSocketFactory(), 80));
+schemeRegistry.register(new Scheme("https",
+        SSLCertificateSocketFactory.getHttpSocketFactory(
+        SOCKET_OPERATION_TIMEOUT, sessionCache), 443));
+
+ClientConnectionManager manager =
+        new ThreadSafeClientConnManager(params, schemeRegistry);
+
+return new DefaultHttpClient(manager, params);
+</code></pre>
+
+<p>To determine where your problem lies you could have a look into your server connection logs and check if the device tries to initiate a connection and if so if there are reasons why the connection is not established. If you don't see any connection attempts when the timeout happens it is more likely a device or network problem.</p>
+
+<p>If you have access to the network the device is connected to (=WiFi) you could check the network traffic with e.g. <a href="http://www.wireshark.org/" rel="nofollow">Wireshark</a> for reasons the connection attempt times out. You can see there if the device sends a connection request or not.</p>
+
+<p>And last but not least it can be caused by some of your code. If you find no other solution try to implement it with <code>HttpURLConnection</code> and see if that helps.</p>

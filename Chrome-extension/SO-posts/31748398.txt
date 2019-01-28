@@ -1,0 +1,56 @@
+<p>Indeed, when using Spring Data REST + Spring Framework 4.2, only <code>HandlerMapping</code> instances created by Spring MVC <code>WebMvcConfigurationSupport</code> and controllers annotated with <code>@CrossOrigin</code> will be CORS aware.</p>
+
+<p>Spring Data REST still compiles against Spring Framework 4.1, and does not support builtin Spring Framework CORS implementation. Feel free to vote for the <a href="https://jira.spring.io/browse/DATAREST-573">DATAREST-573</a> related issue.</p>
+
+<p>Right now, I think the best solution is to use a filter based approach. You could obviously use Tomcat, Jetty or <a href="http://software.dzhuvinov.com/cors-filter.html">this one</a>, but be aware that Spring Framework 4.2 also provides a <a href="http://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/filter/CorsFilter.html"><code>CorsFilter</code></a> that use the same CORS processing logic that <code>@CrossOrigin</code> and <code>addCorsMappings(CorsRegistry registry)</code> approaches. By passing an <a href="http://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/cors/UrlBasedCorsConfigurationSource.html"><code>UrlBasedCorsConfigurationSource</code></a> instance to the <code>CorsFilter</code> constructor parameter, you could easily get something as powerful as Spring native CORS global support.</p>
+
+<p>If you are using Spring Boot (which supports <code>Filter</code> beans), it could be something like:</p>
+
+<pre class="lang-java prettyprint-override"><code>@Configuration
+public class RestConfiguration {
+
+    @Bean
+    public CorsFilter corsFilter() {
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowCredentials(true); // you USUALLY want this
+        config.addAllowedOrigin("*");
+        config.addAllowedHeader("*");
+        config.addAllowedMethod("GET");
+        config.addAllowedMethod("PUT");
+        source.registerCorsConfiguration("/**", config);
+        return new CorsFilter(source);
+    }
+}
+</code></pre>
+
+<p>The Spring Data team is currently looking into ways to let the user customize the CORS handling on it (i.e. calling <code>setCorsConfigurations(Map&lt;String, CorsConfiguration&gt; configurations)</code> on the <code>HandlerMapping</code> instance Spring Data REST deploys), but I think it is better to use the <code>CorsFilter</code> approach until <a href="https://jira.spring.io/browse/DATAREST-573">DATAREST-573</a> is resolved.</p>
+
+<p>Hendy's addition: In my case, the simple <code>@Bean Filter</code> definition above does not work, I had to use this: (It <em>may</em> have something to do with my usage of Spring Security or <a href="http://ocpsoft.com/rewrite/">ocpsoft rewrite</a>, but Sebastien is more expert in this.. I don't really know why)</p>
+
+<pre><code>/**
+ * http://stackoverflow.com/a/31748398/122441 until https://jira.spring.io/browse/DATAREST-573
+ * @return
+ */
+@Bean
+public FilterRegistrationBean corsFilter() {
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    CorsConfiguration config = new CorsConfiguration();
+    config.setAllowCredentials(true);
+    config.addAllowedOrigin("*");
+    config.addAllowedHeader("*");
+    config.addAllowedMethod("OPTIONS");
+    config.addAllowedMethod("HEAD");
+    config.addAllowedMethod("GET");
+    config.addAllowedMethod("PUT");
+    config.addAllowedMethod("POST");
+    config.addAllowedMethod("DELETE");
+    config.addAllowedMethod("PATCH");
+    source.registerCorsConfiguration("/**", config);
+    // return new CorsFilter(source);
+    final FilterRegistrationBean bean = new FilterRegistrationBean(new CorsFilter(source));
+    bean.setOrder(0);
+    return bean;
+}
+</code></pre>

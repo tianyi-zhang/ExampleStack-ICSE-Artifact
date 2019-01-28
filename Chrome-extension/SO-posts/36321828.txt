@@ -1,0 +1,63 @@
+<p>If someone's still interested, here's my solution based on the info provided in Phil's post and on the report from XSJoJo. As mentioned there, the problem is present because the <code>mDateTextSize</code> isn't assigned to the <code>mMonthNumDrawPaint</code> in the <code>CalendarViewLegacyDelegate</code>. I'm using Java reflection.</p>
+
+<pre><code>    /**
+     * I'm doing this in my fragment's onCreateView() callback
+     */
+
+    CalendarView calendarView = (CalendarView) contentView.findViewById(R.id.calendar_view);
+
+    if (Build.VERSION.SDK_INT == Build.VERSION_CODES.JELLY_BEAN) { // this bug exists only in Android 4.1
+        try {
+            Object object = calendarView;
+            Field[] fields = object.getClass().getDeclaredFields();
+            for (Field field : fields) {
+                if (field.getName().equals("mDelegate")) { // the CalendarViewLegacyDelegate instance is stored in this variable
+                    field.setAccessible(true);
+                    object = field.get(object);
+
+                    break;
+                }
+            }
+
+            Field field = object.getClass().getDeclaredField("mDateTextSize"); // text size integer value
+            field.setAccessible(true);
+            final int mDateTextSize = (Integer) field.get(object);
+
+            field = object.getClass().getDeclaredField("mListView"); // main ListView
+            field.setAccessible(true);
+            Object innerObject = field.get(object);
+
+            Method method = innerObject.getClass().getMethod(
+                    "setOnHierarchyChangeListener", ViewGroup.OnHierarchyChangeListener.class); // we need to set the OnHierarchyChangeListener
+            method.setAccessible(true);
+            method.invoke(innerObject, (Object) new ViewGroup.OnHierarchyChangeListener() {
+                @Override
+                public void onChildViewAdded(View parent, View child) { // apply text size every time when a new child view is added
+                    try {
+                        Object object = child;
+                        Field[] fields = object.getClass().getDeclaredFields();
+                        for (Field field : fields) {
+                            if (field.getName().equals("mMonthNumDrawPaint")) { // the paint is stored inside the view
+                                field.setAccessible(true);
+                                object = field.get(object);
+                                Method method = object.getClass().
+                                        getDeclaredMethod("setTextSize", float.class); // finally set text size
+                                method.setAccessible(true);
+                                method.invoke(object, (Object) mDateTextSize);
+
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e(APP_TAG, e.getMessage(), e);
+                    }
+                }
+
+                @Override
+                public void onChildViewRemoved(View parent, View child) {}
+            });
+        } catch (Exception e) {
+            Log.e(APP_TAG, e.getMessage(), e);
+        }
+    }
+</code></pre>

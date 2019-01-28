@@ -1,0 +1,113 @@
+<p><strong>Three 1-line answers...</strong></p>
+
+<p>I would use <s>Google Collections</s> <a href="http://code.google.com/p/guava-libraries/"><strong>Guava</strong></a> to do this - if your values are <code>Comparable</code> then you can use</p>
+
+<pre><code>valueComparator = Ordering.natural().onResultOf(Functions.forMap(map))
+</code></pre>
+
+<p>Which will create a function (object) for the map [that takes any of the keys as input, returning the respective value], and then apply natural (comparable) ordering to them [the values].</p>
+
+<p>If they're not comparable, then you'll need to do something along the lines of</p>
+
+<pre><code>valueComparator = Ordering.from(comparator).onResultOf(Functions.forMap(map)) 
+</code></pre>
+
+<p>These may be applied to a TreeMap (as <code>Ordering</code> extends <code>Comparator</code>), or a <a href="http://stackoverflow.com/questions/109383/how-to-sort-a-mapkey-value-on-the-values-in-java/109389#109389">LinkedHashMap after some sorting</a></p>
+
+<p><em>NB</em>: If you are going to use a TreeMap, remember that if a comparison == 0, then the item is already in the list (which will happen if you have multiple values that compare the same).  To alleviate this, you could add your key to the comparator like so (presuming that your keys and values are <code>Comparable</code>):</p>
+
+<pre><code>valueComparator = Ordering.natural().onResultOf(Functions.forMap(map)).compound(Ordering.natural())
+</code></pre>
+
+<p>= <em>Apply natural ordering to the value mapped by the key, and compound that with the natural ordering of the key</em></p>
+
+<p>Note that this will still not work if your keys compare to 0, but this should be sufficient for most <code>comparable</code> items (as <code>hashCode</code>, <code>equals</code> and <code>compareTo</code> are often in sync...)</p>
+
+<p>See <a href="http://guava-libraries.googlecode.com/svn/trunk/javadoc/com/google/common/collect/Ordering.html#onResultOf%28com.google.common.base.Function%29">Ordering.onResultOf()</a> and <a href="http://guava-libraries.googlecode.com/svn/trunk/javadoc/com/google/common/base/Functions.html#forMap%28java.util.Map%29">Functions.forMap()</a>.</p>
+
+<h2>Implementation</h2>
+
+<p>So now that we've got a comparator that does what we want, we need to get a result from it. </p>
+
+<pre><code>map = ImmutableSortedMap.copyOf(myOriginalMap, valueComparator);
+</code></pre>
+
+<p>Now this will most likely work work, but:</p>
+
+<ol>
+<li>needs to be done given a complete finished map</li>
+<li>Don't try the comparators above on a <code>TreeMap</code>; there's no point trying to compare an inserted key when it doesn't have a value until after the put, i.e., it will break really fast</li>
+</ol>
+
+<p>Point 1 is a bit of a deal-breaker for me; google collections is incredibly lazy (which is good: you can do pretty much every operation in an instant; the real work is done when you start using the result), and this requires copying a <em>whole</em> map!</p>
+
+<h2>"Full" answer/Live sorted map by values</h2>
+
+<p>Don't worry though; if you were obsessed enough with having a "live" map sorted in this manner, you could solve not one but both(!) of the above issues with something crazy like the following:</p>
+
+<p><strong>Note: This has changed significantly in June 2012 - the previous code could never work: an internal HashMap is required to lookup the values without creating an infinite loop between the <code>TreeMap.get()</code> -> <code>compare()</code> and <code>compare()</code> -> <code>get()</code></strong></p>
+
+<pre><code>import static org.junit.Assert.assertEquals;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TreeMap;
+
+import com.google.common.base.Functions;
+import com.google.common.collect.Ordering;
+
+class ValueComparableMap&lt;K extends Comparable&lt;K&gt;,V&gt; extends TreeMap&lt;K,V&gt; {
+    //A map for doing lookups on the keys for comparison so we don't get infinite loops
+    private final Map&lt;K, V&gt; valueMap;
+
+    ValueComparableMap(final Ordering&lt;? super V&gt; partialValueOrdering) {
+        this(partialValueOrdering, new HashMap&lt;K,V&gt;());
+    }
+
+    private ValueComparableMap(Ordering&lt;? super V&gt; partialValueOrdering,
+            HashMap&lt;K, V&gt; valueMap) {
+        super(partialValueOrdering //Apply the value ordering
+                .onResultOf(Functions.forMap(valueMap)) //On the result of getting the value for the key from the map
+                .compound(Ordering.natural())); //as well as ensuring that the keys don't get clobbered
+        this.valueMap = valueMap;
+    }
+
+    public V put(K k, V v) {
+        if (valueMap.containsKey(k)){
+            //remove the key in the sorted set before adding the key again
+            remove(k);
+        }
+        valueMap.put(k,v); //To get "real" unsorted values for the comparator
+        return super.put(k, v); //Put it in value order
+    }
+
+    public static void main(String[] args){
+        TreeMap&lt;String, Integer&gt; map = new ValueComparableMap&lt;String, Integer&gt;(Ordering.natural());
+        map.put("a", 5);
+        map.put("b", 1);
+        map.put("c", 3);
+        assertEquals("b",map.firstKey());
+        assertEquals("a",map.lastKey());
+        map.put("d",0);
+        assertEquals("d",map.firstKey());
+        //ensure it's still a map (by overwriting a key, but with a new value) 
+        map.put("d", 2);
+        assertEquals("b", map.firstKey());
+        //Ensure multiple values do not clobber keys
+        map.put("e", 2);
+        assertEquals(5, map.size());
+        assertEquals(2, (int) map.get("e"));
+        assertEquals(2, (int) map.get("d"));
+    }
+ }
+</code></pre>
+
+<p>When we put, we ensure that the hash map has the value for the comparator, and then put to the TreeSet for sorting. But before that we check the hash map to see that the key is not actually a duplicate. Also, the comparator that we create will also include the key so that duplicate values don't delete the non-duplicate keys (due to == comparison).
+These 2 items are <em>vital</em> for ensuring the map contract is kept; if you think you don't want that, then you're almost at the point of reversing the map entirely (to <code>Map&lt;V,K&gt;</code>).</p>
+
+<p>The constructor would need to be called as </p>
+
+<pre><code> new ValueComparableMap(Ordering.natural());
+ //or
+ new ValueComparableMap(Ordering.from(comparator));
+</code></pre>

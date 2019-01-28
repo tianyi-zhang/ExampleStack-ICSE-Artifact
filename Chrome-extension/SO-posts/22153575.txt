@@ -1,0 +1,170 @@
+<ul>
+<li>My envirment: Windows 7 x64
+<ul>
+<li><code>Java 1.6.0_41</code>: work OK</li>
+<li><code>Java 1.7.0_51</code>: not work to first click for me too</li>
+<li><code>Java 1.8.0</code>: work OK</li>
+</ul></li>
+</ul>
+
+<p>Here is one possible implementation to avoid this issue on <code>Java 1.7.0_51</code> (override <code>TreeCellEditor#isCellEditable(...)</code>):</p>
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import java.util.*;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.tree.*;
+
+public final class TreeCellEditorFirstClickTest {
+  public JComponent makeUI() {
+    JTree tree = new JTree();
+    TreeModel model = tree.getModel();
+    DefaultMutableTreeNode root = (DefaultMutableTreeNode) model.getRoot();
+    Enumeration e = root.breadthFirstEnumeration();
+    while (e.hasMoreElements()) {
+      DefaultMutableTreeNode node = (DefaultMutableTreeNode) e.nextElement();
+      Object o = node.getUserObject();
+      if (o instanceof String) {
+        node.setUserObject(new CheckBoxNode((String) o, false));
+      }
+    }
+    tree.setEditable(true);
+    tree.setCellRenderer(new CheckBoxNodeRenderer());
+    tree.setCellEditor(new CheckBoxNodeEditor());
+    tree.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+    tree.expandRow(0);
+    return new JScrollPane(tree);
+  }
+  public static void main(String[] args) {
+    EventQueue.invokeLater(new Runnable() {
+      @Override public void run() {
+        createAndShowGUI();
+      }
+    });
+  }
+  public static void createAndShowGUI() {
+    JFrame frame = new JFrame();
+    frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+    frame.getContentPane().add(new TreeCellEditorFirstClickTest().makeUI());
+    frame.setSize(320, 240);
+    frame.setLocationRelativeTo(null);
+    frame.setVisible(true);
+  }
+}
+
+class CheckBoxNode {
+  public final String text;
+  public final boolean selected;
+  public CheckBoxNode(String text, boolean selected) {
+    this.text = text;
+    this.selected = selected;
+  }
+  @Override public String toString() {
+    return text;
+  }
+}
+
+class CheckBoxNodeRenderer implements TreeCellRenderer {
+  private DefaultTreeCellRenderer renderer = new DefaultTreeCellRenderer();
+  private final JCheckBox check = new JCheckBox();
+  private final JPanel p = new JPanel(new BorderLayout());
+  public CheckBoxNodeRenderer() {
+    p.setFocusable(false);
+    p.setRequestFocusEnabled(false);
+    p.setOpaque(false);
+    p.add(check, BorderLayout.WEST);
+    check.setOpaque(false);
+  }
+  @Override public Component getTreeCellRendererComponent(
+      JTree tree, Object value, boolean selected, boolean expanded,
+      boolean leaf, int row, boolean hasFocus) {
+    JLabel l = (JLabel) renderer.getTreeCellRendererComponent(
+        tree, value, selected, expanded, leaf, row, hasFocus);
+    if (value instanceof DefaultMutableTreeNode) {
+      check.setEnabled(tree.isEnabled());
+      check.setFont(tree.getFont());
+      Object userObject = ((DefaultMutableTreeNode) value).getUserObject();
+      if (userObject instanceof CheckBoxNode) {
+        CheckBoxNode node = (CheckBoxNode) userObject;
+        l.setText(node.text);
+        check.setSelected(node.selected);
+      }
+      p.add(l);
+      return p;
+    }
+    return l;
+  }
+}
+
+class CheckBoxNodeEditor extends AbstractCellEditor implements TreeCellEditor {
+  private DefaultTreeCellRenderer renderer = new DefaultTreeCellRenderer();
+  private final JCheckBox check = new JCheckBox();
+  private final JPanel p = new JPanel(new BorderLayout());
+  private String str = null;
+  public CheckBoxNodeEditor() {
+    super();
+    check.addActionListener(new ActionListener() {
+      @Override public void actionPerformed(ActionEvent e) {
+        stopCellEditing();
+      }
+    });
+    p.setFocusable(false);
+    p.setRequestFocusEnabled(false);
+    p.setOpaque(false);
+    p.add(check, BorderLayout.WEST);
+    check.setOpaque(false);
+  }
+  @Override public Component getTreeCellEditorComponent(
+      JTree tree, Object value, boolean isSelected, boolean expanded,
+      boolean leaf, int row) {
+    JLabel l = (JLabel) renderer.getTreeCellRendererComponent(
+        tree, value, true, expanded, leaf, row, true);
+    if (value instanceof DefaultMutableTreeNode) {
+      Object userObject = ((DefaultMutableTreeNode) value).getUserObject();
+      if (userObject instanceof CheckBoxNode) {
+        CheckBoxNode node = (CheckBoxNode) userObject;
+        l.setText(node.text);
+        check.setSelected(node.selected);
+        str = node.text;
+      }
+      p.add(l);
+      return p;
+    }
+    return l;
+  }
+  @Override public Object getCellEditorValue() {
+    return new CheckBoxNode(str, check.isSelected());
+  }
+  ////1.6.0_41`: work OK
+  ////1.7.0_51`: not work to first click
+  ////1.8.0`: work OK
+  //@Override public boolean isCellEditable(EventObject e) {
+  //  if (e instanceof MouseEvent &amp;&amp; e.getSource() instanceof JTree) {
+  //    return true;
+  //  }
+  //  return false;
+  //}
+  @Override public boolean isCellEditable(EventObject e) {
+    if (e instanceof MouseEvent &amp;&amp; e.getSource() instanceof JTree) {
+      MouseEvent me = (MouseEvent) e;
+      JTree tree = (JTree) e.getSource();
+      TreePath path = tree.getPathForLocation(me.getX(), me.getY());
+      Rectangle r = tree.getPathBounds(path);
+      if (r == null) {
+        return false;
+      }
+      Dimension d = check.getPreferredSize();
+      r.setSize(new Dimension(d.width, r.height));
+      if (r.contains(me.getX(), me.getY())) {
+        if (str == null &amp;&amp; System.getProperty("java.version").startsWith("1.7.0")) {
+          System.out.println("XXX: Java 7, only on first run\n" + p.getBounds());
+          check.setBounds(new Rectangle(0, 0, d.width, r.height));
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+}
+</code></pre>

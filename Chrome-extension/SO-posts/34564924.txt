@@ -1,0 +1,238 @@
+<p>You might be able to override the <code>createTrackListener(...)</code> method of <code>MetalSliderUI</code> to prevent that dragging.</p>
+
+<p><a href="http://i.stack.imgur.com/bUiTN.png" rel="nofollow"><img src="http://i.stack.imgur.com/bUiTN.png" alt="enter image description here"></a></p>
+
+<p><strong>Edit</strong></p>
+
+<ul>
+<li>Another option is to use a <code>JLayer</code>(untested code, may take some customization to work for other <code>LookAndFeel</code>):</li>
+</ul>
+
+
+
+<pre><code>import java.awt.*;
+import java.awt.event.*;
+import java.beans.PropertyChangeEvent;
+import java.util.*;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.plaf.*;
+import javax.swing.plaf.basic.BasicSliderUI;
+// import javax.swing.plaf.metal.MetalSliderUI;
+// import javax.swing.plaf.synth.SynthSliderUI;
+// import com.sun.java.swing.plaf.windows.WindowsSliderUI;
+
+public class DragLimitedSliderTest {
+  private static int MAXI = 80;
+  private JComponent makeUI() {
+    JSlider slider1 = makeSlider();
+    JSlider slider2 = makeSlider();
+    slider2.setUI(new BasicSliderUI(slider2) {
+    //slider2.setUI(new WindowsSliderUI(slider2) {
+    //slider2.setUI(new MetalSliderUI() {
+    //slider2.setUI(new SynthSliderUI(slider2) {
+      @Override protected TrackListener createTrackListener(JSlider slider) {
+        return new TrackListener() {
+          @Override public void mouseDragged(MouseEvent e) {
+            //case HORIZONTAL:
+            int halfThumbWidth = thumbRect.width / 2;
+            int thumbLeft = e.getX() - offset;
+            int maxPos = xPositionForValue(MAXI) - halfThumbWidth;
+            if (thumbLeft &gt; maxPos) {
+              int x = maxPos + offset;
+              MouseEvent me = new MouseEvent(
+                e.getComponent(), e.getID(), e.getWhen(), e.getModifiers(),
+                x, e.getY(),
+                e.getXOnScreen(), e.getYOnScreen(),
+                e.getClickCount(), e.isPopupTrigger(), e.getButton());
+              e.consume();
+              super.mouseDragged(me);
+            } else {
+              super.mouseDragged(e);
+            }
+          }
+        };
+      }
+    });
+    JSlider slider3 = makeSlider();
+
+    JPanel p = new JPanel(new GridLayout(3, 1));
+    p.add(slider1);
+    p.add(slider2);
+    p.add(new JLayer&lt;JSlider&gt;(slider3, new DisableInputLayerUI()));
+    return p;
+  }
+  private static JSlider makeSlider() {
+    JSlider slider = new JSlider(0, 100, 40) {
+      @Override public void setValue(int n) {
+        super.setValue(n);
+      }
+    };
+    slider.setMajorTickSpacing(10);
+    slider.setPaintTicks(true);
+    slider.setPaintLabels(true);
+    Dictionary dictionary = slider.getLabelTable();
+    if (dictionary != null) {
+      Enumeration elements = dictionary.elements();
+      while (elements.hasMoreElements()) {
+        JLabel label = (JLabel) elements.nextElement();
+        int v = Integer.parseInt(label.getText());
+        if (v &gt; MAXI) {
+          label.setForeground(Color.RED);
+        }
+      }
+    }
+    slider.getModel().addChangeListener(new ChangeListener() {
+      @Override public void stateChanged(ChangeEvent e) {
+        BoundedRangeModel m = (BoundedRangeModel) e.getSource();
+        if (m.getValue() &gt; MAXI) {
+          m.setValue(MAXI);
+        }
+      }
+    });
+    return slider;
+  }
+  public static void main(String... args) {
+    EventQueue.invokeLater(() -&gt; {
+      try {
+        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+//         for (UIManager.LookAndFeelInfo laf: UIManager.getInstalledLookAndFeels()) {
+//           if ("Nimbus".equals(laf.getName())) {
+//             UIManager.setLookAndFeel(laf.getClassName());
+//           }
+//         }
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+      JFrame f = new JFrame();
+      f.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+      f.getContentPane().add(new DragLimitedSliderTest().makeUI());
+      f.setSize(320, 240);
+      f.setLocationRelativeTo(null);
+      f.setVisible(true);
+    });
+  }
+}
+
+class DisableInputLayerUI extends LayerUI&lt;JSlider&gt; {
+  @Override public void installUI(JComponent c) {
+    super.installUI(c);
+    if (c instanceof JLayer) {
+      JLayer jlayer = (JLayer) c;
+      jlayer.setLayerEventMask(
+        AWTEvent.MOUSE_EVENT_MASK |
+        AWTEvent.MOUSE_MOTION_EVENT_MASK);
+    }
+  }
+  @Override public void uninstallUI(JComponent c) {
+    if (c instanceof JLayer) {
+      JLayer jlayer = (JLayer) c;
+      jlayer.setLayerEventMask(0);
+    }
+    super.uninstallUI(c);
+  }
+  private Rectangle thumbRect = new Rectangle(11, 19); //magic number
+  private Rectangle focusRect = new Rectangle();
+  private Rectangle contentRect = new Rectangle();
+  private Rectangle trackRect = new Rectangle();
+  private int offset;
+
+  protected int xPositionForValue(JSlider slider, int value) {
+    int min = slider.getMinimum();
+    int max = slider.getMaximum();
+    int trackLength = trackRect.width;
+    double valueRange = (double) max - (double) min;
+    double pixelsPerValue = (double) trackLength / valueRange;
+    int trackLeft = trackRect.x;
+    int trackRight = trackRect.x + (trackRect.width - 1);
+    int xPosition;
+
+    xPosition = trackLeft;
+    xPosition += Math.round(pixelsPerValue * ((double) value - min));
+
+    xPosition = Math.max(trackLeft, xPosition);
+    xPosition = Math.min(trackRight, xPosition);
+
+    return xPosition;
+  }
+  protected int getHeightOfTallestLabel(JSlider slider) {
+    Dictionary dictionary = slider.getLabelTable();
+    int tallest = 0;
+    if (dictionary != null) {
+      Enumeration keys = dictionary.keys();
+      while (keys.hasMoreElements()) {
+        JComponent label = (JComponent) dictionary.get(keys.nextElement());
+        tallest = Math.max(label.getPreferredSize().height, tallest);
+      }
+    }
+    return tallest;
+  }
+  @Override protected void processMouseEvent(MouseEvent e, JLayer&lt;? extends JSlider&gt; l) {
+    JSlider slider = l.getView();
+    if (e.getID() == MouseEvent.MOUSE_PRESSED) {
+      //case HORIZONTAL:
+
+      //recalculateIfInsetsChanged()
+      Insets insetCache = slider.getInsets();
+      Insets focusInsets = UIManager.getInsets("Slider.focusInsets");
+      if (focusInsets == null) {
+        focusInsets = new Insets(2, 2, 2, 2); //magic number
+      }
+
+      //calculateFocusRect()
+      focusRect.x = insetCache.left;
+      focusRect.y = insetCache.top;
+      focusRect.width = slider.getWidth() - (insetCache.left + insetCache.right);
+      focusRect.height = slider.getHeight() - (insetCache.top + insetCache.bottom);
+
+      //calculateContentRect()
+      contentRect.x = focusRect.x + focusInsets.left;
+      contentRect.y = focusRect.y + focusInsets.top;
+      contentRect.width = focusRect.width - (focusInsets.left + focusInsets.right);
+      contentRect.height = focusRect.height - (focusInsets.top + focusInsets.bottom);
+
+      //calculateThumbSize()
+      Icon ti = UIManager.getIcon("Slider.horizontalThumbIcon");
+      if (ti != null) {
+        thumbRect.width = ti.getIconWidth();
+        thumbRect.height = ti.getIconHeight();
+      }
+
+      //calculateTrackBuffer()
+      int trackBuffer = 9; //magic number, Windows: 9, Metal: 10 ...
+
+      //calculateTrackRect()
+      int centerSpacing = thumbRect.height;
+      if (slider.getPaintTicks())  centerSpacing += 8; //magic number getTickLength();
+      if (slider.getPaintLabels()) centerSpacing += getHeightOfTallestLabel(slider);
+      trackRect.x = contentRect.x + trackBuffer;
+      trackRect.y = contentRect.y + (contentRect.height - centerSpacing - 1) / 2;
+      trackRect.width = contentRect.width - (trackBuffer * 2);
+      trackRect.height = thumbRect.height;
+
+      //calculateThumbLocation()
+      int valuePosition = xPositionForValue(slider, slider.getValue());
+      thumbRect.x = valuePosition - (thumbRect.width / 2);
+      thumbRect.y = trackRect.y;
+      offset = e.getX() - thumbRect.x;
+    }
+  }
+  @Override protected void processMouseMotionEvent(MouseEvent e, JLayer&lt;? extends JSlider&gt; l) {
+    if (e.getID() == MouseEvent.MOUSE_DRAGGED) {
+      JSlider slider = l.getView();
+      //case HORIZONTAL:
+      int halfThumbWidth = thumbRect.width / 2;
+      int thumbLeft = e.getX() - offset;
+      int maxPos = xPositionForValue(slider, 80) - halfThumbWidth;
+      if (thumbLeft &gt; maxPos) {
+        e.consume();
+        SliderUI ui = slider.getUI();
+        if (ui instanceof BasicSliderUI) {
+          ((BasicSliderUI) ui).setThumbLocation(maxPos, thumbRect.y);
+        }
+        slider.getModel().setValue(80);
+      }
+    }
+  }
+}
+</code></pre>

@@ -1,0 +1,37 @@
+<p>Case of leaks lies in <code>TransitionManager.sRunningTransitions</code> where each <code>DecorView</code> adds and never removes. <code>DecorView</code> has link to his <code>Activity</code>'s <code>Context</code>. Because of <code>sRunningTransitions</code> is static field, it has permanent chain of references to <code>Activity</code>, which will never be collected by GC.</p>
+
+<p>I don't known why TransitionManager.sRunningTransitions needs, but if you remove <code>Activity</code>'s <code>DecorView</code> from it, your problem will be solved. Follow code is example, how do it. In your activity class:</p>
+
+<pre><code>@Override
+protected void onDestroy() {
+    super.onDestroy();
+    removeActivityFromTransitionManager(Activity activity);
+}
+
+private static void removeActivityFromTransitionManager(Activity activity) {
+    if (Build.VERSION.SDK_INT &lt; 21) {
+        return;
+    }
+    Class transitionManagerClass = TransitionManager.class;
+    try {
+        Field runningTransitionsField = transitionManagerClass.getDeclaredField("sRunningTransitions");
+            runningTransitionsField.setAccessible(true);
+        //noinspection unchecked
+        ThreadLocal&lt;WeakReference&lt;ArrayMap&lt;ViewGroup, ArrayList&lt;Transition&gt;&gt;&gt;&gt; runningTransitions
+                = (ThreadLocal&lt;WeakReference&lt;ArrayMap&lt;ViewGroup, ArrayList&lt;Transition&gt;&gt;&gt;&gt;)
+                runningTransitionsField.get(transitionManagerClass);
+        if (runningTransitions.get() == null || runningTransitions.get().get() == null) {
+            return;
+        }
+        ArrayMap map = runningTransitions.get().get();
+        View decorView = activity.getWindow().getDecorView();
+        if (map.containsKey(decorView)) {
+            map.remove(decorView);
+        }
+    } catch (NoSuchFieldException e) {
+        e.printStackTrace();
+    } catch (IllegalAccessException e) {
+        e.printStackTrace();
+    }
+}
+</code></pre>

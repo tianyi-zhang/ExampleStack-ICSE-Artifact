@@ -1,0 +1,242 @@
+<p>I managed to implement a solution which exactly does what I want.</p>
+
+<p>A blocking method that collects sensor values for specific period and returns the statistics of all sensor readings i.e. mean and variance.</p>
+
+<p>It is possible to simply store all the sensor's values and then calculate the mean and variance; however you might run out of memory in case of collecting high frequency sensor over extended period of time.</p>
+
+<p>I found a better solution to calculate the mean and variance for a stream of data in real-time (i.e. without storing the sensor values) using the below <code>RunningStat</code> class</p>
+
+<p><strong>Example code:</strong></p>
+
+<pre><code>// Calculate statistics of accelerometer values over 300 ms (a blocking method)
+RunningStat[] stats = SensorUtils.sensorStats(context, 
+                                                  Sensor.TYPE_ACCELEROMETER, 300)
+double xMean = stats[0].mean();
+double xVar  = stats[0].variance();
+</code></pre>
+
+<p><strong>Full class code</strong>:</p>
+
+<pre><code>public class SensorUtils {
+
+// Collect sensors data for specific period and return statistics of 
+// sensor values e.g. mean and variance for x, y and z-axis
+public static RunningStat[] sensorStats(Context context, int sensorType,
+        long timeout) throws Exception {
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Future&lt;RunningStat[]&gt; future = executor.submit(new SensorTask(context,
+            sensorType, timeout));
+
+    RunningStat[] stats = future.get();
+    return stats;
+
+}
+
+private static class SensorTask implements Callable&lt;RunningStat[]&gt; {
+    private final Context context;
+    private final long timeout;
+    private final int sensorType;
+    // We need a dedicated handler for the onSensorChanged
+    HandlerThread handler = new HandlerThread("SensorHandlerThread");
+
+    public SensorTask(Context context, int sensorType, long timeout) {
+        this.context = context;
+        this.timeout = timeout;
+        this.sensorType = sensorType;
+    }
+
+    @Override
+    public RunningStat[] call() throws Exception {
+        final SensorCollector collector = new SensorCollector(context);
+        handler.start();
+        Thread sensorThread = new Thread() {
+            public void run() {
+                collector.start(sensorType,
+                        new Handler(handler.getLooper()));
+            };
+        };
+        sensorThread.start();
+        Thread.sleep(timeout);
+        return collector.finishWithResult();
+    }
+}
+
+private static class SensorCollector implements SensorEventListener {
+    protected Context context;
+    protected RunningStat[] runningStat;
+    protected SensorManager sensorManager;
+    protected int sensorType;
+
+    public SensorCollector(Context context) {
+        this.context = context;
+    }
+
+    protected void start(int sensorType, Handler handle) {
+        if (runningStat == null) {
+            runningStat = new RunningStat[3];
+            runningStat[0] = new RunningStat(3);
+            runningStat[1] = new RunningStat(3);
+            runningStat[2] = new RunningStat(3);
+        } else {
+            runningStat[0].clear();
+            runningStat[1].clear();
+            runningStat[2].clear();
+        }
+        this.sensorType = sensorType;
+        sensorManager = (SensorManager) context
+                .getSystemService(Context.SENSOR_SERVICE);
+        Sensor sensor = sensorManager.getDefaultSensor(sensorType);
+        sensorManager.registerListener(this, sensor,
+                SensorManager.SENSOR_DELAY_NORMAL, handle);
+    }
+
+    public RunningStat[] finishWithResult() {
+        if (sensorManager != null) {
+            sensorManager.unregisterListener(this);
+        }
+        return runningStat;
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() == sensorType) {
+            runningStat[0].push(event.values[0]);
+            runningStat[1].push(event.values[1]);
+            runningStat[2].push(event.values[2]);
+        }
+    }
+}
+
+}
+</code></pre>
+
+<p>Here is the <strong><code>RunningStat</code></strong> code, which is a very handy class to calculate the mean and variance for stream of data without storing the data itself (perfect for calculating statistics of high frequency sensors with very small memory footprint)</p>
+
+<pre><code>//See Knuth TAOCP vol 2, 3rd edition, page 232
+public class RunningStat {
+private int n;
+private double oldM, newM, oldS, newS;
+private int precision = -1;
+
+// An estimate for the t-value (can be read from the t-distribution table)
+private static final double T_THRESHOLD = 1.68;
+
+public RunningStat(int precision) {
+    this.precision = precision;
+}
+
+public RunningStat() {
+}
+
+public void clear() {
+    n = 0;
+}
+
+public void push(double x) {
+    n++;
+
+
+    if (n == 1) {
+        oldM = newM = x;
+        oldS = 0.0;
+    } else {
+        newM = oldM + (x - oldM) / n;
+        newS = oldS + (x - oldM) * (x - newM);
+
+        // set up for next iteration
+        oldM = newM;
+        oldS = newS;
+    }
+}
+
+public int count() {
+    return n;
+}
+
+public double mean() {
+    double mean = (n &gt; 0) ? newM : 0.0;
+    if (precision &gt; 0) {
+        return round(mean, precision);
+    }
+    return mean;
+}
+
+// The upper bound of the mean confidence interval
+public double meanUpper() {
+    double mean = (n &gt; 0) ? newM : 0.0;
+    double stdError = stdDeviation() / Math.sqrt(n);
+    double upperMean = mean + T_THRESHOLD * stdError;
+    if (precision &gt; 0) {
+        return round((n &gt; 0) ? upperMean : 0.0, precision);
+    }
+    return upperMean;
+}
+
+// The lower bound of the mean confidence interval
+public double meanLower() {
+    double mean = (n &gt; 0) ? newM : 0.0;
+    double stdError = stdDeviation() / Math.sqrt(n);
+    double lowerMean = mean - T_THRESHOLD * stdError;
+    if (precision &gt; 0) {
+        return round((n &gt; 0) ? lowerMean : 0.0, precision);
+    }
+    return lowerMean;
+}
+
+public double variance() {
+    if (precision &gt; 0) {
+        return round(((n &gt; 1) ? newS / (n - 1) : 0.0), precision);
+    }
+    return ((n &gt; 1) ? newS / (n - 1) : 0.0);
+}
+
+public double stdDeviation() {
+    if (precision &gt; 0) {
+        return round(Math.sqrt(variance()), precision);
+    }
+    return Math.sqrt(variance());
+}
+
+public void setPrecision(int precision) {
+    this.precision = precision;
+}
+
+    public static double round(double value, int precision) {
+         BigDecimal num = new BigDecimal(value);
+         num = num.round(new MathContext(precision, RoundingMode.HALF_UP));
+         return num.doubleValue();
+    }
+
+// A small test case
+public static void main(String[] args) {
+    int n = 100;
+    RunningStat runningStat = new RunningStat();
+    double[] data = new double[n];
+    double sum = 0.0;
+    for (int i = 0; i &lt; n; i++) {
+        data[i] = i * i;
+        sum += data[i];
+        runningStat.push(data[i]);
+        System.out.println(runningStat.mean() + " - "
+                + runningStat.variance() + " - "
+                + runningStat.stdDeviation());
+    }
+
+    double mean = sum / n;
+    double sum2 = 0.0;
+
+    for (int i = 0; i &lt; n; i++) {
+        sum2 = sum2 + (data[i] - mean) * (data[i] - mean);
+    }
+
+    double variance = sum2 / (n - 1);
+    System.out.println("\n\n" + mean + " - " + variance + " - "
+            + Math.sqrt(variance));
+}
+}
+</code></pre>

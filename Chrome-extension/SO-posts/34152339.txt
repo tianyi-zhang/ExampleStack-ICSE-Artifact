@@ -1,0 +1,71 @@
+<p>So I looked into it and dug into a lot of drools code to try and work this out. </p>
+
+<p>All the KieContainer#newSession does is to query the model and then ask the base for a new session with the session's configuration: </p>
+
+<pre><code>public KieSession newKieSession(String kSessionName, Environment environment, KieSessionConfiguration conf) {
+    KieSessionModelImpl kSessionModel = (KieSessionModelImpl) getKieSessionModel(kSessionName);
+    if ( kSessionModel == null ) {
+        log.error("Unknown KieSession name: " + kSessionName);
+        return null;
+    }
+    if (kSessionModel.getType() == KieSessionModel.KieSessionType.STATELESS) {
+        throw new RuntimeException("Trying to create a stateful KieSession from a stateless KieSessionModel: " + kSessionName);
+    }
+    KieBase kBase = getKieBase( kSessionModel.getKieBaseModel().getName() );
+    if ( kBase == null ) {
+        log.error("Unknown KieBase name: " + kSessionModel.getKieBaseModel().getName());
+        return null;
+    }
+
+    KieSession kSession = kBase.newKieSession( conf != null ? conf : getKnowledgeSessionConfiguration(kSessionModel), environment );
+    wireListnersAndWIHs(kSessionModel, kSession);
+    registerLoggers(kSessionModel, kSession);
+    kSessions.put(kSessionName, kSession);
+    return kSession;
+}
+</code></pre>
+
+<p>At the same time, this is exactly what the StoreService implementation does as well, with some advanced harry potter code to make things persistent. It however ignores the configuration of the session, which I would almost say is a bug.. (might raise one after this) </p>
+
+<p>The configuration created by the KieContainer however only takes 2 options into account anyway:</p>
+
+<pre><code>private KieSessionConfiguration getKnowledgeSessionConfiguration(KieSessionModelImpl kSessionModel) {
+    KieSessionConfiguration ksConf = KnowledgeBaseFactory.newKnowledgeSessionConfiguration();
+    ksConf.setOption( kSessionModel.getClockType() );
+    ksConf.setOption( kSessionModel.getBeliefSystem() );
+    return ksConf;
+}
+</code></pre>
+
+<p>This means, that I would have 2 options to solve this: </p>
+
+<p>either write my own KieContainerImpl that does the right thing (why bother...) or simulate the session configuration. I decided to do the second. </p>
+
+<pre><code>public KieSession createJPASession(final String kieBaseId, Optional&lt;String&gt; clockType, Optional&lt;String&gt; beliefSystem) {
+    log.info(String.format("Creating JPA Session for kieBase %s, clockType %s, beliefSystem %s", kieBaseId, clockType, beliefSystem));
+    KieBase kieBase = kContainer.getKieBase(kieBaseId);
+    KieSessionConfiguration ksConf = ks.newKieSessionConfiguration();
+
+    // Set this thing up manually. Looking at the impl/docs these are the only two options available to set.
+    // The Storage service will remove those options from a default session for whatever reason, however we can set this manually
+    // This means we can use the base configuration and have things run in a normal way
+
+    if (clockType.isPresent()) {
+        ksConf.setOption(ClockTypeOption.get(clockType.get()));
+    }
+    if (beliefSystem.isPresent()) {
+        ksConf.setOption(BeliefSystemTypeOption.get(beliefSystem.get()));
+    }
+
+    KieSession jpaSession = ks.getStoreServices().newKieSession(kieBase, ksConf, env);
+    sessions.put(jpaSession.getIdentifier(), jpaSession);
+    return jpaSession;
+}
+</code></pre>
+
+<p>This last code snippet will create the configured session while making it persistent as well. </p>
+
+<p>Alternatively, by casting KieContainer to KieContainerImpl one gets access to the public method needed to query the KieSession object in the KieModule. (man that's a lot of Kie's) That way one could use the same methods and access the XML configuration.
+My approach is a mix of that (use xml config for KieBase/Module while programatically set the beliefesystem and the clocktype). Reason being that I do not want to depend on the internal implementation and I didn't want to bother implementing my own KieContainer and wiring it in. </p>
+
+<p>I hope this helps someone out. If someone else knows the "correct" way to do that, please post it. </p>

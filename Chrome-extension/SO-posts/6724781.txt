@@ -1,0 +1,115 @@
+<p>I think you're overengineering things a bit. You don't really care about the threads or the thread pool, and rightly so. Java provides nice abstractions so that you don't have to. You just need to know when your tasks are complete, and methods exist for that. Just submit your jobs, and wait for the futures to say they're done. If you really want to know as soon as a single task completes, you can watch all the futures and take action as soon as any one is finished. If not and you only care that everything is finished, you can remove some complexity from the code I'm about to post. Try this on for size (note MultithreadedJaxrsResource is executable):</p>
+
+<pre><code>import javax.ws.rs.*;
+import javax.ws.rs.core.MediaType;
+import java.util.*;
+import java.util.concurrent.*;
+
+@Path("foo")
+public class MultithreadedJaxrsResource {
+    private ExecutorService executorService;
+
+    public MultithreadedJaxrsResource(ExecutorService executorService) {
+        this.executorService = executorService;
+    }
+
+    @GET
+    @Produces(MediaType.APPLICATION_XML)
+    public AllMyArticles getStuff() {
+        List&lt;Future&lt;Article&gt;&gt; futures = new ArrayList&lt;Future&lt;Article&gt;&gt;();
+        // Submit all the tasks to run
+        for (int i = 0; i &lt; 10; i++) {
+            futures.add(executorService.submit(new Driver(i + 1)));
+        }
+        AllMyArticles articles = new AllMyArticles();
+        // Wait for all tasks to finish
+        // If you only care that everything is done and not about seeing
+        // when each one finishes, this outer do/while can go away, and
+        // you only need a single for loop to wait on each future.
+        boolean allDone;
+        do {
+            allDone = true;
+            Iterator&lt;Future&lt;Article&gt;&gt; futureIterator = futures.iterator();
+            while (futureIterator.hasNext()) {
+                Future&lt;Article&gt; future =  futureIterator.next();
+                if (future.isDone()) {
+                    try {
+                        articles.articles.add(future.get());
+                        futureIterator.remove();
+                    } catch (InterruptedException e) {
+                        // thread was interrupted. don't do that.
+                        throw new IllegalStateException("broken", e);
+                    } catch (ExecutionException e) {
+                        // execution of the Callable failed with an
+                        // exception. check it out.
+                        throw new IllegalStateException("broken", e);
+                    }
+                } else {
+                    allDone = false;
+                }
+            }
+        } while (!allDone);
+        return articles;
+    }
+
+    public static void main(String[] args) {
+        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        AllMyArticles stuff =
+            new MultithreadedJaxrsResource(executorService).getStuff();
+        System.out.println(stuff.articles);
+        executorService.shutdown();
+    }
+}
+
+class Driver implements Callable&lt;Article&gt; {
+    private int i; // Just to differentiate the instances
+
+    public Driver(int i) {
+        this.i = i;
+    }
+
+    public Article call() {
+        // Simulate taking some time for each call
+        try {
+            Thread.sleep(1000 / i);
+        } catch (InterruptedException e) {
+            System.err.println("oops");
+        }
+        return new Article(i);
+    }
+}
+
+class AllMyArticles {
+    public final List&lt;Article&gt; articles = new ArrayList&lt;Article&gt;();
+}
+
+class Article {
+    public final int i;
+
+    public Article(int i) {
+        this.i = i;
+    }
+
+    @Override
+    public String toString() {
+        return "Article{" +
+                       "i=" + i +
+                       '}';
+    }
+}
+</code></pre>
+
+<p>Done that way, you can plainly see that the tasks are returned in the order they complete, as the last task finishes first thanks to sleeping the shortest time. If you don't care about completion order and just want to wait for all to finish, the loop becomes much simpler:</p>
+
+<pre><code>for (Future&lt;Article&gt; future : futures) {
+    try {
+        articles.articles.add(future.get());
+    } catch (InterruptedException e) {
+        // thread was interrupted. don't do that.
+        throw new IllegalStateException("broken", e);
+    } catch (ExecutionException e) {
+        // execution of the Callable failed with an exception. check it out.
+        throw new IllegalStateException("broken", e);
+    }
+}
+</code></pre>

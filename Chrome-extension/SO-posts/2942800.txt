@@ -1,0 +1,261 @@
+<p>Here is the code of the server, i'll try to make a wireshark trace later.</p>
+
+<pre><code>public class ChatroomSipServlet extends SipServlet {
+
+    public final static String USER_LIST = "userList";
+
+    public final static String CHATROOM_SERVER_NAME = "chatroomservername";
+
+    public String serverAddress;
+    public SipFactory factory;
+
+    @Override
+    public void init(ServletConfig servletConfig) throws ServletException {
+        super.init(servletConfig);
+        System.out.println("Chatroom sip servlet is gestart!");
+        try {
+            factory = (SipFactory) getServletContext().getAttribute("javax.servlet.sip.SipFactory");
+            System.out.println("Sip Factory: " + factory);
+        } catch (Exception e) {
+            throw new ServletException("Factory probleem!", e);
+        }
+        getServletContext().setAttribute(USER_LIST, new ArrayList&lt;String&gt;());
+        serverAddress = getServletConfig().getInitParameter(CHATROOM_SERVER_NAME);
+        System.out.println("serverAddress is: " + serverAddress);
+    }
+
+    @Override
+    public void destroy() {
+        try {
+            sendToAll(serverAddress, "Server sluit af!");
+        } catch (Throwable e) {
+
+            e.printStackTrace();
+        }
+        super.destroy();
+    }
+
+    protected void doMessage(SipServletRequest request) throws ServletException, IOException {
+
+        System.out.println(getDateTime() + " Bericht ontvangen");
+
+        request.createResponse(SipServletResponse.SC_OK).send();
+
+        String message = request.getContent().toString();
+        String from = ((SipURI) request.getFrom().getURI()).toString();
+
+        if (message.equalsIgnoreCase("/quit")) {
+            sendToUser(from, "Bye");
+            removeUser(from);
+            return;
+        }
+
+        if (!containsUser(from)) {
+            sendToUser(from, "Welkom in de chatroom. Typ '/quit' om af te sluiten.");
+            addUser(from);
+        }
+
+        if (message.equalsIgnoreCase("/who")) {
+            String users = "Lijst van de gebruikers:\n";
+            List&lt;String&gt; list = (List&lt;String&gt;) getServletContext().getAttribute(USER_LIST);
+            for (String user : list) {
+                users += user + "\n";
+            }
+            sendToUser(from, users);
+            return;
+        }
+
+        if (message.equalsIgnoreCase("/join")) {
+            return;
+        }
+
+        sendToAll(from, message);
+    }
+
+    protected void doErrorResponse(SipServletResponse response) throws ServletException, IOException {
+
+//      String receiver = response.getTo().toString();
+        String receiver = ((SipURI) response.getTo().getURI()).toString();
+        System.out.println(getDateTime() + " Errorresponse voor " + receiver);
+        removeUser(receiver);
+    }
+
+    protected void doSuccessResponse(SipServletResponse response) throws ServletException, IOException {
+
+        response.getApplicationSession().invalidate();
+    }
+
+    private void sendToAll(String from, String message) throws ServletParseException, IOException {
+
+        List&lt;String&gt; list = (List&lt;String&gt;) getServletContext().getAttribute(USER_LIST);
+        for (String user : list) {
+            SipApplicationSession session = factory.createApplicationSession();
+            System.out.println(getDateTime() + " Session created voor " + user);
+            SipServletRequest request = factory.createRequest(session, "MESSAGE", serverAddress, user);
+            String msg = from + " stuurt: \n" + message;
+            request.setContent(msg.getBytes(), "text/plain");
+            request.send();
+        }
+    }
+
+    private void sendToUser(String to, String message) throws ServletParseException, IOException {
+
+        SipApplicationSession session = factory.createApplicationSession();
+        SipServletRequest request = factory.createRequest(session, "MESSAGE", serverAddress, to);
+        request.setContent(message.getBytes(), "text/plain");
+        request.send();
+    }
+
+    private boolean containsUser(String from) {
+        List&lt;String&gt; list = (List&lt;String&gt;) getServletContext().getAttribute(USER_LIST);
+        return list.contains(from);
+    }
+
+    private void addUser(String from) {
+        List&lt;String&gt; list = (List&lt;String&gt;) getServletContext().getAttribute(USER_LIST);
+        list.add(from);
+    }
+
+    private void removeUser(String from) {
+        System.out.println(getDateTime() + " " + from + " wordt verwijderd uit de lijst.");
+        List&lt;String&gt; list = (List&lt;String&gt;) getServletContext().getAttribute(USER_LIST);
+        list.remove(from);
+
+    }
+
+    @Override
+    protected void doRegister(SipServletRequest req) throws ServletException, IOException {
+        System.out.println("Register request ontvangen: " + req.getTo());
+        int response = SipServletResponse.SC_OK;
+        SipServletResponse resp = req.createResponse(response);
+        resp.send();
+    }
+
+    private String getDateTime() {
+        DateFormat dateFormat = new SimpleDateFormat("[" + "HH:mm:ss" + "]");
+        Date date = new Date();
+        return dateFormat.format(date);
+    }
+}
+</code></pre>
+
+<p>And the sip.xml</p>
+
+<pre><code>&lt;sip-app&gt;
+    &lt;app-name&gt;sip.chatvoorbeeld.ChatServer&lt;/app-name&gt;
+    &lt;display-name&gt;Chatroom Sip Servlet&lt;/display-name&gt;
+    &lt;description&gt;Chatroom Sip Servlet&lt;/description&gt;
+
+    &lt;servlet-selection&gt;
+        &lt;main-servlet&gt;
+            ChatroomSipServlet
+        &lt;/main-servlet&gt;
+    &lt;/servlet-selection&gt;
+    &lt;session-config&gt;
+        &lt;session-timeout&gt;5&lt;/session-timeout&gt;
+    &lt;/session-config&gt;
+
+    &lt;servlet&gt;
+        &lt;servlet-name&gt;ChatroomSipServlet&lt;/servlet-name&gt;
+        &lt;display-name&gt;ChatroomSipServlet&lt;/display-name&gt;
+        &lt;description&gt;Chatroom SIP servlet&lt;/description&gt;
+        &lt;servlet-class&gt;
+            sip.chatvoorbeeld.ChatroomSipServlet
+        &lt;/servlet-class&gt;
+        &lt;init-param&gt;
+            &lt;param-name&gt;chatroomservername&lt;/param-name&gt;
+            &lt;param-value&gt;sip:chatserver@192.168.56.1:5060&lt;/param-value&gt;
+        &lt;/init-param&gt;
+        &lt;load-on-startup&gt;1&lt;/load-on-startup&gt;
+    &lt;/servlet&gt;
+&lt;/sip-app&gt;
+</code></pre>
+
+<p>I also tried an empty servlet, just with a <code>doMessage()</code> method that just prints out "message received". Same 32 seconds delay...</p>
+
+<p>Wireshark gives me:</p>
+
+<p>I send the message "test" to the server:</p>
+
+<pre><code>MESSAGE sip:chatserver@192.168.56.1:5060;transport=udp SIP/2.0
+Call-ID: aba00c2646a9b4e6df3b15df19dbf58d@192.168.56.101
+CSeq: 1 MESSAGE
+From: "bobby" &lt;sip:bobby@192.168.56.101:5095&gt;;tag=textclientv1.0
+To: "chatserver" &lt;sip:chatserver@192.168.56.1:5060&gt;
+Via: SIP/2.0/UDP 192.168.56.101:5095;branch=branch1
+Max-Forwards: 70
+Contact: "bobby" &lt;sip:bobby@192.168.56.101:5095&gt;
+Content-Type: text/plain
+Content-Length: 4
+
+test
+</code></pre>
+
+<p>Server sends back:</p>
+
+<pre><code>SIP/2.0 200 OK
+Content-Length: 0
+To: "chatserver"&lt;sip:chatserver@192.168.56.1:5060&gt;;tag=g9vdns7u-e
+Cseq: 1 MESSAGE
+Via: SIP/2.0/UDP 192.168.56.101:5095;branch=branch1
+From: "bobby"&lt;sip:bobby@192.168.56.101:5095&gt;;tag=textclientv1.0
+Call-Id: aba00c2646a9b4e6df3b15df19dbf58d@192.168.56.101
+Server: Glassfish_SIP_2.0.0
+
+MESSAGE sip:bobby@192.168.56.101:5095 SIP/2.0
+Max-Forwards: 69
+Content-Length: 43
+To: &lt;sip:bobby@192.168.56.101:5095&gt;
+Cseq: 1 MESSAGE
+Via: SIP/2.0/UDP 192.168.56.1:5060;branch=z9hG4bKdaacb7673c871796474ca951221a6643db6c
+Content-Type: text/plain
+Call-Id: 192.168.56.1_11_6595680936174578736
+From: &lt;sip:chatserver@192.168.56.1:5060&gt;;tag=g9vdns7u-g
+
+sip:bobby@192.168.56.101:5095 stuurt: 
+test
+</code></pre>
+
+<p>Then my client again answers with an OK:</p>
+
+<pre><code>SIP/2.0 200 OK
+To: &lt;sip:bobby@192.168.56.101:5095&gt;;tag=888
+CSeq: 1 MESSAGE
+Via: SIP/2.0/UDP 192.168.56.1:5060;branch=z9hG4bKdaacb7673c871796474ca951221a6643db6c;received=192.168.56.1
+Call-ID: 192.168.56.1_11_6595680936174578736
+From: &lt;sip:chatserver@192.168.56.1:5060&gt;;tag=g9vdns7u-g
+Content-Length: 0
+</code></pre>
+
+<p>So far so good, everything works well.
+But now I send a second message to the server "test2" and I get this:</p>
+
+<p>Client to server:</p>
+
+<pre><code>MESSAGE sip:chatserver@192.168.56.1:5060;transport=udp SIP/2.0
+Call-ID: 95ad65365378b9b6b5bd7ad3629f7b02@192.168.56.101
+CSeq: 1 MESSAGE
+From: "bobby" &lt;sip:bobby@192.168.56.101:5095&gt;;tag=textclientv1.0
+To: "chatserver" &lt;sip:chatserver@192.168.56.1:5060&gt;
+Via: SIP/2.0/UDP 192.168.56.101:5095;branch=branch1
+Max-Forwards: 70
+Contact: "bobby" &lt;sip:bobby@192.168.56.101:5095&gt;
+Content-Type: text/plain
+Content-Length: 5
+
+test2
+</code></pre>
+
+<p>Then the server does respond with:</p>
+
+<pre><code>SIP/2.0 200 OK
+Content-Length: 0
+To: "chatserver"&lt;sip:chatserver@192.168.56.1:5060&gt;;tag=g9vdns7u-e
+Cseq: 1 MESSAGE
+Via: SIP/2.0/UDP 192.168.56.101:5095;branch=branch1
+From: "bobby"&lt;sip:bobby@192.168.56.101:5095&gt;;tag=textclientv1.0
+Call-Id: aba00c2646a9b4e6df3b15df19dbf58d@192.168.56.101
+Server: Glassfish_SIP_2.0.0
+</code></pre>
+
+<p>But then the communication stops... I get a 200 OK, but the <code>println()</code> in my <code>doMessage()</code> method is not passed.</p>

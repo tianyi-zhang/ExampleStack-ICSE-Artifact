@@ -1,0 +1,166 @@
+<p>Try this:</p>
+
+<pre><code>private static Class&lt;?&gt;[] getClasses(Object[] oa) {
+    if (oa == null) return new Class[0];
+    Class&lt;?&gt;[] ret = new Class[oa.length];
+    for (int i = 0; i &lt; oa.length; i++) {
+        ret[i] = oa[i].getClass();
+    }
+    return ret;
+}
+</code></pre>
+
+<hr>
+
+<p>I haven't tested following extensively, but it seems to find match for args of primitve types and chooses most specific ctor for creation of new object. However, it may have errors (the one I've found is that it has no auto conversion of primitive values for chosen ctor, e.g., if chosen ctor has <code>short</code> param and you pass <code>int</code> in object array, it'll fail inside <code>newInstance</code>). Feel free to improve on this :)</p>
+
+<pre><code>class B {
+    @Override
+    public String toString() {
+        return "B{}";
+    }
+}
+class D extends B {
+    @Override
+    public String toString() {
+        return "D{}";
+    }
+}
+class E extends D {
+    @Override
+    public String toString() {
+        return "E{}";
+    }
+}
+
+class Test {
+    final short primitive;
+    final B obj;
+
+    Test() {
+        System.out.println("()");
+        primitive = 42;
+        obj = new D();
+    }
+
+    Test(short primitive, B obj) {
+        System.out.println("B()");
+        this.primitive = primitive;
+        this.obj = obj;
+    }
+
+    Test(short primitive, D obj) {
+        System.out.println("D()");
+        this.primitive = primitive;
+        this.obj = obj;
+    }
+
+    @Override
+    public String toString() {
+        return "Test{" +
+                "primitive=" + primitive +
+                ", obj=" + obj +
+                '}';
+    }
+}
+
+
+class Junk {
+
+    // sorts lists of param classes in order from the most to the least specific one
+    private static final Comparator&lt;? super Constructor&lt;?&gt;&gt; CTOR_COMPARATOR = new Comparator&lt;Constructor&lt;?&gt;&gt;() {
+        @Override
+        public int compare(Constructor&lt;?&gt; ctorA, Constructor&lt;?&gt; ctorB) {
+            Class&lt;?&gt;[] params1 = ctorA.getParameterTypes();
+            Class&lt;?&gt;[] params2 = ctorB.getParameterTypes();
+
+            if (params1.length != params2.length)
+                throw new IllegalArgumentException(ctorA + " can't be compared to " + ctorB);
+
+            for (int i = 0; i &lt; params1.length; i++) {
+                Class&lt;?&gt; aClass = params1[i];
+                Class&lt;?&gt; bClass = params2[i];
+                if (!aClass.equals(bClass)) {
+                    if (aClass.isAssignableFrom(bClass)) return 1;
+                    if (bClass.isAssignableFrom(aClass)) return -1;
+                    throw new IllegalArgumentException(ctorA + " can't be compared to " + ctorB +
+                            ": args at pos " + i + " aren't comparable: " + aClass + " vs " + bClass);
+                }
+            }
+
+            return 0;
+        }
+    };
+
+    public static void main(String[] args) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException, InstantiationException {
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{(short)1, new B()}));
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{(short)1, new D()}));
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{null, new B()}));
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{(short)1, new E()}));
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{}));
+        System.out.println(tryToCreateBestMatch(Test.class, new Object[]{"will fail"}));
+    }
+
+    private static &lt;T&gt; T tryToCreateBestMatch(Class&lt;T&gt; aClass, Object[] oa) throws InstantiationException, IllegalAccessException, InvocationTargetException {
+        //noinspection unchecked
+        Constructor&lt;T&gt;[] declaredConstructors = (Constructor&lt;T&gt;[]) aClass.getDeclaredConstructors();
+        Class&lt;?&gt;[] argClasses = getClasses(oa);
+        List&lt;Constructor&lt;T&gt;&gt; matchedCtors = new ArrayList&lt;&gt;();
+        for (Constructor&lt;T&gt; ctr : declaredConstructors) {
+            Class&lt;?&gt;[] parameterTypes = ctr.getParameterTypes();
+            if (ctorMatches(parameterTypes, argClasses)) {
+                matchedCtors.add(ctr);
+            }
+        }
+
+        if (matchedCtors.isEmpty()) return null;
+
+        Collections.sort(matchedCtors, CTOR_COMPARATOR);
+        return matchedCtors.get(0).newInstance(oa);
+    }
+
+    private static boolean ctorMatches(Class&lt;?&gt;[] ctrParamTypes, Class&lt;?&gt;[] argClasses) {
+        if (ctrParamTypes.length != argClasses.length) return false;
+        for (int i = 0; i &lt; ctrParamTypes.length; i++) {
+            Class&lt;?&gt; ctrParamType = ctrParamTypes[i];
+            Class&lt;?&gt; argClass = argClasses[i];
+
+            if (!compatible(ctrParamType, argClass)) return false;
+        }
+        return true;
+    }
+
+    private static boolean compatible(Class&lt;?&gt; ctrParamType, Class&lt;?&gt; argClass) {
+        if (ctrParamType.isAssignableFrom(argClass)) return true;
+        if (ctrParamType.isPrimitive()) return compareAgainstPrimitive(ctrParamType.getName(), argClass);
+        return false;
+    }
+
+    private static boolean compareAgainstPrimitive(String primitiveType, Class&lt;?&gt; argClass) {
+        switch (primitiveType) {
+            case "short":case "byte" :case "int":case "long":
+                return INTEGER_WRAPPERS.contains(argClass.getName());
+            case "float":case "dobule":
+                return FP_WRAPPERS.contains(argClass.getName());
+        }
+        throw new IllegalArgumentException("Unexpected primitive type?!?!: " + primitiveType);
+    }
+
+    private static final HashSet&lt;String&gt; INTEGER_WRAPPERS = new HashSet&lt;&gt;(Arrays.asList(
+            "java.lang.Integer", "java.lang.Short", "java.lang.Byte", "java.lang.Long"
+            ));
+    private static final HashSet&lt;String&gt; FP_WRAPPERS = new HashSet&lt;&gt;(Arrays.asList(
+            "java.lang.Float", "java.lang.Double"
+            ));
+
+    private static Class&lt;?&gt;[] getClasses(Object[] oa) {
+        if (oa == null) return new Class[0];
+        Class&lt;?&gt;[] ret = new Class[oa.length];
+        for (int i = 0; i &lt; oa.length; i++) {
+            ret[i] = oa[i] == null ? Object.class : oa[i].getClass();
+        }
+        return ret;
+    }
+
+}
+</code></pre>

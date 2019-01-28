@@ -1,0 +1,345 @@
+<p>Yes, there are ways to speed this up as the source code of winzipaes uses a rather inefficient way of decrypting: it decrypt each block by calculating the IV and initializing the cipher (for CTR mode decryption). This <em>could</em> mean that the key gets reinitialized too often. Furthermore, handling data in blocks of 16 bytes is not very efficient either. This is mainly due to the fact that the AES-CTR as performed by WinZip uses a little endian counter instead of a big endian counter (as standardized).</p>
+
+<p>The decryption also seems to include calculation of a HMAC-SHA1 over the ciphertext, which will add significant overhead as well. If you only require confidentiality of stored text then you may skip that step, although a MAC does have significant security advantages, providing cryptographically secure integrity as well as authenticity.</p>
+
+<p>To show what I mean I've created a small sample code that at least runs a lot faster on my Java SE machine. According to Wayne (the original poster) this speeds up the Android code with a factor 10 or so, on my Java SE tests I "only" see speedups of about 3 times the original.</p>
+
+<p>Changes:</p>
+
+<ul>
+<li>created special little endian counter mode used for ZIP</li>
+<li>simplified / optimized decrypter code because of above</li>
+<li>removed double key derivation (D'oh!) per file</li>
+<li>option not to validate MAC (with relatively small returns, SHA1 is pretty fast)</li>
+<li>using <code>AESFastEngine</code>, did not matter much, but hey...</li>
+</ul>
+
+<p>It's very likely that the same kind of optimizations can be created for the encrypter.</p>
+
+<p>Notes:</p>
+
+<ul>
+<li><code>.zip</code> encryption is <em>per stored file</em> and therefore rather inefficient as the key derivation needs to take place once per stored file as well. Encryption of the <code>.zip</code> file itself would be much more efficient.</li>
+<li>using the JCA version of the decrypter may provide an a speedup as well as Android may be able to use OpenSSL code in the later versions (it will have to perform block by block encryption though).</li>
+</ul>
+
+<p>-</p>
+
+<pre><code>/**
+ * Adapter for bouncy castle crypto implementation (decryption).
+ *
+ * @author olaf@merkert.de
+ * @author owlstead
+ */
+public class AESDecrypterOwlstead extends AESCryptoBase implements AESDecrypter {
+
+
+    private final boolean verify;
+
+    public AESDecrypterOwlstead(boolean verify) {
+        this.verify = verify;
+    }
+
+    // TODO consider keySize (but: we probably need to adapt the key size for the zip file as well)
+    public void init( String pwStr, int keySize, byte[] salt, byte[] pwVerification ) throws ZipException {
+        byte[] pwBytes = pwStr.getBytes();
+
+        super.saltBytes = salt;
+
+        PBEParametersGenerator generator = new PKCS5S2ParametersGenerator();
+        generator.init( pwBytes, salt, ITERATION_COUNT );
+
+        cipherParameters = generator.generateDerivedParameters(KEY_SIZE_BIT*2 + 16);
+        byte[] keyBytes = ((KeyParameter)cipherParameters).getKey();
+
+        this.cryptoKeyBytes = new byte[ KEY_SIZE_BYTE ];
+        System.arraycopy( keyBytes, 0, cryptoKeyBytes, 0, KEY_SIZE_BYTE );
+
+        this.authenticationCodeBytes = new byte[ KEY_SIZE_BYTE ];
+        System.arraycopy( keyBytes, KEY_SIZE_BYTE, authenticationCodeBytes, 0, KEY_SIZE_BYTE );
+
+        // based on SALT + PASSWORD (password is probably correct)
+        this.pwVerificationBytes = new byte[ 2 ];
+        System.arraycopy( keyBytes, KEY_SIZE_BYTE*2, this.pwVerificationBytes, 0, 2 );
+
+        if( !ByteArrayHelper.isEqual( this.pwVerificationBytes, pwVerification ) ) {
+            throw new ZipException("wrong password - " + ByteArrayHelper.toString(this.pwVerificationBytes) + "/ " + ByteArrayHelper.toString(pwVerification));
+        }
+
+        cipherParameters = new KeyParameter(cryptoKeyBytes);
+
+        // checksum added to the end of the encrypted data, update on each encryption call
+
+        if (this.verify) {
+            this.mac = new HMac( new SHA1Digest() );
+            this.mac.init( new KeyParameter(authenticationCodeBytes) );
+        }
+
+        this.aesCipher = new SICZIPBlockCipher(new AESFastEngine());
+        this.blockSize = aesCipher.getBlockSize();
+
+        // incremented on each 16 byte block and used as encryption NONCE (ivBytes)
+
+        // warning: non-CTR; little endian IV and starting with 1 instead of 0
+
+        nonce = 1;
+
+        byte[] ivBytes = ByteArrayHelper.toByteArray( nonce, 16 );
+
+        ParametersWithIV ivParams = new ParametersWithIV(cipherParameters, ivBytes);
+        aesCipher.init( false, ivParams );
+    }
+
+    // --------------------------------------------------------------------------
+
+    protected CipherParameters cipherParameters;
+
+    protected SICZIPBlockCipher aesCipher;
+
+    protected HMac mac;
+
+
+    @Override
+    public void decrypt(byte[] in, int length) {
+        if (verify) {
+            mac.update(in, 0, length);
+        }
+        aesCipher.processBytes(in, 0, length, in, 0);
+    }
+
+    public byte[] getFinalAuthentication() {
+        if (!verify) {
+            return null;
+        }
+        byte[] macBytes = new byte[ mac.getMacSize() ];
+        mac.doFinal( macBytes, 0 );
+        byte[] macBytes10 = new byte[10];
+        System.arraycopy( macBytes, 0, macBytes10, 0, 10 );
+        return macBytes10;
+    }
+}
+</code></pre>
+
+<p>Of course you also need the referenced <code>SICZIPCipher</code>:</p>
+
+<pre><code>/**
+ * Implements the Segmented Integer Counter (SIC) mode on top of a simple
+ * block cipher. This mode is also known as CTR mode. This CTR mode
+ * was altered to comply with the ZIP little endian counter and
+ * different starting point.
+ */
+public class SICZIPBlockCipher
+    extends StreamBlockCipher
+    implements SkippingStreamCipher
+{
+    private final BlockCipher     cipher;
+    private final int             blockSize;
+
+    private byte[]          IV;
+    private byte[]          counter;
+    private byte[]          counterOut;
+    private int             byteCount;
+
+    /**
+     * Basic constructor.
+     *
+     * @param c the block cipher to be used.
+     */
+    public SICZIPBlockCipher(BlockCipher c)
+    {
+        super(c);
+
+        this.cipher = c;
+        this.blockSize = cipher.getBlockSize();
+        this.IV = new byte[blockSize];
+        this.counter = new byte[blockSize];
+        this.counterOut = new byte[blockSize];
+        this.byteCount = 0;
+    }
+
+    public void init(
+        boolean             forEncryption, //ignored by this CTR mode
+        CipherParameters    params)
+        throws IllegalArgumentException
+    {
+        if (params instanceof ParametersWithIV)
+        {
+            ParametersWithIV ivParam = (ParametersWithIV)params;
+            byte[] iv = ivParam.getIV();
+            System.arraycopy(iv, 0, IV, 0, IV.length);
+
+            // if null it's an IV changed only.
+            if (ivParam.getParameters() != null)
+            {
+                cipher.init(true, ivParam.getParameters());
+            }
+
+            reset();
+        }
+        else
+        {
+            throw new IllegalArgumentException("SICZIP mode requires ParametersWithIV");
+        }
+    }
+
+    public String getAlgorithmName()
+    {
+        return cipher.getAlgorithmName() + "/SICZIP";
+    }
+
+    public int getBlockSize()
+    {
+        return cipher.getBlockSize();
+    }
+
+    public int processBlock(byte[] in, int inOff, byte[] out, int outOff)
+          throws DataLengthException, IllegalStateException
+    {
+        processBytes(in, inOff, blockSize, out, outOff);
+
+        return blockSize;
+    }
+
+    protected byte calculateByte(byte in)
+          throws DataLengthException, IllegalStateException
+    {
+        if (byteCount == 0)
+        {
+            cipher.processBlock(counter, 0, counterOut, 0);
+
+            return (byte)(counterOut[byteCount++] ^ in);
+        }
+
+        byte rv = (byte)(counterOut[byteCount++] ^ in);
+
+        if (byteCount == counter.length)
+        {
+            byteCount = 0;
+
+            incrementCounter();
+        }
+
+        return rv;
+    }
+
+    private void incrementCounter()
+    {
+        // increment counter by 1.
+        for (int i = 0; i &lt; counter.length &amp;&amp; ++counter[i] == 0; i++)
+        {
+            ; // do nothing - pre-increment and test for 0 in counter does the job.
+        }
+    }
+
+    private void decrementCounter()
+    {
+        // TODO test - owlstead too lazy to test
+
+        if (counter[counter.length - 1] == 0)
+        {
+            boolean nonZero = false;
+
+            for (int i = 0; i &lt; counter.length; i++)
+            {
+                if (counter[i] != 0)
+                {
+                    nonZero = true;
+                }
+            }
+
+            if (!nonZero)
+            {
+                throw new IllegalStateException("attempt to reduce counter past zero.");
+            }
+        }
+
+        // decrement counter by 1.
+        for (int i = 0; i &lt; counter.length &amp;&amp; --counter[i] == -1; i++)
+        {
+            ;
+        }
+    }
+
+    private void adjustCounter(long n)
+    {
+        if (n &gt;= 0)
+        {
+            long numBlocks = (n + byteCount) / blockSize;
+
+            for (long i = 0; i != numBlocks; i++)
+            {
+                incrementCounter();
+            }
+
+            byteCount = (int)((n + byteCount) - (blockSize * numBlocks));
+        }
+        else
+        {
+            long numBlocks = (-n - byteCount) / blockSize;
+
+            for (long i = 0; i != numBlocks; i++)
+            {
+                decrementCounter();
+            }
+
+            int gap = (int)(byteCount + n + (blockSize * numBlocks));
+
+            if (gap &gt;= 0)
+            {
+                byteCount = 0;
+            }
+            else
+            {
+                decrementCounter();
+                byteCount =  blockSize + gap;
+            }
+        }
+    }
+
+    public void reset()
+    {
+        System.arraycopy(IV, 0, counter, 0, counter.length);
+        cipher.reset();
+        this.byteCount = 0;
+    }
+
+    public long skip(long numberOfBytes)
+    {
+        adjustCounter(numberOfBytes);
+
+        cipher.processBlock(counter, 0, counterOut, 0);
+
+        return numberOfBytes;
+    }
+
+    public long seekTo(long position)
+    {
+        reset();
+
+        return skip(position);
+    }
+
+    public long getPosition()
+    {
+        byte[] res = new byte[IV.length];
+
+        System.arraycopy(counter, 0, res, 0, res.length);
+
+        for (int i = 0; i &lt; res.length; i++)
+        {
+            int v = (res[i] - IV[i]);
+
+            if (v &lt; 0)
+            {
+               res[i + 1]--;
+               v += 256;
+            }
+
+            res[i] = (byte)v;
+        }
+
+        // TODO still broken - owlstead too lazy to fix for zip
+        return Pack.bigEndianToLong(res, res.length - 8) * blockSize + byteCount;
+    }
+}
+</code></pre>

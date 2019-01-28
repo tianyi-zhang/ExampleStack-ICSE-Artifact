@@ -1,0 +1,82 @@
+<p>K, I got it figured out.  The settings were not displaying right because a ListView has two layers:  the View layer and the data layer.  The way that android recycles Views in a ListView means that which View is being used to display the data does not matter.  So to use a CursorAdapter, the View information goes in the newView() method, and the data information from the Cursor goes in the bindView() method.  Here is the fixed stuff:</p>
+
+<p>Not much changed here, only passing what is needed:</p>
+
+<pre><code>@Override
+protected void onListItemClick(ListView l, View v, int position, long id) {
+    super.onListItemClick(l, v, position, id);
+    ((NotesCursorAdapter) l.getAdapter()).toggle(position);
+}
+</code></pre>
+
+<p>The view holder only gets information needed to construct the view, not any information in the view, including the visible state:</p>
+
+<pre><code>static class ViewHolder {
+    public TextView title;
+    public TextView body;
+    public Button button;
+}
+</code></pre>
+
+<p>The visible state is tracked in an array as a property of the adapter.  The view information is in the newView() method and the data information is in the bindView() method.  When the notifyDataSetChanged() fires, the views are all recycled, and the data is re-layered on.  Because the view info and the data info are separate, it does not matter which view gets matched up with which data. </p>
+
+<pre><code>    class NotesCursorAdapter extends CursorAdapter {
+
+    private boolean[] expandedArray;
+
+    public NotesCursorAdapter(Context context, Cursor c) {
+        super(context, c);
+        expandedArray = new boolean[c.getCount()];
+    }
+
+    @Override
+    public View newView(Context context, Cursor cursor, ViewGroup parent) {
+        LayoutInflater inflater = (LayoutInflater) context
+                .getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+        View rowView = inflater.inflate(R.layout.row, parent, false);
+
+        ViewHolder holder = new ViewHolder();
+        holder.title= (TextView) rowView
+                .findViewById(R.id.title);
+        holder.body= (TextView) rowView
+                .findViewById(R.id.body);
+        holder.button= (Button) rowView
+                .findViewById(R.id.button);
+
+        rowView.setTag(holder);
+        return rowView;
+    }
+
+    @Override
+    public void bindView(View view, Context context, Cursor cursor) {
+        ViewHolder holder = (ViewHolder) view.getTag();
+
+        holder.title.setText(cursor.getString(cursor
+                .getColumnIndexOrThrow(NotesDbAdapter.KEY_TITLE)));
+        holder.body.setText(cursor.getString(cursor.getColumnIndexOrThrow(NotesDbAdapter.KEY_BODY)));
+        holder.body
+                .setVisibility(expandedArray[cursor.getPosition()] ? View.VISIBLE
+                        : View.GONE);
+        holder.button
+                .setVisibility(expandedArray[cursor.getPosition()] ? View.VISIBLE
+                        : View.GONE);
+        holder.button.setTag(cursor.getPosition());
+
+    }
+
+    public void toggle(int position) {
+        expandedArray[position] = !expandedArray[position];
+        notifyDataSetChanged();
+    }
+}
+</code></pre>
+
+<p>And for completeness, here is the mapping from the ListAdapter mapping to be called in onCreate(), onActivityResult(), or whenever the list needs reloaded:</p>
+
+<pre><code>private void fillData() {
+    notesCursor = mDbHelper.fetchAllNotes();
+    startManagingCursor(notesCursor);
+    NotesCursorAdapter notes = new NotesCursorAdapter(this, notesCursor);
+    setListAdapter(notes);
+}
+</code></pre>

@@ -1,0 +1,167 @@
+<p>First of all, this is in no way a bug. It is the expected behavior. The purpose of media type mappings is not related to working with files, but instead an alternative form of content negotiation for cases where setting headers may not be available, for instance in a browser.</p>
+
+<p>Though not in the official spec, this feature was part of a draft prior to the specs final release. Most implementations decided to include it one way or another. Jersey happens to let you configure it. So can see <a href="https://jsr311.java.net/drafts/spec20080627.pdf" rel="nofollow">here in the spec in 3.7.1 Request Preprocessing</a></p>
+
+<blockquote>
+  <ol start="2">
+  <li><p>Set </p>
+  
+  <ul>
+  <li><code>M</code> = <code>{config.getMediaTypeMappings().keySet()}</code></li>
+  <li><code>L</code> = <code>{config.getLanguageMappings().keySet()}</code></li>
+  <li><code>m</code> = <code>null</code> </li>
+  <li><code>l</code> = <code>null</code> </li>
+  <li>Where config is an instance of the application-supplied subclass of ApplicationConfig. </li>
+  </ul></li>
+  <li><p>For each extension (a <code>.</code> character followed by one or more alphanumeric characters) <code>e</code> in the final path segment scanning from right to left: </p>
+  
+  <ul>
+  <li>(a)  Remove the leading ‘.’ character from <code>e</code></li>
+  <li>(b) If <code>m</code> is <code>null</code> and <code>e</code> is a member of <code>M</code> then remove the corresponding extension from the effective request URI and set <code>m = e</code>. </li>
+  <li>(c) Else if <code>l</code> is <code>null</code> and <code>e</code> is a member of <code>L</code> then remove the corresponding extension from the effective request URI and set <code>l = e</code>. Else go to step 4 </li>
+  </ul></li>
+  <li><p>If m is not null then set the value of the Accept header to <code>config.getExtensionMappings().get(m)</code></p></li>
+  </ol>
+</blockquote>
+
+<p>3(b) is basically saying that the extension should be removed from the requested URI and 4 is stating that there should be some extension mapping that would map say <code>json</code> (the extension) to <code>application/json</code> and set that as the <code>Accept</code> header. You can see from different tests, this behavior</p>
+
+<pre><code>@POST
+@Path("/files/{file}")
+@Produces({MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML})
+public Response doTest(@PathParam("file") String fileName, @Context HttpHeaders headers) {
+    String accept = headers.getHeaderString(HttpHeaders.ACCEPT);
+    return Response.ok(fileName + "; Accept: " + accept).build();
+}
+...
+
+Map&lt;String, MediaType&gt; map = new HashMap&lt;&gt;();
+map.put("xml", MediaType.APPLICATION_XML_TYPE);
+resourceCnfig.property(ServerProperties.MEDIA_TYPE_MAPPINGS, map);
+</code></pre>
+
+<blockquote>
+  <p><code>curl -v http://localhost:8080/api/mapping/files/file.xml -X POST</code><br/>
+  <strong>Result:</strong> <code>file; Accept: application/xml</code></p>
+</blockquote>
+
+<p>If we comment out that configuration property, you will see that the <code>Accept</code> header hasn't been set.</p>
+
+<blockquote>
+  <p><code>curl -v http://localhost:8080/api/mapping/files/file.xml -X POST</code><br/>
+  <strong>Result:</strong> <code>file.xml; Accept: */**</code></p>
+</blockquote>
+
+<h1><em>That being said...</em></h1>
+
+<p>When you configure the <code>ServerProperties.MEDIA_TYPE_MAPPINGS</code>, the <a href="https://jersey.java.net/apidocs/2.15/jersey/org/glassfish/jersey/server/filter/UriConnegFilter.html" rel="nofollow"><code>org.glassfish.jersey.server.filter.UriConnegFilter</code></a> is the filter used for this feature. You can see in the <a href="http://grepcode.com/file/repo1.maven.org/maven2/org.glassfish.jersey.core/jersey-server/2.13/org/glassfish/jersey/server/filter/UriConnegFilter.java#UriConnegFilter.filter%28javax.ws.rs.container.ContainerRequestContext%29" rel="nofollow">source code in line 204 and 211</a>, where the filter is stripping the extension</p>
+
+<pre><code>path = new StringBuilder(path).delete(index, index + suffix.length() + 1).toString();
+...
+rc.setRequestUri(uriInfo.getRequestUriBuilder().replacePath(path).build(new Object[0]));
+</code></pre>
+
+<p>So there's no way to configure this (at least as far as I can tell from looking at the source), so we would have to extend that class, override the <code>filter</code> method and take out, at minimum, that last line that actually does the replacing, then register the filter. Here's what I did to get it to work. I simply copy and pasted the code from the filter, and commented out the line where it replaces the extension</p>
+
+<pre><code>import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import javax.annotation.Priority;
+import javax.ws.rs.container.ContainerRequestContext;
+import javax.ws.rs.container.PreMatching;
+import javax.ws.rs.core.Configuration;
+import javax.ws.rs.core.Context;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.PathSegment;
+import javax.ws.rs.core.UriInfo;
+import org.glassfish.jersey.server.filter.UriConnegFilter;
+
+@PreMatching
+@Priority(3000)
+public class MyUriConnegFilter extends UriConnegFilter {
+
+    public MyUriConnegFilter(@Context Configuration config) {
+        super(config);
+    }
+
+    public MyUriConnegFilter(Map&lt;String, MediaType&gt; mediaTypeMappings, 
+                             Map&lt;String, String&gt; languageMappings) {
+        super(mediaTypeMappings, languageMappings);
+    }
+
+    @Override
+    public void filter(ContainerRequestContext rc)
+            throws IOException {
+        UriInfo uriInfo = rc.getUriInfo();
+
+        String path = uriInfo.getRequestUri().getRawPath();
+        if (path.indexOf('.') == -1) {
+            return;
+        }
+        List&lt;PathSegment&gt; l = uriInfo.getPathSegments(false);
+        if (l.isEmpty()) {
+            return;
+        }
+        PathSegment segment = null;
+        for (int i = l.size() - 1; i &gt;= 0; i--) {
+            segment = (PathSegment) l.get(i);
+            if (segment.getPath().length() &gt; 0) {
+                break;
+            }
+        }
+        if (segment == null) {
+            return;
+        }
+        int length = path.length();
+
+        String[] suffixes = segment.getPath().split("\\.");
+        for (int i = suffixes.length - 1; i &gt;= 1; i--) {
+            String suffix = suffixes[i];
+            if (suffix.length() != 0) {
+                MediaType accept = (MediaType) this.mediaTypeMappings.get(suffix);
+                if (accept != null) {
+                    rc.getHeaders().putSingle("Accept", accept.toString());
+
+                    int index = path.lastIndexOf('.' + suffix);
+                    path = new StringBuilder(path).delete(index, index + suffix.length() + 1).toString();
+                    suffixes[i] = "";
+                    break;
+                }
+            }
+        }
+        for (int i = suffixes.length - 1; i &gt;= 1; i--) {
+            String suffix = suffixes[i];
+            if (suffix.length() != 0) {
+                String acceptLanguage = (String) this.languageMappings.get(suffix);
+                if (acceptLanguage != null) {
+                    rc.getHeaders().putSingle("Accept-Language", acceptLanguage);
+
+                    int index = path.lastIndexOf('.' + suffix);
+                    path = new StringBuilder(path).delete(index, index + suffix.length() + 1).toString();
+                    suffixes[i] = "";
+                    break;
+                }
+            }
+        }
+        if (length != path.length()) {
+            //rc.setRequestUri(uriInfo.getRequestUriBuilder().replacePath(path).build(new Object[0]));
+        }
+    }
+}
+</code></pre>
+
+<p>Then configure it</p>
+
+<pre><code>Map&lt;String, MediaType&gt; map = new HashMap&lt;&gt;();
+map.put("xml", MediaType.APPLICATION_XML_TYPE);
+map.put("json", MediaType.APPLICATION_JSON_TYPE);
+resourceConfig.register(new MyUriConnegFilter(map, null));
+</code></pre>
+
+<blockquote>
+  <p><code>curl -v http://localhost:8080/api/mapping/files/file.xml -X POST</code><br/>
+  <strong>Result:</strong> <code>file.xml; Accept: application/xml</code></p>
+  
+  <p><code>curl -v http://localhost:8080/api/mapping/files/file.json -X POST</code><br/>
+  <strong>Result:</strong> <code>file.json; Accept: application/json</code></p>
+</blockquote>

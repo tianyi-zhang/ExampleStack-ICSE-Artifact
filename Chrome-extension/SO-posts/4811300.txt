@@ -1,0 +1,602 @@
+<p>Finally, I got it working (still need some modifcations). :)</p>
+
+<p>I must admit that I wasn't able to do draw the background in the <code>ViewGroup</code> itself. Well, it worked, but I couldn't control the scrolling (scrolled too much).
+What I basically did, was merging 2 tutorials.</p>
+
+<ul>
+<li>First one from here: <a href="http://android-projects.de/2011/01/04/android-homescreen-view-flipper/" rel="nofollow">Android Homescreen</a>
+It switches between different layouts. So first of all, I set transparent backgrounds.</li>
+<li>Second one from here: <a href="http://eagle.phys.utk.edu/guidry/android/DraggableSymbols.html" rel="nofollow">Draggable Symbols</a>
+It drags symbols over the screen by touch (using the <code>onDraw</code>, as suggested). I reduced the symbols to a single one and changed it from <code>ImageView</code> to <code>LinearLayout</code>.</li>
+</ul>
+
+<p>In that Layout I put the <code>ViewGroup</code>, did some little changes in the <code>onTouchEvent</code> and <code>onInterceptTouchEvent</code>, added some bad code and at last it worked. :)</p>
+
+<p>If someone's interested, I'll clean up the code and post it here, but I'm ashamed of my coding style, it's a mess. ;)</p>
+
+<p>Thank you very much, I appreciate your help! :)</p>
+
+<p><strong>UPDATE:</strong> 
+So, here is the code:</p>
+
+<p><strong>MainActivity.java</strong></p>
+
+<pre><code>package de.android.projects;
+
+import android.app.Activity;
+import android.os.Bundle;
+
+public class MainActivity extends Activity {
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+    }
+}
+</code></pre>
+
+<p><strong>MoveBackground.java</strong></p>
+
+<pre><code>package de.android.projects;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
+import android.util.AttributeSet;
+import android.widget.LinearLayout;
+
+/*
+ * LinearLayout which moves the background image by touchEvents. 
+ * Taken from: http://eagle.phys.utk.edu/guidry/android/DraggableSymbols.html
+ * and changed a little bit
+*/
+
+public class MoveBackground extends LinearLayout{
+
+    private Drawable background;     // background picture
+    private float X = -300;             // Current x coordinate, upper left corner - 300
+    private int scroll;
+
+    public MoveBackground(Context context) {
+        super(context);
+    }
+
+    public MoveBackground(Context context, AttributeSet attrs) {
+        super(context);
+
+        background = context.getResources().getDrawable(R.drawable.backgroundpicture);
+//just for tests, not really optimized yet :) 
+    background.setBounds(0,0,1000,getResources().getDisplayMetrics().heightPixels);
+
+        setWillNotDraw(false);
+    }
+
+    /* 
+     * Don't need these methods, maybe later for gesture improvements
+     */
+    /*
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        onTouchEvent(ev);
+        return false;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent ev) {
+        final int action = ev.getAction();
+
+        switch (action) {
+            // MotionEvent class constant signifying a finger-drag event  
+            case MotionEvent.ACTION_MOVE: {
+                // Request a redraw
+                invalidate();
+                break;
+            }
+            // MotionEvent class constant signifying a finger-up event
+            case MotionEvent.ACTION_UP:
+                invalidate();  // Request redraw
+                break;
+        }
+        return true;
+    }
+    */
+
+
+    // This method will be called each time the screen is redrawn. 
+    // When to redraw is under Android control, but we can request a redraw 
+    // using the method invalidate() inherited from the View superclass.
+
+    @Override
+    public void onDraw(Canvas canvas) {
+        super.onDraw(canvas);    
+
+     // get the object movement
+        if (BadScrollHelp.getScrollX() != scroll){
+            //reduce the scrolling
+            X -= scroll / 5;
+            scroll = BadScrollHelp.getScrollX();
+        }
+
+        // Draw background image at its current locations
+        canvas.save();
+        canvas.translate(X,0);
+        background.draw(canvas);
+        canvas.restore();
+    }
+}
+</code></pre>
+
+<p><strong>ViewFlipper.java</strong></p>
+
+<pre><code>package de.android.projects;
+
+import android.content.Context;
+import android.os.Parcel;
+import android.os.Parcelable;
+import android.util.Log;
+import android.content.res.TypedArray;
+import android.util.AttributeSet;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewConfiguration;
+import android.widget.Scroller;
+
+/*
+ * Flip different views. Taken from tutorial there http://android-projects.de/2011/01/04/android-homescreen-view-flipper/
+ */
+
+public class ViewFlipper extends ViewGroup {
+    private Scroller mScroller;
+    private VelocityTracker mVelocityTracker;
+
+    private int mScrollX = 0;
+    private int mCurrentScreen = 0;
+
+    private float mLastMotionX;
+
+    private static final String LOG_TAG = "DragableSpace";
+
+    private static final int SNAP_VELOCITY = 1000;
+
+    private final static int TOUCH_STATE_REST = 0;
+    private final static int TOUCH_STATE_SCROLLING = 1;
+
+    private int mTouchState = TOUCH_STATE_REST;
+
+    private int mTouchSlop = 0;
+
+    public ViewFlipper(Context context) {
+        super(context);
+        mScroller = new Scroller(context);
+
+        mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+
+        this.setLayoutParams(new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.FILL_PARENT));
+
+       setWillNotDraw(false);
+       requestDisallowInterceptTouchEvent(true);
+    }
+
+
+    public ViewFlipper(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        TypedArray a = getContext().obtainStyledAttributes(attrs, R.styleable.DragableSpace);
+        mCurrentScreen = a.getInteger(R.styleable.DragableSpace_default_screen, 0);
+
+        mScroller = new Scroller(context);
+
+        mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+
+        this.setLayoutParams(new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT ,
+                    ViewGroup.LayoutParams.FILL_PARENT));
+
+        setWillNotDraw(false);
+        requestDisallowInterceptTouchEvent(true);
+    }
+
+
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        /*
+         * This method JUST determines whether we want to intercept the motion.
+         * If we return true, onTouchEvent will be called and we do the actual
+         * scrolling there.
+         */
+
+        /*
+         * Shortcut the most recurring case: the user is in the dragging state
+         * and he is moving his finger. We want to intercept this motion.
+         */
+        final int action = ev.getAction();
+        if ((action == MotionEvent.ACTION_MOVE)
+                &amp;&amp; (mTouchState != TOUCH_STATE_REST)) {
+            return true;
+                }
+
+        final float x = ev.getX();
+
+        switch (action) {
+            case MotionEvent.ACTION_MOVE:
+                /*
+                 * mIsBeingDragged == false, otherwise the shortcut would have caught it. Check
+                 * whether the user has moved far enough from his original down touch.
+                 */
+
+                /*
+                 * Locally do absolute value. mLastMotionX is set to the y value
+                 * of the down event.
+                 */
+                final int xDiff = (int) Math.abs(x - mLastMotionX);
+                boolean xMoved = xDiff &gt; mTouchSlop + 50;
+
+                if (xMoved) {
+                    // Scroll if the user moved far enough along the X axis then
+                    mTouchState = TOUCH_STATE_SCROLLING;
+                }
+                break;
+
+            case MotionEvent.ACTION_DOWN:
+                // Remember location of down touch
+                mLastMotionX = x;
+                /*
+                 * If being flinged and user touches the screen, initiate drag;
+                 * otherwise don't.  mScroller.isFinished should be false when
+                 * being flinged.
+                 */
+                mTouchState = mScroller.isFinished() ? TOUCH_STATE_REST : TOUCH_STATE_SCROLLING;
+                break;
+
+            case MotionEvent.ACTION_CANCEL:
+            case MotionEvent.ACTION_UP:
+                // Release the drag
+                mTouchState = TOUCH_STATE_REST;
+                break;
+        }
+
+        /*
+         * The only time we want to intercept motion events is if we are in the
+         * drag mode.
+         */
+        return mTouchState != TOUCH_STATE_REST;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (mVelocityTracker == null) {
+            mVelocityTracker = VelocityTracker.obtain();
+        }
+        mVelocityTracker.addMovement(event);
+
+        final int action = event.getAction();
+        final float x = event.getX();
+
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+                Log.i(LOG_TAG, "event : down");
+                /*
+                 * If being flinged and user touches, stop the fling. isFinished
+                 * will be false if being flinged.
+                 */
+                if (!mScroller.isFinished()) {
+                    mScroller.abortAnimation();
+                }
+
+                // Remember where the motion event started
+                mLastMotionX = x;
+
+                break;
+            case MotionEvent.ACTION_MOVE:
+                // Scroll to follow the motion event
+                final int deltaX = (int) (mLastMotionX - x);
+                mLastMotionX = x;
+
+                if (deltaX &lt; 0) {
+                    if (mScrollX &gt; 0) {
+                        BadScrollHelp.setScrollX(deltaX);
+                        scrollBy(Math.max(-mScrollX, deltaX), 0);
+                    }
+                } else if (deltaX &gt; 0) {
+                    final int availableToScroll = getChildAt(getChildCount() - 1)
+                        .getRight()
+                        - mScrollX - getWidth();
+                    if (availableToScroll &gt; 0) {
+                        BadScrollHelp.setScrollX(deltaX);
+                        scrollBy(Math.min(availableToScroll, deltaX), 0);
+                    }
+                }
+
+                // Request a redraw
+                invalidate();
+                break;
+            case MotionEvent.ACTION_UP:
+                Log.i(LOG_TAG, "event : up");
+                final VelocityTracker velocityTracker = mVelocityTracker;
+                velocityTracker.computeCurrentVelocity(1000);
+                int velocityX = (int) velocityTracker.getXVelocity();
+
+                if (velocityX &gt; SNAP_VELOCITY &amp;&amp; mCurrentScreen &gt; 0) {
+                    // Fling hard enough to move left
+                    snapToScreen(mCurrentScreen - 1);
+                } else if (velocityX &lt; -SNAP_VELOCITY
+                        &amp;&amp; mCurrentScreen &lt; getChildCount() - 1) {
+                    // Fling hard enough to move right
+                    snapToScreen(mCurrentScreen + 1);
+                } else {
+                    snapToDestination();
+                }
+
+                if (mVelocityTracker != null) {
+                    mVelocityTracker.recycle();
+                    mVelocityTracker = null;
+                }
+                mTouchState = TOUCH_STATE_REST;
+                //neu unten
+                invalidate();  // Request redraw
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                Log.i(LOG_TAG, "event : cancel");
+                mTouchState = TOUCH_STATE_REST;
+        }
+        mScrollX = this.getScrollX();
+
+        return true;
+    }
+
+    private void snapToDestination() {
+        final int screenWidth = getWidth();
+        final int whichScreen = (mScrollX + (screenWidth / 2)) / screenWidth;
+        Log.i(LOG_TAG, "from des");
+        snapToScreen(whichScreen);
+    }
+
+    public void snapToScreen(int whichScreen) {         
+        Log.i(LOG_TAG, "snap To Screen " + whichScreen);
+        mCurrentScreen = whichScreen;
+        BadScrollHelp.setCurrentScreen(mCurrentScreen);
+        final int newX = whichScreen * getWidth();
+        final int delta = newX - mScrollX;
+        mScroller.startScroll(mScrollX, 0, delta, 0, Math.abs(delta) * 2);
+
+        invalidate();
+    }
+
+    public void setToScreen(int whichScreen) {
+        Log.i(LOG_TAG, "set To Screen " + whichScreen);
+        mCurrentScreen = whichScreen;
+        BadScrollHelp.setCurrentScreen(mCurrentScreen);
+        final int newX = whichScreen * getWidth();
+        mScroller.startScroll(newX, 0, 0, 0, 10);             
+        invalidate();
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        int childLeft = 0;
+
+        final int count = getChildCount();
+        for (int i = 0; i &lt; count; i++) {
+            final View child = getChildAt(i);
+            if (child.getVisibility() != View.GONE) {
+                final int childWidth = child.getMeasuredWidth();
+                child.layout(childLeft, 0, childLeft + childWidth, child
+                        .getMeasuredHeight());
+                childLeft += childWidth;
+            }
+        }
+
+    }
+
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+
+        final int width = MeasureSpec.getSize(widthMeasureSpec);
+        final int widthMode = MeasureSpec.getMode(widthMeasureSpec);
+        if (widthMode != MeasureSpec.EXACTLY) {
+            //throw new IllegalStateException("error mode.");
+        }
+
+        final int heightMode = MeasureSpec.getMode(heightMeasureSpec);
+        if (heightMode != MeasureSpec.EXACTLY) {
+            //throw new IllegalStateException("error mode.");
+        }
+
+        // The children are given the same width and height as the workspace
+        final int count = getChildCount();
+        for (int i = 0; i &lt; count; i++) {
+            getChildAt(i).measure(widthMeasureSpec, heightMeasureSpec);
+        }
+        Log.i(LOG_TAG, "moving to screen "+mCurrentScreen);
+        scrollTo(mCurrentScreen * width, 0);    
+    }  
+
+    @Override
+    public void computeScroll() {
+        if (mScroller.computeScrollOffset()) {
+            mScrollX = mScroller.getCurrX();
+            scrollTo(mScrollX, 0);
+            postInvalidate();
+        }
+    }
+
+    /**
+     * Return the parceable instance to be saved
+     */
+    @Override
+    protected Parcelable onSaveInstanceState() {
+      final SavedState state = new SavedState(super.onSaveInstanceState());
+      state.currentScreen = mCurrentScreen;
+      return state;
+    }
+
+
+    /**
+     * Restore the previous saved current screen
+     */
+    @Override
+    protected void onRestoreInstanceState(Parcelable state) {
+      SavedState savedState = (SavedState) state;
+      super.onRestoreInstanceState(savedState.getSuperState());
+      if (savedState.currentScreen != -1) {
+        mCurrentScreen = savedState.currentScreen;
+        BadScrollHelp.setCurrentScreen(mCurrentScreen);
+      }
+    }
+
+    // ========================= INNER CLASSES ==============================
+
+    public interface onViewChangedEvent{      
+      void onViewChange (int currentViewIndex);
+    }
+
+    /**
+     * A SavedState which save and load the current screen
+     */
+    public static class SavedState extends BaseSavedState {
+      int currentScreen = -1;
+
+      /**
+       * Internal constructor
+       * 
+       * @param superState
+       */
+      SavedState(Parcelable superState) {
+        super(superState);
+      }
+
+      /**
+       * Private constructor
+       * 
+       * @param in
+       */
+      private SavedState(Parcel in) {
+        super(in);
+        currentScreen = in.readInt();
+      }
+
+      /**
+       * Save the current screen
+       */
+      @Override
+      public void writeToParcel(Parcel out, int flags) {
+        super.writeToParcel(out, flags);
+        out.writeInt(currentScreen);
+      }
+
+      /**
+       * Return a Parcelable creator
+       */
+      public static final Parcelable.Creator&lt;SavedState&gt; CREATOR = new Parcelable.Creator&lt;SavedState&gt;() {
+        public SavedState createFromParcel(Parcel in) {
+          return new SavedState(in);
+        }
+
+        public SavedState[] newArray(int size) {
+          return new SavedState[size];
+        }
+      };
+    }
+}
+</code></pre>
+
+<p><strong>BadScrollHelp.java</strong></p>
+
+<pre><code>package de.android.projects;
+
+public class BadScrollHelp {
+    private static int scrollX = 0;
+    private static int currentScreen = 0;
+
+    public static synchronized void setScrollX(int scroll){
+        scrollX = scroll;
+    }
+
+    public static synchronized void setCurrentScreen(int screen){
+        currentScreen = screen;
+    }
+
+    public static synchronized int getScrollX(){
+        return scrollX;
+    }
+
+    public static synchronized int getCurrentScreen(){
+        return currentScreen;
+    }
+
+}
+</code></pre>
+
+<p><strong>main.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"&gt;
+
+    &lt;de.android.projects.MoveBackground
+        xmlns:app="http://schemas.android.com/apk/res/de.android.projects"
+        android:id="@+id/space1"
+        android:layout_width="fill_parent" 
+        android:layout_height="fill_parent" &gt;   
+
+        &lt;de.android.projects.ViewFlipper
+            xmlns:app="http://schemas.android.com/apk/res/de.android.projects"
+            android:id="@+id/space"
+            android:layout_width="fill_parent" 
+            android:layout_height="fill_parent" 
+            app:default_screen="0" &gt;
+            &lt;include android:id="@+id/left" layout="@layout/left_screen" /&gt;
+            &lt;include android:id="@+id/center" layout="@layout/initial_screen" /&gt;
+            &lt;include android:id="@+id/right" layout="@layout/right_screen" /&gt;
+        &lt;/de.android.projects.ViewFlipper&gt;
+
+    &lt;/de.android.projects.MoveBackground&gt;
+
+&lt;/FrameLayout&gt;
+</code></pre>
+
+<p><strong>left_screen.xml, right_screen.xml and initial_screen.xml</strong></p>
+
+<pre><code>&lt;LinearLayout 
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:background="#00000000"
+    android:layout_width="fill_parent" 
+    android:layout_height="fill_parent"
+    android:orientation="vertical" &gt;
+
+    &lt;LinearLayout android:layout_width="fill_parent" 
+                android:layout_height="fill_parent"
+                android:orientation="vertical" &gt;
+
+        &lt;Button android:layout_width="100dip"
+                android:layout_height="50dip"
+                android:text="Button" /&gt;
+
+    &lt;/LinearLayout&gt;
+
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>attrs.xml (in values folder)</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;resources&gt;
+    &lt;declare-styleable name="DragableSpace"&gt;
+        &lt;attr name="default_screen" format="integer"/&gt;
+    &lt;/declare-styleable&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p>So, finally, that's it. The <code>onDraw</code> method still needs some modification. 
+I'm unhappy with this solution so far, because it must be possible to use the <code>onDraw</code> method in the <code>ViewGroup</code>, I think. But I couldn't figure it out.
+Also, setting variables with static methods seems to be a dirty trick.</p>
+
+<p>Would be glad if someone could give me advice how to pass those events from the <code>ViewFlipper</code> to the parent <code>MoveBackground</code> class. Or how to include the <code>MoveBackground</code> drawing method into the <code>ViewFlipper</code>.</p>
+
+<p>I could integrate the <code>ViewFlipper</code> class into the <code>MoveBackground</code> class and do a <code>addView(viewFlipper)</code> programmatically. Than I would not need that static workaround anymore. :)</p>

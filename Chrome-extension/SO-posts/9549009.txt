@@ -1,0 +1,193 @@
+<p>OK, there goes. You might have to marshall some parameters to fit though:</p>
+
+<pre><code>/**
+ * Copied shamelessly from org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator,
+ * changed only the hash algorithm.
+ * All rights reserved by Bouncy Castle, see their MIT-like permissive license.
+ * @author maartenb
+ *
+ */
+public class PKCS5S2_SHA256_ParametersGenerator
+    extends PBEParametersGenerator
+{
+
+    // NOTE this is the only actual change from PKCS5S2ParametersGenerator
+    private Mac    hMac = new HMac(new SHA256Digest());
+
+    /**
+     * construct a PKCS5 Scheme 2 Parameters generator.
+     */
+    public PKCS5S2_SHA256_ParametersGenerator()
+    {
+    }
+
+    private void F(
+        byte[]  P,
+        byte[]  S,
+        int     c,
+        byte[]  iBuf,
+        byte[]  out,
+        int     outOff)
+    {
+        byte[]              state = new byte[hMac.getMacSize()];
+        CipherParameters    param = new KeyParameter(P);
+
+        hMac.init(param);
+
+        if (S != null)
+        {
+            hMac.update(S, 0, S.length);
+        }
+
+        hMac.update(iBuf, 0, iBuf.length);
+
+        hMac.doFinal(state, 0);
+
+        System.arraycopy(state, 0, out, outOff, state.length);
+
+        if (c == 0)
+        {
+            throw new IllegalArgumentException("iteration count must be at least 1.");
+        }
+
+        for (int count = 1; count &lt; c; count++)
+        {
+            hMac.init(param);
+            hMac.update(state, 0, state.length);
+            hMac.doFinal(state, 0);
+
+            for (int j = 0; j != state.length; j++)
+            {
+                out[outOff + j] ^= state[j];
+            }
+        }
+    }
+
+
+    private void intToOctet(
+        byte[]  buf,
+        int     i)
+    {
+        buf[0] = (byte)(i &gt;&gt;&gt; 24);
+        buf[1] = (byte)(i &gt;&gt;&gt; 16);
+        buf[2] = (byte)(i &gt;&gt;&gt; 8);
+        buf[3] = (byte)i;
+    }
+
+    private byte[] generateDerivedKey(
+        int dkLen)
+    {
+        int     hLen = hMac.getMacSize();
+        int     l = (dkLen + hLen - 1) / hLen;
+        byte[]  iBuf = new byte[4];
+        byte[]  out = new byte[l * hLen];
+
+        for (int i = 1; i &lt;= l; i++)
+        {
+            intToOctet(iBuf, i);
+
+            F(password, salt, iterationCount, iBuf, out, (i - 1) * hLen);
+        }
+
+        return out;
+    }
+
+    /**
+     * Generate a key parameter derived from the password, salt, and iteration
+     * count we are currently initialised with.
+     *
+     * @param keySize the size of the key we want (in bits)
+     * @return a KeyParameter object.
+     */
+    public CipherParameters generateDerivedParameters(
+        int keySize)
+    {
+        keySize = keySize / 8;
+
+        byte[]  dKey = generateDerivedKey(keySize);
+
+        return new KeyParameter(dKey, 0, keySize);
+    }
+
+    /**
+     * Generate a key with initialisation vector parameter derived from
+     * the password, salt, and iteration count we are currently initialised
+     * with.
+     *
+     * @param keySize the size of the key we want (in bits)
+     * @param ivSize the size of the iv we want (in bits)
+     * @return a ParametersWithIV object.
+     */
+    public CipherParameters generateDerivedParameters(
+        int     keySize,
+        int     ivSize)
+    {
+        keySize = keySize / 8;
+        ivSize = ivSize / 8;
+
+        byte[]  dKey = generateDerivedKey(keySize + ivSize);
+
+        return new ParametersWithIV(new KeyParameter(dKey, 0, keySize), dKey, keySize, ivSize);
+    }
+
+    /**
+     * Generate a key parameter for use with a MAC derived from the password,
+     * salt, and iteration count we are currently initialised with.
+     *
+     * @param keySize the size of the key we want (in bits)
+     * @return a KeyParameter object.
+     */
+    public CipherParameters generateDerivedMacParameters(
+        int keySize)
+    {
+        return generateDerivedParameters(keySize);
+    }
+}
+</code></pre>
+
+<p>Oh, and add Bouncy to your path of course...these are the required import statements:</p>
+
+<pre><code>import org.bouncycastle.crypto.CipherParameters;
+import org.bouncycastle.crypto.Mac;
+import org.bouncycastle.crypto.PBEParametersGenerator;
+import org.bouncycastle.crypto.digests.SHA256Digest;
+import org.bouncycastle.crypto.macs.HMac;
+import org.bouncycastle.crypto.params.KeyParameter;
+import org.bouncycastle.crypto.params.ParametersWithIV;
+</code></pre>
+
+<p>[EDIT] example usage</p>
+
+<pre><code>        int iterations = 1000; // minimum
+        int keySize = 256; // maximum
+        final byte[] salt = new byte[8];
+        SecureRandom rng = SecureRandom.getInstance("SHA1PRNG");
+        rng.nextBytes(salt);
+        char[] password = new char[] { 'o', 'w', 'l', 's', 't', 'e', 'a', 'd' };
+
+        // S2 *is* PBKDF2, but the default used only HMAC(SHA-1)
+        final PKCS5S2_SHA256_ParametersGenerator gen = new PKCS5S2_SHA256_ParametersGenerator();
+
+        // lets not use String, as we cannot destroy strings, BC to the rescue!
+        final byte[] pwBytes = Strings.toUTF8ByteArray(password);
+
+        gen.init(pwBytes, salt, iterations);
+
+        final KeyParameter params1 = (KeyParameter) gen.generateDerivedMacParameters(keySize);
+
+        // use for/next loop for older Java versions, destroy password information in memory
+        Arrays.fill(pwBytes, 0, pwBytes.length, (byte) 0);
+        Arrays.fill(password, 0, password.length, ' ');
+        final KeyParameter keyParam = params1;
+        SecretKeySpec secretKey = new SecretKeySpec(keyParam.getKey().clone(), "AES");
+</code></pre>
+
+<p>[EDIT] forgot to include the license, even if I pointed to it, sorry about the legalize:</p>
+
+<p>Copyright (c) 2000 - 2011 The Legion Of The Bouncy Castle (http://www.bouncycastle.org)</p>
+
+<p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
+
+<p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+
+<p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. </p>

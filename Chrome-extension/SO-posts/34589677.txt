@@ -1,0 +1,95 @@
+<p>What you described is very strange, but I came out with one case when your code may fail. Let me describe it in details. You first create new scheduled executor with a thread pool size = 1:</p>
+
+<pre><code>Executors.newScheduledThreadPool(1);
+</code></pre>
+
+<p>This single thread will be used to execute your runnables. Then you schedule runnable with fixed rate, to be run first after 10 seconds, and then every 60 seconds:</p>
+
+<pre><code>scheduler.scheduleAtFixedRate(new BackupTask(), 10, 60, TimeUnit.SECONDS);
+</code></pre>
+
+<p>Now, because you have only one thread in executor that can run your runnables, when your BackupTask hang for any reason, or maybe execute much much longer, the next execution will be delayed as long as the first one completes. You are doing network backup, so the issue may be network related. Just for example - doing close() may result in code waiting for network timeout (depending how long timeout value is), or doing write(..) in the same scenario.</p>
+
+<p>What I would suggest is to put some debug statements in your code (please see code below). I know this may generate some rubbish in the application console, but if you do not want to debug remotely, this may be the only way to find out what is wrong in your code.</p>
+
+<pre><code>public static void copyFolder(File src, File dest) throws IOException{
+    if (src.isDirectory()) {
+
+        //if directory not exists, create it
+        if(!dest.exists()){
+            System.out.println("Creating directory " + dest);
+            dest.mkdir();
+            System.out.println("Created directory ");
+        }
+
+        for (String file : src.list()) {
+
+            File srcFile = new File(src, file);
+            File destFile = new File(dest, file);
+
+            System.out.println("Copying " + srcFile + " to " + destFile);
+            copyFolder(srcFile,destFile);
+            System.out.println("Copied " + srcFile + " to " + destFile);
+        }
+
+    }else{
+
+        InputStream in = new FileInputStream(src);
+        OutputStream out = new FileOutputStream(dest);
+
+        byte[] buffer = new byte[1024];
+
+        System.out.println("Writing file " + src + " to " + dest);
+
+        int length;
+        //copy the file content in bytes
+        while ((length = in.read(buffer)) &gt; 0){
+            out.write(buffer, 0, length);
+        }
+
+        System.out.println("Closing file " + src);
+        in.close();
+
+        System.out.println("Closing file " + dest);
+        out.close();
+
+        System.out.println("Writing file " + src + " to " + dest + " is done");
+    }
+}
+</code></pre>
+
+<p>Also, my few comments in regards to your code:</p>
+
+<p>Your BackupTask extends TimerTask. This is unnecessary. It's enough for it to implement Runnable.</p>
+
+<p>When you write/read from streams you should always make sure to close your resources in finally section, or use try with resources (from Java 7 upward). Otherwise you may be left with files open forever.</p>
+
+<pre><code>InputStream in = null;
+OutputStream out = null;
+
+byte[] buffer = new byte[1024];
+int length;
+
+try {
+  in = new FileInputStream(src);
+  out = new FileOutputStream(dest);
+  while ((length = in.read(buffer)) &gt; 0) {
+    out.write(buffer, 0, length);
+  }
+} finally {
+  if (in != null) {
+    try {
+      in.close();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+  if (out != null) {
+    try {
+      out.close();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+}
+</code></pre>

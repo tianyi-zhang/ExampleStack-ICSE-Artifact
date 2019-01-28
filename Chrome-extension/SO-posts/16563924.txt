@@ -1,0 +1,132 @@
+<p><strong>First</strong>, to use a database, in general, in android, you should extend the <code>SQLiteOpenHelper</code> class. This class is the one responsible for creating your database (and upgrading) when needed from a sql script you provide in your implementation.</p>
+
+<p><strong>So the trick is</strong>, you need to override the behavior of the <code>SQLiteOpenHelper</code> to <em>copy</em> your database file from the assets folder instead of <em>create</em> your database.</p>
+
+<p>in this <a href="http://kdehairy.com/2012/08/19/using-a-preloaded-sqlite-database-with-sqliteopenhelper/" rel="nofollow">blog</a> post, i explain in details the process of overriding this behavior. but here is the final code.</p>
+
+<p>use the <code>Repository</code> class as you would use <code>SQLiteOpenHelper</code> normally.</p>
+
+<pre><code>public class Repository extends SQLiteOpenHelper {
+private static final int VERSION = 1;
+private static final String DATABASE_NAME = "data.sqlite";
+private static File DATABASE_FILE;
+// This is an indicator if we need to copy the
+// database file.
+private boolean mInvalidDatabaseFile = false;
+private boolean mIsUpgraded = false;
+private Context mContext;
+/**
+* number of users of the database connection.
+* */
+private int mOpenConnections = 0;
+private static Repository mInstance;
+
+synchronized static public Repository getInstance(Context context) {
+    if (mInstance == null) {
+        mInstance = new Repository(context.getApplicationContext());
+    }
+    return mInstance;
+}
+private Repository(Context context) {
+    super(context, DATABASE_NAME, null, VERSION);
+    this.mContext = context;
+    SQLiteDatabase db = null;
+    try {
+        db = getReadableDatabase();
+        if (db != null) {
+            db.close();
+        }
+        DATABASE_FILE = context.getDatabasePath(DATABASE_NAME);
+        if (mInvalidDatabaseFile) {
+            copyDatabase();
+        }
+        if (mIsUpgraded) {
+            doUpgrade();
+        }
+    } catch (SQLiteException e) {
+    } finally {
+        if (db != null &amp;&amp; db.isOpen()) {
+            db.close();
+        }
+    }
+}
+@Override
+public void onCreate(SQLiteDatabase db) {
+    mInvalidDatabaseFile = true;
+}
+@Override
+public void onUpgrade(SQLiteDatabase database,
+                      int old_version, int new_version) {
+    mInvalidDatabaseFile = true;
+    mIsUpgraded = true;
+}
+/**
+* called if a database upgrade is needed
+*/
+private void doUpgrade() {
+    // implement the database upgrade here.
+}
+@Override
+public synchronized void onOpen(SQLiteDatabase db) {
+    super.onOpen(db);
+    // increment the number of users of the database connection.
+    mOpenConnections++;
+    if (!db.isReadOnly()) {
+        // Enable foreign key constraints
+        db.execSQL("PRAGMA foreign_keys=ON;");
+    }
+}
+/**
+* implementation to avoid closing the database connection while it is in
+* use by others.
+*/
+@Override
+public synchronized void close() {
+    mOpenConnections--;
+    if (mOpenConnections == 0) {
+        super.close();
+    }
+}
+private void copyDatabase() {
+    AssetManager assetManager = mContext.getResources().getAssets();
+    InputStream in = null;
+    OutputStream out = null;
+    try {
+        in = assetManager.open(DATABASE_NAME);
+        out = new FileOutputStream(DATABASE_FILE);
+        byte[] buffer = new byte[1024];
+        int read = 0;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+    } catch (IOException e) {
+    } finally {
+        if (in != null) {
+            try {
+                in.close();
+            } catch (IOException e) {}
+        }
+        if (out != null) {
+            try {
+                out.close();
+            } catch (IOException e) {}
+        }
+    }
+    setDatabaseVersion();
+    mInvalidDatabaseFile = false;
+}
+private void setDatabaseVersion() {
+    SQLiteDatabase db = null;
+    try {
+        db = SQLiteDatabase.openDatabase(DATABASE_FILE.getAbsolutePath(), null,
+                                         SQLiteDatabase.OPEN_READWRITE);
+        db.execSQL("PRAGMA user_version = " + VERSION);
+    } catch (SQLiteException e ) {
+    } finally {
+        if (db != null &amp;&amp; db.isOpen()) {
+            db.close();
+        }
+    }
+}
+}
+</code></pre>

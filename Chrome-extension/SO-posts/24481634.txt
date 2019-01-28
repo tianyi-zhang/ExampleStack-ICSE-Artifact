@@ -1,0 +1,374 @@
+<p>andengine uses opengl so you might want to create a handler to execute your dialog on the opengl thread</p>
+
+<pre><code>public Handler handler; 
+</code></pre>
+
+<p>then </p>
+
+<pre><code>handler = new Handler() {
+            @Override
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                case 0:
+                AlertDialog alert = alertBuilder.create(); 
+                alert.show();
+                break;
+}
+}};
+</code></pre>
+
+<p>then to use it</p>
+
+<pre><code>handler.sendMessage(Message.obtain(handler, 0));
+</code></pre>
+
+<p>something along those lines</p>
+
+<p>EDIT: class using handler for looper prepare opengl</p>
+
+<pre><code>import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+
+import java.net.MalformedURLException;
+import java.nio.IntBuffer;
+import java.util.List;
+
+
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
+
+
+import com.facebook.android.AsyncFacebookRunner;
+import com.facebook.android.AsyncFacebookRunner.RequestListener;
+import com.facebook.android.DialogError;
+import com.facebook.android.Facebook;
+import com.facebook.android.FacebookError;
+import com.facebook.android.Facebook.DialogListener;
+
+import pic.puzzle.framework.Audio;
+import pic.puzzle.framework.FileIO;
+import pic.puzzle.framework.Game;
+import pic.puzzle.framework.Graphics;
+import pic.puzzle.framework.Input;
+import pic.puzzle.framework.Screen;
+import pic.puzzle.picturepuzzle.GameOverScreen;
+import pic.puzzle.picturepuzzle.GameOverScreenCustom;
+import pic.puzzle.picturepuzzle.PicturePuzzleScreen;
+import pic.puzzle.picturepuzzle.PuzzleScreen;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.ProgressDialog;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
+import android.net.Uri;
+import android.opengl.GLSurfaceView;
+import android.opengl.GLSurfaceView.Renderer;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.os.PowerManager;
+import android.os.PowerManager.WakeLock;
+
+import android.view.Window;
+import android.view.WindowManager;
+
+import android.widget.Toast;
+
+
+public abstract class GLGame extends Activity implements Game, Renderer {
+    enum GLGameState {
+        Initialized,
+        Running,
+        Paused,
+        Finished,
+        Idle
+    }
+
+
+    GLSurfaceView glView;    
+    GLGraphics glGraphics;
+    Audio audio;
+    Input input;
+    FileIO fileIO;
+    Screen screen;
+    GLGameState state = GLGameState.Initialized;
+    Object stateChanged = new Object();
+    long startTime = System.nanoTime();
+    WakeLock wakeLock;
+    public static Bitmap lastscreenshot;
+    public static boolean screenshot = false,finish = false;
+   public static int width, height;
+    public static Handler handler; 
+    public static boolean share = false;
+    String APP_ID = ("567944629883125");
+    public Facebook fb;
+    public byte[] data;
+    public static int custom = 0;
+    public Uri uri;
+    String here;
+
+    @SuppressLint("HandlerLeak")
+    @SuppressWarnings("deprecation")
+    @Override 
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                             WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        glView = new GLSurfaceView(this);
+        glView.setEGLConfigChooser(8 , 8, 8, 8, 16, 0);
+        glView.setRenderer(this);
+        setContentView(glView);
+        fb = new Facebook(APP_ID);
+        glGraphics = new GLGraphics(glView);
+        fileIO = new AndroidFileIO(getAssets());
+        audio = new AndroidAudio(this);
+        input = new AndroidInput(this, glView, 1, 1);
+        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        wakeLock = powerManager.newWakeLock(PowerManager.FULL_WAKE_LOCK, "GLGame");
+        handler = new Handler() {
+            @Override
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                case 0:
+
+
+                    if(custom == 0)
+                    uri = GameOverScreen.pngUri;
+                    else if(custom == 1)
+                        uri = GameOverScreenCustom.pngUri;
+
+
+                    if(custom == 0){
+                         here = "Moves: " + GameOverScreen.moves + "   " + "Time: " + GameOverScreen.time;}
+                    else if(custom == 1){
+                        here = "Moves: " + GameOverScreenCustom.moves + "   " + "Time: " + GameOverScreenCustom.time;}
+
+                    Intent shareIntent = new Intent(android.content.Intent.ACTION_SEND);
+                    shareIntent.setType("text/plain");
+
+
+
+                    shareIntent.putExtra(android.content.Intent.EXTRA_TEXT,
+                            here);
+                    shareIntent.setType("image/png");
+                    shareIntent.putExtra(android.content.Intent.EXTRA_STREAM,
+                                    uri); //Share the image on Facebook
+                    PackageManager pm = getApplicationContext().getPackageManager();
+                    List&lt;ResolveInfo&gt; activityList = pm.queryIntentActivities(
+                                        shareIntent, 0);
+                    for (final ResolveInfo app : activityList) {
+                        if ((app.activityInfo.name).contains("facebook")) {
+                            final ActivityInfo activity = app.activityInfo;
+                            final ComponentName name = new ComponentName(
+                                        activity.applicationInfo.packageName,
+                                        activity.name);
+                            shareIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                            shareIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                            shareIntent.setComponent(name);
+                            startActivity(shareIntent);
+                            break;
+                                }
+                            }
+                }
+            }
+        };
+    }
+
+    public void onResume() {
+        super.onResume();
+        glView.onResume();
+        wakeLock.acquire();
+    }
+
+    @Override
+    public void onSurfaceCreated(GL10 gl, EGLConfig config) {        
+        glGraphics.setGL(gl);
+
+        synchronized(stateChanged) {
+            if(state == GLGameState.Initialized)
+                screen = getStartScreen();
+            state = GLGameState.Running;
+            screen.resume();
+            startTime = System.nanoTime();
+        }        
+    }
+
+    @Override
+    public void onSurfaceChanged(GL10 gl, int width, int height) { 
+        GLGame.width = width;
+        GLGame.height = height;
+    }
+
+    @Override
+    public void onDrawFrame(GL10 gl) {                
+        GLGameState state = null;
+        if(finish){
+            finish = false;
+            finish();
+        }
+        if(share) { 
+            share = false;
+           handler.sendMessage(Message.obtain(handler, 0));
+
+        }
+
+        synchronized(stateChanged) {
+            state = this.state;
+        }
+
+        if(state == GLGameState.Running) {
+            float deltaTime = (System.nanoTime()-startTime) / 1000000000.0f;
+            startTime = System.nanoTime();
+
+            screen.update(deltaTime);
+            screen.present(deltaTime);
+            if(screenshot){                     
+                lastscreenshot = SavePixels(0,0,width,height,gl);
+                lastscreenshot = Bitmap.createScaledBitmap(lastscreenshot, 320, 480, true);
+
+
+                screenshot = false;
+             }
+
+        }
+
+        if(state == GLGameState.Paused) {
+            screen.pause();            
+            synchronized(stateChanged) {
+                this.state = GLGameState.Idle;
+                stateChanged.notifyAll();
+            }
+        }
+
+        if(state == GLGameState.Finished) {
+            screen.pause();
+            screen.dispose();
+            synchronized(stateChanged) {
+                this.state = GLGameState.Idle;
+                stateChanged.notifyAll();
+            }            
+        }
+
+    } 
+
+
+    @Override 
+    public void onPause() {        
+        synchronized(stateChanged) {
+            if(isFinishing())            
+                state = GLGameState.Finished;
+            else
+                state = GLGameState.Paused;
+            while(true) {
+                try {
+                    stateChanged.wait();
+                    break;
+                } catch(InterruptedException e) {         
+                }
+            }
+        }
+        wakeLock.release();
+        glView.onPause();  
+        super.onPause();
+    } 
+    @Override
+    public void onDestroy(){
+        if(lastscreenshot != null)
+        lastscreenshot.recycle();
+        if(PicturePuzzleScreen.pic != null)
+        PicturePuzzleScreen.pic.recycle();
+
+        if(GameOverScreen.finalbitmap != null)
+        GameOverScreen.finalbitmap.recycle();
+        if(GameOverScreenCustom.finalbitmap != null)
+        GameOverScreenCustom.finalbitmap.recycle();
+        System.gc();
+        super.onDestroy();
+    }
+    public static Bitmap SavePixels(int x, int y, int w, int h, GL10 gl)
+    {  
+         int b[]=new int[w*(y+h)];
+         int bt[]=new int[w*h];
+         IntBuffer ib=IntBuffer.wrap(b);
+         ib.position(0);
+         gl.glReadPixels(x, 0, w, y+h, GL10.GL_RGBA, GL10.GL_UNSIGNED_BYTE, ib);
+
+         for(int i=0, k=0; i&lt;h; i++, k++)
+         {//remember, that OpenGL bitmap is incompatible with Android bitmap
+          //and so, some correction need.        
+              for(int j=0; j&lt;w; j++)
+              {
+                   int pix=b[i*w+j];
+                   int pb=(pix&gt;&gt;16)&amp;0xff;
+                   int pr=(pix&lt;&lt;16)&amp;0x00ff0000;
+                   int pix1=(pix&amp;0xff00ff00) | pr | pb;
+                   bt[(h-k-1)*w+j]=pix1;
+              }
+         }
+
+
+         Bitmap sb=Bitmap.createBitmap(bt, w, h, Bitmap.Config.RGB_565);
+         return sb;
+    }
+
+
+    public GLGraphics getGLGraphics() {
+        return glGraphics;
+    }  
+
+    @Override
+    public Input getInput() {
+        return input;
+    }
+
+    @Override
+    public FileIO getFileIO() {
+        return fileIO;
+    }
+
+    @Override
+    public Graphics getGraphics() {
+        throw new IllegalStateException("We are using OpenGL!");
+    }
+
+    @Override
+    public Audio getAudio() {
+        return audio;
+    }
+
+    @Override
+    public void setScreen(Screen screen) {
+        if (screen == null)
+            throw new IllegalArgumentException("Screen must not be null");
+
+        this.screen.pause();
+        this.screen.dispose();
+        screen.resume();
+        screen.update(0);
+        this.screen = screen;
+    }
+
+    @Override
+    public Screen getCurrentScreen() {
+        return screen;
+    }  
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void onActivityResult(int requestCode,int resultCode,Intent data)
+    {
+        super.onActivityResult(requestCode, resultCode, data);
+        fb.authorizeCallback(requestCode, resultCode, data);
+    }
+
+}
+</code></pre>

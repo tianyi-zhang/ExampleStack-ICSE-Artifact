@@ -1,0 +1,147 @@
+<p>Its easier to do it with SWT here is the code...</p>
+
+<pre><code>package printer;
+
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.printing.Printer;
+import org.eclipse.swt.printing.PrinterData;
+
+public class TextPrinter {
+
+    Printer printer;
+    GC gc;
+    int lineHeight = 0;
+    int tabWidth = 0;
+    int leftMargin;
+    int rightMargin;
+    int topMargin, bottomMargin;
+    int x;
+    int y;
+    int index;
+    int end;
+    String tabs;
+    StringBuffer wordBuffer;
+
+    public TextPrinter() {
+    }
+
+    public void printString(final String textToPrint) {
+
+        PrinterData data = Printer.getDefaultPrinterData();
+        printer = new Printer(data);
+        Thread printingThread = new Thread("Printing") {
+            @Override
+            public void run() {
+                print(printer, textToPrint);
+                printer.dispose();
+            }
+        };
+        printingThread.start();
+    }
+
+    void print(Printer printer, String textToPrint) {
+        if (printer.startJob("iassael")) { 
+
+            Rectangle clientArea = printer.getClientArea();
+            Rectangle trim = printer.computeTrim(0, 0, 0, 0);
+            Point dpi = printer.getDPI();
+            leftMargin = dpi.x + trim.x; // one inch from left side of paper
+            rightMargin = clientArea.width - dpi.x + trim.x + trim.width; 
+            topMargin = dpi.y + trim.y; // one inch from top edge of paper
+            bottomMargin = clientArea.height - dpi.y + trim.y + trim.height;
+
+            /* Create a buffer for computing tab width. */
+            int tabSize = 4; // is tab width a user setting in your UI?
+            StringBuffer tabBuffer = new StringBuffer(tabSize);
+            for (int i = 0; i &lt; tabSize; i++)
+                tabBuffer.append(' ');
+            tabs = tabBuffer.toString();
+
+            /*
+             * Create printer GC, and create and set the printer font &amp;
+             * foreground color.
+             */
+            gc = new GC(printer);
+
+            Font font = new Font(null, "Helvetica", 11, SWT.NORMAL);
+            gc.setFont(font);
+            tabWidth = gc.stringExtent(tabs).x;
+            lineHeight = gc.getFontMetrics().getHeight();
+
+            /* Print text to current gc using word wrap */
+            printText(textToPrint);
+            printer.endJob();
+
+            /* Cleanup graphics resources used in printing */
+            font.dispose();
+            gc.dispose();
+        }
+    }
+
+    void printText(String textToPrint) {
+        printer.startPage();
+        wordBuffer = new StringBuffer();
+        x = leftMargin;
+        y = topMargin;
+        index = 0;
+        end = textToPrint.length();
+        while (index &lt; end) {
+            char c = textToPrint.charAt(index);
+            index++;
+            if (c != 0) {
+                if (c == 0x0a || c == 0x0d) {
+                    if (c == 0x0d &amp;&amp; index &lt; end
+                            &amp;&amp; textToPrint.charAt(index) == 0x0a) {
+                        index++; // if this is cr-lf, skip the lf
+                    }
+                    printWordBuffer();
+                    newline();
+                } else {
+                    if (c != '\t') {
+                        wordBuffer.append(c);
+                    }
+                    if (Character.isWhitespace(c)) {
+                        printWordBuffer();
+                        if (c == '\t') {
+                            x += tabWidth;
+                        }
+                    }
+                }
+            }
+        }
+        if (y + lineHeight &lt;= bottomMargin) {
+            printer.endPage();
+        }
+    }
+
+    void printWordBuffer() {
+        if (wordBuffer.length() &gt; 0) {
+            String word = wordBuffer.toString();
+            int wordWidth = gc.stringExtent(word).x;
+            if (x + wordWidth &gt; rightMargin) {
+                /* word doesn't fit on current line, so wrap */
+                newline();
+            }
+            gc.drawString(word, x, y, false);
+            x += wordWidth;
+            wordBuffer = new StringBuffer();
+        }
+    }
+
+    void newline() {
+        x = leftMargin;
+        y += lineHeight;
+        if (y + lineHeight &gt; bottomMargin) {
+            printer.endPage();
+            if (index + 1 &lt; end) {
+                y = topMargin;
+                printer.startPage();
+            }
+        }
+    }
+}
+</code></pre>

@@ -1,0 +1,150 @@
+<p>This question isn't exactly new. But since I spent a lot of time on the problem and came up with a working solution, I thought I'll post it here. The solution requires Sanselan (or Apache Commons Imaging as it's called now) and it requires a reasonable CMYK color profile (.icc file). You can get the later one from Adobe or from <a href="http://www.eci.org">eci.org</a>.</p>
+
+<p>The basic problem is that Java - out of the box - can only read JPEG files in RGB. If you have a CMYK file, you need to distinguish between regular CMYK, Adobe CMYK (with inverted values, i.e. 255 for no ink and 0 for maximum ink) and Adobe CYYK (some variant with inverted colors as well).</p>
+
+<pre><code>public class JpegReader {
+
+    public static final int COLOR_TYPE_RGB = 1;
+    public static final int COLOR_TYPE_CMYK = 2;
+    public static final int COLOR_TYPE_YCCK = 3;
+
+    private int colorType = COLOR_TYPE_RGB;
+    private boolean hasAdobeMarker = false;
+
+    public BufferedImage readImage(File file) throws IOException, ImageReadException {
+        colorType = COLOR_TYPE_RGB;
+        hasAdobeMarker = false;
+
+        ImageInputStream stream = ImageIO.createImageInputStream(file);
+        Iterator&lt;ImageReader&gt; iter = ImageIO.getImageReaders(stream);
+        while (iter.hasNext()) {
+            ImageReader reader = iter.next();
+            reader.setInput(stream);
+
+            BufferedImage image;
+            ICC_Profile profile = null;
+            try {
+                image = reader.read(0);
+            } catch (IIOException e) {
+                colorType = COLOR_TYPE_CMYK;
+                checkAdobeMarker(file);
+                profile = Sanselan.getICCProfile(file);
+                WritableRaster raster = (WritableRaster) reader.readRaster(0, null);
+                if (colorType == COLOR_TYPE_YCCK)
+                    convertYcckToCmyk(raster);
+                if (hasAdobeMarker)
+                    convertInvertedColors(raster);
+                image = convertCmykToRgb(raster, profile);
+            }
+
+            return image;
+        }
+
+        return null;
+    }
+
+    public void checkAdobeMarker(File file) throws IOException, ImageReadException {
+        JpegImageParser parser = new JpegImageParser();
+        ByteSource byteSource = new ByteSourceFile(file);
+        @SuppressWarnings("rawtypes")
+        ArrayList segments = parser.readSegments(byteSource, new int[] { 0xffee }, true);
+        if (segments != null &amp;&amp; segments.size() &gt;= 1) {
+            UnknownSegment app14Segment = (UnknownSegment) segments.get(0);
+            byte[] data = app14Segment.bytes;
+            if (data.length &gt;= 12 &amp;&amp; data[0] == 'A' &amp;&amp; data[1] == 'd' &amp;&amp; data[2] == 'o' &amp;&amp; data[3] == 'b' &amp;&amp; data[4] == 'e')
+            {
+                hasAdobeMarker = true;
+                int transform = app14Segment.bytes[11] &amp; 0xff;
+                if (transform == 2)
+                    colorType = COLOR_TYPE_YCCK;
+            }
+        }
+    }
+
+    public static void convertYcckToCmyk(WritableRaster raster) {
+        int height = raster.getHeight();
+        int width = raster.getWidth();
+        int stride = width * 4;
+        int[] pixelRow = new int[stride];
+        for (int h = 0; h &lt; height; h++) {
+            raster.getPixels(0, h, width, 1, pixelRow);
+
+            for (int x = 0; x &lt; stride; x += 4) {
+                int y = pixelRow[x];
+                int cb = pixelRow[x + 1];
+                int cr = pixelRow[x + 2];
+
+                int c = (int) (y + 1.402 * cr - 178.956);
+                int m = (int) (y - 0.34414 * cb - 0.71414 * cr + 135.95984);
+                y = (int) (y + 1.772 * cb - 226.316);
+
+                if (c &lt; 0) c = 0; else if (c &gt; 255) c = 255;
+                if (m &lt; 0) m = 0; else if (m &gt; 255) m = 255;
+                if (y &lt; 0) y = 0; else if (y &gt; 255) y = 255;
+
+                pixelRow[x] = 255 - c;
+                pixelRow[x + 1] = 255 - m;
+                pixelRow[x + 2] = 255 - y;
+            }
+
+            raster.setPixels(0, h, width, 1, pixelRow);
+        }
+    }
+
+    public static void convertInvertedColors(WritableRaster raster) {
+        int height = raster.getHeight();
+        int width = raster.getWidth();
+        int stride = width * 4;
+        int[] pixelRow = new int[stride];
+        for (int h = 0; h &lt; height; h++) {
+            raster.getPixels(0, h, width, 1, pixelRow);
+            for (int x = 0; x &lt; stride; x++)
+                pixelRow[x] = 255 - pixelRow[x];
+            raster.setPixels(0, h, width, 1, pixelRow);
+        }
+    }
+
+    public static BufferedImage convertCmykToRgb(Raster cmykRaster, ICC_Profile cmykProfile) throws IOException {
+        if (cmykProfile == null)
+            cmykProfile = ICC_Profile.getInstance(JpegReader.class.getResourceAsStream("/ISOcoated_v2_300_eci.icc"));
+        ICC_ColorSpace cmykCS = new ICC_ColorSpace(cmykProfile);
+        BufferedImage rgbImage = new BufferedImage(cmykRaster.getWidth(), cmykRaster.getHeight(), BufferedImage.TYPE_INT_RGB);
+        WritableRaster rgbRaster = rgbImage.getRaster();
+        ColorSpace rgbCS = rgbImage.getColorModel().getColorSpace();
+        ColorConvertOp cmykToRgb = new ColorConvertOp(cmykCS, rgbCS, null);
+        cmykToRgb.filter(cmykRaster, rgbRaster);
+        return rgbImage;
+    }
+}
+</code></pre>
+
+<p>The code first tries to read the file using the regular method, which works for RGB files. If it fails, it reads the details of the color model (profile, Adobe marker, Adobe variant). Then it reads the raw pixel data (raster) and does all the necessary conversion (YCCK to CMYK, inverted colors, CMYK to RGB).</p>
+
+<p>I'm not quite satisfied with my solution. While the colors are mostly good, dark areas are slightly too bright, in particular black isn't fully black. If anyone knows what I could improve, I'd be glad to hear it.</p>
+
+<p><strong>Update:</strong></p>
+
+<p>I've figured out how to fix the brightness issues. Or rather: the people from the twelvemonkeys-imageio project have (see this <a href="http://home.java.net/forum/topic/javadesktop/java-desktop-technologies/java-2d/colorconvertopicc-profile-issue?force=153">post</a>). It has to do with the color rendering intent.</p>
+
+<p>There fix is to add the following lines which nicely work for me. Basically, the color profile is modified because there seems to be no other way to tell the <code>ColorConvertOp</code> class to use a perceptual color render intent.</p>
+
+<pre><code>    if (cmykProfile.getProfileClass() != ICC_Profile.CLASS_DISPLAY) {
+        byte[] profileData = cmykProfile.getData(); // Need to clone entire profile, due to a JDK 7 bug
+
+        if (profileData[ICC_Profile.icHdrRenderingIntent] == ICC_Profile.icPerceptual) {
+            intToBigEndian(ICC_Profile.icSigDisplayClass, profileData, ICC_Profile.icHdrDeviceClass); // Header is first
+
+            cmykProfile = ICC_Profile.getInstance(profileData);
+        }
+    }
+</code></pre>
+
+<p>...</p>
+
+<pre><code>static void intToBigEndian(int value, byte[] array, int index) {
+    array[index]   = (byte) (value &gt;&gt; 24);
+    array[index+1] = (byte) (value &gt;&gt; 16);
+    array[index+2] = (byte) (value &gt;&gt;  8);
+    array[index+3] = (byte) (value);
+}
+</code></pre>

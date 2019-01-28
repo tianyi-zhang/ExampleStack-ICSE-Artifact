@@ -1,0 +1,93 @@
+<p><strong>Note: Do not implement this in production code you are ever going to use on a network you do not entirely trust. Especially anything going over the public internet.</strong> </p>
+
+<p>Your question is just what I want to know. After I did some searches, the conclusion is as follows.</p>
+
+<p>In HttpClient way, you should create a custom class from org.apache.http.conn.ssl.SSLSocketFactory, not the one org.apache.http.conn.ssl.SSLSocketFactory
+ itself. Some clues can be found in this post <a href="http://stackoverflow.com/questions/2899079/custom-ssl-handling-stopped-working-on-android-2-2-froyo">Custom SSL handling stopped working on Android 2.2 FroYo</a>.</p>
+
+<p>An example is like  ...</p>
+
+<pre><code>import java.io.IOException;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import org.apache.http.conn.ssl.SSLSocketFactory;
+public class MySSLSocketFactory extends SSLSocketFactory {
+    SSLContext sslContext = SSLContext.getInstance("TLS");
+
+    public MySSLSocketFactory(KeyStore truststore) throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException {
+        super(truststore);
+
+        TrustManager tm = new X509TrustManager() {
+            public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            }
+
+            public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            }
+
+            public X509Certificate[] getAcceptedIssuers() {
+                return null;
+            }
+        };
+
+        sslContext.init(null, new TrustManager[] { tm }, null);
+    }
+
+    @Override
+    public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException, UnknownHostException {
+        return sslContext.getSocketFactory().createSocket(socket, host, port, autoClose);
+    }
+
+    @Override
+    public Socket createSocket() throws IOException {
+        return sslContext.getSocketFactory().createSocket();
+    }
+}
+</code></pre>
+
+<p>and use this class while creating instance of HttpClient.</p>
+
+<pre><code>public HttpClient getNewHttpClient() {
+    try {
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+
+        MySSLSocketFactory sf = new MySSLSocketFactory(trustStore);
+        sf.setHostnameVerifier(SSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER);
+
+        HttpParams params = new BasicHttpParams();
+        HttpProtocolParams.setVersion(params, HttpVersion.HTTP_1_1);
+        HttpProtocolParams.setContentCharset(params, HTTP.UTF_8);
+
+        SchemeRegistry registry = new SchemeRegistry();
+        registry.register(new Scheme("http", PlainSocketFactory.getSocketFactory(), 80));
+        registry.register(new Scheme("https", sf, 443));
+
+        ClientConnectionManager ccm = new ThreadSafeClientConnManager(params, registry);
+
+        return new DefaultHttpClient(ccm, params);
+    } catch (Exception e) {
+        return new DefaultHttpClient();
+    }
+}
+</code></pre>
+
+<p>BTW, the link below is for someone who is looking for HttpURLConnection solution.
+<a href="http://stackoverflow.com/questions/995514/https-connection-android/1000205#1000205">Https Connection Android</a></p>
+
+<p>I have tested the above two kinds of solutions on froyo, and they all work like a charm in my cases. Finally, using HttpURLConnection may face the redirect problems, but this is beyond the topic.</p>
+
+<p>Note: Before you decide to trust all certificates, you probably should know the site full well and won't be harmful of it to end-user.</p>
+
+<p>Indeed, the risk you take should be considered carefully, including the effect of hacker's mock site mentioned in the following comments that I deeply appreciated. In some situation, although it might be hard to take care of all certificates, you'd better know the implicit drawbacks to trust all of them.</p>

@@ -1,0 +1,188 @@
+<pre><code>    public class GalleryAdapter extends BaseAdapter {
+
+    AlertDialog alertDialog = null;
+    List&lt;GalleryDTO&gt; mDatalist;
+    Activity context;
+    private LruCache&lt;String, Bitmap&gt; mMemoryCache;
+    LocationHandler mLocationHandler = null;
+    public GalleryAdapter(Activity context, List&lt;GalleryDTO&gt; mDatalist) {
+        this.context = context;
+        this.mDatalist = mDatalist;
+        final int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
+        final int cacheSize = maxMemory / 8;
+        mMemoryCache = new LruCache&lt;String, Bitmap&gt;(cacheSize) {
+            @Override
+            protected int sizeOf(String key, Bitmap bitmap) {
+                return (int) (getSizeInBytes(bitmap) / 1024);
+            }
+        };
+
+    }
+
+    public void addBitmapToMemoryCache(String key, Bitmap bitmap) {
+        if (getBitmapFromMemCache(key) == null) {
+            mMemoryCache.put(key, bitmap);
+        }
+    }
+
+    public Bitmap getBitmapFromMemCache(String key) {
+        return mMemoryCache.get(key);
+    }
+
+    public long getSizeInBytes(Bitmap bitmap) {
+        if (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.HONEYCOMB) {
+            return bitmap.getByteCount();
+        } else {
+            return bitmap.getRowBytes() * bitmap.getHeight();
+        }
+    }
+
+    @Override
+    public int getCount() {
+
+        return mDatalist.size();
+    }
+
+    @Override
+    public Object getItem(int position) {
+
+        return mDatalist.get(position);
+    }
+
+    @Override
+    public long getItemId(int position) {
+
+        return mDatalist.get(position).photoId;
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent) {
+        ViewHolder holder;
+        if (convertView == null) {
+            convertView = context.getLayoutInflater().inflate(
+                    R.layout.list_item_gallery, parent, false);
+            holder = new ViewHolder();
+            holder.mPhoto = (ImageView) convertView
+                    .findViewById(R.id.img_photo);
+            holder.mProgress = (ProgressBar) convertView
+                    .findViewById(R.id.pg_list_item);
+            convertView.setTag(holder);
+        } else {
+            holder = (ViewHolder) convertView.getTag();
+        }
+        GalleryDTO data = (GalleryDTO) getItem(position);
+        loadBitmap(data.photoName, holder);
+
+        return convertView;
+    }
+
+
+
+    private static class ViewHolder {
+        protected ImageView mPhoto;
+        protected ProgressBar mProgress;
+    }
+
+    public void loadBitmap(String respath, ViewHolder holder) {
+        final String imageKey = respath;
+        final Bitmap bitmap = getBitmapFromMemCache(imageKey);
+        if (bitmap != null) {
+            holder.mPhoto.setImageBitmap(bitmap);
+            holder.mProgress.setVisibility(View.GONE);
+        } else {
+            if (cancelPotentialWork(respath, holder.mPhoto, holder.mProgress)) {
+                final BitmapWorkerTask task = new BitmapWorkerTask(
+                        holder.mPhoto, holder.mProgress);
+                final AsyncDrawable asyncDrawable = new AsyncDrawable(
+                        context.getResources(), holder.mPlaceHolderBitmap, task);
+                holder.mPhoto.setImageDrawable(asyncDrawable);
+                task.execute(respath);
+            }
+        }
+
+    }
+
+    class BitmapWorkerTask extends AsyncTask&lt;String, Void, Bitmap&gt; {
+        private final WeakReference&lt;ImageView&gt; imageViewReference;
+        private final WeakReference&lt;ProgressBar&gt; progressbarReference;
+        private String data = "";
+
+        public BitmapWorkerTask(ImageView imageView, ProgressBar progressBar) {
+            imageViewReference = new WeakReference&lt;ImageView&gt;(imageView);
+            progressbarReference = new WeakReference&lt;ProgressBar&gt;(progressBar);
+        }
+
+        @Override
+        protected Bitmap doInBackground(String... params) {
+            data = params[0];
+            final Bitmap bitmap = downloadUrlToStream(url);
+            addBitmapToMemoryCache(String.valueOf(params[0]), bitmap);
+            return bitmap;
+
+        }
+
+        @Override
+        protected void onPostExecute(Bitmap bitmap) {
+            if (isCancelled()) {
+                bitmap = null;
+            }
+
+            if (imageViewReference != null &amp;&amp; bitmap != null) {
+                final ImageView imageView = imageViewReference.get();
+                final ProgressBar mProgressBar = progressbarReference.get();
+                final BitmapWorkerTask bitmapWorkerTask = getBitmapWorkerTask(
+                        imageView, mProgressBar);
+                if (this == bitmapWorkerTask &amp;&amp; imageView != null) {
+                    imageView.setImageBitmap(bitmap);
+                    if (mProgressBar != null)
+                        mProgressBar.setVisibility(View.GONE);
+                }
+            }
+        }
+    }
+
+    static class AsyncDrawable extends BitmapDrawable {
+        private final WeakReference&lt;BitmapWorkerTask&gt; bitmapWorkerTaskReference;
+
+        public AsyncDrawable(Resources res, Bitmap bitmap,
+                BitmapWorkerTask bitmapWorkerTask) {
+            super(res, bitmap);
+            bitmapWorkerTaskReference = new WeakReference&lt;BitmapWorkerTask&gt;(
+                    bitmapWorkerTask);
+        }
+
+        public BitmapWorkerTask getBitmapWorkerTask() {
+            return bitmapWorkerTaskReference.get();
+        }
+    }
+
+    public static boolean cancelPotentialWork(String data, ImageView imageView,
+            ProgressBar progressBar) {
+        final BitmapWorkerTask bitmapWorkerTask = getBitmapWorkerTask(
+                imageView, progressBar);
+
+        if (bitmapWorkerTask != null) {
+            final String bitmapData = bitmapWorkerTask.data;
+            if (bitmapData != data) {
+                bitmapWorkerTask.cancel(true);
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static BitmapWorkerTask getBitmapWorkerTask(ImageView imageView,
+            ProgressBar progressBar) {
+        if (imageView != null) {
+            final Drawable drawable = imageView.getDrawable();
+            if (drawable instanceof AsyncDrawable) {
+                final AsyncDrawable asyncDrawable = (AsyncDrawable) drawable;
+                return asyncDrawable.getBitmapWorkerTask();
+            }
+        }
+        return null;
+    }
+
+}
+</code></pre>

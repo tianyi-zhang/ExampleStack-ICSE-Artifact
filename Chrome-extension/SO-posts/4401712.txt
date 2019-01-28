@@ -1,0 +1,121 @@
+<p>I use the <a href="http://jericho.htmlparser.net/docs/index.html" rel="nofollow">Jericho HTML parser</a> for this purpose.</p>
+
+<p>Somewhat tweaked version of their sanitizer example:</p>
+
+<pre><code>public class HtmlSanitizer {
+
+private HtmlSanitizer() {
+}
+
+private static final Set&lt;String&gt; VALID_ELEMENTS = Sets.newHashSet(DIV, BR,
+        P, B, I, OL, UL, LI, A, STRONG, SPAN, EM, TT, IMG);
+
+
+private static final Set&lt;String&gt; VALID_ATTRIBUTES = Sets.newHashSet("id",
+        "class", "href", "target", "title", "src");
+
+private static final Object VALID_MARKER = new Object();
+
+public static void sanitize(Reader r, Writer w) {
+    try {
+        sanitize(new Source(r)).writeTo(w);
+        w.flush();
+        r.close();
+    } catch (IOException ioe) {
+        throw new RuntimeException("error during sanitize", ioe);
+    }
+}
+
+public static OutputDocument sanitize(Source source) {
+    source.fullSequentialParse();
+    OutputDocument doc = new OutputDocument(source);
+    List&lt;Tag&gt; tags = source.getAllTags();
+    int pos = 0;
+    for (Tag tag : tags) {
+        if (processTag(tag, doc))
+            tag.setUserData(VALID_MARKER);
+        else
+            doc.remove(tag);
+        reencodeTextSegment(source, doc, pos, tag.getBegin());
+        pos = tag.getEnd();
+    }
+    reencodeTextSegment(source, doc, pos, source.getEnd());
+    return doc;
+}
+
+private static boolean processTag(Tag tag, OutputDocument doc) {
+    String elementName = tag.getName();
+    if (!VALID_ELEMENTS.contains(elementName))
+        return false;
+    if (tag.getTagType() == StartTagType.NORMAL) {
+        Element element = tag.getElement();
+        if (HTMLElements.getEndTagRequiredElementNames().contains(
+                elementName)) {
+            if (element.getEndTag() == null)
+                return false;
+        } else if (HTMLElements.getEndTagOptionalElementNames().contains(
+                elementName)) {
+            if (elementName == HTMLElementName.LI &amp;&amp; !isValidLITag(tag))
+                return false;
+            if (element.getEndTag() == null)
+                doc.insert(element.getEnd(), getEndTagHTML(elementName));
+
+        }
+        doc.replace(tag, getStartTagHTML(element.getStartTag()));
+    } else if (tag.getTagType() == EndTagType.NORMAL) {
+        if (tag.getElement() == null)
+            return false;
+        if (elementName == HTMLElementName.LI &amp;&amp; !isValidLITag(tag))
+            return false;
+        doc.replace(tag, getEndTagHTML(elementName));
+    } else {
+        return false;
+    }
+    return true;
+}
+
+private static boolean isValidLITag(Tag tag) {
+    Element parentElement = tag.getElement().getParentElement();
+    if (parentElement == null
+            || parentElement.getStartTag().getUserData() != VALID_MARKER)
+        return false;
+    return parentElement.getName() == HTMLElementName.UL
+            || parentElement.getName() == HTMLElementName.OL;
+}
+
+private static void reencodeTextSegment(Source source, OutputDocument doc,
+        int begin, int end) {
+    if (begin &gt;= end)
+        return;
+    Segment textSegment = new Segment(source, begin, end);
+    String encodedText = encode(decode(textSegment));
+    doc.replace(textSegment, encodedText);
+}
+
+private static CharSequence getStartTagHTML(StartTag startTag) {
+    StringBuilder sb = new StringBuilder();
+    sb.append('&lt;').append(startTag.getName());
+    for (Attribute attribute : startTag.getAttributes()) {
+        if (VALID_ATTRIBUTES.contains(attribute.getKey())) {
+            sb.append(' ').append(attribute.getName());
+            if (attribute.getValue() != null) {
+                sb.append("=\"");
+                sb.append(CharacterReference.encode(attribute.getValue()));
+                sb.append('"');
+            }
+        }
+    }
+    if (startTag.getElement().getEndTag() == null
+            &amp;&amp; !HTMLElements.getEndTagOptionalElementNames().contains(
+                    startTag.getName()))
+        sb.append('/');
+    sb.append('&gt;');
+    return sb;
+}
+
+private static String getEndTagHTML(String tagName) {
+    return "&lt;/" + tagName + '&gt;';
+}
+
+}
+</code></pre>

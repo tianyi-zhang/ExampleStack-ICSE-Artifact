@@ -1,0 +1,345 @@
+<p>I have done walking and driving directions with drawing path on map.
+For that i use 2 locations.; 1)current location lat and lon 2) user click on marker to show path between point 1 and 2.
+for that you just need to get lat and long of clicked marker point than my code is useful.</p>
+
+<pre><code>    drawPath(Utils.ConvertToFloat(kiosk.Lat),
+    Utils.ConvertToFloat(kiosk.Lon), true);
+</code></pre>
+
+<p>Function is:</p>
+
+<pre><code>private void drawPath(final double lat, final double lon,
+        final boolean isWalking) {
+    new Thread() {
+        @Override
+        public void run() {
+            double fromLat = 0, fromLon = 0, toLat, toLon;
+            if (curLocation != null) {
+                fromLat = curLocation.getLatitude();
+                fromLon = curLocation.getLongitude();
+            }
+            toLat = lat;
+            toLon = lon;
+            // For Testing
+            // fromLat = 36.00;
+            // fromLon = -115.16116333007813;
+            String url = RoadProvider.getUrl(fromLat, fromLon, toLat,
+                    toLon, isWalking);
+            InputStream is = getConnection(url);
+            mRoad = RoadProvider.getRoute(is);
+            mHandler.sendEmptyMessage(0);
+        }
+    }.start();
+}
+   Handler mHandler = new Handler() {
+    public void handleMessage(android.os.Message msg) {
+
+        MapOverlay mapOverlay = new MapOverlay(mRoad, mapView);
+        List&lt;Overlay&gt; listOfOverlays = mapView.getOverlays();
+        ArrayList&lt;Overlay&gt; objs = new ArrayList&lt;Overlay&gt;();
+
+        for (Overlay o : listOfOverlays) {
+            if (o instanceof MapOverlay) {
+                objs.add(o);
+            }
+        }
+        for (Overlay overlay : objs) {
+            listOfOverlays.remove(overlay);
+        }
+        // listOfOverlays.clear();
+        listOfOverlays.add(mapOverlay);
+        mapView.invalidate();
+    };
+};
+</code></pre>
+
+<p>here is where path is drawn::</p>
+
+<pre><code>class MapOverlay extends com.google.android.maps.Overlay {
+    Road mRoad;
+    ArrayList&lt;GeoPoint&gt; mPoints;
+
+    public MapOverlay(Road road, MapView mv) {
+        mRoad = road;
+        if (road.mRoute.length &gt; 0) {
+            mPoints = new ArrayList&lt;GeoPoint&gt;();
+            for (int i = 0; i &lt; road.mRoute.length; i++) {
+                mPoints.add(new GeoPoint(
+                        (int) (road.mRoute[i][1] * 1000000),
+                        (int) (road.mRoute[i][0] * 1000000)));
+            }
+            int moveToLat = (mPoints.get(0).getLatitudeE6() + (mPoints.get(
+                    mPoints.size() - 1).getLatitudeE6() - mPoints.get(0)
+                    .getLatitudeE6()) / 2);
+            int moveToLong = (mPoints.get(0).getLongitudeE6() + (mPoints
+                    .get(mPoints.size() - 1).getLongitudeE6() - mPoints
+                    .get(0).getLongitudeE6()) / 2);
+            GeoPoint moveTo = new GeoPoint(moveToLat, moveToLong);
+
+            MapController mapController = mv.getController();
+            mapController.animateTo(moveTo);
+            mapController.setZoom(13);
+        }
+    }
+
+    @Override
+    public boolean draw(Canvas canvas, MapView mv, boolean shadow, long when) {
+        super.draw(canvas, mv, shadow);
+        drawPath(mv, canvas);
+        return true;
+    }
+
+    public void drawPath(MapView mv, Canvas canvas) {
+        int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+        Paint paint = new Paint();
+        paint.setColor(Color.GREEN);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3);
+        if (mPoints != null &amp;&amp; mPoints.size() &gt; 0) {
+
+            for (int i = 0; i &lt; mPoints.size(); i++) {
+                Point point = new Point();
+                mv.getProjection().toPixels(mPoints.get(i), point);
+                x2 = point.x;
+                y2 = point.y;
+                if (i &gt; 0) {
+                    canvas.drawLine(x1, y1, x2, y2, paint);
+                }
+                x1 = x2;
+                y1 = y2;
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>You need these 3 files in same or different package.</p>
+
+<p>point.java</p>
+
+<pre><code>public class Point {
+String mName;
+String mDescription;
+String mIconUrl;
+double mLatitude;
+double mLongitude;
+</code></pre>
+
+<p>}</p>
+
+<p>Road.java</p>
+
+<pre><code>public class Road {
+public String mName;
+public String mDescription;
+public int mColor;
+public int mWidth;
+public double[][] mRoute = new double[][] {};
+public Point[] mPoints = new Point[] {};
+</code></pre>
+
+<p>}</p>
+
+<p>RoadProvider.java</p>
+
+<pre><code>  public class RoadProvider {
+
+    public static Road getRoute(InputStream is) {
+            KMLHandler handler = new KMLHandler();
+            try {
+                    SAXParser parser = SAXParserFactory.newInstance().newSAXParser();
+                    parser.parse(is, handler);
+            } catch (ParserConfigurationException e) {
+                    e.printStackTrace();
+            } catch (SAXException e) {
+                    e.printStackTrace();
+            } catch (IOException e) {
+                    e.printStackTrace();
+            }
+            return handler.mRoad;
+    }
+
+    public static String getUrl(double fromLat, double fromLon, double toLat,
+                    double toLon, boolean isWalking) {// connect to map web service
+            StringBuffer urlString = new StringBuffer();
+            urlString.append("http://maps.google.com/maps?f=d&amp;hl=en");
+            urlString.append("&amp;saddr=");// from
+            urlString.append(Double.toString(fromLat));
+            urlString.append(",");
+            urlString.append(Double.toString(fromLon));
+            urlString.append("&amp;daddr=");// to
+            urlString.append(Double.toString(toLat));
+            urlString.append(",");
+            urlString.append(Double.toString(toLon));
+            urlString.append("&amp;ie=UTF8&amp;0&amp;om=0&amp;output=kml");
+            if(isWalking){
+                urlString.append("&amp;dirflg=w");
+            }
+            Utils.LogInfo(urlString.toString());
+            return urlString.toString();
+    }
+    }
+
+    class KMLHandler extends DefaultHandler {
+    Road mRoad;
+    boolean isPlacemark;
+    boolean isRoute;
+    boolean isItemIcon;
+    private Stack mCurrentElement = new Stack();
+    private String mString;
+
+    public KMLHandler() {
+            mRoad = new Road();
+    }
+
+    public void startElement(String uri, String localName, String name,
+                    Attributes attributes) throws SAXException {
+            mCurrentElement.push(localName);
+            if (localName.equalsIgnoreCase("Placemark")) {
+                    isPlacemark = true;
+                    mRoad.mPoints = addPoint(mRoad.mPoints);
+            } else if (localName.equalsIgnoreCase("ItemIcon")) {
+                    if (isPlacemark)
+                            isItemIcon = true;
+            }
+            mString = new String();
+    }
+
+    public void characters(char[] ch, int start, int length)
+                    throws SAXException {
+            String chars = new String(ch, start, length).trim();
+            mString = mString.concat(chars);
+    }
+
+    public void endElement(String uri, String localName, String name)
+                    throws SAXException {
+            if (mString.length() &gt; 0) {
+                    if (localName.equalsIgnoreCase("name")) {
+                            if (isPlacemark) {
+                                    isRoute = mString.equalsIgnoreCase("Route");
+                                    if (!isRoute) {
+                                            mRoad.mPoints[mRoad.mPoints.length - 1].mName = mString;
+                                    }
+                            } else {
+                                    mRoad.mName = mString;
+                            }
+                    } else if (localName.equalsIgnoreCase("color") &amp;&amp; !isPlacemark) {
+                            mRoad.mColor = Integer.parseInt(mString, 16);
+                    } else if (localName.equalsIgnoreCase("width") &amp;&amp; !isPlacemark) {
+                            mRoad.mWidth = Integer.parseInt(mString);
+                    } else if (localName.equalsIgnoreCase("description")) {
+                            if (isPlacemark) {
+                                    String description = cleanup(mString);
+                                    if (!isRoute)
+                                            mRoad.mPoints[mRoad.mPoints.length - 1].mDescription = description;
+                                    else
+                                            mRoad.mDescription = description;
+                            }
+                    } else if (localName.equalsIgnoreCase("href")) {
+                            if (isItemIcon) {
+                                    mRoad.mPoints[mRoad.mPoints.length - 1].mIconUrl = mString;
+                            }
+                    } else if (localName.equalsIgnoreCase("coordinates")) {
+                            if (isPlacemark) {
+                                    if (!isRoute) {
+                                            String[] xyParsed = split(mString, ",");
+                                            double lon = Double.parseDouble(xyParsed[0]);
+                                            double lat = Double.parseDouble(xyParsed[1]);
+                                            mRoad.mPoints[mRoad.mPoints.length - 1].mLatitude = lat;
+                                            mRoad.mPoints[mRoad.mPoints.length - 1].mLongitude = lon;
+                                    } else {
+                                            String[] coodrinatesParsed = split(mString, " ");
+                                            int lenNew = coodrinatesParsed.length;
+                                            int lenOld = mRoad.mRoute.length;
+                                            double[][] temp = new double[lenOld + lenNew][2];
+                                            for (int i = 0; i &lt; lenOld; i++) {
+                                                    temp[i] = mRoad.mRoute[i];
+                                            }
+                                            for (int i = 0; i &lt; lenNew; i++) {
+                                                    String[] xyParsed = split(coodrinatesParsed[i], ",");
+                                                    for (int j = 0; j &lt; 2 &amp;&amp; j &lt; xyParsed.length; j++)
+                                                            temp[lenOld + i][j] = Double
+                                                                            .parseDouble(xyParsed[j]);
+                                            }
+                                            mRoad.mRoute = temp;
+                                    }
+                            }
+                    }
+            }
+            mCurrentElement.pop();
+            if (localName.equalsIgnoreCase("Placemark")) {
+                    isPlacemark = false;
+                    if (isRoute)
+                            isRoute = false;
+            } else if (localName.equalsIgnoreCase("ItemIcon")) {
+                    if (isItemIcon)
+                            isItemIcon = false;
+            }
+    }
+
+    private String cleanup(String value) {
+            String remove = "&lt;br/&gt;";
+            int index = value.indexOf(remove);
+            if (index != -1)
+                    value = value.substring(0, index);
+            remove = "&amp;#160;";
+            index = value.indexOf(remove);
+            int len = remove.length();
+            while (index != -1) {
+                    value = value.substring(0, index).concat(
+                                    value.substring(index + len, value.length()));
+                    index = value.indexOf(remove);
+            }
+            return value;
+    }
+
+    public Point[] addPoint(Point[] points) {
+            Point[] result = new Point[points.length + 1];
+            for (int i = 0; i &lt; points.length; i++)
+                    result[i] = points[i];
+            result[points.length] = new Point();
+            return result;
+    }
+
+    private static String[] split(String strString, String strDelimiter) {
+            String[] strArray;
+            int iOccurrences = 0;
+            int iIndexOfInnerString = 0;
+            int iIndexOfDelimiter = 0;
+            int iCounter = 0;
+            if (strString == null) {
+                    throw new IllegalArgumentException("Input string cannot be null.");
+            }
+            if (strDelimiter.length() &lt;= 0 || strDelimiter == null) {
+                    throw new IllegalArgumentException(
+                                    "Delimeter cannot be null or empty.");
+            }
+            if (strString.startsWith(strDelimiter)) {
+                    strString = strString.substring(strDelimiter.length());
+            }
+            if (!strString.endsWith(strDelimiter)) {
+                    strString += strDelimiter;
+            }
+            while ((iIndexOfDelimiter = strString.indexOf(strDelimiter,
+                            iIndexOfInnerString)) != -1) {
+                    iOccurrences += 1;
+                    iIndexOfInnerString = iIndexOfDelimiter + strDelimiter.length();
+            }
+            strArray = new String[iOccurrences];
+            iIndexOfInnerString = 0;
+            iIndexOfDelimiter = 0;
+            while ((iIndexOfDelimiter = strString.indexOf(strDelimiter,
+                            iIndexOfInnerString)) != -1) {
+                    strArray[iCounter] = strString.substring(iIndexOfInnerString,
+                                    iIndexOfDelimiter);
+                    iIndexOfInnerString = iIndexOfDelimiter + strDelimiter.length();
+                    iCounter += 1;
+            }
+
+            return strArray;
+    }
+</code></pre>
+
+<p>}</p>
+
+<p>Tell me if you need any other code..</p>

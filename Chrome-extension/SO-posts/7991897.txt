@@ -1,0 +1,69 @@
+<p>For me, this sort of test is a code smell. The question is always: What <em>exactly</em> does this test test? For this test, what do you trust and what don't you trust?</p>
+
+<p>For me, you can't trust read() and write() together, they are probably in the same class, written by the same person. So if you're testing read() by calling write(), then this isn't a good test, you're testing that write() and read() are in sync, not that they do what they should be doing.</p>
+
+<p>In the second example, you're testing that copy and equals are in sync, same problem.</p>
+
+<p>Lets say this was the implementation of the persistence layer:</p>
+
+<pre><code>public class PersistenceLayer {
+    private Object object;
+
+    void write(Object object) {
+        this.object = object;
+    }
+
+    Object read(Long id) {
+        return object;
+    }
+}
+</code></pre>
+
+<p>The question is, would your tests pass with this persistence layer? But it obviously doesn't do what you want. It doesn't go near a database. In a similar vein, would your tests pass if your read &amp; write shared a session/transaction? In this case, the data may never be actually committed to the database. It may do a rollback at the end. But your tests will still pass.</p>
+
+<p>Reading your description, you're testing that when I call write() and then read(), I get a similar object back. What I would expect from a write() method is that it writes data to the database. So if I'm testing <em>that</em>, I need to check that. So I have to have another channel which I can use to test the read &amp; write. This usually ends up as create a new Connection via JDBC and do a select.</p>
+
+<p>So my testing code would be</p>
+
+<pre><code>testWrite() {
+    write(o);
+    Object o2 = readByJdbc("SELECT * FROM table WHERE id = ?", o);
+    assertObjectsEqual(o, o2); // this needs to compare all values
+}
+
+testRead() {
+    write(o);
+    Object o2 = read(o.id);
+    Object o3 = readByJdbc("SELECT * FROM table WHERE id = ?", o);
+
+    assertObjectsEqual(o2, o3); // this needs to compare all values
+}
+</code></pre>
+
+<p>testWrite() writes to the database and ensures that the data is written to the database by opening a JDBC connection and reading that way (different session, different transaction, i.e the data will be in the database).</p>
+
+<p>testRead() writes to the database and compares the two objects returned by read via the persistence layer and via jdbc. I am duplicating the call to write(o) but it's acceptable because we know whether write will work when the other test gets called. I could write another writeByJdbc, but all I would gain is that one test would fail instead of two.</p>
+
+<p>In fact, depending upon you level of paranoia, you don't need to compare all values in the assertObjectsEqual(). If you're using hibernate for example, you could just assume that everything is declared correctly, and test for the existence of the row in the database. I do this often, because I trust hibernate. But in that case, I need to test how I call hibernate, how the objects are defined.</p>
+
+<p>The jdbc code doesn't need to be long and complex, for a simple select, I just create a List of Maps of columns to values:</p>
+
+<pre><code>private List&lt;Map&lt;String, Object&gt;&gt; resultSetToListMap(ResultSet resultSet) throws SQLException {
+    int columnCount = resultSet.getMetaData().getColumnCount();
+    List&lt;Map&lt;String, Object&gt;&gt; list = new ArrayList&lt;Map&lt;String, Object&gt;&gt;();
+
+    while (resultSet.next()) {
+        Map&lt;String, Object&gt; map = new LinkedHashMap&lt;String, Object&gt;();
+
+        for (int i = 1; i &lt;= columnCount; i++) {
+            map.put(resultSet.getMetaData().getColumnName(i), resultSet.getObject(i));
+        }
+
+        list.add(map);
+    }
+
+    return list;
+}
+</code></pre>
+
+<p>This is more than sufficient for most tests.</p>

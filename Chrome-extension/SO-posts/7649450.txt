@@ -1,0 +1,72 @@
+<p>Came across the same issue and it seems that there is(or was) a bug with the LocalActivityManager that occurs when you're trying to (re)start an Activity with the same ID as a previously destroyed Activity. It will simply return null as Window, because of a <a href="http://code.google.com/p/android/issues/detail?id=12359" rel="nofollow">bug</a> inside the destroyActivity method. The workaround I'm using, uses reflection to properly destroy a activity (detailed explanation after the workaround)  : </p>
+
+<pre><code>public boolean destroyActivityWorkAround(String id) {
+    final LocalActivityManager activityManager = getLocalActivityManager();
+    if(activityManager != null){
+        activityManager.destroyActivity(id, false);             
+        try {
+            // Use reflection to get to the HashMaps with the records(which activities are started ect.)
+            // to remove the records properly 
+            // http://code.google.com/p/android/issues/detail?id=10083
+            final Field mActivitiesField = LocalActivityManager.class.getDeclaredField("mActivities");
+            if(mActivitiesField != null){
+                mActivitiesField.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                final Map&lt;String, Object&gt; mActivities = (Map&lt;String, Object&gt;)mActivitiesField.get(activityManager);
+                if(mActivities != null){
+                    mActivities.remove(id);
+                }
+                final Field mActivityArrayField = LocalActivityManager.class.getDeclaredField("mActivityArray");
+                if(mActivityArrayField != null){
+                    mActivityArrayField.setAccessible(true);
+                    @SuppressWarnings("unchecked")
+                    final ArrayList&lt;Object&gt; mActivityArray = (ArrayList&lt;Object&gt;)mActivityArrayField.get(activityManager);
+                    if(mActivityArray != null){
+                        for(Object record : mActivityArray){
+                            final Field idField = record.getClass().getDeclaredField("id");
+                            if(idField != null){
+                                idField.setAccessible(true);
+                                final String _id = (String)idField.get(record);
+                                if(id.equals(_id)){
+                                    mActivityArray.remove(record);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(LOGTAG, this.getClass().getSimpleName() + ".destroyActivityWorkAround() removing activity using reflection failed with error:", e);
+            //e.printStackTrace();
+        }
+        return true;
+    }
+    return false;
+}
+</code></pre>
+
+<p>This is a workaround because the LocalActivityManager.destroyActivity(...) contains a bug in several API-versions. The method doesn't remove  the Activity properly from its HashMap's (<a href="http://www.netmite.com/android/mydroid/frameworks/base/core/java/android/app/LocalActivityManager.java" rel="nofollow">LocalActivityManager's source</a>):</p>
+
+<pre><code>     public Window destroyActivity(String id, boolean finish) {
+         LocalActivityRecord r = mActivities.get(id);   //&lt;-- id's are the key's for the HashMap
+         Window win = null;
+         if (r != null) {
+             win = performDestroy(r, finish);
+             if (finish) {
+                    mActivities.remove(r);  //--&gt; This works on id's not the 'r object', this doesn't remove anything
+             }
+         }
+         return win;
+     } 
+</code></pre>
+
+<p>the if(finish) statement should be as followed to remove the LocalActivityRecord of the activity being destroyed:</p>
+
+<pre><code>if (finish) {
+    mActivities.remove(id);    //--&gt; mActivities should remove the id
+    mActivityArray.remove(r);  //--&gt; mActivitiesArray should remove the 'r object' (LocalActivityRecord)
+}
+</code></pre>
+
+<p>Although they say it's being fixed for Froyo but I still encountered it on a Samsung galaxy S2 running 2.3.3</p>

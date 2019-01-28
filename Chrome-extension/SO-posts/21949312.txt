@@ -1,0 +1,208 @@
+<p>Here couple of suggestions.</p>
+
+<ol>
+<li>Do this heavy camera work <code>Camera.open()</code> on <code>onResume()</code> method of Activity/Fragment</li>
+<li>It seems that you are not checking if camera is currently available. You can not count on that everytime you request camera it will be ready to serve you.</li>
+<li>This may relate to not proper initialization of camera instance.</li>
+</ol>
+
+<p>Here is my sample code seems to be working on and using suggestions above. Check especially surface method seems like you are mixing surface method jobs.</p>
+
+<pre><code>public class NewItemCameraFragment extends Fragment{
+
+    private static final String TAG_STRING = NewItemCameraFragment.class.toString();
+
+    private Camera mCamera;
+    private SurfaceView mSurfaceView;
+    private Button mTakeButton;
+    private FrameLayout mProgressLayout;
+
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+            Bundle savedInstanceState) {
+
+        View view = inflater.inflate(R.layout.fragment_item_camera, null, false);
+
+        mProgressLayout = (FrameLayout) view.findViewById(R.id.item_camera_progress);
+        mProgressLayout.setVisibility(View.INVISIBLE);
+
+        mTakeButton = (Button) view.findViewById(R.id.item_camera_button);
+        mTakeButton.setOnClickListener(new OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+
+                if (mCamera != null) {
+                    mCamera.takePicture(mShutterCallback, null, mPictureCallback);
+                }
+
+            }
+        });
+
+        mSurfaceView = (SurfaceView) view.findViewById(R.id.item_camera_surfaceview);
+        SurfaceHolder holder = mSurfaceView.getHolder();
+        holder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+        holder.addCallback(new Callback() {
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                // TODO Auto-generated method stub
+                if (mCamera != null) {
+                    mCamera.stopPreview();
+                }
+            }
+
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                // TODO Auto-generated method stub
+                if (mCamera != null) {
+                    try {
+                        mCamera.setPreviewDisplay(holder);
+                        mCamera.setDisplayOrientation(90);
+                    } catch (IOException e) {
+                        // TODO Auto-generated catch block
+                        Log.d(TAG_STRING, "Error setting up preview display " + e);
+                    }
+                }
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width,
+                    int height) {
+
+                if (mCamera == null) return;
+
+                Camera.Parameters parameters = mCamera.getParameters();
+                Size s = getBestSupportedSize(parameters.getSupportedPreviewSizes(), width, height);
+                parameters.setPreviewSize(s.width, s.height);
+                s = getBestSupportedSize(parameters.getSupportedPreviewSizes(), width, height);
+                parameters.setPictureSize(s.width, s.height);
+                mCamera.setParameters(parameters);
+
+                try {
+                    mCamera.startPreview();
+                } catch (Exception e) {
+                    Log.d(TAG_STRING, "Could not start the preview " + e);
+                    mCamera.release();
+                    mCamera = null;
+                }
+
+            }
+        });
+
+        return view;
+    }
+
+    private Camera.ShutterCallback mShutterCallback = new ShutterCallback() {
+
+        @Override
+        public void onShutter() {
+            mProgressLayout.setVisibility(View.VISIBLE);
+        }
+    };
+
+
+    private Camera.PictureCallback mPictureCallback = new PictureCallback() {
+
+        @Override
+        public void onPictureTaken(byte[] data, Camera camera) {
+            String filename = UUID.randomUUID().toString() + ".jpg";
+            FileOutputStream fos = null;
+            boolean success = true;
+
+            try {
+                fos = getActivity().openFileOutput(filename, Context.MODE_PRIVATE);
+                fos.write(data);
+            } catch (Exception e) {
+                Log.d(TAG_STRING, "Error writing to file " + e);
+            } finally {
+                try {
+                    if (fos != null)  fos.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    success = false;
+                }
+            }
+
+            if (success) { Log.i(TAG_STRING, "File saved at " + filename); }
+            getActivity().finish();
+        }
+    };
+
+    private Size getBestSupportedSize(List&lt;Size&gt; sizes, int width, int height) {
+        Size bestSize = sizes.get(0);
+        int largestArea = bestSize.width * bestSize.height;
+
+        for (Size size : sizes) {
+            int area = size.width * size.height;
+            if (largestArea &lt; area) {
+                bestSize = size;
+                largestArea = area;
+            }
+        }
+
+        return bestSize;
+    }
+
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        mCamera = Camera.open();
+    }
+
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        if (mCamera != null) {
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+}
+</code></pre>
+
+<p>Updated with layout to clear things out. </p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent" &gt;
+
+&lt;LinearLayout 
+    android:layout_height="match_parent"
+    android:layout_width="match_parent"
+    android:orientation="vertical"&gt;
+
+    &lt;SurfaceView 
+        android:id="@+id/item_camera_surfaceview"
+        android:layout_height="match_parent"
+        android:layout_width="match_parent"
+        android:layout_weight="1"/&gt;
+
+    &lt;Button 
+        android:id="@+id/item_camera_button"
+        android:layout_height="wrap_content"
+        android:layout_width="match_parent"
+        android:text="@string/item_camera_button_text"/&gt;
+
+&lt;/LinearLayout&gt;
+
+&lt;FrameLayout 
+    android:id="@+id/item_camera_progress"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="true"&gt;
+
+    &lt;ProgressBar 
+        style="@android:style/Widget.ProgressBar.Large"
+        android:layout_height="wrap_content"
+        android:layout_width="wrap_content"
+        android:layout_gravity="center"/&gt;
+
+&lt;/FrameLayout&gt;
+
+&lt;/FrameLayout&gt;
+</code></pre>

@@ -1,0 +1,55 @@
+<blockquote>
+  <p>300 million lookups take about 3.1 seconds when I create the hashmap myself, and about 8.5 seconds when I read the same hashmap from file. Does anybody have an idea why? Am I overlooking something obvious? </p>
+</blockquote>
+
+<p>One possible cause is that the reconstructed HashMap may not have the same capacity (number of buckets) as the original one, which might increase the frequency of hash collisions or (if the size is increased) decrease locality of main memory access (resulting in more cache misses). To verify, use a debugger to inspect the length of map.table before and after reconstruction. If this is indeed the case, try copying the data into a new HashMap with an appropriate loadFactor.</p>
+
+<p>As for why serialization does not maintain capacity: HashMap customizes its serialization format (it makes no sense to serialize null for every empty table element) by providing writeObject and readObject methods, and ignores the capacity it finds in the input stream:</p>
+
+<pre><code>/**
+ * Reconstitute the {@code HashMap} instance from a stream (i.e.,
+ * deserialize it).
+ */
+private void readObject(java.io.ObjectInputStream s)
+    throws IOException, ClassNotFoundException {
+    // Read in the threshold (ignored), loadfactor, and any hidden stuff
+    s.defaultReadObject();
+    reinitialize();
+    if (loadFactor &lt;= 0 || Float.isNaN(loadFactor))
+        throw new InvalidObjectException("Illegal load factor: " +
+                                         loadFactor);
+    s.readInt();                // Read and ignore number of buckets
+    int mappings = s.readInt(); // Read number of mappings (size)
+    if (mappings &lt; 0)
+        throw new InvalidObjectException("Illegal mappings count: " +
+                                         mappings);
+    else if (mappings &gt; 0) { // (if zero, use defaults)
+        // Size the table using given load factor only if within
+        // range of 0.25...4.0
+        float lf = Math.min(Math.max(0.25f, loadFactor), 4.0f);
+        float fc = (float)mappings / lf + 1.0f;
+        int cap = ((fc &lt; DEFAULT_INITIAL_CAPACITY) ?
+                   DEFAULT_INITIAL_CAPACITY :
+                   (fc &gt;= MAXIMUM_CAPACITY) ?
+                   MAXIMUM_CAPACITY :
+                   tableSizeFor((int)fc));
+        float ft = (float)cap * lf;
+        threshold = ((cap &lt; MAXIMUM_CAPACITY &amp;&amp; ft &lt; MAXIMUM_CAPACITY) ?
+                     (int)ft : Integer.MAX_VALUE);
+        @SuppressWarnings({"rawtypes","unchecked"})
+            Node&lt;K,V&gt;[] tab = (Node&lt;K,V&gt;[])new Node[cap];
+        table = tab;
+
+        // Read the keys and values, and put the mappings in the HashMap
+        for (int i = 0; i &lt; mappings; i++) {
+            @SuppressWarnings("unchecked")
+                K key = (K) s.readObject();
+            @SuppressWarnings("unchecked")
+                V value = (V) s.readObject();
+            putVal(hash(key), key, value, false, false);
+        }
+    }
+}
+</code></pre>
+
+<p>I suspect it ignores the number of buckets to prevent a denial of service attack where an attacker crafts a serialization stream, and gives an unrealistically high (or low) number of buckets, which would cause an OutOfMemoryError (or excessive CPU load due to hash collisions), which would be a cheap way to do a denial of service attack against any application accepting serialized data from unstrusted sources (<a href="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-2739" rel="nofollow">CVE-2012-2739</a> describes such an issue).</p>

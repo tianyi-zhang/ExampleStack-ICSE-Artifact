@@ -1,0 +1,387 @@
+<p>In order to perform any kind of animation of this nature, you're going to need some kind of proxy layout manager.</p>
+
+<p>It needs to determine the current position of all the components, the position that the layout manager would like them to have and then move them into position.</p>
+
+<p>The following example demonstrates the basic idea.  The animation engine use is VERY basic and does not include features like slow-in and slow-out fundamentals, but uses a linear approach.</p>
+
+<pre><code>public class TestAnimatedLayout {
+
+    public static void main(String[] args) {
+        new TestAnimatedLayout();
+    }
+
+    public TestAnimatedLayout() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException ex) {
+                } catch (InstantiationException ex) {
+                } catch (IllegalAccessException ex) {
+                } catch (UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame("Test");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new TestAnimatedLayoutPane());
+                frame.pack();
+                frame.setLocationRelativeTo(null);
+                frame.setVisible(true);
+            }
+
+        });
+    }
+
+    public class TestAnimatedLayoutPane extends JPanel {
+
+        public TestAnimatedLayoutPane() {
+            setLayout(new AnimatedLayout(new GridBagLayout()));
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.gridx = 0;
+            gbc.gridy = 0;
+            add(new JLabel("Value:"), gbc);
+            gbc.gridx++;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            gbc.weightx = 1;
+            add(new JComboBox(), gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy++;
+            gbc.fill = GridBagConstraints.BOTH;
+            gbc.weightx = 1;
+            gbc.weighty = 1;
+            gbc.gridwidth = 2;
+            add(new JScrollPane(new JTextArea()), gbc);
+
+            gbc.gridwidth = 0;
+            gbc.gridy++;
+            gbc.gridx++;
+            gbc.weightx = 0;
+            gbc.weighty = 0;
+            gbc.fill = GridBagConstraints.NONE;
+            gbc.anchor = GridBagConstraints.EAST;
+            add(new JButton("Click"), gbc);
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            return new Dimension(200, 200);
+        }
+
+    }
+
+    public class AnimatedLayout implements LayoutManager2 {
+
+        private LayoutManager2 proxy;
+        private Map&lt;Component, Rectangle&gt; mapStart;
+        private Map&lt;Component, Rectangle&gt; mapTarget;
+        private Map&lt;Container, Timer&gt; mapTrips;
+        private Map&lt;Container, Animator&gt; mapAnimators;
+
+        public AnimatedLayout(LayoutManager2 proxy) {
+            this.proxy = proxy;
+            mapTrips = new WeakHashMap&lt;&gt;(5);
+            mapAnimators = new WeakHashMap&lt;&gt;(5);
+        }
+
+        @Override
+        public void addLayoutComponent(String name, Component comp) {
+            proxy.addLayoutComponent(name, comp);
+        }
+
+        @Override
+        public void removeLayoutComponent(Component comp) {
+            proxy.removeLayoutComponent(comp);
+        }
+
+        @Override
+        public Dimension preferredLayoutSize(Container parent) {
+            return proxy.preferredLayoutSize(parent);
+        }
+
+        @Override
+        public Dimension minimumLayoutSize(Container parent) {
+            return proxy.minimumLayoutSize(parent);
+        }
+
+        @Override
+        public void layoutContainer(Container parent) {
+            Timer timer = mapTrips.get(parent);
+            if (timer == null) {
+                System.out.println("...create new trip");
+                timer = new Timer(125, new TripAction(parent));
+                timer.setRepeats(false);
+                timer.setCoalesce(false);
+                mapTrips.put(parent, timer);
+            }
+            System.out.println("trip...");
+            timer.restart();
+        }
+
+        protected void doLayout(Container parent) {
+
+            System.out.println("doLayout...");
+
+            mapStart = new HashMap&lt;&gt;(parent.getComponentCount());
+
+            for (Component comp : parent.getComponents()) {
+                mapStart.put(comp, (Rectangle) comp.getBounds().clone());
+            }
+
+            proxy.layoutContainer(parent);
+
+            LayoutConstraints constraints = new LayoutConstraints();
+            for (Component comp : parent.getComponents()) {
+                Rectangle bounds = comp.getBounds();
+                Rectangle startBounds = mapStart.get(comp);
+                if (!mapStart.get(comp).equals(bounds)) {
+                    comp.setBounds(startBounds);
+                    constraints.add(comp, startBounds, bounds);
+                }
+            }
+
+            System.out.println("Items to layout " + constraints.size());
+            if (constraints.size() &gt; 0) {
+                Animator animator = mapAnimators.get(parent);
+                if (animator == null) {
+                    animator = new Animator(parent, constraints);
+                    mapAnimators.put(parent, animator);
+                } else {
+                    animator.setConstraints(constraints);
+                }
+                animator.restart();
+            } else {
+                if (mapAnimators.containsKey(parent)) {
+                    Animator animator = mapAnimators.get(parent);
+                    animator.stop();
+                    mapAnimators.remove(parent);
+                }
+            }
+
+        }
+
+        @Override
+        public void addLayoutComponent(Component comp, Object constraints) {
+            proxy.addLayoutComponent(comp, constraints);
+        }
+
+        @Override
+        public Dimension maximumLayoutSize(Container target) {
+            return proxy.maximumLayoutSize(target);
+        }
+
+        @Override
+        public float getLayoutAlignmentX(Container target) {
+            return proxy.getLayoutAlignmentX(target);
+        }
+
+        @Override
+        public float getLayoutAlignmentY(Container target) {
+            return proxy.getLayoutAlignmentY(target);
+        }
+
+        @Override
+        public void invalidateLayout(Container target) {
+            proxy.invalidateLayout(target);
+        }
+
+        protected class TripAction implements ActionListener {
+
+            private Container container;
+
+            public TripAction(Container container) {
+                this.container = container;
+            }
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                System.out.println("...trip");
+                mapTrips.remove(container);
+                doLayout(container);
+            }
+
+        }
+
+    }
+
+    public class LayoutConstraints {
+
+        private List&lt;AnimationBounds&gt; animationBounds;
+
+        public LayoutConstraints() {
+            animationBounds = new ArrayList&lt;AnimationBounds&gt;(25);
+        }
+
+        public void add(Component comp, Rectangle startBounds, Rectangle targetBounds) {
+
+            add(new AnimationBounds(comp, startBounds, targetBounds));
+
+        }
+
+        public void add(AnimationBounds bounds) {
+
+            animationBounds.add(bounds);
+
+        }
+
+        public int size() {
+            return animationBounds.size();
+        }
+
+        public AnimationBounds[] getAnimationBounds() {
+
+            return animationBounds.toArray(new AnimationBounds[animationBounds.size()]);
+
+        }
+
+    }
+
+    public class AnimationBounds {
+
+        private Component component;
+        private Rectangle startBounds;
+        private Rectangle targetBounds;
+
+        public AnimationBounds(Component component, Rectangle startBounds, Rectangle targetBounds) {
+            this.component = component;
+            this.startBounds = startBounds;
+            this.targetBounds = targetBounds;
+        }
+
+        public Rectangle getStartBounds() {
+            return startBounds;
+        }
+
+        public Rectangle getTargetBounds() {
+            return targetBounds;
+        }
+
+        public Component getComponent() {
+            return component;
+        }
+
+        public Rectangle getBounds(float progress) {
+
+            return calculateProgress(getStartBounds(), getTargetBounds(), progress);
+
+        }
+
+    }
+
+    public static Rectangle calculateProgress(Rectangle startBounds, Rectangle targetBounds, float progress) {
+
+        Rectangle bounds = new Rectangle();
+
+        if (startBounds != null &amp;&amp; targetBounds != null) {
+
+            bounds.setLocation(calculateProgress(startBounds.getLocation(), targetBounds.getLocation(), progress));
+            bounds.setSize(calculateProgress(startBounds.getSize(), targetBounds.getSize(), progress));
+
+        }
+
+        return bounds;
+
+    }
+
+    public static Point calculateProgress(Point startPoint, Point targetPoint, float progress) {
+
+        Point point = new Point();
+
+        if (startPoint != null &amp;&amp; targetPoint != null) {
+
+            point.x = calculateProgress(startPoint.x, targetPoint.x, progress);
+            point.y = calculateProgress(startPoint.y, targetPoint.y, progress);
+
+        }
+
+        return point;
+
+    }
+
+    public static Dimension calculateProgress(Dimension startSize, Dimension targetSize, float progress) {
+
+        Dimension size = new Dimension();
+
+        if (startSize != null &amp;&amp; targetSize != null) {
+
+            size.width = calculateProgress(startSize.width, targetSize.width, progress);
+            size.height = calculateProgress(startSize.height, targetSize.height, progress);
+
+        }
+
+        return size;
+
+    }
+
+    public static int calculateProgress(int startValue, int endValue, float fraction) {
+
+        int value = 0;
+        int distance = endValue - startValue;
+        value = (int) ((float) distance * fraction);
+        value += startValue;
+
+        return value;
+
+    }
+
+    public class Animator implements ActionListener {
+
+        private Timer timer;
+        private LayoutConstraints constraints;
+        private int tick;
+        private Container parent;
+
+        public Animator(Container parent, LayoutConstraints constraints) {
+            setConstraints(constraints);
+            timer = new Timer(16, this);
+            timer.setRepeats(true);
+            timer.setCoalesce(true);
+            this.parent = parent;
+        }
+
+        private void setConstraints(LayoutConstraints constraints) {
+            this.constraints = constraints;
+        }
+
+        public void restart() {
+            tick = 0;
+            timer.restart();
+        }
+
+        protected void stop() {
+            timer.stop();
+            tick = 0;
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+
+            tick += 16;
+            float progress = (float)tick / (float)1000;
+            if (progress &gt;= 1f) {
+                progress = 1f;
+                timer.stop();
+            }
+
+            for (AnimationBounds ab : constraints.getAnimationBounds()) {
+                Rectangle bounds = ab.getBounds(progress);
+                Component comp = ab.getComponent();
+                comp.setBounds(bounds);
+                comp.invalidate();
+                comp.repaint();
+            }
+
+            parent.repaint();
+
+        }
+
+    }
+
+}
+</code></pre>
+
+<p><strong>Update</strong></p>
+
+<p>You could also take a look at <a href="https://github.com/AurelienRibon/sliding-layout">AurelianRibbon/Sliding-Layout</a></p>

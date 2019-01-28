@@ -1,0 +1,144 @@
+<h1>Using Envers</h1>
+
+<p>You can query the <code>CustomRevisionEntity</code> using the <code>AuditReader</code></p>
+
+<pre><code>AuditReader auditReader = AuditReaderFactory.get(entityManager);
+
+//Here you find the revision number that you want
+Number revisionNumber = getRevisionNumber(auditReader);
+
+//then you use the auditReader :-)
+CustomRevisionEntity cRevEntity = auditReader.findRevision(
+                CustomRevisionEntity.class, revisionNumber );
+
+//Then you can just get your Username
+String userName = cRevEntity.getUsername();
+</code></pre>
+
+<p>Here is the method signature</p>
+
+<pre><code> /**
+ * A helper method; should be used only if a custom revision entity is used. See also {@link RevisionEntity}.
+ * @param revisionEntityClass Class of the revision entity. Should be annotated with {@link RevisionEntity}.
+ * @param revision Number of the revision for which to get the data.
+ * @return Entity containing data for the given revision.
+ * @throws IllegalArgumentException If revision is less or equal to 0 or if the class of the revision entity
+ * is invalid.
+ * @throws RevisionDoesNotExistException If the revision does not exist.
+ * @throws IllegalStateException If the associated entity manager is closed.
+ */
+&lt;T&gt; T findRevision(Class&lt;T&gt; revisionEntityClass, Number revision) throws IllegalArgumentException,
+        RevisionDoesNotExistException, IllegalStateException;
+</code></pre>
+
+<p>From the Hibernate-envers 3.6.3.Final source, this is implemented at AuditReaderImpl.java line 193:</p>
+
+<pre><code>@SuppressWarnings({"unchecked"})
+public &lt;T&gt; T findRevision(Class&lt;T&gt; revisionEntityClass, Number revision) throws IllegalArgumentException,
+        RevisionDoesNotExistException, IllegalStateException {
+    checkNotNull(revision, "Entity revision");
+    checkPositive(revision, "Entity revision");
+    checkSession();
+
+    Set&lt;Number&gt; revisions = new HashSet&lt;Number&gt;(1);
+    revisions.add(revision);
+    Query query = verCfg.getRevisionInfoQueryCreator().getRevisionsQuery(session, revisions);
+
+    try {
+        T revisionData = (T) query.uniqueResult();
+
+        if (revisionData == null) {
+            throw new RevisionDoesNotExistException(revision);
+        }
+
+        return revisionData;
+    } catch (NonUniqueResultException e) {
+        throw new AuditException(e);
+    }
+}
+</code></pre>
+
+<h1>Update - Missing Spring Configuration</h1>
+
+<p>Looking your stacktrace, you're missing some spring transaction configuration.
+Either use a declarative configuration or use annotation.</p>
+
+<h3>Declarative Configuration</h3>
+
+<p>You need to declare the usage of transaction within the configuration xml, this is done using a AOP pointcut. Looking at this <a href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/transaction.html#transaction-declarative-first-example" rel="nofollow">example</a>, you can see it first sets up the <code>TransactionManager</code> and it's <code>DataSource</code>, then declare that every method of <code>x.y.service.FooService</code> will require a transaction</p>
+
+<pre><code>&lt;!-- ensure that the above transactional advice runs for any execution
+     of an operation defined by the FooService interface --&gt;
+&lt;aop:config&gt;
+    &lt;aop:pointcut id="fooServiceOperation" expression="execution(* x.y.service.FooService.*(..))"/&gt;
+    &lt;aop:advisor advice-ref="txAdvice" pointcut-ref="fooServiceOperation"/&gt;
+&lt;/aop:config&gt;
+</code></pre>
+
+<p>Your provided configuration is <strong>missing</strong> the AOP configuration. For convenience you can configure every class from a specific package to use transaction.</p>
+
+<pre><code>&lt;aop:config&gt;
+    &lt;aop:pointcut id="fooServiceMethods" expression="execution(* x.y.service.*.*(..))"/&gt;
+    &lt;aop:advisor advice-ref="txAdvice" pointcut-ref="fooServiceMethods"/&gt;
+&lt;/aop:config&gt;
+</code></pre>
+
+<p>See that is just the <code>expression="execution(* x.y.service.*.*(..))"</code> that changes.</p>
+
+<h3>Using @Transactional</h3>
+
+<p>Spring thankfully provides a easier way to declare the usage of a <code>@Transactional</code> method, simply by annotating a Class, Interface or Method as <code>@Transactional</code></p>
+
+<pre><code>// the service class that we want to make transactional
+@Transactional
+public class DefaultFooService implements FooService {
+
+    Foo getFoo(String fooName);
+
+    Foo getFoo(String fooName, String barName);
+
+    void insertFoo(Foo foo);
+
+    void updateFoo(Foo foo);
+}
+</code></pre>
+
+<p>After that we need to configure spring to scan our code looking for @Transactional, to generate the proper proxy beans instances when needed.</p>
+
+<pre><code>&lt;!-- enable the configuration of transactional behavior based on annotations --&gt;
+&lt;tx:annotation-driven transaction-manager="txManager"/&gt;&lt;!-- a PlatformTransactionManager is still required --&gt;
+</code></pre>
+
+<p>Here is the <a href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/transaction.html#transaction-declarative-annotations" rel="nofollow">complete example</a> for @Transactional and my <a href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/transaction.html" rel="nofollow">reference</a> for spring configuration about transactions.</p>
+
+<h1>Envers Configuration On Hibernate 3</h1>
+
+<p>Hibernate 3 requires a special configuration to work with Envers, you need to add this at your <code>persistence.xml</code>. <a href="http://guidogarcia.net/blog/2012/01/25/auditing-jpa-entities-with-hibernate-envers/" rel="nofollow">Example</a> </p>
+
+<pre><code>&lt;property name="hibernate.ejb.event.post-insert" value="org.hibernate.ejb.event.EJB3PostInsertEventListener,org.hibernate.envers.event.AuditEventListener" /&gt;
+&lt;property name="hibernate.ejb.event.post-update" value="org.hibernate.ejb.event.EJB3PostUpdateEventListener,org.hibernate.envers.event.AuditEventListener" /&gt;
+&lt;property name="hibernate.ejb.event.post-delete" value="org.hibernate.ejb.event.EJB3PostDeleteEventListener,org.hibernate.envers.event.AuditEventListener" /&gt;
+&lt;property name="hibernate.ejb.event.pre-collection-update" value="org.hibernate.envers.event.AuditEventListener" /&gt;
+&lt;property name="hibernate.ejb.event.pre-collection-remove" value="org.hibernate.envers.event.AuditEventListener" /&gt;
+&lt;property name="hibernate.ejb.event.post-collection-recreate" value="org.hibernate.envers.event.AuditEventListener" /&gt;
+</code></pre>
+
+<p>In case you don't have a persistence.xml or hibernate.cfg.xml, and you declare the <code>SessionFactory</code> and it just works, you need to edit your spring configuration something like <a href="http://j4fry.blogspot.com.br/2009/06/hibernate-event-listeners-with-spring.html" rel="nofollow">this</a> </p>
+
+<pre><code>&lt;bean id="sessionFactory" class="org.springframework.orm.hibernate3.annotation.AnnotationSessionFactoryBean"&gt;
+    ....
+    &lt;property name="eventListeners"&gt;
+        &lt;map&gt;
+            &lt;entry key="post-insert" value-ref="auditListener"/&gt;
+            &lt;entry key="post-update" value-ref="auditListener"/&gt;
+            &lt;entry key="post-delete" value-ref="auditListener"/&gt;
+            &lt;entry key="pre-collection-update" value-ref="auditListener"/&gt;
+            &lt;entry key="pre-collection-remove" value-ref="auditListener"/&gt;
+            &lt;entry key="post-collection-recreate" value-ref="auditListener"/&gt;
+        &lt;/map&gt;
+    &lt;/property&gt;
+    ...
+&lt;/bean&gt;
+
+&lt;bean id="auditListener" class="org.hibernate.envers.event.AuditEventListener"/&gt;
+</code></pre>

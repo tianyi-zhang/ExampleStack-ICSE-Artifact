@@ -1,0 +1,202 @@
+<p>Here is the mapper I've written to parse the so posts xml and create a tab separated file(s) on hadoop to be used by other map reduce jobs or Hive or Pig.</p>
+
+<p>Mapper</p>
+
+<pre><code>package com.aravind.learning.hadoop.mapred.techtalks;
+
+import java.io.IOException;
+import java.io.StringReader;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+
+import com.google.common.base.Joiner;
+
+public class StackoverflowDataWranglerMapper extends Mapper&lt;LongWritable, Text, Text, Text&gt;
+{
+    static enum BadRecordCounters
+    {
+        NO_CREATION_DATE, UNKNOWN_USER_ID, UNPARSEABLE_RECORD, UNTAGGED_POSTS
+    }
+
+    private final Text outputKey = new Text();
+    private final Text outputValue = new Text();
+
+    private final DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+    private DocumentBuilder builder;
+    private static final Joiner TAG_JOINER = Joiner.on(",").skipNulls();
+    // 2008-07-31T21:42:52.667
+    private static final DateFormat DATE_PARSER = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS");
+    private static final SimpleDateFormat DATE_BUILDER = new SimpleDateFormat("yyyy-MM-dd");
+
+    @Override
+    protected void setup(Context context) throws IOException, InterruptedException
+    {
+        try
+        {
+            builder = factory.newDocumentBuilder();
+        }
+        catch (ParserConfigurationException e)
+        {
+            new IOException(e);
+        }
+    }
+
+    @Override
+    protected void map(LongWritable inputKey, Text inputValue, Mapper&lt;LongWritable, Text, Text, Text&gt;.Context context)
+            throws IOException, InterruptedException
+    {
+        try
+        {
+            String entry = inputValue.toString();
+            if (entry.contains("&lt;row "))
+            {
+                Document doc = builder.parse(new InputSource(new StringReader(entry)));
+                Element rootElem = doc.getDocumentElement();
+
+                String id = rootElem.getAttribute("Id");
+                String postedBy = rootElem.getAttribute("OwnerUserId").trim();
+                String viewCount = rootElem.getAttribute("ViewCount");
+                String postTypeId = rootElem.getAttribute("PostTypeId");
+                String score = rootElem.getAttribute("Score");
+                String title = rootElem.getAttribute("Title");
+                String tags = rootElem.getAttribute("Tags");
+                String answerCount = rootElem.getAttribute("AnswerCount");
+                String commentCount = rootElem.getAttribute("CommentCount");
+                String favoriteCount = rootElem.getAttribute("FavoriteCount");
+                String creationDate = rootElem.getAttribute("CreationDate");
+
+                Date parsedDate = null;
+                if (creationDate != null &amp;&amp; creationDate.trim().length() &gt; 0)
+                {
+                    try
+                    {
+                        parsedDate = DATE_PARSER.parse(creationDate);
+                    }
+                    catch (ParseException e)
+                    {
+                        context.getCounter("Bad Record Counters", "Posts missing CreationDate").increment(1);
+                    }
+                }
+
+                if (postedBy.length() == 0 || postedBy.trim().equals("-1"))
+                {
+                    context.getCounter("Bad Record Counters", "Posts with either empty UserId or UserId contains '-1'")
+                            .increment(1);
+                    try
+                    {
+                        parsedDate = DATE_BUILDER.parse("2100-00-01");
+                    }
+                    catch (ParseException e)
+                    {
+                        // ignore
+                    }
+                }
+
+                tags = tags.trim();
+                String tagTokens[] = null;
+
+                if (tags.length() &gt; 1)
+                {
+                    tagTokens = tags.substring(1, tags.length() - 1).split("&gt;&lt;");
+                }
+                else
+                {
+                    context.getCounter("Bad Record Counters", "Untagged Posts").increment(1);
+                }
+
+                outputKey.clear();
+                outputKey.set(id);
+
+                StringBuilder sb = new StringBuilder(postedBy).append("\t").append(parsedDate.getTime()).append("\t")
+                        .append(postTypeId).append("\t").append(title).append("\t").append(viewCount).append("\t").append(score)
+                        .append("\t");
+
+                if (tagTokens != null)
+                {
+                    sb.append(TAG_JOINER.join(tagTokens)).append("\t");
+                }
+                else
+                {
+                    sb.append("").append("\t");
+                }
+                sb.append(answerCount).append("\t").append(commentCount).append("\t").append(favoriteCount).toString();
+
+                outputValue.set(sb.toString());
+
+                context.write(outputKey, outputValue);
+            }
+        }
+        catch (SAXException e)
+        {
+            context.getCounter("Bad Record Counters", "Unparsable records").increment(1);
+        }
+        finally
+        {
+            builder.reset();
+        }
+    }
+}
+</code></pre>
+
+<p><strong>Driver</strong></p>
+
+<pre><code>public class StackoverflowDataWranglerDriver extends Configured implements Tool
+{
+    @Override
+    public int run(String[] args) throws Exception
+    {
+        if (args.length != 2)
+        {
+            System.err.printf("Usage: %s [generic options] &lt;input&gt; &lt;output&gt;\n", getClass().getSimpleName());
+            ToolRunner.printGenericCommandUsage(System.err);
+            return -1;
+        }
+
+        Job job = Job.getInstance(getConf());
+
+        job.setJobName("Tech Talks - Stackoverflow Forum Posts - Data Wrangler");
+
+        TextInputFormat.addInputPath(job, new Path(args[0]));
+
+        TextOutputFormat.setOutputPath(job, new Path(args[1]));
+
+        job.setInputFormatClass(TextInputFormat.class);
+        job.setOutputFormatClass(TextOutputFormat.class);
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(Text.class);
+
+        job.setJarByClass(StackoverflowDataWranglerMapper.class);// required for mr1
+        job.setMapperClass(StackoverflowDataWranglerMapper.class);
+        job.setNumReduceTasks(0);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+
+        return job.waitForCompletion(true) ? 0 : 1;
+    }
+
+    public static void main(String args[]) throws Exception
+    {
+        int exitCode = ToolRunner.run(new Configuration(), new StackoverflowDataWranglerDriver(), args);
+        System.exit(exitCode);
+    }
+}
+</code></pre>
+
+<p><strong>Job submit command</strong></p>
+
+<pre><code>hadoop jar ./hadoop-examples-0.0.1-SNAPSHOT.jar com.aravind.learning.hadoop.mapred.techtalks.StackoverflowDataWranglerDriver data/stackoverflow-posts.xml data/so-posts-tsv
+</code></pre>

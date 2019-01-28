@@ -1,0 +1,275 @@
+<p>I used <code>.Net</code> WebService to upload <code>Database</code> file. Similarly you can use it for <code>Image</code> Upload.</p>
+
+<p><a href="https://github.com/Abhan/SoapWithoutKSoap" rel="nofollow">Project Link</a></p>
+
+<p>Download this demo.</p>
+
+<p>Add these files in that package.</p>
+
+<p><code>1. OutputStream.java</code></p>
+
+<pre><code>package com.abhan.example;
+
+public class OutputStream extends java.io.FilterOutputStream {
+
+    public final static int ENCODE = 1;
+    public final static int DO_BREAK_LINES = 8;
+    private final static int MAX_LINE_LENGTH = 76;
+    private final static byte NEW_LINE = (byte)'\n';
+    private final static byte WHITE_SPACE_ENC = -5;
+    private boolean encode;
+    private int     position;
+    private byte[]  buffer;
+    private int     bufferLength;
+    private int     lineLength;
+    private boolean breakLines;
+    private byte[]  b4;
+    private boolean suspendEncoding;
+    private int     options;
+    private byte[]  decodabet;
+
+    public OutputStream( java.io.OutputStream out ) {
+        this( out, ENCODE );
+    }
+
+    public OutputStream( java.io.OutputStream out, int options ) {
+        super( out );
+        this.breakLines   = (options &amp; DO_BREAK_LINES) != 0;
+        this.encode       = (options &amp; ENCODE) != 0;
+        this.bufferLength = encode ? 3 : 4;
+        this.buffer       = new byte[ bufferLength ];
+        this.position     = 0;
+        this.lineLength   = 0;
+        this.suspendEncoding = false;
+        this.b4           = new byte[4];
+        this.options      = options;
+        this.decodabet    = Base64.getDecodabet(options);
+    }
+
+    @Override
+    public void write(int theByte) 
+    throws java.io.IOException {
+        if( suspendEncoding ) {
+            this.out.write( theByte );
+            return;
+        }
+
+        if( encode ) {
+            buffer[ position++ ] = (byte)theByte;
+            if( position &gt;= bufferLength ) { 
+                this.out.write( Base64.encode3to4( b4, buffer, bufferLength, options ) );
+                lineLength += 4;
+                if( breakLines &amp;&amp; lineLength &gt;= MAX_LINE_LENGTH ) {
+                    this.out.write( NEW_LINE );
+                    lineLength = 0;
+                }
+                position = 0;
+            } 
+        } else {
+            if( decodabet[ theByte &amp; 0x7f ] &gt; WHITE_SPACE_ENC ) {
+                buffer[ position++ ] = (byte)theByte;
+                if( position &gt;= bufferLength ) {
+                    int len = Base64.decode4to3( buffer, 0, b4, 0, options );
+                    out.write( b4, 0, len );
+                    position = 0;
+                }
+            }   
+            else if( decodabet[ theByte &amp; 0x7f ] != WHITE_SPACE_ENC ) {
+                throw new java.io.IOException( "Invalid character in Base64 data." );
+            } 
+        }   
+    }  
+
+    @Override
+    public void write( byte[] theBytes, int off, int len ) 
+    throws java.io.IOException {
+        if( suspendEncoding ) {
+            this.out.write( theBytes, off, len );
+            return;
+        }
+
+        for( int i = 0; i &lt; len; i++ ) {
+            write( theBytes[ off + i ] );
+        } 
+    } 
+
+    public void flushBase64() throws java.io.IOException  {
+        if( position &gt; 0 ) {
+            if( encode ) {
+                out.write( Base64.encode3to4( b4, buffer, position, options ) );
+                position = 0;
+            } 
+            else {
+                throw new java.io.IOException( "Base64 input not properly padded." );
+            } 
+        } 
+    }  
+
+    @Override
+    public void close() throws java.io.IOException {
+        flushBase64();
+        super.close();
+        buffer = null;
+        out    = null;
+    } 
+
+    public void suspendEncoding() throws java.io.IOException  {
+        flushBase64();
+        this.suspendEncoding = true;
+    } 
+
+    public void resumeEncoding() {
+        this.suspendEncoding = false;
+    }
+}
+</code></pre>
+
+<p><code>2. Utils.java</code></p>
+
+<pre><code>package com.abhan.example;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+import android.os.Environment;
+
+public class Utils {
+
+    public static boolean checkExternalStorageAvailable() {
+        boolean mExternalStorageAvailable = false;
+        String state = Environment.getExternalStorageState();
+        if(state.equals(Environment.MEDIA_MOUNTED)) {
+            mExternalStorageAvailable = true;
+        } else if(state.equals(Environment.MEDIA_MOUNTED_READ_ONLY)) {
+            mExternalStorageAvailable = false;
+        } else if(state.equals(Environment.MEDIA_NOFS)) {
+            mExternalStorageAvailable = false;
+        } else if(state.equals(Environment.MEDIA_SHARED)) {
+            mExternalStorageAvailable = false;
+        } else if(state.equals(Environment.MEDIA_UNMOUNTABLE)) {
+            mExternalStorageAvailable = false;
+        } else if(state.equals(Environment.MEDIA_UNMOUNTED)) {
+            mExternalStorageAvailable = false;
+        } else if(state.equals(Environment.MEDIA_REMOVED)) {
+            mExternalStorageAvailable = false;
+        } 
+
+        return mExternalStorageAvailable;
+    }
+
+    public static String dataDirectory() {
+        String dataDir = null;
+        if(checkExternalStorageAvailable()) {
+            dataDir = Environment.getDataDirectory().getAbsolutePath();
+        }
+        return dataDir;
+    }
+
+    public static boolean createDirectory(final String dirName) {
+        boolean isDirectoryCreated = false;
+        if(checkExternalStorageAvailable()) {
+            File dirFile = new File(dirName);
+            if(!dirFile.exists()) {
+                dirFile.mkdirs();
+                isDirectoryCreated = true;
+            }
+        }
+
+        return isDirectoryCreated;
+    }
+
+    public static boolean deleteDirectory(final String dirName) {
+        boolean isDirectoryDeleted = false;
+        if(checkExternalStorageAvailable()) {
+            File dirFile = new File(dirName);
+            if(!dirFile.exists()) {
+                isDirectoryDeleted = false;
+            } else {
+                dirFile.delete();
+                isDirectoryDeleted = true;
+            }
+        }
+
+        return isDirectoryDeleted;
+    }
+
+    public static String todayDate(final String providedFormat) {
+        String returnedDateString = null;
+        try {
+            Calendar calendar = new GregorianCalendar();
+            DateFormat dateFormat = new SimpleDateFormat(providedFormat);
+            returnedDateString = dateFormat.format(calendar.getTime());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return returnedDateString;
+    }
+
+    public static byte[] convertDatabaseFileToArray(final String filePath) {
+        InputStream inputStream = null;
+        ByteArrayOutputStream byteOutputStream = null;
+        try {
+            inputStream = new BufferedInputStream(
+                    new FileInputStream(new File(filePath)), 8192);
+            byte[] buffer = new byte[8096];
+            byteOutputStream = new ByteArrayOutputStream();
+            int length = 0;
+            while((length = inputStream.read(buffer)) != -1) {
+                byteOutputStream.write(buffer, 0, length);
+            }
+            if(inputStream != null) {
+                inputStream.close();
+            }
+            if(byteOutputStream != null) {
+                byteOutputStream.flush();
+                byteOutputStream.close();
+            }
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return byteOutputStream.toByteArray();
+    }
+}
+</code></pre>
+
+<p><code>3. Base64.java</code></p>
+
+<p>To download this file you can use <a href="http://grepcode.com/" rel="nofollow">GrepCode</a> Search.</p>
+
+<p>Encode Bytes / String according to your needs in Web Service using <code>Base64</code> and pass it to your param.</p>
+
+<p>In <code>MainActivity.java</code> change the following things.</p>
+
+<pre><code>final String filePath = Utils.dataDirectory() + File.separator + "data"
+                + File.separator + MainActivity.this.getPackageName() 
+                + File.separator + "databases" + File.separator + "My_DB";
+final String todayDate = Utils.todayDate("Your_Preferred_Format");
+final String param0 = "http://121.121.121.121/mWebService/Abhan.asmx";
+final String param1 = "121.121.121.121";
+final String param2 = "http://localhost/mWebService/UploadFile";
+final String param3 = getTopOfHeader()
++ "&lt;UploadFile xmlns=\"http://localhost/mWebService\"&gt;"
+                + "&lt;FileArray&gt;" + Base64.encodeBytes(Utils.convertDatabaseFileToArray(filePath)) + "&lt;/FileArray&gt;" 
+                + "&lt;Filename&gt;" + todayDate + "_1234567890_My_DB.db" + "&lt;/Filename&gt;" 
+                + "&lt;Number&gt;1234567890&lt;/Number&gt;" 
+                + "&lt;/UploadFile&gt;"
+                + getBottomOfHeader();
+</code></pre>
+
+<p>In this demo I have used <code>Local Service</code>. Please change it to your <code>Live</code> or <code>Local</code> Web Service. Moreover, I also used created <code>Database</code> file in <code>\data\data\databases\My_DB</code>.
+You can remove unnecessary code.</p>
+
+<p>Run the demo.</p>
+
+<p>Thanks.</p>

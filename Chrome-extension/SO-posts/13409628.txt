@@ -1,0 +1,155 @@
+<p><strong>WARNING</strong> This answer uses <code>SecureRandom</code> for key derivation, which is contrary to its purpose. <code>SecureRandom</code> is a random number generator and is <strong>not</strong> guaranteed to produce consistent output between platforms (which is what caused the problem in the question). The proper mechanism for key derivation is <code>SecretKeyFactory</code>. This <a href="http://nelenkov.blogspot.ru/2012/04/using-password-based-encryption-on.html">nelenkov's blog post</a> has a good write-up on this issue. This answer provides a solution for cases when you are constrained by backwards compatibility requirement; however, you should migrate to a correct implementation as soon as possible.</p>
+
+<hr>
+
+<p>Ok, today with a little more time to do some research (and remove my old post, that actually wasn't work, sorry) I got one answer that's working fine, I actually did test it  on Android 2.3.6, 2.3.7 (that's basically the same), 4.0.4 and 4.2 and it has worked.
+I did some research on those links :</p>
+
+<p><a href="http://stackoverflow.com/questions/13383006/encryption-error-on-android-4-2">Encryption error on Android 4.2</a>,</p>
+
+<p><a href="http://stackoverflow.com/questions/4405334/bouncycastle-aes-error-when-upgrading-to-1-45">BouncyCastle AES error when upgrading to 1.45</a>,</p>
+
+<p><a href="http://en.wikipedia.org/wiki/Padding_%28cryptography%29">http://en.wikipedia.org/wiki/Padding_(cryptography)</a></p>
+
+<p>Then I got in this solution thanks to the content on those links above.
+Here is my class (and now working fine):</p>
+
+<pre><code>    package au.gov.dhsJobSeeker.main.readwriteprefssettings.util;
+
+    import java.security.SecureRandom;
+
+    import javax.crypto.Cipher;
+    import javax.crypto.KeyGenerator;
+    import javax.crypto.SecretKey;
+    import javax.crypto.spec.SecretKeySpec;
+
+    import android.util.Base64;
+
+    public class EncodeDecodeAES {
+
+private final static String HEX = "0123456789ABCDEF";
+private final static int JELLY_BEAN_4_2 = 17;
+private final static byte[] key = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+
+// static {
+// Security.addProvider(new BouncyCastleProvider());
+// }
+
+public static String encrypt(String seed, String cleartext) throws Exception {
+    byte[] rawKey = getRawKey(seed.getBytes());
+    byte[] result = encrypt(rawKey, cleartext.getBytes());
+    String fromHex = toHex(result);
+    String base64 = new String(Base64.encodeToString(fromHex.getBytes(), 0));
+    return base64;
+}
+
+
+public static String decrypt(String seed, String encrypted) throws Exception {
+    byte[] seedByte = seed.getBytes();
+    System.arraycopy(seedByte, 0, key, 0, ((seedByte.length &lt; 16) ? seedByte.length : 16));
+    String base64 = new String(Base64.decode(encrypted, 0));
+    byte[] rawKey = getRawKey(seedByte);
+    byte[] enc = toByte(base64);
+    byte[] result = decrypt(rawKey, enc);
+    return new String(result);
+}
+
+
+public static byte[] encryptBytes(String seed, byte[] cleartext) throws Exception {
+    byte[] rawKey = getRawKey(seed.getBytes());
+    byte[] result = encrypt(rawKey, cleartext);
+    return result;
+}
+
+
+public static byte[] decryptBytes(String seed, byte[] encrypted) throws Exception {
+    byte[] rawKey = getRawKey(seed.getBytes());
+    byte[] result = decrypt(rawKey, encrypted);
+    return result;
+}
+
+
+private static byte[] getRawKey(byte[] seed) throws Exception {
+    KeyGenerator kgen = KeyGenerator.getInstance("AES"); // , "SC");
+    SecureRandom sr = null;
+    if (android.os.Build.VERSION.SDK_INT &gt;= JELLY_BEAN_4_2) {
+        sr = SecureRandom.getInstance("SHA1PRNG", "Crypto");
+    } else {
+        sr = SecureRandom.getInstance("SHA1PRNG");
+    }
+    sr.setSeed(seed);
+    try {
+        kgen.init(256, sr);
+        // kgen.init(128, sr);
+    } catch (Exception e) {
+        // Log.w(LOG, "This device doesn't suppor 256bits, trying 192bits.");
+        try {
+            kgen.init(192, sr);
+        } catch (Exception e1) {
+            // Log.w(LOG, "This device doesn't suppor 192bits, trying 128bits.");
+            kgen.init(128, sr);
+        }
+    }
+    SecretKey skey = kgen.generateKey();
+    byte[] raw = skey.getEncoded();
+    return raw;
+}
+
+
+private static byte[] encrypt(byte[] raw, byte[] clear) throws Exception {
+    SecretKeySpec skeySpec = new SecretKeySpec(raw, "AES");
+    Cipher cipher = Cipher.getInstance("AES"); // /ECB/PKCS7Padding", "SC");
+    cipher.init(Cipher.ENCRYPT_MODE, skeySpec);
+    byte[] encrypted = cipher.doFinal(clear);
+    return encrypted;
+}
+
+
+private static byte[] decrypt(byte[] raw, byte[] encrypted) throws Exception {
+    SecretKeySpec skeySpec = new SecretKeySpec(raw, "AES");
+    Cipher cipher = Cipher.getInstance("AES"); // /ECB/PKCS7Padding", "SC");
+    cipher.init(Cipher.DECRYPT_MODE, skeySpec);
+    byte[] decrypted = cipher.doFinal(encrypted);
+    return decrypted;
+}
+
+
+public static String toHex(String txt) {
+    return toHex(txt.getBytes());
+}
+
+
+public static String fromHex(String hex) {
+    return new String(toByte(hex));
+}
+
+
+public static byte[] toByte(String hexString) {
+    int len = hexString.length() / 2;
+    byte[] result = new byte[len];
+    for (int i = 0; i &lt; len; i++)
+        result[i] = Integer.valueOf(hexString.substring(2 * i, 2 * i + 2), 16).byteValue();
+    return result;
+}
+
+
+public static String toHex(byte[] buf) {
+    if (buf == null) return "";
+    StringBuffer result = new StringBuffer(2 * buf.length);
+    for (int i = 0; i &lt; buf.length; i++) {
+        appendHex(result, buf[i]);
+    }
+    return result.toString();
+}
+
+
+private static void appendHex(StringBuffer sb, byte b) {
+    sb.append(HEX.charAt((b &gt;&gt; 4) &amp; 0x0f)).append(HEX.charAt(b &amp; 0x0f));
+}
+
+    }
+</code></pre>
+
+<p>However the PBrando answer(above, also works, due that I marked it as solution.), though as I was looking for a way to keep a similar app file size with it's now, I've opted to use this approach. Because I don't need to import external Jars.
+I did put the entire class for just in case any of you is having the same issue, and want to just copy ans paste it.</p>

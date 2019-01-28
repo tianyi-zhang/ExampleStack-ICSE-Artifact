@@ -1,0 +1,272 @@
+<p>Victory! :) I have now an implementation for it and it is not quite simple.
+Benchmark Jackson vs JSONObject included.</p>
+
+<p><strong>Problem</strong> and solution described piece by piece:</p>
+
+<p>First, I have a big json string in a data store that I want to partially deserialize and update. The deserialization has to be partial, but serialization full, so I don't lose the data I didn't deserialize.
+Here are the object I am using for the example:</p>
+
+<pre><code>   private static class KnownPart {
+
+        @JsonProperty
+        private Customer customer;
+        @JsonProperty
+        private BrowserInfo browser;
+    }
+
+    private static class Customer {
+
+        @JsonProperty
+        private int id;
+        @JsonProperty
+        private String name;
+        @JsonProperty
+        private Address[] addresses; // just to make it more complex for this example
+
+        public Customer(int id, String name, Address[] addresses) {
+            this.id = id;
+            this.name = name;
+            this.addresses = addresses;
+        }
+
+        public Customer() {
+        }
+    }
+
+    private static class Address {
+
+        @JsonProperty
+        private String street;
+        @JsonProperty
+        private String city;
+
+        public Address(String street, String city) {
+            this.street = street;
+            this.city = city;
+        }
+
+        public Address() {
+        }
+    }
+
+    private static class BrowserInfo {
+
+        @JsonProperty
+        private String agent;
+        @JsonProperty
+        private String version;
+
+        public BrowserInfo(String agent, String version) {
+            this.agent = agent;
+            this.version = version;
+        }
+
+        public BrowserInfo() {
+        }
+    }
+</code></pre>
+
+<p>KnownPart object contains a lot more than 2 properties, but I have no idea which ones exactly and I can not guarantee to keep track of which properties are added to the json string...</p>
+
+<p>I have a data store which has its data encoded in Json. The current implementation uses JSONObject to read/write and supports jackson to read json and map it to "real" Java object (POJOs and more complex objects).
+While writing full Json strings with jackson is not a problem, updating an existing string with a Java object that only represents a small part of it is much harder.</p>
+
+<p>Data store problem:</p>
+
+<pre><code>    private static class DataStore {
+
+        private final String data;
+
+        private DataStore(Customer customer, BrowserInfo browser) throws IOException, JSONException {
+            StringWriter sw = new StringWriter(1000);
+            try (JsonGenerator jgen = MAPPER.getJsonFactory().createJsonGenerator(sw)) {
+                jgen.writeStartObject();
+                writeBunchOfProperties(jgen);
+                jgen.writeFieldName("customer");
+                jgen.writeRawValue(MAPPER.writeValueAsString(customer));
+                writeBunchOfProperties(jgen);
+                jgen.writeFieldName("browser");
+                jgen.writeRawValue(MAPPER.writeValueAsString(browser));
+                writeBunchOfProperties(jgen);
+                jgen.writeEndObject();
+            }
+            this.data = sw.toString();
+        }
+
+        private void writeBunchOfProperties(JsonGenerator jgen) throws IOException {
+            int c = new Random().nextInt(3) + 1;
+            for (int i = 0; i &lt; c; ++i) {
+                jgen.writeFieldName(RandomStringUtils.random(10));
+                jgen.writeRawValue(JSON_LONG);
+            }
+        }
+
+        public String readData(String query) {
+            return data;
+        }
+
+        private void saveData(String json) {
+            // Not implemented
+        }
+
+        public void saveData(JSONObject json) {
+            saveData(json.toString());
+        }
+
+        public void saveData(Object obj) throws IOException {
+            // problem: ?
+        }
+
+        public &lt;T&gt; T readData(String query, Class&lt;T&gt; clazz) throws IOException {
+            return MAPPER.readValue(readData(query), clazz);
+        }
+
+        public &lt;T&gt; T readDataForUpdating(String query, Class&lt;T&gt; clazz) throws IOException {
+            // problem: ?
+        }
+</code></pre>
+
+<p>At the higher level, I want to be able to do something like:</p>
+
+<pre><code>        public long doSomeWritingWithJackson() throws IOException {
+            t0 = System.nanoTime();
+            KnownPart obj = store.readDataForUpdating(null, KnownPart.class);
+            obj.customer.name = "Jackson Doe";
+            obj.browser.version = "10";
+            store.saveData(obj);
+            t1 = System.nanoTime();
+            return t1 - t0;
+        }
+</code></pre>
+
+<p>without losing the data I didn't read when I save.
+Obviously, I don't want to read a 2nd time the data because I'm reading this from a remote host and I don't want to cache it in some static/instance map because I need this to be still very effective in a highly concurrent environment.</p>
+
+<p>So the <strong>solution</strong>, in a few words is:
+ - to read the tree of the json string first and use it to deserialize the Json object into the Java object.
+ - store the deserialize object (in KnowPart class) and store the tree in some parent abstract class
+ - write a Jackson module to customize how bean are serialized. The code is pretty much the same than the original one with the difference that when an attribute from the KnownPart is written, it's key is removed the tree which is in the UnknownPart object, then it is easy to write the unknown part...</p>
+
+<p>The main object becomes:</p>
+
+<pre><code>    private static abstract class UnknownPart {
+
+         ObjectNode tree;
+    }
+
+    private static class KnownPart extends UnknownPart {
+
+        @JsonProperty
+        private Customer customer;
+        @JsonProperty
+        private BrowserInfo browser;
+    }
+</code></pre>
+
+<p>The module only deals with UnknownPart objects:
+        private static class MyModule extends Module {</p>
+
+<pre><code>        @Override
+        public String getModuleName() {
+            return "MyModule";
+        }
+
+        @Override
+        public Version version() {
+            return new Version(0, 0, 1, "SNAPSHOT");
+        }
+
+        @Override
+        public void setupModule(Module.SetupContext context) {
+            context.addBeanSerializerModifier(new org.codehaus.jackson.map.ser.BeanSerializerModifier() {
+                private UnknownPartSerializer cs;
+
+                @Override
+                public JsonSerializer modifySerializer(SerializationConfig config, BasicBeanDescription beanDesc, JsonSerializer&lt;?&gt; serializer) {
+                   return UnknownPart.class.isAssignableFrom(beanDesc.getBeanClass())
+                       ? new UnknownPartSerializer((BeanSerializerBase) serializer)
+                       : serializer;
+                }
+            });
+        }
+    }
+</code></pre>
+
+<p>And the serializer is:</p>
+
+<pre><code>    private static class UnknownPartSerializer extends BeanSerializerBase {
+
+        public UnknownPartSerializer(BeanSerializerBase src) {
+            super(src);
+        }
+
+        @Override
+        public void serialize(Object bean, JsonGenerator jgen, SerializerProvider provider) throws IOException, JsonGenerationException {
+            UnknownPart up = (UnknownPart) bean;
+            jgen.writeStartObject();
+            serializeFields(up, jgen, provider);
+            jgen.writeEndObject();
+        }
+
+        protected void serializeFields(UnknownPart bean, JsonGenerator jgen, SerializerProvider provider) throws IOException, JsonGenerationException {
+            final BeanPropertyWriter[] props;
+            if (_filteredProps != null &amp;&amp; provider.getSerializationView() != null) {
+                props = _filteredProps;
+            } else {
+                props = _props;
+            }
+            int i = 0;
+            try {
+                for (final int len = props.length; i &lt; len; ++i) {
+                    BeanPropertyWriter prop = props[i];
+                    if (prop != null) { // can have nulls in filtered list
+                        prop.serializeAsField(bean, jgen, provider);
+                        bean.tree.remove(prop.getName()); // new
+                    }
+                }
+                if (_anyGetterWriter != null) {
+                    _anyGetterWriter.getAndSerialize(bean, jgen, provider);
+                }
+                // new:
+                Iterator&lt;Entry&lt;String, JsonNode&gt;&gt; it = bean.tree.getFields();
+                while (it.hasNext()) {
+                    Entry&lt;String, JsonNode&gt; e = it.next();
+                    jgen.writeFieldName(e.getKey());
+                    jgen.writeObject(e.getValue());
+                }
+            } catch (Exception e) {
+                String name = (i == props.length) ? "[anySetter]"
+                        : props[i].getName();
+                wrapAndThrow(provider, e, bean, name);
+            } catch (StackOverflowError e) {
+                /* 04-Sep-2009, tatu: Dealing with this is tricky, since we do not
+                 *   have many stack frames to spare... just one or two; can't
+                 *   make many calls.
+                 */
+                JsonMappingException mapE = new JsonMappingException("Infinite recursion (StackOverflowError)", e);
+                String name = (i == props.length) ? "[anySetter]"
+                        : props[i].getName();
+                mapE.prependPath(new JsonMappingException.Reference(bean, name));
+                throw mapE;
+            }
+        }
+    }
+</code></pre>
+
+<p>In the same time, I wrote a benchmark to confirm (or not) that this solution is faster than JSONObject for big Json strings...
+The test compares:
+ - read with JSONObject (without mapping)
+ - read with Jackson
+ - read with tree with Jackson
+ - read/write with JSONObject
+ - read/write with Jackson
+And it is indeed faster :)</p>
+
+<p>After 1000 iterations, excluding potential class load or some initialization the JVM does, i get, in nano seconds:</p>
+
+<pre><code>-- AVERAGE ----------------------------------------------------------------------------
+|    1|        860,560|        157,772|        234,654|      1,595,018|        488,427|
+---------------------------------------------------------------------------------------
+|     |  RO JSONObject|     RO Jackson|    R/- Jackson| R/W JSONObject|    R/W Jackson|
+---------------------------------------------------------------------------------------
+</code></pre>

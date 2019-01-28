@@ -1,0 +1,205 @@
+<p>BalusC's answer is the appropriate answer for small amounts of object data, however, the object I am submitting to the backing bean is 2.2 megabytes and not suitable for encoding in the URL. Further more I don't want people bookmarking this particular page as more attributes may be added to the search criteria file in the future and this would make the book mark properties invalid.</p>
+
+<p>The solution I am using is very low tech but it works. The applet submits the serialised object to the servlet, which in turn passes it to the backing bean, and then returns a fail or succeed message to the applet. If the submission succeeds then the applet calls a javascript function on the web page to load the results page. This ensures that the correct backing bean is retained.</p>
+
+<p>The final code is as follows:</p>
+
+<p>Applet "Submit Search Criteria" button code:</p>
+
+<pre><code>private void jButton8ActionPerformed(java.awt.event.ActionEvent evt)                                         
+{                                             
+    criteriaModel.loadCodeBase();
+    int choice = JOptionPane.showConfirmDialog(this,
+         "Are you sure you want to submit your search criteria and exit the \"Customise Search Criteria\" web page?",
+         "Confirm Submit",
+         JOptionPane.YES_NO_OPTION,
+         JOptionPane.QUESTION_MESSAGE);
+
+     if (choice == 0)
+     {
+         try 
+         {      
+             URL url = new URL(criteriaModel.getCodeBase(), "CriteriaServlet");
+
+             System.out.println("Servlet address is: " + url);
+
+            Object searchSubmitObject = criteriaModel.getObjectSlideData();
+
+            HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+            connection.setDoInput(true);
+            connection.setDoOutput(true);
+            connection.setUseCaches(false);
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type","application/x-java-serialized-object");
+
+            ObjectOutputStream out = new ObjectOutputStream(connection.getOutputStream());
+            out.writeObject(searchSubmitObject);
+            out.flush();
+            out.close();
+            out.close();
+
+            System.out.println("Object Written");
+
+            ObjectInputStream in = new ObjectInputStream(connection.getInputStream());
+            String response = (String)in.readObject();
+            System.out.println(response);
+            in.close();
+
+            if(response.equals("Failed"))
+            {
+                JOptionPane.showMessageDialog(jPanel8, "Submit Search criteria file to server failed.\n Try Again later.");
+            }
+            else
+            {
+                getAppletContext().showDocument(new URL("javascript:openResultsPage()"));
+            }
+         } 
+         catch (MalformedURLException ex)
+        {
+            JOptionPane.showMessageDialog(jPanel8, "Submit criteria file Malformed URL."
+                    + ex.toString());
+            System.out.println("MalformedURLException occurred");
+            Logger.getLogger(CriteriaInterfaceView.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        catch (Exception e) 
+         {
+             System.out.println("Submit criteria file ERROR exception: " + e.toString());
+             JOptionPane.showMessageDialog(jPanel8, "Submit criteria file ERROR exception:"
+                    + e.toString());
+         }
+     }         
+}      
+</code></pre>
+
+<p>In the servlet:</p>
+
+<pre><code>@Override
+public void service(ServletRequest req, ServletResponse res) throws ServletException, IOException
+{
+    System.out.println("service(ServletRequest req, ServletResponse res)");
+
+    res.setContentType("text/plain");
+
+    try
+    {
+        ObjectInputStream in = new ObjectInputStream(req.getInputStream());
+        slideData = (MultipleSlideDataObject2)in.readObject();
+        in.close();
+
+        String reply = "Failed";
+
+        if(slideData != null)
+        {
+            System.out.println("Serial number of submitted slide series is: " + slideData.getSerialNumber());
+
+            FacesContext facesContext = FacesUtil.getFacesContext(req, res);
+            ProductSelection productSelection = (ProductSelection) facesContext.getApplication().evaluateExpressionGet(facesContext, "#{productSelection}", ProductSelection.class);
+            productSelection.submitSearchCriteriaFile(slideData);
+
+            reply = "Success";
+        }
+
+        ObjectOutputStream outputToApplet = new ObjectOutputStream(res.getOutputStream());
+        outputToApplet.writeObject(reply);
+        outputToApplet.flush();          
+        outputToApplet.close();
+    }
+    catch (ClassNotFoundException ex)
+    {
+        Logger.getLogger(CriteriaServlet.class.getName()).log(Level.SEVERE, null, ex);
+    }
+}
+</code></pre>
+
+<p>In the backing bean:</p>
+
+<pre><code>public String submitSearchCriteriaFile(MultipleSlideDataObject2 slideData) throws IOException
+{
+    System.out.println("Recieved slide series with serial number: " + slideData.getSerialNumber());
+
+    // If there is no slide data then...
+    if (slideData == null)
+    {
+        return "process_MainSearchResultFailed";
+    }
+    else
+    {
+        rankProducts(slideData);
+    }
+
+    return "process_MainSearchResult";
+}
+</code></pre>
+
+<p>In the header of the JSF page, which contains the applet:</p>
+
+<pre><code>&lt;SCRIPT language="javascript"&gt;
+
+    function openResultsPage()
+    {
+        window.location = "MainSearchResult.xhtml";
+    }
+
+    &lt;/SCRIPT&gt;
+</code></pre>
+
+<p>FacesUtil based on BalusC's FacesUtil class (couple of minor changes to the request and response types) Used to get the backing bean in the servlet:</p>
+
+<pre><code>    package searchselection;
+
+import javax.faces.FactoryFinder;
+import javax.faces.component.UIViewRoot;
+import javax.faces.context.FacesContext;
+import javax.faces.context.FacesContextFactory;
+import javax.faces.lifecycle.Lifecycle;
+import javax.faces.lifecycle.LifecycleFactory;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+
+public class FacesUtil
+{
+    // Getters -----------------------------------------------------------------------------------
+
+    public static FacesContext getFacesContext(
+        ServletRequest request, ServletResponse response)
+    {
+        // Get current FacesContext.
+        FacesContext facesContext = FacesContext.getCurrentInstance();
+
+        // Check current FacesContext.
+        if (facesContext == null) {
+
+            // Create new Lifecycle.
+            LifecycleFactory lifecycleFactory = (LifecycleFactory)
+                FactoryFinder.getFactory(FactoryFinder.LIFECYCLE_FACTORY); 
+            Lifecycle lifecycle = lifecycleFactory.getLifecycle(LifecycleFactory.DEFAULT_LIFECYCLE);
+
+            // Create new FacesContext.
+            FacesContextFactory contextFactory  = (FacesContextFactory)
+                FactoryFinder.getFactory(FactoryFinder.FACES_CONTEXT_FACTORY);
+            facesContext = contextFactory.getFacesContext(
+                request.getServletContext(), request, response, lifecycle);
+
+            // Create new View.
+            UIViewRoot view = facesContext.getApplication().getViewHandler().createView(
+                facesContext, "");
+            facesContext.setViewRoot(view);                
+
+            // Set current FacesContext.
+            FacesContextWrapper.setCurrentInstance(facesContext);
+        }
+
+        return facesContext;
+    }
+
+    // Helpers -----------------------------------------------------------------------------------
+
+    // Wrap the protected FacesContext.setCurrentInstance() in a inner class.
+    private static abstract class FacesContextWrapper extends FacesContext {
+        protected static void setCurrentInstance(FacesContext facesContext) {
+            FacesContext.setCurrentInstance(facesContext);
+        }
+    } 
+
+}
+</code></pre>

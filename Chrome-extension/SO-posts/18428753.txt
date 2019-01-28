@@ -1,0 +1,71 @@
+<p>Your message converter does not work with the native request but with a <a href="http://static.springsource.org/spring/docs/3.1.x/javadoc-api/org/springframework/http/HttpInputMessage.html" rel="nofollow"><code>HttpInputMessage</code></a> parameter. That is a Spring class. </p>
+
+<p>The <code>inputMessage.getBody()</code> is were your problem arises. By default, a <a href="http://static.springsource.org/spring/docs/3.1.x/javadoc-api/org/springframework/http/server/ServletServerHttpRequest.html" rel="nofollow"><code>ServletServerHttpRequest</code></a> (another Spring class) is used which has something like this in its <code>getBody()</code> method:</p>
+
+<pre><code>public InputStream getBody() throws IOException {
+    if (isFormSubmittal(this.servletRequest)) {
+        return getFormBody(this.servletRequest);
+    }
+    else {
+        return this.servletRequest.getInputStream();
+    }
+}
+</code></pre>
+
+<p>which delegates to a private implementation like this:</p>
+
+<pre><code>private InputStream getFormBody(HttpServletRequest request) throws IOException {
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    Writer writer = new OutputStreamWriter(bos, FORM_CHARSET);
+
+    Map&lt;String, String[]&gt; form = request.getParameterMap();
+    for (Iterator&lt;String&gt; nameIterator = form.keySet().iterator(); nameIterator.hasNext();) {
+        String name = nameIterator.next();
+        List&lt;String&gt; values = Arrays.asList(form.get(name));
+        for (Iterator&lt;String&gt; valueIterator = values.iterator(); valueIterator.hasNext();) {
+            String value = valueIterator.next();
+            writer.write(URLEncoder.encode(name, FORM_CHARSET));
+            if (value != null) {
+                writer.write('=');
+                writer.write(URLEncoder.encode(value, FORM_CHARSET));
+                if (valueIterator.hasNext()) {
+                    writer.write('&amp;');
+                }
+            }
+        }
+        if (nameIterator.hasNext()) {
+            writer.append('&amp;');
+        }
+    }
+    writer.flush();
+
+    return new ByteArrayInputStream(bos.toByteArray());
+}
+</code></pre>
+
+<p>This is were your problem happens:</p>
+
+<pre><code>...
+Map&lt;String, String[]&gt; form = request.getParameterMap();
+...
+</code></pre>
+
+<p>You mentioned that you use Tomcat 7 so in this case the <code>request.getParameterMap()</code> returns a <a href="http://tomcat.apache.org/tomcat-7.0-doc/api/org/apache/catalina/util/ParameterMap.html" rel="nofollow"><code>org.apache.catalina.util.ParameterMap</code></a> which is just a <code>HashMap</code> which makes no specific guarantees as to its content order. So iterating through the parameters and recomposing the request body is what messes up the original order of your parameters.</p>
+
+<p>Spring is a flexible framework and <strong>you might try to do something about it but you would be fixing the effects, not the cause. And the cause is that your signing method is fragile</strong>. </p>
+
+<p>For example, should these cause different signatures?</p>
+
+<pre><code>aaa=1&amp;bbb=2
+bbb=2&amp;aaa=1
+</code></pre>
+
+<p>Or these?</p>
+
+<pre><code>aaa=Hello+world
+aaa=Hello%20world
+</code></pre>
+
+<p>A server normally does not care about the order of the parameters and different ways of encoding values end up as the same decoded value. For this reason, when signing something, you normally <strong>perform a normalization</strong> first. You can borrow some ideas from <a href="http://en.wikipedia.org/wiki/URL_normalization" rel="nofollow">URL normalization</a> or some <a href="https://dev.twitter.com/docs/auth/creating-signature" rel="nofollow">available APIs like Twitter's</a>. </p>
+
+<p><strong>You will notice that sorting the parameters before signing is an important step which will remove your current problem.</strong></p>

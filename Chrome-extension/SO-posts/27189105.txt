@@ -1,0 +1,140 @@
+<p>It's definitely possible to get object size, 'cause an object of a certain class is just a fix-sized memory block.  I wrote the following code to calculate the retained size of an object. It also provides a method like 'sizeof' in C++. It's ready-to-run and depends on nothing. You may copy and try it!</p>
+
+<pre><code>public class ObjectSizer {
+
+    public static final Unsafe us = getUnsafe();
+
+    public static boolean useCompressedOops = true;
+
+    public static int retainedSize(Object obj) {
+        return retainedSize(obj, new HashMap&lt;Object, Object&gt;());
+    }
+
+    private static int retainedSize(Object obj, HashMap&lt;Object, Object&gt; calculated) {
+        try {
+            if (obj == null)
+                throw new NullPointerException();
+            calculated.put(obj, obj);
+            Class&lt;?&gt; cls = obj.getClass();
+            if (cls.isArray()) {
+                int arraysize = us.arrayBaseOffset(cls) + us.arrayIndexScale(cls) * Array.getLength(obj);
+                if (!cls.getComponentType().isPrimitive()) {
+                    Object[] arr = (Object[]) obj;
+                    for (Object comp : arr) {
+                        if (comp != null &amp;&amp; !isCalculated(calculated, comp))
+                            arraysize += retainedSize(comp, calculated);
+                    }
+                }
+                return arraysize;
+            } else {
+                int objectsize = sizeof(cls);
+                for (Field f : getAllNonStaticFields(obj.getClass())) {
+                    Class&lt;?&gt; fcls = f.getType();
+                    if (fcls.isPrimitive())
+                        continue;
+                    f.setAccessible(true);
+                    Object ref = f.get(obj);
+                    if (ref != null &amp;&amp; !isCalculated(calculated, ref)) {
+                        int referentSize = retainedSize(ref, calculated);
+                        objectsize += referentSize;
+                    }
+                }
+                return objectsize;
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static int sizeof(Class&lt;?&gt; cls) {
+
+        if (cls == null)
+            throw new NullPointerException();
+
+        if (cls.isArray())
+            throw new IllegalArgumentException();
+
+        if (cls.isPrimitive())
+            return primsize(cls);
+
+        int lastOffset = Integer.MIN_VALUE;
+        Class&lt;?&gt; lastClass = null;
+
+        for (Field f : getAllNonStaticFields(cls)) {
+            if (Modifier.isStatic(f.getModifiers()))
+                continue;
+
+            int offset = (int) us.objectFieldOffset(f);
+            if (offset &gt; lastOffset) {
+                lastOffset = offset;
+                lastClass = f.getClass();
+            }
+        }
+        if (lastOffset &gt; 0)
+            return modulo8(lastOffset + primsize(lastClass));
+        else
+            return 16;
+    }
+
+    private static Field[] getAllNonStaticFields(Class&lt;?&gt; cls) {
+        if (cls == null)
+            throw new NullPointerException();
+
+        List&lt;Field&gt; fieldList = new ArrayList&lt;Field&gt;();
+        while (cls != Object.class) {
+            for (Field f : cls.getDeclaredFields()) {
+                if (!Modifier.isStatic(f.getModifiers()))
+                    fieldList.add(f);
+            }
+            cls = cls.getSuperclass();
+        }
+        Field[] fs = new Field[fieldList.size()];
+        fieldList.toArray(fs);
+        return fs;
+    }
+
+    private static boolean isCalculated(HashMap&lt;Object, Object&gt; calculated, Object test) {
+        Object that = calculated.get(test);
+        return that != null &amp;&amp; that == test;
+    }
+
+    private static int primsize(Class&lt;?&gt; cls) {
+        if (cls == byte.class)
+            return 1;
+        if (cls == boolean.class)
+            return 1;
+        if (cls == char.class)
+            return 2;
+        if (cls == short.class)
+            return 2;
+        if (cls == int.class)
+            return 4;
+        if (cls == float.class)
+            return 4;
+        if (cls == long.class)
+            return 8;
+        if (cls == double.class)
+            return 8;
+        else
+            return useCompressedOops ? 4 : 8;
+    }
+
+    private static int modulo8(int value) {
+        return (value &amp; 0x7) &gt; 0 ? (value &amp; ~0x7) + 8 : value;
+    }
+
+    private static Unsafe getUnsafe() {
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            return (Unsafe) f.get(Unsafe.class);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(retainedSize("Hello Leeeeeeeen"));
+    }
+}
+</code></pre>

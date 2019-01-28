@@ -1,0 +1,449 @@
+<p>So, I did it this way:</p>
+
+<p>First of all, add this following dependency in <code>build.gradle(app)</code>:</p>
+
+<blockquote>
+  <p>compile 'com.android.support:customtabs:23.1.1'</p>
+</blockquote>
+
+<p>First create an activity <code>WebviewActivity</code>:</p>
+
+<p><strong>WebViewActivity.java</strong></p>
+
+<pre><code>public class WebviewActivity extends AppCompatActivity {
+    public static final String EXTRA_URL = "extra.url";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_webview);
+        String url = getIntent().getStringExtra(EXTRA_URL);
+        WebView webView = (WebView)findViewById(R.id.webview);
+        webView.setWebViewClient(new WebViewClient());
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        setTitle(url);
+        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        webView.loadUrl(url);
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            // Respond to the action bar's Up/Home button
+            case android.R.id.home:
+                finish();
+                return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+}
+</code></pre>
+
+<p>Now, say on button click you want to open chrome custom tab and load <code>www.google.com</code>, so, do it as below:</p>
+
+<pre><code>public void onButtonClick(View view){
+    CustomTabsIntent customTabsIntent = new CustomTabsIntent.Builder().build();
+    CustomTabActivityHelper.openCustomTab(
+        this,// activity
+        customTabsIntent,
+        Uri.parse("http://www.google.com"), 
+        new WebviewFallback()
+    );
+
+}
+</code></pre>
+
+<p><strong>activity_webview.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;!-- Copyright 2015 Google Inc. All Rights Reserved.
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+--&gt;
+&lt;WebView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/webview"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:paddingBottom="@dimen/activity_vertical_margin"
+    android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    tools:context=".helpers.WebviewActivity" /&gt;
+</code></pre>
+
+<p>Then, simply craete the classes as below:</p>
+
+<p><strong>CustomTabActivityHelper.java</strong>import android.app.Activity;</p>
+
+<pre><code>import android.net.Uri;
+import android.os.Bundle;
+import android.support.customtabs.CustomTabsClient;
+import android.support.customtabs.CustomTabsIntent;
+import android.support.customtabs.CustomTabsServiceConnection;
+import android.support.customtabs.CustomTabsSession;
+
+import java.util.List;
+
+/**
+ * This is a helper class to manage the connection to the Custom Tabs Service.
+ */
+public class CustomTabActivityHelper implements ServiceConnectionCallback {
+    private CustomTabsSession mCustomTabsSession;
+    private CustomTabsClient mClient;
+    private CustomTabsServiceConnection mConnection;
+    private ConnectionCallback mConnectionCallback;
+
+    /**
+     * Opens the URL on a Custom Tab if possible. Otherwise fallsback to opening it on a WebView.
+     *
+     * @param activity         The host activity.
+     * @param customTabsIntent a CustomTabsIntent to be used if Custom Tabs is available.
+     * @param uri              the Uri to be opened.
+     * @param fallback         a CustomTabFallback to be used if Custom Tabs is not available.
+     */
+    public static void openCustomTab(Activity activity,
+                                     CustomTabsIntent customTabsIntent,
+                                     Uri uri,
+                                     CustomTabFallback fallback) {
+        String packageName = CustomTabsHelper.getPackageNameToUse(activity);
+
+        //If we cant find a package name, it means theres no browser that supports
+        //Chrome Custom Tabs installed. So, we fallback to the webview
+        if (packageName == null) {
+            if (fallback != null) {
+                fallback.openUri(activity, uri);
+            }
+        } else {
+            customTabsIntent.intent.setPackage(packageName);
+            customTabsIntent.launchUrl(activity, uri);
+        }
+    }
+
+    /**
+     * Unbinds the Activity from the Custom Tabs Service.
+     *
+     * @param activity the activity that is connected to the service.
+     */
+    public void unbindCustomTabsService(Activity activity) {
+        if (mConnection == null) return;
+        activity.unbindService(mConnection);
+        mClient = null;
+        mCustomTabsSession = null;
+        mConnection = null;
+    }
+
+    /**
+     * Creates or retrieves an exiting CustomTabsSession.
+     *
+     * @return a CustomTabsSession.
+     */
+    public CustomTabsSession getSession() {
+        if (mClient == null) {
+            mCustomTabsSession = null;
+        } else if (mCustomTabsSession == null) {
+            mCustomTabsSession = mClient.newSession(null);
+        }
+        return mCustomTabsSession;
+    }
+
+    /**
+     * Register a Callback to be called when connected or disconnected from the Custom Tabs Service.
+     *
+     * @param connectionCallback
+     */
+    public void setConnectionCallback(ConnectionCallback connectionCallback) {
+        this.mConnectionCallback = connectionCallback;
+    }
+
+    /**
+     * Binds the Activity to the Custom Tabs Service.
+     *
+     * @param activity the activity to be binded to the service.
+     */
+    public void bindCustomTabsService(Activity activity) {
+        if (mClient != null) return;
+
+        String packageName = CustomTabsHelper.getPackageNameToUse(activity);
+        if (packageName == null) return;
+
+        mConnection = new ServiceConnection(this);
+        CustomTabsClient.bindCustomTabsService(activity, packageName, mConnection);
+    }
+
+    /**
+     * @return true if call to mayLaunchUrl was accepted.
+     * @see {@link CustomTabsSession#mayLaunchUrl(Uri, Bundle, List)}.
+     */
+    public boolean mayLaunchUrl(Uri uri, Bundle extras, List&lt;Bundle&gt; otherLikelyBundles) {
+        if (mClient == null) return false;
+
+        CustomTabsSession session = getSession();
+        if (session == null) return false;
+
+        return session.mayLaunchUrl(uri, extras, otherLikelyBundles);
+    }
+
+    @Override
+    public void onServiceConnected(CustomTabsClient client) {
+        mClient = client;
+        mClient.warmup(0L);
+        if (mConnectionCallback != null) mConnectionCallback.onCustomTabsConnected();
+    }
+
+    @Override
+    public void onServiceDisconnected() {
+        mClient = null;
+        mCustomTabsSession = null;
+        if (mConnectionCallback != null) mConnectionCallback.onCustomTabsDisconnected();
+    }
+
+    /**
+     * A Callback for when the service is connected or disconnected. Use those callbacks to
+     * handle UI changes when the service is connected or disconnected.
+     */
+    public interface ConnectionCallback {
+        /**
+         * Called when the service is connected.
+         */
+        void onCustomTabsConnected();
+
+        /**
+         * Called when the service is disconnected.
+         */
+        void onCustomTabsDisconnected();
+    }
+
+    /**
+     * To be used as a fallback to open the Uri when Custom Tabs is not available.
+     */
+    public interface CustomTabFallback {
+        /**
+         * @param activity The Activity that wants to open the Uri.
+         * @param uri      The uri to be opened by the fallback.
+         */
+        void openUri(Activity activity, Uri uri);
+    }
+
+}
+</code></pre>
+
+<p><strong>CustomTabsHelper.java</strong>import android.content.Context;</p>
+
+<pre><code>import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.net.Uri;
+import android.text.TextUtils;
+import android.util.Log;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Helper class for Custom Tabs.
+ */
+public class CustomTabsHelper {
+    private static final String TAG = "CustomTabsHelper";
+    static final String STABLE_PACKAGE = "com.android.chrome";
+    static final String BETA_PACKAGE = "com.chrome.beta";
+    static final String DEV_PACKAGE = "com.chrome.dev";
+    static final String LOCAL_PACKAGE = "com.google.android.apps.chrome";
+    private static final String EXTRA_CUSTOM_TABS_KEEP_ALIVE =
+            "android.support.customtabs.extra.KEEP_ALIVE";
+    private static final String ACTION_CUSTOM_TABS_CONNECTION =
+            "android.support.customtabs.action.CustomTabsService";
+
+    private static String sPackageNameToUse;
+
+    private CustomTabsHelper() {}
+
+    public static void addKeepAliveExtra(Context context, Intent intent) {
+        Intent keepAliveIntent = new Intent().setClassName(
+                context.getPackageName(), KeepAliveService.class.getCanonicalName());
+        intent.putExtra(EXTRA_CUSTOM_TABS_KEEP_ALIVE, keepAliveIntent);
+    }
+
+    /**
+     * Goes through all apps that handle VIEW intents and have a warmup service. Picks
+     * the one chosen by the user if there is one, otherwise makes a best effort to return a
+     * valid package name.
+     *
+     * This is &lt;strong&gt;not&lt;/strong&gt; threadsafe.
+     *
+     * @param context {@link Context} to use for accessing {@link PackageManager}.
+     * @return The package name recommended to use for connecting to custom tabs related components.
+     */
+    public static String getPackageNameToUse(Context context) {
+        if (sPackageNameToUse != null) return sPackageNameToUse;
+
+        PackageManager pm = context.getPackageManager();
+        // Get default VIEW intent handler.
+        Intent activityIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.example.com"));
+        ResolveInfo defaultViewHandlerInfo = pm.resolveActivity(activityIntent, 0);
+        String defaultViewHandlerPackageName = null;
+        if (defaultViewHandlerInfo != null) {
+            defaultViewHandlerPackageName = defaultViewHandlerInfo.activityInfo.packageName;
+        }
+
+        // Get all apps that can handle VIEW intents.
+        List&lt;ResolveInfo&gt; resolvedActivityList = pm.queryIntentActivities(activityIntent, 0);
+        List&lt;String&gt; packagesSupportingCustomTabs = new ArrayList&lt;&gt;();
+        for (ResolveInfo info : resolvedActivityList) {
+            Intent serviceIntent = new Intent();
+            serviceIntent.setAction(ACTION_CUSTOM_TABS_CONNECTION);
+            serviceIntent.setPackage(info.activityInfo.packageName);
+            if (pm.resolveService(serviceIntent, 0) != null) {
+                packagesSupportingCustomTabs.add(info.activityInfo.packageName);
+            }
+        }
+
+        // Now packagesSupportingCustomTabs contains all apps that can handle both VIEW intents
+        // and service calls.
+        if (packagesSupportingCustomTabs.isEmpty()) {
+            sPackageNameToUse = null;
+        } else if (packagesSupportingCustomTabs.size() == 1) {
+            sPackageNameToUse = packagesSupportingCustomTabs.get(0);
+        } else if (!TextUtils.isEmpty(defaultViewHandlerPackageName)
+                &amp;&amp; !hasSpecializedHandlerIntents(context, activityIntent)
+                &amp;&amp; packagesSupportingCustomTabs.contains(defaultViewHandlerPackageName)) {
+            sPackageNameToUse = defaultViewHandlerPackageName;
+        } else if (packagesSupportingCustomTabs.contains(STABLE_PACKAGE)) {
+            sPackageNameToUse = STABLE_PACKAGE;
+        } else if (packagesSupportingCustomTabs.contains(BETA_PACKAGE)) {
+            sPackageNameToUse = BETA_PACKAGE;
+        } else if (packagesSupportingCustomTabs.contains(DEV_PACKAGE)) {
+            sPackageNameToUse = DEV_PACKAGE;
+        } else if (packagesSupportingCustomTabs.contains(LOCAL_PACKAGE)) {
+            sPackageNameToUse = LOCAL_PACKAGE;
+        }
+        return sPackageNameToUse;
+    }
+
+    /**
+     * Used to check whether there is a specialized handler for a given intent.
+     * @param intent The intent to check with.
+     * @return Whether there is a specialized handler for the given intent.
+     */
+    private static boolean hasSpecializedHandlerIntents(Context context, Intent intent) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            List&lt;ResolveInfo&gt; handlers = pm.queryIntentActivities(
+                    intent,
+                    PackageManager.GET_RESOLVED_FILTER);
+            if (handlers == null || handlers.size() == 0) {
+                return false;
+            }
+            for (ResolveInfo resolveInfo : handlers) {
+                IntentFilter filter = resolveInfo.filter;
+                if (filter == null) continue;
+                if (filter.countDataAuthorities() == 0 || filter.countDataPaths() == 0) continue;
+                if (resolveInfo.activityInfo == null) continue;
+                return true;
+            }
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Runtime exception while getting specialized handlers");
+        }
+        return false;
+    }
+
+    /**
+     * @return All possible chrome package names that provide custom tabs feature.
+     */
+    public static String[] getPackages() {
+        return new String[]{"", STABLE_PACKAGE, BETA_PACKAGE, DEV_PACKAGE, LOCAL_PACKAGE};
+    }
+}
+</code></pre>
+
+<p><strong>ServiceConnection.java</strong></p>
+
+<pre><code>import android.content.ComponentName;
+import android.support.customtabs.CustomTabsClient;
+import android.support.customtabs.CustomTabsServiceConnection;
+
+import java.lang.ref.WeakReference;
+
+/**
+ * Implementation for the CustomTabsServiceConnection that avoids leaking the
+ * ServiceConnectionCallback
+ */
+public class ServiceConnection extends CustomTabsServiceConnection {
+    // A weak reference to the ServiceConnectionCallback to avoid leaking it.
+    private WeakReference&lt;ServiceConnectionCallback&gt; mConnectionCallback;
+
+    public ServiceConnection(ServiceConnectionCallback connectionCallback) {
+        mConnectionCallback = new WeakReference&lt;&gt;(connectionCallback);
+    }
+
+    @Override
+    public void onCustomTabsServiceConnected(ComponentName name, CustomTabsClient client) {
+        ServiceConnectionCallback connectionCallback = mConnectionCallback.get();
+        if (connectionCallback != null) connectionCallback.onServiceConnected(client);
+    }
+
+    @Override
+    public void onServiceDisconnected(ComponentName name) {
+        ServiceConnectionCallback connectionCallback = mConnectionCallback.get();
+        if (connectionCallback != null) connectionCallback.onServiceDisconnected();
+    }
+}
+</code></pre>
+
+<p><strong>ServiceConnectionCallback.java</strong></p>
+
+<pre><code>import android.support.customtabs.CustomTabsClient;
+
+/**
+ * Callback for events when connecting and disconnecting from Custom Tabs Service.
+ */
+public interface ServiceConnectionCallback {
+    /**
+     * Called when the service is connected.
+     * @param client a CustomTabsClient
+     */
+    void onServiceConnected(CustomTabsClient client);
+
+    /**
+     * Called when the service is disconnected.
+     */
+    void onServiceDisconnected();
+}
+</code></pre>
+
+<p><strong>WebviewFallback.java</strong></p>
+
+<pre><code>import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+
+/**
+ * A Fallback that opens a Webview when Custom Tabs is not available
+ */
+public class WebviewFallback implements CustomTabActivityHelper.CustomTabFallback {
+    @Override
+    public void openUri(Activity activity, Uri uri) {
+        Intent intent = new Intent(activity, WebviewActivity.class);
+        intent.putExtra(WebviewActivity.EXTRA_URL, uri.toString());
+        activity.startActivity(intent);
+    }
+}
+</code></pre>
+
+<p>By now, you should be able to open Chrome custom tab.</p>
+
+<p>If found any issue with this, just let me know.</p>
+
+<p>Thanks.</p>

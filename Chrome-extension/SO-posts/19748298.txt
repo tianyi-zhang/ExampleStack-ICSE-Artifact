@@ -1,0 +1,376 @@
+<h1>What are they?</h1>
+
+<p>Nothing special. Just as same as common Java Class Instance.</p>
+
+<p>But those class are <code>Synthetic proxy classes</code> created by <a href="http://docs.oracle.com/javase/7/docs/api/java/lang/reflect/Proxy.html#newProxyInstance(java.lang.ClassLoader,%20java.lang.Class[],%20java.lang.reflect.InvocationHandler)" rel="nofollow"><code>java.lang.reflect.Proxy#newProxyInstance</code></a></p>
+
+<h1>What is there relationship to the JVM? Are they JVM implementation specific?</h1>
+
+<p>Introduced in 1.3</p>
+
+<p><a href="http://docs.oracle.com/javase/1.3/docs/relnotes/features.html#reflection" rel="nofollow">http://docs.oracle.com/javase/1.3/docs/relnotes/features.html#reflection</a></p>
+
+<p>It is a part of Java. so each JVM should support it. </p>
+
+<h1>How are they created (Openjdk7 source)?</h1>
+
+<p>In short : they are created using JVM ASM tech ( defining javabyte code at runtime  )</p>
+
+<p>something using same tech:</p>
+
+<ul>
+<li>asm( <a href="http://asm.ow2.org/" rel="nofollow">http://asm.ow2.org/</a> )</li>
+<li>cglib( <a href="http://cglib.sourceforge.net/" rel="nofollow">http://cglib.sourceforge.net/</a> )</li>
+</ul>
+
+<h2>What happens after calling <code>java.lang.reflect.Proxy#newProxyInstance</code></h2>
+
+<ol>
+<li>reading the source you can see newProxyInstance call <code>getProxyClass0</code> to obtain a `Class
+  <p>`</p>
+</li>
+<li>after lots of cache or sth it calls the magic <code>ProxyGenerator.generateProxyClass</code> which return a byte[]</li>
+<li>call ClassLoader <code>define class</code> to load the generated <code>$Proxy</code> Class (the classname you have seen)</li>
+<li>just instance it and ready for use</li>
+</ol>
+
+<h2>What happens in magic sun.misc.ProxyGenerator</h2>
+
+<ol>
+<li>draw a class(bytecode) combining all methods in the interfaces into one</li>
+<li><p>each method is build with same bytecode like</p>
+
+<ol>
+<li>get calling Method meth info (stored while generating)</li>
+<li>pass info into <code>invocation handler</code>'s <code>invoke()</code></li>
+<li>get return value from <code>invocation handler</code>'s <code>invoke()</code></li>
+<li>just return it</li>
+</ol></li>
+<li><p>the class(bytecode) represent in form of <code>byte[]</code></p></li>
+</ol>
+
+<p><strong>How to draw a class</strong></p>
+
+<p>Thinking your java codes are compiled into bytecodes, just do this at runtime</p>
+
+<h1>Talk is cheap show you the code</h1>
+
+<p>core method in sun/misc/ProxyGenerator.java </p>
+
+<p>generateClassFile </p>
+
+<pre><code>/**
+ * Generate a class file for the proxy class.  This method drives the
+ * class file generation process.
+ */
+private byte[] generateClassFile() {
+
+    /* ============================================================
+     * Step 1: Assemble ProxyMethod objects for all methods to
+     * generate proxy dispatching code for.
+     */
+
+    /*
+     * Record that proxy methods are needed for the hashCode, equals,
+     * and toString methods of java.lang.Object.  This is done before
+     * the methods from the proxy interfaces so that the methods from
+     * java.lang.Object take precedence over duplicate methods in the
+     * proxy interfaces.
+     */
+    addProxyMethod(hashCodeMethod, Object.class);
+    addProxyMethod(equalsMethod, Object.class);
+    addProxyMethod(toStringMethod, Object.class);
+
+    /*
+     * Now record all of the methods from the proxy interfaces, giving
+     * earlier interfaces precedence over later ones with duplicate
+     * methods.
+     */
+    for (int i = 0; i &lt; interfaces.length; i++) {
+        Method[] methods = interfaces[i].getMethods();
+        for (int j = 0; j &lt; methods.length; j++) {
+            addProxyMethod(methods[j], interfaces[i]);
+        }
+    }
+
+    /*
+     * For each set of proxy methods with the same signature,
+     * verify that the methods' return types are compatible.
+     */
+    for (List&lt;ProxyMethod&gt; sigmethods : proxyMethods.values()) {
+        checkReturnTypes(sigmethods);
+    }
+
+    /* ============================================================
+     * Step 2: Assemble FieldInfo and MethodInfo structs for all of
+     * fields and methods in the class we are generating.
+     */
+    try {
+        methods.add(generateConstructor());
+
+        for (List&lt;ProxyMethod&gt; sigmethods : proxyMethods.values()) {
+            for (ProxyMethod pm : sigmethods) {
+
+                // add static field for method's Method object
+                fields.add(new FieldInfo(pm.methodFieldName,
+                    "Ljava/lang/reflect/Method;",
+                     ACC_PRIVATE | ACC_STATIC));
+
+                // generate code for proxy method and add it
+                methods.add(pm.generateMethod());
+            }
+        }
+
+        methods.add(generateStaticInitializer());
+
+    } catch (IOException e) {
+        throw new InternalError("unexpected I/O Exception");
+    }
+
+    if (methods.size() &gt; 65535) {
+        throw new IllegalArgumentException("method limit exceeded");
+    }
+    if (fields.size() &gt; 65535) {
+        throw new IllegalArgumentException("field limit exceeded");
+    }
+
+    /* ============================================================
+     * Step 3: Write the final class file.
+     */
+
+    /*
+     * Make sure that constant pool indexes are reserved for the
+     * following items before starting to write the final class file.
+     */
+    cp.getClass(dotToSlash(className));
+    cp.getClass(superclassName);
+    for (int i = 0; i &lt; interfaces.length; i++) {
+        cp.getClass(dotToSlash(interfaces[i].getName()));
+    }
+
+    /*
+     * Disallow new constant pool additions beyond this point, since
+     * we are about to write the final constant pool table.
+     */
+    cp.setReadOnly();
+
+    ByteArrayOutputStream bout = new ByteArrayOutputStream();
+    DataOutputStream dout = new DataOutputStream(bout);
+
+    try {
+        /*
+         * Write all the items of the "ClassFile" structure.
+         * See JVMS section 4.1.
+         */
+                                    // u4 magic;
+        dout.writeInt(0xCAFEBABE);
+                                    // u2 minor_version;
+        dout.writeShort(CLASSFILE_MINOR_VERSION);
+                                    // u2 major_version;
+        dout.writeShort(CLASSFILE_MAJOR_VERSION);
+
+        cp.write(dout);             // (write constant pool)
+
+                                    // u2 access_flags;
+        dout.writeShort(ACC_PUBLIC | ACC_FINAL | ACC_SUPER);
+                                    // u2 this_class;
+        dout.writeShort(cp.getClass(dotToSlash(className)));
+                                    // u2 super_class;
+        dout.writeShort(cp.getClass(superclassName));
+
+                                    // u2 interfaces_count;
+        dout.writeShort(interfaces.length);
+                                    // u2 interfaces[interfaces_count];
+        for (int i = 0; i &lt; interfaces.length; i++) {
+            dout.writeShort(cp.getClass(
+                dotToSlash(interfaces[i].getName())));
+        }
+
+                                    // u2 fields_count;
+        dout.writeShort(fields.size());
+                                    // field_info fields[fields_count];
+        for (FieldInfo f : fields) {
+            f.write(dout);
+        }
+
+                                    // u2 methods_count;
+        dout.writeShort(methods.size());
+                                    // method_info methods[methods_count];
+        for (MethodInfo m : methods) {
+            m.write(dout);
+        }
+
+                                     // u2 attributes_count;
+        dout.writeShort(0); // (no ClassFile attributes for proxy classes)
+
+    } catch (IOException e) {
+        throw new InternalError("unexpected I/O Exception");
+    }
+
+    return bout.toByteArray();
+}
+</code></pre>
+
+<p>addProxyMethod</p>
+
+<pre><code>/**
+ * Add another method to be proxied, either by creating a new
+ * ProxyMethod object or augmenting an old one for a duplicate
+ * method.
+ *
+ * "fromClass" indicates the proxy interface that the method was
+ * found through, which may be different from (a subinterface of)
+ * the method's "declaring class".  Note that the first Method
+ * object passed for a given name and descriptor identifies the
+ * Method object (and thus the declaring class) that will be
+ * passed to the invocation handler's "invoke" method for a given
+ * set of duplicate methods.
+ */
+private void addProxyMethod(Method m, Class fromClass) {
+    String name = m.getName();
+    Class[] parameterTypes = m.getParameterTypes();
+    Class returnType = m.getReturnType();
+    Class[] exceptionTypes = m.getExceptionTypes();
+
+    String sig = name + getParameterDescriptors(parameterTypes);
+    List&lt;ProxyMethod&gt; sigmethods = proxyMethods.get(sig);
+    if (sigmethods != null) {
+        for (ProxyMethod pm : sigmethods) {
+            if (returnType == pm.returnType) {
+                /*
+                 * Found a match: reduce exception types to the
+                 * greatest set of exceptions that can thrown
+                 * compatibly with the throws clauses of both
+                 * overridden methods.
+                 */
+                List&lt;Class&lt;?&gt;&gt; legalExceptions = new ArrayList&lt;Class&lt;?&gt;&gt;();
+                collectCompatibleTypes(
+                    exceptionTypes, pm.exceptionTypes, legalExceptions);
+                collectCompatibleTypes(
+                    pm.exceptionTypes, exceptionTypes, legalExceptions);
+                pm.exceptionTypes = new Class[legalExceptions.size()];
+                pm.exceptionTypes =
+                    legalExceptions.toArray(pm.exceptionTypes);
+                return;
+            }
+        }
+    } else {
+        sigmethods = new ArrayList&lt;ProxyMethod&gt;(3);
+        proxyMethods.put(sig, sigmethods);
+    }
+    sigmethods.add(new ProxyMethod(name, parameterTypes, returnType,
+                                   exceptionTypes, fromClass));
+}
+</code></pre>
+
+<p>Full code about gen the proxy method</p>
+
+<pre><code>    private MethodInfo generateMethod() throws IOException {
+        String desc = getMethodDescriptor(parameterTypes, returnType);
+        MethodInfo minfo = new MethodInfo(methodName, desc,
+            ACC_PUBLIC | ACC_FINAL);
+
+        int[] parameterSlot = new int[parameterTypes.length];
+        int nextSlot = 1;
+        for (int i = 0; i &lt; parameterSlot.length; i++) {
+            parameterSlot[i] = nextSlot;
+            nextSlot += getWordsPerType(parameterTypes[i]);
+        }
+        int localSlot0 = nextSlot;
+        short pc, tryBegin = 0, tryEnd;
+
+        DataOutputStream out = new DataOutputStream(minfo.code);
+
+        code_aload(0, out);
+
+        out.writeByte(opc_getfield);
+        out.writeShort(cp.getFieldRef(
+            superclassName,
+            handlerFieldName, "Ljava/lang/reflect/InvocationHandler;"));
+
+        code_aload(0, out);
+
+        out.writeByte(opc_getstatic);
+        out.writeShort(cp.getFieldRef(
+            dotToSlash(className),
+            methodFieldName, "Ljava/lang/reflect/Method;"));
+
+        if (parameterTypes.length &gt; 0) {
+
+            code_ipush(parameterTypes.length, out);
+
+            out.writeByte(opc_anewarray);
+            out.writeShort(cp.getClass("java/lang/Object"));
+
+            for (int i = 0; i &lt; parameterTypes.length; i++) {
+
+                out.writeByte(opc_dup);
+
+                code_ipush(i, out);
+
+                codeWrapArgument(parameterTypes[i], parameterSlot[i], out);
+
+                out.writeByte(opc_aastore);
+            }
+        } else {
+
+            out.writeByte(opc_aconst_null);
+        }
+
+        out.writeByte(opc_invokeinterface);
+        out.writeShort(cp.getInterfaceMethodRef(
+            "java/lang/reflect/InvocationHandler",
+            "invoke",
+            "(Ljava/lang/Object;Ljava/lang/reflect/Method;" +
+                "[Ljava/lang/Object;)Ljava/lang/Object;"));
+        out.writeByte(4);
+        out.writeByte(0);
+
+        if (returnType == void.class) {
+
+            out.writeByte(opc_pop);
+
+            out.writeByte(opc_return);
+
+        } else {
+
+            codeUnwrapReturnValue(returnType, out);
+        }
+
+        tryEnd = pc = (short) minfo.code.size();
+
+        List&lt;Class&lt;?&gt;&gt; catchList = computeUniqueCatchList(exceptionTypes);
+        if (catchList.size() &gt; 0) {
+
+            for (Class&lt;?&gt; ex : catchList) {
+                minfo.exceptionTable.add(new ExceptionTableEntry(
+                    tryBegin, tryEnd, pc,
+                    cp.getClass(dotToSlash(ex.getName()))));
+            }
+
+            out.writeByte(opc_athrow);
+
+            pc = (short) minfo.code.size();
+
+            minfo.exceptionTable.add(new ExceptionTableEntry(
+                tryBegin, tryEnd, pc, cp.getClass("java/lang/Throwable")));
+
+            code_astore(localSlot0, out);
+
+            out.writeByte(opc_new);
+            out.writeShort(cp.getClass(
+                "java/lang/reflect/UndeclaredThrowableException"));
+
+            out.writeByte(opc_dup);
+
+            code_aload(localSlot0, out);
+
+            out.writeByte(opc_invokespecial);
+
+            out.writeShort(cp.getMethodRef(
+                "java/lang/reflect/UndeclaredThrowableException",
+                "&lt;init&gt;", "(Ljava/lang/Throwable;)V"));
+
+            out.writeByte(opc_athrow);
+        }
+</code></pre>

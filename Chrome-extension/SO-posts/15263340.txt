@@ -1,0 +1,208 @@
+<p>I stripped the MjpegView and display the stream by updating imageviews:</p>
+
+<p><strong>MainActivity</strong>   </p>
+
+<pre><code>public class MainActivity extends Activity {
+    IPCamera cam1, cam2;
+    ImageView iv1, iv2;    
+    DownloadImageTask task1, task2;
+
+    final Handler h = new Handler(new Callback() {
+        @Override
+        public boolean handleMessage(Message msg) {
+            if (msg.what == 1){
+                Bitmap bmp = (Bitmap) msg.obj;
+                iv1.setImageBitmap(bmp);
+            }if(msg.what == 2){
+                Bitmap bmp = (Bitmap) msg.obj;
+                iv2.setImageBitmap(bmp);
+            }
+            return false;
+        }
+    });
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);       
+        this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);          
+        setContentView(R.layout.activity_main);
+        iv1 = ((ImageView) findViewById(R.id.imageView1));
+        iv2 = ((ImageView) findViewById(R.id.imageView2));
+        cam1 = new IPCamera("http://10.0.0.101/video.cgi", "admin", "admin", this); 
+        cam2 = new IPCamera("http://10.0.0.102/video.cgi", "admin", "admin", this);        
+
+        task1 = startTask(cam1, 1, false, h);
+        task2 = startTask(cam2, 2, false, h);
+
+    }   
+
+    private DownloadImageTask startTask(IPCamera cam, int id, boolean useParallelExecution, Handler h) {
+        DownloadImageTask task = new DownloadImageTask(cam, id);        
+        if (useParallelExecution) {            
+            task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);            
+        } else {           
+            task.execute(h);
+        }        
+        return task;        
+    }
+
+    private class DownloadImageTask extends AsyncTask&lt;Handler, Void, Void&gt; {        
+        IPCamera cam;
+        int id;
+        DownloadImageTask(IPCamera cam, int id){
+            this.cam = cam;
+            this.id = id;
+        }
+
+
+
+        protected Void doInBackground(Handler... h) {    
+            cam.startStream(h[0], id);    
+            cam.getFrame();         
+            return null;        
+        }
+    }
+}  
+</code></pre>
+
+<p><strong>IPCamera class</strong> </p>
+
+<pre><code>public class IPCamera{
+
+    private static final String TAG = "MjpegActivity";
+
+    String url;
+    String usr;
+    String pwd; 
+    MjpegInputStream is;
+    boolean running = false;
+    Handler h;
+    Context ctx;
+    int id;
+
+    IPCamera(String url, String usr, String pwd, Context ctx){
+        this.url = url;
+        this.usr = usr;
+        this.pwd = pwd;
+        this.ctx = ctx;
+    }
+
+    public void startStream(Handler h, int id){
+    this.h = h;
+    this.id = id;
+    is = new MjpegInputStream(httpRequest(url,usr,pwd));    
+    running = true;
+}   
+
+public void getFrame(){     
+    while (running){
+        Bitmap b;
+        try {   
+            b = is.readMjpegFrame();
+            Message m = h.obtainMessage(id, b);
+            m.sendToTarget();
+            } catch (IOException e) {
+            e.printStackTrace();
+        }           
+    }   
+}
+
+    public InputStream httpRequest(String url, String usr, String pwd){
+        HttpResponse res = null;
+        DefaultHttpClient httpclient = new DefaultHttpClient(); 
+        CredentialsProvider credProvider = new BasicCredentialsProvider();
+        credProvider.setCredentials(new AuthScope(AuthScope.ANY_HOST, AuthScope.ANY_PORT),
+            new UsernamePasswordCredentials(usr, pwd));
+        httpclient.setCredentialsProvider(credProvider);
+        Log.d(TAG, "1. Sending http request");
+        try {
+            res = httpclient.execute(new HttpGet(URI.create(url)));
+            Log.d(TAG, "2. Request finished, status = " + res.getStatusLine().getStatusCode());
+            if(res.getStatusLine().getStatusCode()==401){
+                //You must turn off camera User Access Control before this will work
+                return null;
+            }
+            return res.getEntity().getContent();  
+        } catch (ClientProtocolException e) {
+            e.printStackTrace();
+            Log.d(TAG, "Request failed-ClientProtocolException", e);
+            //Error connecting to camera
+        } catch (IOException e) {
+            e.printStackTrace();
+            Log.d(TAG, "Request failed-IOException", e);
+            //Error connecting to camera
+        }
+
+        return null;
+
+    }
+}
+</code></pre>
+
+<p><strong>MjpegInputStream</strong></p>
+
+<p>Had to increase the FRAME_MAX_LENGHT to 400000 from 40000. More stable this way.</p>
+
+<pre><code>public class MjpegInputStream extends DataInputStream {
+    private static final String TAG = "MjpegInputStream";
+
+    private final byte[] SOI_MARKER = { (byte) 0xFF, (byte) 0xD8 };
+    private final byte[] EOF_MARKER = { (byte) 0xFF, (byte) 0xD9 };
+    private final String CONTENT_LENGTH = "Content-Length";
+    private final static int HEADER_MAX_LENGTH = 100;
+    private final static int FRAME_MAX_LENGTH = 400000 + HEADER_MAX_LENGTH;
+    private int mContentLength = -1;
+
+    public MjpegInputStream(InputStream in) {
+        super(new BufferedInputStream(in, FRAME_MAX_LENGTH));
+    }
+
+    private int getEndOfSeqeunce(DataInputStream in, byte[] sequence) throws IOException {
+        int seqIndex = 0;
+        byte c;
+        for(int i=0; i &lt; FRAME_MAX_LENGTH; i++) {
+            c = (byte) in.readUnsignedByte();
+            if(c == sequence[seqIndex]) {
+                seqIndex++;
+                if(seqIndex == sequence.length) {
+                    return i + 1;
+                }
+            } else {
+                seqIndex = 0;
+            }
+        }
+        return -1;
+    }
+
+    private int getStartOfSequence(DataInputStream in, byte[] sequence) throws IOException {
+        int end = getEndOfSeqeunce(in, sequence);
+        return (end &lt; 0) ? (-1) : (end - sequence.length);
+    }
+
+    private int parseContentLength(byte[] headerBytes) throws IOException, NumberFormatException {
+        ByteArrayInputStream headerIn = new ByteArrayInputStream(headerBytes);
+        Properties props = new Properties();
+        props.load(headerIn);
+        return Integer.parseInt(props.getProperty(CONTENT_LENGTH));       
+    }   
+
+    public Bitmap readMjpegFrame() throws IOException {
+        mark(FRAME_MAX_LENGTH);
+        int headerLen = getStartOfSequence(this, SOI_MARKER);
+        reset();
+        byte[] header = new byte[headerLen];
+        readFully(header);
+        try {
+            mContentLength = parseContentLength(header);
+        } catch (NumberFormatException nfe) {           
+            mContentLength = getEndOfSeqeunce(this, EOF_MARKER); 
+        }
+        reset();
+        byte[] frameData = new byte[mContentLength];
+        skipBytes(headerLen);
+        readFully(frameData);
+        return BitmapFactory.decodeStream(new ByteArrayInputStream(frameData));
+    }
+}
+</code></pre>
+
+<p>Not totally clean but it works. Just did a 24 hour stability test and no errors. Still have to come up with a way to stop the stream thread if camera connection goes down and reconnect when the camera pops back up.</p>

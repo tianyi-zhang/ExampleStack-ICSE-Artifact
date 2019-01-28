@@ -1,0 +1,140 @@
+<blockquote>
+  <p>Obviously f2 should take little time to execute,</p>
+</blockquote>
+
+<p>It might take some time, but it doesn't have to take a milli-second.  Your calculation could be a fraction of a milli-second.  In fact since the result is not used, the code could be discarded.</p>
+
+<p>I suggest you use <code>System.nanoTime()</code> and ensure the result is used.</p>
+
+<blockquote>
+  <p>guess perhaps it's because of the JVM initialization.</p>
+</blockquote>
+
+<p>The first time you call code, it has to be loaded and most likely this is what you are timing</p>
+
+<blockquote>
+  <p>line 2 and line 4 are also different although I tried garbage collection</p>
+</blockquote>
+
+<p>The code has loaded now.  Note: if you copied the code and run another method which did the same thing, you might get similar timings.</p>
+
+<blockquote>
+  <p>I should run the results for many times to actually profile them </p>
+</blockquote>
+
+<p>I would ignore the first 2 seconds of running to ensure the code has warmed up, or use a micro-benchmark framework like JMH  <a href="http://openjdk.java.net/projects/code-tools/jmh/" rel="nofollow">http://openjdk.java.net/projects/code-tools/jmh/</a></p>
+
+<pre><code>static int n = 10000;
+
+public static void main(String[] args) throws RunnerException, IOException {
+    long time = 2;
+    Options opt = new OptionsBuilder()
+            .include(CalcBenchmark.class.getSimpleName())
+            .warmupIterations(6)
+            .forks(1)
+            .measurementTime(TimeValue.seconds(time))
+            .timeUnit(TimeUnit.NANOSECONDS)
+            .build();
+
+    new Runner(opt).run();
+}
+@Benchmark
+public long calc() {
+    return (n - 1L) * n / 2 * (n + 1) / 3 * (3 * n + 2) / 2;
+}
+</code></pre>
+
+<p>prints</p>
+
+<pre><code># JMH 1.11.2 (released 164 days ago, please consider updating!)
+# VM version: JDK 1.8.0_45, VM 25.45-b02
+# VM invoker: /mnt/opt/jdk1.8.0_45/jre/bin/java
+# VM options: -Didea.launcher.port=7534 -Didea.launcher.bin.path=/mnt/opt/idea-IC-143.1821.5/bin -Dfile.encoding=UTF-8
+# Warmup: 6 iterations, 1 s each
+# Measurement: 20 iterations, 2 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Throughput, ops/time
+# Benchmark: vanilla.java.jmh.CalcBenchmark.calc
+
+# Run progress: 0.00% complete, ETA 00:00:46
+# Fork: 1 of 1
+# Warmup Iteration   1: 0.105 ops/ns
+# Warmup Iteration   2: 0.156 ops/ns
+# Warmup Iteration   3: 0.169 ops/ns
+# Warmup Iteration   4: 0.167 ops/ns
+# Warmup Iteration   5: 0.166 ops/ns
+# Warmup Iteration   6: 0.165 ops/ns
+Iteration   1: 0.169 ops/ns
+Iteration   2: 0.166 ops/ns
+Iteration   3: 0.165 ops/ns
+Iteration   4: 0.168 ops/ns
+Iteration   5: 0.163 ops/ns
+Iteration   6: 0.159 ops/ns
+Iteration   7: 0.162 ops/ns
+Iteration   8: 0.166 ops/ns
+Iteration   9: 0.169 ops/ns
+Iteration  10: 0.166 ops/ns
+Iteration  11: 0.169 ops/ns
+Iteration  12: 0.162 ops/ns
+Iteration  13: 0.166 ops/ns
+Iteration  14: 0.167 ops/ns
+Iteration  15: 0.166 ops/ns
+Iteration  16: 0.169 ops/ns
+Iteration  17: 0.166 ops/ns
+Iteration  18: 0.165 ops/ns
+Iteration  19: 0.170 ops/ns
+Iteration  20: 0.164 ops/ns
+
+
+Result "calc":
+  0.166 ±(99.9%) 0.002 ops/ns [Average]
+  (min, avg, max) = (0.159, 0.166, 0.170), stdev = 0.003
+  CI (99.9%): [0.163, 0.168] (assumes normal distribution)
+
+
+# Run complete. Total time: 00:00:47
+
+Benchmark            Mode  Cnt  Score   Error   Units
+CalcBenchmark.calc  thrpt   20  0.166 ± 0.002  ops/ns
+</code></pre>
+
+<p>In short your operation, once warmed up, should take about 6 ns or 0.000006 ms</p>
+
+<hr>
+
+<p>A simpler benchmark without JMH might look like this.  Note: I trust the JMH numbers more.</p>
+
+<pre><code>public class SimpleCalcBenchmark {
+    static int n = 10000;
+    static final AtomicLong blackHole = new AtomicLong();
+
+    public static void main(String[] args) throws RunnerException, IOException {
+        for (int i = 0; i &lt; 5; i++) {
+            long start = System.nanoTime();
+            long counter = 0;
+            while (System.nanoTime() - start &lt; 2e9) {
+                for (int j = 0; j &lt; 100; j++) {
+                    blackHole.lazySet(calc());
+                }
+                counter += 100;
+            }
+            long time = System.nanoTime() - start;
+            System.out.printf("Took an average of %.1f ns%n", (double) time/counter);
+        }
+    }
+
+    public static long calc() {
+        return (n - 1L) * n / 2 * (n + 1) / 3 * (3 * n + 2) / 2;
+    }
+}
+</code></pre>
+
+<p>prints</p>
+
+<pre><code>Took an average of 10.2 ns
+Took an average of 6.7 ns
+Took an average of 4.7 ns
+Took an average of 4.7 ns
+Took an average of 4.6 ns
+</code></pre>

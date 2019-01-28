@@ -1,0 +1,92 @@
+<p>Based on your clarification above, you need each broadcast receiver (that of your library and that of the host app) to take care of its own messages and ignore messages intended for the other broadcast receiver. </p>
+
+<p>Since you are using different sender IDs to register to GCM in your library and in your host app, you can use that to determine which message should be handled by which broadcast receiver.</p>
+
+<p>First of all, I'd suggest that you stop extending the deprecated <code>GCMBroadcastReceiver</code> class. My solution relies on not using it (though you might be able to make it work with the old receiver by changing its code).</p>
+
+<p>Then following receiver is based on the new version of the official <a href="http://code.google.com/p/gcm/source/browse/gcm-client/GcmClient/src/main/java/com/google/android/gcm/demo/app/GcmBroadcastReceiver.java" rel="nofollow">GCM Demo App</a>.</p>
+
+<pre><code>public class PushLibraryBroadcastReceiver extends WakefulBroadcastReceiver {
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        if (intent.getExtras ().get("from").equals (SENDER_ID_OF_LIBRARY) {
+          // Explicitly specify that GcmIntentService will handle the intent.
+          ComponentName comp = new ComponentName(
+            GcmIntentService.class.getPackage().getName(),
+            GcmIntentService.class.getName());
+          // Start the service, keeping the device awake while it is launching.
+          startWakefulService(context, (intent.setComponent(comp)));
+          setResultCode(Activity.RESULT_CANCEL);
+        } else
+          setResultCode(Activity.RESULT_OK);
+        }
+    }
+}
+</code></pre>
+
+<p>I made two changes from the Demo's implementation :</p>
+
+<ol>
+<li>get the package name of the intent service explicitly (since using <code>context.getPackageName()</code> will return the main package of the host app, which is not what you need).</li>
+<li>compare the "from" field of the message to the sender ID of the library and handle the message only if it comes from that sender. Once the message is handled, the result is set to <code>Activity.RESULT_CANCEL</code>, to prevent the broadcast from being handled by the broadcast receiver of the host app. </li>
+</ol>
+
+<p>If you stop using the old GCMBroadcastReceiver, you should change your intent service to something like this (again, this is taken from the <a href="http://code.google.com/p/gcm/source/browse/gcm-client/GcmClient/src/main/java/com/google/android/gcm/demo/app/GcmIntentService.java" rel="nofollow">demo</a>) :</p>
+
+<pre><code>protected void onHandleIntent(Intent intent) {
+    Bundle extras = intent.getExtras();
+    GoogleCloudMessaging gcm = GoogleCloudMessaging.getInstance(this);
+    // The getMessageType() intent parameter must be the intent you received
+    // in your BroadcastReceiver.
+    String messageType = gcm.getMessageType(intent);
+
+    if (!extras.isEmpty()) {  // has effect of unparcelling Bundle
+        /*
+         * Filter messages based on message type. Since it is likely that GCM will be
+         * extended in the future with new message types, just ignore any message types you're
+         * not interested in, or that you don't recognize.
+         */
+        if (GoogleCloudMessaging.MESSAGE_TYPE_SEND_ERROR.equals(messageType)) {
+            sendNotification("Send error: " + extras.toString());
+        } else if (GoogleCloudMessaging.MESSAGE_TYPE_DELETED.equals(messageType)) {
+            sendNotification("Deleted messages on server: " + extras.toString());
+        // If it's a regular GCM message, do some work.
+        } else if (GoogleCloudMessaging.MESSAGE_TYPE_MESSAGE.equals(messageType)) {
+            // This loop represents the service doing some work.
+            for (int i = 0; i &lt; 5; i++) {
+                Log.i(TAG, "Working... " + (i + 1)
+                        + "/5 @ " + SystemClock.elapsedRealtime());
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                }
+            }
+            Log.i(TAG, "Completed work @ " + SystemClock.elapsedRealtime());
+            // Post notification of received message.
+            sendNotification("Received: " + extras.toString());
+            Log.i(TAG, "Received: " + extras.toString());
+        }
+    }
+    // Release the wake lock provided by the WakefulBroadcastReceiver.
+    GcmBroadcastReceiver.completeWakefulIntent(intent);
+}
+</code></pre>
+
+<p>I'm assuming your <code>GCMIntentService</code> class extends the deprecated <code>GCMBaseIntentService</code>. You should extend <code>IntentService</code> instead, and move the logic from <code>onMessage</code> to <code>onHandleIntent</code>.</p>
+
+<p>You should also switch to the new way of registering to GCM, using <code>GoogleCloudMessaging.register</code>, which doesn't require any handling in the intent service class. All the handling will be done in the activity that performs the registration, as demonstrated <a href="http://code.google.com/p/gcm/source/browse/gcm-client/GcmClient/src/main/java/com/google/android/gcm/demo/app/DemoActivity.java" rel="nofollow">here</a>.</p>
+
+<p>Finally, if the broadcast receiver of the host app doesn't behave similarly to your library's broadcast receiver (i.e. handling only the messages it is supposed to handle), you would still have a problem if the host app's broadcast receiver is triggered before your library's broadcast receiver. You can avoid that by adding the <code>android:priority</code> attribute to the intent-filter of both receivers, and giving your library's receiver a higher priority. That would ensure that the library's broadcast receiver is always triggered first.</p>
+
+<p>I must say that I never tested an app with two broadcast receivers, so I can't guarantee that using the priority attribute works, but it should work based on the documentation I read :</p>
+
+<blockquote>
+  <p>Ordered broadcasts (sent with Context.sendOrderedBroadcast) are
+  delivered to one receiver at a time. As each receiver executes in
+  turn, it can propagate a result to the next receiver, or it can
+  completely abort the broadcast so that it won't be passed to other
+  receivers. The order receivers run in can be controlled with the
+  android:priority attribute of the matching intent-filter; receivers
+  with the same priority will be run in an arbitrary order.</p>
+</blockquote>

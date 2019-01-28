@@ -1,0 +1,111 @@
+<p>It looks like <code>NodeLocator.updateLocator(List&lt;MemcachedNode&gt; newNodes)</code> should do the job.</p>
+
+<p>But to get connected MemcachedNode is a bit hard. You have to override <code>MemcachedClient</code>, <code>MemcachedConnection</code> and <code>DefaultConnectionFactory</code>. </p>
+
+<p>It reasonable you would like to add or remove clients from <code>MemcachedClient</code> so you add <code>remove(MemcachedNode node)</code> and <code>add(MemcachedNode node)</code> methods.</p>
+
+<p>In case of remove you should disconnect the node (see <code>MemcachedConnection.shutdown()</code>) and remove it from <code>NodeLocator.getAll()</code> and call <code>NodeLocator.updateLocator(List&lt;MemcachedNode&gt; newNodes)</code>.</p>
+
+<p>In case of add you should connect the node via MemcachedConnection.createConnections(final Collection a), merge it with <code>NodeLocator.getAll()</code> and call <code>NodeLocator.updateLocator(List&lt;MemcachedNode&gt; newNodes)</code>.</p>
+
+<p>Well, I have never try it so it is possible it won't work. So good luck!</p>
+
+<p><strong>ExtMemCachedConnection.java</strong>
+    public class ExtMemCachedConnection extends MemcachedConnection {</p>
+
+<pre><code>  protected final OperationFactory opFact;
+
+  /**
+   * Construct a memcached connection.
+   *
+   * @param bufSize the size of the buffer used for reading from the server
+   * @param f       the factory that will provide an operation queue
+   * @param a       the addresses of the servers to connect to
+   * @throws java.io.IOException if a connection attempt fails early
+   */
+  public ExtendableMemcachedConnection(int bufSize, ConnectionFactory f,
+                                       List&lt;InetSocketAddress&gt; a,
+                                       Collection&lt;ConnectionObserver&gt; obs,
+                                       FailureMode fm, OperationFactory opfactory)
+      throws IOException {
+    super(bufSize, f, a, obs, fm, opfactory);
+    this.opFact = opfactory;
+  }
+
+  public void add(InetSocketAddress nodeAddress) throws IOException {
+    final List&lt;InetSocketAddress&gt; nodeToAdd = new ArrayList&lt;InetSocketAddress&gt;(1);
+    nodeToAdd.add(nodeAddress);
+    List&lt;MemcachedNode&gt; newNodesList = createConnections(nodeToAdd);
+    newNodesList.addAll(getLocator().getAll());
+    getLocator().updateLocator(newNodesList);
+  }
+
+  //The node should be obtain from locator to ensure currentNode.equals(node) will return true
+  public void remove(MemcachedNode node) throws IOException {
+    for(MemcachedNode currentNode : getLocator().getAll()) {
+      if(currentNode.equals(node)) {
+        Collection&lt;Operation&gt; notCompletedOperations = currentNode.destroyInputQueue();
+        if (currentNode.getChannel() != null) {
+          currentNode.getChannel().close();
+          currentNode.setSk(null);
+          if (currentNode.getBytesRemainingToWrite() &gt; 0) {
+            getLogger().warn("Shut down with %d bytes remaining to write",
+                             currentNode.getBytesRemainingToWrite());
+          }
+          getLogger().debug("Shut down channel %s", currentNode.getChannel());
+        }
+        //Unfortunatelly,  redistributeOperations is private so it cannot be used or override. I put copy/paste the implementation
+        redistributeOperations(notCompletedOperations);
+      }
+    }
+  }
+
+  protected void redistributeOperations(Collection&lt;Operation&gt; ops) {
+    for (Operation op : ops) {
+      if (op.isCancelled() || op.isTimedOut()) {
+        continue;
+      }
+      if (op instanceof KeyedOperation) {
+        KeyedOperation ko = (KeyedOperation) op;
+        int added = 0;
+        for (String k : ko.getKeys()) {
+          for (Operation newop : opFact.clone(ko)) {
+            addOperation(k, newop);
+            added++;
+          }
+        }
+        assert added &gt; 0 : "Didn't add any new operations when redistributing";
+      } else {
+        // Cancel things that don't have definite targets.
+        op.cancel();
+      }
+    }
+  }
+
+
+}
+</code></pre>
+
+<p><strong>ExtMemcachedClient.java</strong></p>
+
+<pre><code>  public void add(InetSocketAddress nodeAddress) {
+    if(mconn instanceof ExtMemcachedConnection) {
+      ((ExtMemcachedConnection)mconn).add(nodeAddress);  
+    }
+  }
+
+  public boolean remove(MemcachedNode node) {
+    if(mconn instanceof ExtMemcachedConnection) {
+      ((ExtMemcachedConnection)mconn).remove(nodeAddress);
+    }
+  }
+</code></pre>
+
+<p><strong>ExtMemcachedConnectionfactory.java</strong></p>
+
+<pre><code>  @Override
+  public MemcachedConnection createConnection(List&lt;InetSocketAddress&gt; addrs) throws IOException {
+    return new ExtendableMemcachedConnection(getReadBufSize(), this, addrs,
+                                             getInitialObservers(), getFailureMode(), getOperationFactory());
+  }
+</code></pre>

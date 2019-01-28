@@ -1,0 +1,73 @@
+<p>If the only thing you're interested in when using the Camera Intent is a scaled down version of the image, you should use the <a href="https://developers.google.com/glass/develop/gdk/reference/com/google/android/glass/media/CameraManager#EXTRA_THUMBNAIL_FILE_PATH" rel="nofollow">CameraManager#EXTRA_THUMBNAIL_FILE_PATH</a> instead of the full picture for those reasons:</p>
+
+<ol>
+<li>It is available right away: the full image may take multiple seconds to be written due to some post processing</li>
+<li>It is already scaled-down to the Preview size</li>
+</ol>
+
+<p>If you need the full image, the FileObserver should observe the parent directory of the file, not the file itself.
+Here is the code snippet we provided in our <a href="https://developers.google.com/glass/develop/gdk/camera#capturing_images_or_video" rel="nofollow">Developer's Guide</a>:</p>
+
+<pre><code>private static final int TAKE_PICTURE_REQUEST = 1;
+
+private void takePicture() {
+    Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    startActivityForResult(intent, TAKE_PICTURE_REQUEST);
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    if (requestCode == TAKE_PICTURE_REQUEST &amp;&amp; resultCode == RESULT_OK) {
+        String picturePath = data.getStringExtra(
+                CameraManager.EXTRA_PICTURE_FILE_PATH);
+        processPictureWhenReady(picturePath);
+    }
+
+    super.onActivityResult(requestCode, resultCode, data);
+}
+
+private void processPictureWhenReady(final String picturePath) {
+    final File pictureFile = new File(picturePath);
+
+    if (pictureFile.exists()) {
+        // The picture is ready; process it.
+    } else {
+        // The file does not exist yet. Before starting the file observer, you
+        // can update your UI to let the user know that the application is
+        // waiting for the picture (for example, by displaying the thumbnail
+        // image and a progress indicator).
+
+        final File parentDirectory = pictureFile.getParentFile();
+        FileObserver observer = new FileObserver(parentDirectory.getPath(),
+                FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+            // Protect against additional pending events after CLOSE_WRITE
+            // or MOVED_TO is handled.
+            private boolean isFileWritten;
+
+            @Override
+            public void onEvent(int event, String path) {
+                if (!isFileWritten) {
+                    // For safety, make sure that the file that was created in
+                    // the directory is actually the one that we're expecting.
+                    File affectedFile = new File(parentDirectory, path);
+                    isFileWritten = affectedFile.equals(pictureFile);
+
+                    if (isFileWritten) {
+                        stopWatching();
+
+                        // Now that the file is ready, recursively call
+                        // processPictureWhenReady again (on the UI thread).
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                processPictureWhenReady(picturePath);
+                            }
+                        });
+                    }
+                }
+            }
+        };
+        observer.startWatching();
+    }
+}
+</code></pre>

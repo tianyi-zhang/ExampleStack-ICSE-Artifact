@@ -1,0 +1,235 @@
+<p>Oh, I found the problem. My image is too large. Updated code with several improvements below:</p>
+
+<pre><code>private static Context context;
+
+private static final int CAPTURE_IMAGE_ACTIVITY_REQUEST_CODE = 100;
+private static final int CAPTURE_VIDEO_ACTIVITY_REQUEST_CODE = 200;
+
+public static final int MEDIA_TYPE_IMAGE = 1;
+public static final int MEDIA_TYPE_VIDEO = 2;
+
+private static final int SELECT_PICTURE = 3;
+
+private String selectedImagePath;
+private static String imageFilePath;
+private static String videoFilePath;
+private Uri fileUri;
+
+private Bitmap bitmap;
+
+private Button btnGallery, btnCamera;
+
+private Intent selectPictureIntent;
+
+public void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_get_image);
+
+    context = this;
+
+    btnGallery = (Button) findViewById(R.id.Button01);
+    btnCamera = (Button) findViewById(R.id.Button02);
+
+    btnGallery.setOnClickListener(this);
+    btnCamera.setOnClickListener(this);
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    if (resultCode == RESULT_OK) {
+        if (requestCode == SELECT_PICTURE) {
+            Uri selectedImageUri = data.getData();
+            Log.d("bitmap", selectedImageUri.getScheme());
+            selectedImagePath = getPath(selectedImageUri);
+            if (selectedImagePath != null) {
+                // Selected image is local image
+                Bitmap b = new BitmapDrawable(context.getResources(),
+                        selectedImagePath).getBitmap();
+                int i = (int) (b.getHeight() * (512.0 / b.getWidth()));
+                bitmap = Bitmap.createScaledBitmap(b, 512, i, true);
+            } else {
+                // Selected image is Picasa image
+                loadPicasaImageFromGallery(selectedImageUri);
+            }
+            ImageView img = (ImageView) findViewById(R.id.ImageView01);
+            img.setImageBitmap(bitmap);
+        }
+    }
+
+    if (requestCode == CAPTURE_IMAGE_ACTIVITY_REQUEST_CODE) {
+        if (resultCode == RESULT_OK) {
+            // Image captured and saved to fileUri specified in the Intent
+            addImageToGallery(imageFilePath, context);
+        } else if (resultCode == RESULT_CANCELED) {
+            // User cancelled the image capture
+        } else {
+            // Image capture failed, advise user
+        }
+    }
+
+    if (requestCode == CAPTURE_VIDEO_ACTIVITY_REQUEST_CODE) {
+        if (resultCode == RESULT_OK) {
+            // Video captured and saved to fileUri specified in the Intent
+            addVideoToGallery(videoFilePath, context);
+        } else if (resultCode == RESULT_CANCELED) {
+            // User cancelled the video capture
+        } else {
+            // Video capture failed, advise user
+        }
+    }
+}
+
+public Bitmap getBitmapFromUri(Uri uri) throws IOException {
+    ParcelFileDescriptor parcelFileDescriptor = getContentResolver()
+            .openFileDescriptor(uri, "r");
+    FileDescriptor fileDescriptor = parcelFileDescriptor
+            .getFileDescriptor();
+    Bitmap image = BitmapFactory.decodeFileDescriptor(fileDescriptor);
+    parcelFileDescriptor.close();
+    return image;
+}
+
+public String getPath(Uri uri) {
+    String[] projection = { MediaColumns.DATA };
+    Cursor cursor = getContentResolver().query(uri, projection, null, null,
+            null);
+    if (cursor != null) {
+        cursor.moveToFirst();
+        int columnIndex = cursor.getColumnIndexOrThrow(MediaColumns.DATA);
+        String filePath = cursor.getString(columnIndex);
+        cursor.close();
+        return filePath;
+    } else
+        return uri.getPath();
+}
+
+private void loadPicasaImageFromGallery(final Uri uri) {
+    String[] projection = { MediaColumns.DATA, MediaColumns.DISPLAY_NAME };
+    Cursor cursor = getContentResolver().query(uri, projection, null, null,
+            null);
+    if (cursor != null) {
+        cursor.moveToFirst();
+
+        int columnIndex = cursor.getColumnIndex(MediaColumns.DISPLAY_NAME);
+        if (columnIndex != -1) {
+            new Thread(new Runnable() {
+                // NEW THREAD BECAUSE NETWORK REQUEST WILL BE MADE THAT WILL
+                // BE A LONG PROCESS &amp; BLOCK UI
+                // IF CALLED IN UI THREAD
+                public void run() {
+                    try {
+                        Bitmap bm = android.provider.MediaStore.Images.Media
+                                .getBitmap(getContentResolver(), uri);
+                        int i = (int) (bm.getHeight() * (512.0 / bm
+                                .getWidth()));
+                        bitmap = Bitmap
+                                .createScaledBitmap(bm, 512, i, true);
+                        // THIS IS THE BITMAP IMAGE WE ARE LOOKING FOR
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                }
+            }).start();
+
+        }
+    }
+    cursor.close();
+}
+
+/** Create a file Uri for saving an image or video */
+private static Uri getOutputMediaFileUri(int type) {
+    return Uri.fromFile(getOutputMediaFile(type));
+}
+
+/** Create a File for saving an image or video */
+private static File getOutputMediaFile(int type) {
+    // To be safe, you should check that the SDCard is mounted
+    // using Environment.getExternalStorageState() before doing this.
+
+    File mediaStorageDir = new File(
+            Environment
+                    .getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            "MappyDiary");
+    // This location works best if you want the created images to be shared
+    // between applications and persist after your app has been uninstalled.
+
+    // Create the storage directory if it does not exist
+    if (!mediaStorageDir.exists()) {
+        if (!mediaStorageDir.mkdirs()) {
+            Log.d("MappyDiary", "failed to create directory");
+            return null;
+        }
+    }
+
+    // Create a media file name
+    String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss")
+            .format(new Date());
+    File mediaFile;
+    if (type == MEDIA_TYPE_IMAGE) {
+        imageFilePath = mediaStorageDir.getPath() + File.separator + "IMG_"
+                + timeStamp + ".jpg";
+        mediaFile = new File(imageFilePath);
+    } else if (type == MEDIA_TYPE_VIDEO) {
+        videoFilePath = mediaStorageDir.getPath() + File.separator + "VID_"
+                + timeStamp + ".mp4";
+        mediaFile = new File(videoFilePath);
+    } else {
+        return null;
+    }
+
+    return mediaFile;
+}
+
+public static void addImageToGallery(final String filePath,
+        final Context context) {
+
+    ContentValues values = new ContentValues();
+
+    values.put(Images.Media.DATE_TAKEN, System.currentTimeMillis());
+    values.put(Images.Media.MIME_TYPE, "image/jpeg");
+    values.put(MediaStore.MediaColumns.DATA, filePath);
+
+    context.getContentResolver().insert(Images.Media.EXTERNAL_CONTENT_URI,
+            values);
+}
+
+public static void addVideoToGallery(final String filePath,
+        final Context context) {
+
+    ContentValues values = new ContentValues();
+
+    values.put(Video.Media.DATE_TAKEN, System.currentTimeMillis());
+    values.put(Video.Media.MIME_TYPE, "video/mp4");
+    values.put(MediaStore.MediaColumns.DATA, filePath);
+
+    context.getContentResolver().insert(Video.Media.EXTERNAL_CONTENT_URI,
+            values);
+}
+
+@Override
+public void onClick(View v) {
+    // TODO Auto-generated method stub
+    switch (v.getId()) {
+    case R.id.Button01:
+        Intent intent = new Intent();
+        intent.setType("image/*");
+        intent.setAction(Intent.ACTION_GET_CONTENT);
+        selectPictureIntent = Intent
+                .createChooser(intent, "Select Picture");
+        startActivityForResult(selectPictureIntent, SELECT_PICTURE);
+        break;
+
+    case R.id.Button02:
+        // create Intent to take a picture and return control to the calling
+        // application
+        Intent intent2 = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        fileUri = getOutputMediaFileUri(MEDIA_TYPE_IMAGE);
+        intent2.putExtra(MediaStore.EXTRA_OUTPUT, fileUri);
+        // start the image capture Intent
+        startActivityForResult(intent2, CAPTURE_IMAGE_ACTIVITY_REQUEST_CODE);
+    default:
+        break;
+    }
+
+}
+</code></pre>

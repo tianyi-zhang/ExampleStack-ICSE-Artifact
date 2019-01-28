@@ -1,0 +1,100 @@
+<p><strong>-- You can load worlds async using this: <a href="http://pastebin.com/K9CuVMS5" rel="nofollow">http://pastebin.com/K9CuVMS5</a> --</strong></p>
+
+<p>No you cannot, and if you tried it would have a high chance of world corruption. But if you don't care about it this is what you can do:
+Bukkit loads worlds via <code>Bukkit.createWorld(WorldCreator)</code> which activates <code>Server.createWorld(WorldCreator)</code> which activates:</p>
+
+<pre><code>Validate.notNull(creator, "Creator may not be null");
+    String name = creator.name();
+    ChunkGenerator generator = creator.generator();
+    File folder = new File(this.getWorldContainer(), name);
+    World world = this.getWorld(name);
+    WorldType type = WorldType.getType(creator.type().getName());
+    boolean generateStructures = creator.generateStructures();
+    if(world != null) {
+        return world;
+    } else if(folder.exists() &amp;&amp; !folder.isDirectory()) {
+        throw new IllegalArgumentException("File exists with the name \'" + name + "\' and isn\'t a folder");
+    } else {
+        if(generator == null) {
+            generator = this.getGenerator(name);
+        }
+
+        WorldLoaderServer converter = new WorldLoaderServer(this.getWorldContainer());
+        if(converter.isConvertable(name)) {
+            this.getLogger().info("Converting world \'" + name + "\'");
+            converter.convert(name, new ConvertProgressUpdater(this.console));
+        }
+
+        int dimension = 10 + this.console.worlds.size();
+        boolean used = false;
+
+        do {
+            Iterator sdm = this.console.worlds.iterator();
+
+            while(sdm.hasNext()) {
+                WorldServer hardcore = (WorldServer)sdm.next();
+                used = hardcore.dimension == dimension;
+                if(used) {
+                    ++dimension;
+                    break;
+                }
+            }
+        } while(used);
+
+        boolean var25 = false;
+        ServerNBTManager var24 = new ServerNBTManager(this.getWorldContainer(), name, true);
+        WorldData worlddata = var24.getWorldData();
+        if(worlddata == null) {
+            WorldSettings internal = new WorldSettings(creator.seed(), EnumGamemode.getById(this.getDefaultGameMode().getValue()), generateStructures, var25, type);
+            internal.setGeneratorSettings(creator.generatorSettings());
+            worlddata = new WorldData(internal, name);
+        }
+
+        worlddata.checkName(name);
+        WorldServer var26 = (WorldServer)(new WorldServer(this.console, var24, worlddata, dimension, this.console.methodProfiler, creator.environment(), generator)).b();
+        if(!this.worlds.containsKey(name.toLowerCase())) {
+            return null;
+        } else {
+            var26.scoreboard = this.getScoreboardManager().getMainScoreboard().getHandle();
+            var26.tracker = new EntityTracker(var26);
+            var26.addIWorldAccess(new WorldManager(this.console, var26));
+            var26.worldData.setDifficulty(EnumDifficulty.EASY);
+            var26.setSpawnFlags(true, true);
+            this.console.worlds.add(var26);
+            if(generator != null) {
+                var26.getWorld().getPopulators().addAll(generator.getDefaultPopulators(var26.getWorld()));
+            }
+
+            this.pluginManager.callEvent(new WorldInitEvent(var26.getWorld()));
+            System.out.print("Preparing start region for level " + (this.console.worlds.size() - 1) + " (Seed: " + var26.getSeed() + ")");
+            if(var26.getWorld().getKeepSpawnInMemory()) {
+                short short1 = 196;
+                long i = System.currentTimeMillis();
+
+                for(int j = -short1; j &lt;= short1; j += 16) {
+                    for(int k = -short1; k &lt;= short1; k += 16) {
+                        long l = System.currentTimeMillis();
+                        if(l &lt; i) {
+                            i = l;
+                        }
+
+                        if(l &gt; i + 1000L) {
+                            int chunkcoordinates = (short1 * 2 + 1) * (short1 * 2 + 1);
+                            int j1 = (j + short1) * (short1 * 2 + 1) + k + 1;
+                            System.out.println("Preparing spawn area for " + name + ", " + j1 * 100 / chunkcoordinates + "%");
+                            i = l;
+                        }
+
+                        BlockPosition var27 = var26.getSpawn();
+                        var26.chunkProviderServer.getChunkAt(var27.getX() + j &gt;&gt; 4, var27.getZ() + k &gt;&gt; 4);
+                    }
+                }
+            }
+
+            this.pluginManager.callEvent(new WorldLoadEvent(var26.getWorld()));
+            return var26.getWorld();
+        }
+    }
+</code></pre>
+
+<p>Now by creating you own world loader, you can make it so it only generates a chunk every tick or so.</p>

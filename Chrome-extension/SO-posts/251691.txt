@@ -1,0 +1,39 @@
+<p>There's nothing built into Java 1.5 for this. I implemented it myself; it's not too complicated. However, when we upgrade to Java 6, I will have to replace calls to my implementation with calls to <code>ServiceLoader</code>. I could have defined a little bridge between the app and the loader, but I only use it in a few places, and the wrapper itself would be a good candidate for a ServiceLoader.</p>
+
+<p>This is the core idea:</p>
+
+<pre><code>public &lt;S&gt; Iterable&lt;S&gt; load(Class&lt;S&gt; ifc) throws Exception {
+  ClassLoader ldr = Thread.currentThread().getContextClassLoader();
+  Enumeration&lt;URL&gt; e = ldr.getResources("META-INF/services/" + ifc.getName());
+  Collection&lt;S&gt; services = new ArrayList&lt;S&gt;();
+  while (e.hasMoreElements()) {
+    URL url = e.nextElement();
+    InputStream is = url.openStream();
+    try {
+      BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+      while (true) {
+        String line = r.readLine();
+        if (line == null)
+          break;
+        int comment = line.indexOf('#');
+        if (comment &gt;= 0)
+          line = line.substring(0, comment);
+        String name = line.trim();
+        if (name.length() == 0)
+          continue;
+        Class&lt;?&gt; clz = Class.forName(name, true, ldr);
+        Class&lt;? extends S&gt; impl = clz.asSubclass(ifc);
+        Constructor&lt;? extends S&gt; ctor = impl.getConstructor();
+        S svc = ctor.newInstance();
+        services.add(svc);
+      }
+    }
+    finally {
+      is.close();
+    }
+  }
+  return services;
+}
+</code></pre>
+
+<p>Better exception handling is left as an exercise for the reader. Also, the method could be parameterized to accept a ClassLoader of the caller's choosing.</p>

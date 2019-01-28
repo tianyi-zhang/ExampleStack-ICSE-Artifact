@@ -1,0 +1,270 @@
+<p>I have problem with too stretching camera preview.
+It is too <strong>stretching</strong> at vertical and landscape mode.</p>
+
+<p>So at manifest i added screenOrentation="Portrait", 
+but it did not help,still preview is rescaled at 
+any position (vertical - preview is to wide or 
+landscape is too long) you can 
+see this at screens.
+I would like to add at Samsung ace III everything is fine but at LG Nexus 4 is <strong>stretching</strong></p>
+
+<pre><code> package pl.probs.camera.component;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Point;
+import android.hardware.Camera;
+import android.hardware.Camera.AutoFocusCallback;
+import android.hardware.Camera.CameraInfo;
+import android.hardware.Camera.Parameters;
+import android.hardware.Camera.Size;
+import android.util.Log;
+import android.view.Display;
+import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import pl.probs.lib.debug.L;
+
+public class CameraPreview extends SurfaceView implements SurfaceHolder.Callback {
+    private static final String TAG = "CameraPreview";
+    private static boolean showLogs = true;
+    private SurfaceHolder mHolder;
+    private Camera mCamera;
+    private Context context;
+    private Parameters resolution;
+    private List&lt;Size&gt; lSuportedPreviewSize;
+    private static int cOrientation = 0; // aktualny kat orientacji
+    private static boolean cOrientationChanged = false; // Stan orientacji
+                                                        // zostal zmieniony
+                                                        // wzgledem poprzedniego
+    private Display display; // Rozmiar ekranu
+    private Point displaySize; // Zmienna przechowuje Rozmiar Ekranu
+    private Point optimalPreviewSize;
+public CameraPreview(Context context, Camera camera, int resolution) {
+    super(context);
+    this.optimalPreviewSize = new Point();
+    this.context = context;
+    this.mCamera = camera;
+    setDisplaySize(this.display);
+    setFocusable(true);
+    setFocusableInTouchMode(true);
+    mHolder = getHolder();
+    mHolder.addCallback(this);
+    mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    this.resolution = getMinResolution(resolution);
+    this.optimalPreviewSize = getOptimalPreviewResolution(this.display);
+    Size s = mCamera.getParameters().getPreviewSize(); // Sprawdzenie jaki
+                                                        // prewiev ustawiony
+}
+
+public Point getOptimalPreviewSize() {
+    return optimalPreviewSize;
+}
+
+public void surfaceCreated(SurfaceHolder holder) {
+    try {
+        if (mCamera != null) {
+            mCamera.stopPreview();
+            mCamera.setPreviewDisplay(holder);
+            Size s = mCamera.getParameters().getPreviewSize();
+            mCamera.startPreview();
+        }
+    } catch (IOException e) {
+        L.d("B??d ustawiania podglÄ…du: " + e.getMessage());
+    }
+}
+
+protected void onPause() {
+    // Because the Camera object is a shared resource, it's very
+    // important to release it when the activity is paused.
+    if (mCamera != null) {
+        mCamera.release();
+        mCamera = null;
+    }
+}
+
+public void surfaceDestroyed(SurfaceHolder holder) {
+    if (mCamera != null) {
+        mCamera.stopPreview();
+    }
+}
+
+public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+    Camera.Parameters setPrevOrientation = mCamera.getParameters();
+    if (mHolder.getSurface() == null)
+        return;
+
+    try {
+        mCamera.stopPreview();
+        Size sizeBefore = mCamera.getParameters().getPreviewSize();
+        setPrevOrientation.setRotation(setCameraDisplayOrientation((Activity) context, getCameraId(), mCamera));
+        // Orientacja Portrait np 640x480 Landscape 480x640
+        this.resolution.setPreviewSize(this.optimalPreviewSize.x, this.optimalPreviewSize.y);
+        mCamera.setParameters(this.resolution);
+        Size sizeAfter = mCamera.getParameters().getPreviewSize();
+    } catch (RuntimeException e) {
+        L.d("Podgl?d nie istnieje");
+    }
+
+    try {
+        mCamera.stopPreview();
+        mCamera.setPreviewDisplay(mHolder);
+        mCamera.startPreview();
+
+    } catch (Exception e) {
+        L.d("b??d podgladu: " + e.getMessage());
+    }
+}
+
+@SuppressLint("ClickableViewAccessibility")
+public boolean onTouchEvent(MotionEvent event) {
+    if (event.getAction() == MotionEvent.ACTION_DOWN) {
+        mCamera.autoFocus(new AutoFocusCallback() {
+
+            @Override
+            public void onAutoFocus(boolean success, Camera camera) {
+                // do something
+            }
+        });
+
+    }
+
+    return true;
+}
+
+private static int setCameraDisplayOrientation(Activity activity, int cameraId, android.hardware.Camera camera) {
+    android.hardware.Camera.CameraInfo info = new android.hardware.Camera.CameraInfo();
+
+    android.hardware.Camera.getCameraInfo(cameraId, info);
+    int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+    int degrees = 0;
+    switch (rotation) {
+    case Surface.ROTATION_0:
+        degrees = 0;
+        break;
+    case Surface.ROTATION_90:
+        degrees = 90;
+        break;
+    case Surface.ROTATION_180:
+        degrees = 180;
+        break;
+    case Surface.ROTATION_270:
+        degrees = 270;
+        break;
+    }
+
+    cOrientation = degrees;
+
+    int result;
+    if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+        result = (info.orientation + degrees) % 360;
+        result = (360 - result) % 360; // compensate the mirror
+    } else { // back-facing
+        result = (info.orientation - degrees + 360) % 360;
+    }
+
+    camera.setDisplayOrientation(result);
+    return result;
+}
+
+private int getCameraId() {
+    int cameraId = -1;
+    int numberOfCameras = Camera.getNumberOfCameras();
+    for (int i = 0; i &lt; numberOfCameras; i++) {
+        CameraInfo info = new CameraInfo();
+        Camera.getCameraInfo(i, info);
+        if (info.facing == CameraInfo.CAMERA_FACING_BACK) {
+            cameraId = i;
+            break;
+        }
+    }
+    return cameraId;
+}
+
+private Parameters getMinResolution(int desireResolutionInMpx) {
+    int height[], width[], size;
+    float megapixels;
+    Camera.Parameters p = mCamera.getParameters();
+    size = p.getSupportedPictureSizes().size();
+    height = new int[size];
+    width = new int[size];
+    for (int i = 0; i &lt; size; i++) {
+        height[i] = p.getSupportedPictureSizes().get(i).height;
+        width[i] = p.getSupportedPictureSizes().get(i).width;
+        megapixels = (float) (((float) height[i] * (float) width[i]) / 1024000);
+        if (megapixels &lt;= desireResolutionInMpx) {
+            p.setPictureSize(width[i], height[i]);
+            break;
+        }
+    }
+    return p;
+}
+
+private Point getOptimalPreviewResolution(Display displaySize) {
+    lSuportedPreviewSize = mCamera.getParameters().getSupportedPreviewSizes();
+    Point optimalPreviewSize = new Point();
+    int displayWidth = displaySize.getWidth(); // szerokosc ekranu
+    int displayHeight = displaySize.getHeight(); // wysokosc ekranu
+    int cameraHeight; // wspierana wysokosc kamery
+    int cameraWidth; // wspierana szerokosc kamery
+
+    // Lista przechowywujace SupportedPreviewSize kamery, wszyskie
+    // rozdzielczosci mniejsze od szerokosc i wysokosci ekranu
+    List&lt;Point&gt; lOptimalPoint = new ArrayList&lt;Point&gt;();
+
+    // Pomocniczo do listowania zawartosci listy
+    // TODO manta displayHeight cameraHeight brak oraz width brak zgodnosci
+    // (
+    System.out.println(lOptimalPoint.toString());
+    for (int i = 0; i &lt; lSuportedPreviewSize.size(); i++) {
+        Log.i(TAG, "w " + lSuportedPreviewSize.get(i).width + " h " + lSuportedPreviewSize.get(i).height + " \n");
+    }
+
+    // Wyszukanie wszystkich wysokosci kamery mniejszej od wysokosci ekranu
+    for (int i = 0; i &lt; lSuportedPreviewSize.size(); i++) {
+        // TODO Uwazaj kamera zapisuje swoj rozmiar dla pozycji landscape
+        // gdzie height = 480 a width = 800
+        cameraHeight = lSuportedPreviewSize.get(i).width;
+        cameraWidth = lSuportedPreviewSize.get(i).height;
+        // Porownaj wysokosc ekranu urzadzenia z wysokosci supportedPreview
+        // dodaj do listy
+        if (displayHeight &gt; cameraHeight) {
+            lOptimalPoint.add(new Point(cameraHeight, cameraWidth));
+        }
+    }
+
+    // Sortowanie rosnaco
+    Collections.sort(lOptimalPoint, new ComapreSupportedPreviewByWidth());
+    // Ostatni element listy optymalny
+    optimalPreviewSize = lOptimalPoint.get(lOptimalPoint.size()-1);
+
+    // Zwracana rozdzielczosc landscape aparatu np (800x600)
+    return optimalPreviewSize;
+}
+
+private void setDisplaySize(Display display) {
+    Activity activity = (Activity) this.context; // Pobierz aktywnosc aby
+                                                    // zna? rozmiar ekranu
+
+    this.display = activity.getWindowManager().getDefaultDisplay();
+}
+
+class ComapreSupportedPreviewByWidth implements Comparator&lt;Point&gt; {
+
+    @Override
+    public int compare(Point lhs, Point rhs) {
+        return lhs.x - rhs.x;
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<p><a href="https://drive.google.com/folderview?id=0B1mG2OJ1tptwfktFcHdMeWhVRVVHeG1Bek9YNFlPVFpQanlheFl0UGd4UzFGTlBqam04dzQ&amp;usp=sharing" rel="nofollow">Link to screens and project doing at eclipse</a></p>

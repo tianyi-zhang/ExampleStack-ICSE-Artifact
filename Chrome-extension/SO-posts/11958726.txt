@@ -1,0 +1,199 @@
+<p>I used the solution trashgod used, but I've extended the solution to support the sort of printing I wanted to be able to do with my application.</p>
+
+<p>I wanted to be able to print like JFreechart usually does, but put multiples of its graphs on each page in a grid and have it stretch and expand to the page nicely.  Using this function, I was able to generate a print that matches the image below:</p>
+
+<p><img src="http://i.stack.imgur.com/vAP2v.png" alt="Sample Print"></p>
+
+<p>Basically I extended JPanel and implemented the Printable interface. to make a panel that will contain all the JFreecharts I may want to display/print. The panel will arrange them in a grid fashion based on some layoutinstructions you provide.  </p>
+
+<p>The print function for the panel basically takes a page format like normal, but then sub divides the page into the grid specified before.  It then takes each of these cells and makes a pageformat for each of them.  Then it will tell each JFreeChart ChartPanel to print to each of those PageFormat cells.</p>
+
+<h1>CustomChartPanel:</h1>
+
+<pre><code>package com.company.jfreeChartCustom;
+
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.geom.Rectangle2D;
+import java.awt.print.PageFormat;
+import java.awt.print.Paper;
+import java.awt.print.Printable;
+import java.awt.print.PrinterException;
+import java.awt.print.PrinterJob;
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+
+import org.jfree.chart.ChartPanel;
+import org.jfree.chart.JFreeChart;
+
+import com.lowagie.text.Row;
+
+/**
+ * The CustomChartPanel is used to display/print multiple JFreeCharts
+ * Users should only interact with this class with the methods defined
+ * below in order to get the proper functionality.  Using
+ * inherited methods may produce unwanted display/print behavior if you
+ * add components other than JFreeCharts.
+ * 
+ */
+public class CustomChartPanel extends JPanel implements Printable{
+
+    List&lt;JFreeChart&gt; charts = new ArrayList&lt;JFreeChart&gt;();
+    List&lt;ChartPanel&gt; panels = new ArrayList&lt;ChartPanel&gt;();
+    ChartLayoutInstructions layoutInstructions;
+
+    public CustomChartPanel(){
+        super();
+    }
+
+    public CustomChartPanel(JFreeChart chart){
+        super();
+        charts.add(chart);
+    }
+
+    /**
+     * Creates a CustomChartPanel which displays 1 or more charts in a grid-like fashion
+     * described by the layoutInstructions you pass in.  Note that if you pass in more
+     * charts than there are columns specified in the ChartLayoutInstructions then excess
+     * charts will not be displayed or printed.
+     * @param charts
+     * @param layoutInstructions
+     */
+    public CustomChartPanel(List&lt;JFreeChart&gt; charts, ChartLayoutInstructions layoutInstructions){
+        super();
+        this.layoutInstructions = layoutInstructions;
+        for(JFreeChart chart : charts){
+            this.charts.add(chart);
+        }
+        createUIComponents();
+    }
+
+    protected void createUIComponents(){
+        int size = Math.min(layoutInstructions.getColumns() * layoutInstructions.getRows(), charts.size());
+        this.setLayout(new GridLayout(layoutInstructions.getRows(), layoutInstructions.getColumns()));
+
+
+        for(int i = 0; i &lt; size; i++ ){
+            System.err.println("Adding chart");
+            ChartPanel chartPanel = new ChartPanel(charts.get(i));
+            chartPanel.setMaximumDrawHeight(20000);
+            chartPanel.setMinimumDrawHeight(0);
+            chartPanel.setMaximumDrawWidth(20000);
+            chartPanel.setMinimumDrawWidth(0);
+            chartPanel.setPopupMenu(null);
+            panels.add(chartPanel);
+            this.add(chartPanel);
+        }
+    }
+
+    public void createPrintJob(){
+        PrinterJob job = PrinterJob.getPrinterJob();
+        PageFormat pf = job.defaultPage();
+        PageFormat pf2 = job.pageDialog(pf);
+        if (pf2 != pf) {
+            job.setPrintable(this, pf2);
+            if (job.printDialog()) {
+                try {
+                    job.print();
+                }
+                catch (PrinterException e) {
+                    JOptionPane.showMessageDialog(this, e);
+                }
+            }
+        }
+    }
+
+    @Override
+    public int print(Graphics g, PageFormat pf, int pageIndex)
+            throws PrinterException {
+        System.err.println("PRINTING");
+        //Divide the current page format into sections based
+        //on the layout instructions received in the constructor
+        //a new pagelayout is created for each cell in the grid
+        //that will then be passed along to the print method of
+        //each chart panel.  
+
+
+        if(pageIndex != 0){
+            return NO_SUCH_PAGE;
+        }
+
+        List&lt;PageFormat&gt; pageFormats = new ArrayList&lt;PageFormat&gt;();
+
+        //setup all the page formats needed for the grid cells.
+        double x = pf.getImageableX();
+        double y = pf.getImageableY();
+        double cellWidth = pf.getImageableWidth() / layoutInstructions.getColumns();
+        double cellHeight = pf.getImageableHeight() / layoutInstructions.getRows();
+
+        for(int i=1; i &lt;= layoutInstructions.getRows(); i++){
+            double rowOffset = (i-1)*cellHeight + y;
+            for(int j=1; j &lt;= layoutInstructions.getColumns(); j++){
+                PageFormat format = new PageFormat();
+                Paper paper = new Paper();
+                double columnOffset = (j-1)*cellWidth + x;
+                paper.setImageableArea(columnOffset, rowOffset, cellWidth, cellHeight);
+                format.setPaper(paper);
+                pageFormats.add(format);
+            }
+        }
+
+        //have each chartpanel print on the graphics context using its
+        //particular PageFormat
+        int size = Math.min(pageFormats.size(), panels.size());
+        for(int i = 0; i &lt; size; i++ ){
+            panels.get(i).print(g, pageFormats.get(i), pageIndex);
+
+        }
+
+        return PAGE_EXISTS;
+    }
+</code></pre>
+
+<h1>ChartLayoutInstructions:</h1>
+
+<p>I have plans to extend this class for my own purposes for defining more advanced behaviors.  that's why I use this class rather than just having rows and columns defined in the constructor of the CustomChartPanel Class.</p>
+
+<pre><code>package com.company.jfreeChartCustom;
+
+/**
+ * ChartLayoutInstructions are used to specify how charts should be
+ * layed out on screen and in print format.  
+ *
+ */
+public class ChartLayoutInstructions {
+
+    int rows;
+    int columns;
+
+    /**
+     * Constructor
+     * @param rows number of rows in the display/print grid
+     * @param columns number of columns in the display/print grid
+     */
+    public ChartLayoutInstructions(int rows, int columns, boolean allowSwap){
+        this.rows = Math.abs(rows);
+        this.columns = Math.abs(columns);
+    }
+
+    public int getRows() {
+        return rows;
+    }
+
+    public void setRows(int rows) {
+        this.rows = Math.abs(rows);
+    }
+
+    public int getColumns() {
+        return columns;
+    }
+
+    public void setColumns(int columns) {
+        this.columns = Math.abs(columns);
+    }
+}
+</code></pre>

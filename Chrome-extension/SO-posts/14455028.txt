@@ -1,0 +1,137 @@
+<p>Check out the source <a href="https://android.googlesource.com/platform/sdk/+/android-cts-4.2_r1/ddms/libs/ddmlib/src/com/android/ddmlib/Device.java" rel="nofollow">com.android.ddmlib.Device</a> to see how DDMS generate the deivce name/serial number:</p>
+
+<pre><code>private static final String DEVICE_MODEL_PROPERTY = "ro.product.model"; //$NON-NLS-1$
+private static final String DEVICE_MANUFACTURER_PROPERTY = "ro.product.manufacturer"; //$NON-NLS-1$
+
+... ...
+
+private static final char SEPARATOR = '-';
+
+... ...
+
+@Override
+public String getName() {
+    if (mName == null) {
+        mName = constructName();
+    }
+
+    return mName;
+}
+
+private String constructName() {
+    if (isEmulator()) {
+        String avdName = getAvdName();
+        if (avdName != null) {
+            return String.format("%s [%s]", avdName, getSerialNumber());
+        } else {
+            return getSerialNumber();
+        }
+    } else {
+        String manufacturer = cleanupStringForDisplay(
+                getProperty(DEVICE_MANUFACTURER_PROPERTY));
+        String model = cleanupStringForDisplay(
+                getProperty(DEVICE_MODEL_PROPERTY));
+
+        StringBuilder sb = new StringBuilder(20);
+
+        if (manufacturer != null) {
+            sb.append(manufacturer);
+            sb.append(SEPARATOR);
+        }
+
+        if (model != null) {
+            sb.append(model);
+            sb.append(SEPARATOR);
+        }
+
+        sb.append(getSerialNumber());
+        return sb.toString();
+    }
+}
+
+private String cleanupStringForDisplay(String s) {
+    if (s == null) {
+        return null;
+    }
+
+    StringBuilder sb = new StringBuilder(s.length());
+    for (int i = 0; i &lt; s.length(); i++) {
+        char c = s.charAt(i);
+
+        if (Character.isLetterOrDigit(c)) {
+            sb.append(Character.toLowerCase(c));
+        } else {
+            sb.append('_');
+        }
+    }
+
+    return sb.toString();
+}
+</code></pre>
+
+<p>If you want to see how DDMS render this device name/serial number, see <a href="https://android.googlesource.com/platform/sdk/+/android-cts-4.2_r1/ddms/libs/ddmuilib/src/com/android/ddmuilib/DevicePanel.java" rel="nofollow">com.android.ddmuilib.DevicePanel</a>.</p>
+
+<p>The <strong>ro.product.manufacturer</strong> and <strong>ro.product.model</strong> are in <strong>/system/build.prop</strong>, you can use <code>adb -e shell getprop|grep "\[ro.product"</code> to see the current value:</p>
+
+<pre><code>[ro.product.manufacturer]: [samsung]
+[ro.product.model]: [GT-I9100]
+</code></pre>
+
+<p>Then the device name/serial number shown in DDMS perspective is <strong>samsung-gt_i9100-0x0123456789ABCDEF</strong>. Note that some kludge vendors doesn't set these two properties properly, that is why for those devices, it only shows the serial number.</p>
+
+<p>There is no configuration in Eclipse that can let you simply tick and force it shown. If your device is rooted, you can edit these properties so that the device's manufacturer and model are shown properly in DDMS perspective, for example, using <code>adb shell setprop &lt;key&gt; &lt;value&gt;</code> or directly editing build.prop in file system.</p>
+
+<hr>
+
+<h2>DDMS in Depth</h2>
+
+<p>The way DDMS used to retrieve device info is quite complicated, in general, when AndroidDebugBridge is up and running, it starts a DeviceMonitor in a separate thread, which keep listening income device connection and issue an remote shell command <code>getprop</code> to the specific device to query device info like <code>ro.product.manufacturer</code> and <code>ro.product.model</code>, this remote shell command execution is unreliable (which may be affected by several factors), and it does not guarantee to grab the properties all the time. See <a href="https://android.googlesource.com/platform/sdk/+/android-cts-4.2_r1/ddms/libs/ddmlib/src/com/android/ddmlib/DeviceMonitor.java" rel="nofollow">com.android.ddmlib.DeviceMonitor</a>:</p>
+
+<pre><code>/**
+ * Queries a device for its build info.
+ * @param device the device to query.
+ */
+private void queryNewDeviceForInfo(Device device) {
+    // TODO: do this in a separate thread.
+    try {
+        // first get the list of properties.
+        device.executeShellCommand(GetPropReceiver.GETPROP_COMMAND,
+                new GetPropReceiver(device));
+
+        queryNewDeviceForMountingPoint(device, IDevice.MNT_EXTERNAL_STORAGE);
+        queryNewDeviceForMountingPoint(device, IDevice.MNT_DATA);
+        queryNewDeviceForMountingPoint(device, IDevice.MNT_ROOT);
+
+        // now get the emulator Virtual Device name (if applicable).
+        if (device.isEmulator()) {
+            EmulatorConsole console = EmulatorConsole.getConsole(device);
+            if (console != null) {
+                device.setAvdName(console.getAvdName());
+            }
+        }
+    } catch (TimeoutException e) {
+        Log.w("DeviceMonitor", String.format("Connection timeout getting info for device %s",
+                device.getSerialNumber()));
+
+    } catch (AdbCommandRejectedException e) {
+        // This should never happen as we only do this once the device is online.
+        Log.w("DeviceMonitor", String.format(
+                "Adb rejected command to get  device %1$s info: %2$s",
+                device.getSerialNumber(), e.getMessage()));
+
+    } catch (ShellCommandUnresponsiveException e) {
+        Log.w("DeviceMonitor", String.format(
+                "Adb shell command took too long returning info for device %s",
+                device.getSerialNumber()));
+
+    } catch (IOException e) {
+        Log.w("DeviceMonitor", String.format(
+                "IO Error getting info for device %s",
+                device.getSerialNumber()));
+    }
+}
+</code></pre>
+
+<p>Notice all exceptions <code>device.executeShellCommand()</code> thrown and handled by <code>DeviceMonitor.queryNewDeviceForInfo()</code>, If any of these occurred, DDMS will not get the properties properly.</p>
+
+<p>If you want to read the full source, check out <a href="https://android.googlesource.com/platform/sdk/+/android-cts-4.2_r1/ddms/libs/ddmlib/src/com/android/ddmlib" rel="nofollow">here</a>.</p>

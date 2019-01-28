@@ -1,0 +1,334 @@
+<p>Here is the code,i tried appending ";interface=true" to the url still its not executing on 9550 device,whereas in 9550 simulator its executing</p>
+
+<p>/*
+ * BrowserFieldDemo.java 
+ * 
+ * Copyright © 1998-2009 Research In Motion Ltd.
+ * 
+ * Note: For the sake of simplicity, this sample application may not leverage
+ * resource bundles and resource strings.  However, it is STRONGLY recommended
+ * that application developers make use of the localization features available
+ * within the BlackBerry development platform to ensure a seamless application
+ * experience across a variety of languages and geographies.  For more information
+ * on localizing your application, please refer to the BlackBerry Java Development
+ * Environment Development Guide associated with this release.
+ */</p>
+
+<p>import java.io.IOException;</p>
+
+<p>import javax.microedition.io.HttpConnection;</p>
+
+<p>import net.rim.device.api.browser.field.<em>;
+import net.rim.device.api.io.http.HttpHeaders;
+import net.rim.device.api.system.Application;
+import net.rim.device.api.ui.</em>;
+import net.rim.device.api.ui.component.Status;
+import net.rim.device.api.ui.container.MainScreen;
+import net.rim.device.api.system.*;</p>
+
+<p>final class BrowserFieldDemo extends UiApplication implements RenderingApplication 
+{</p>
+
+<pre><code>private static final String REFERER = "referer";   
+
+private RenderingSession _renderingSession;   
+private HttpConnection  _currentConnection;
+private MainScreen _mainScreen;
+
+
+/***************************************************************************
+ * Main.
+ **************************************************************************/
+public static void main(String[] args) 
+{
+    BrowserFieldDemo app = new BrowserFieldDemo();
+    app.enterEventDispatcher();
+}
+
+private BrowserFieldDemo() 
+{        
+
+    _mainScreen = new MainScreen();        
+    pushScreen(_mainScreen);
+    _renderingSession = RenderingSession.getNewInstance();
+
+    // Enable javascript.
+    //_renderingSession.getRenderingOptions().setProperty(RenderingOptions.CORE_OPTIONS_GUID, RenderingOptions.JAVASCRIPT_ENABLED, true);                        
+
+    PrimaryResourceFetchThread thread = new PrimaryResourceFetchThread("http://wwww.vensi.com"+";interface=true", null, null, null, this);
+    thread.start();                       
+
+}
+
+void processConnection(HttpConnection connection, Event e) 
+{
+    // Cancel previous request.
+    if (_currentConnection != null) 
+    {
+        try 
+        {
+            _currentConnection.close();
+        } 
+        catch (IOException e1) 
+        {
+        }
+    }
+
+    _currentConnection = connection;
+
+    BrowserContent browserContent = null;
+
+    try 
+    {
+        browserContent = _renderingSession.getBrowserContent(connection, this, e);
+
+        if (browserContent != null) 
+        {
+            Field field = browserContent.getDisplayableContent();
+
+            if (field != null) 
+            {
+                synchronized (Application.getEventLock()) 
+                {
+                    _mainScreen.deleteAll();
+                    _mainScreen.add(field);
+                }
+            }
+
+            browserContent.finishLoading();
+        }
+
+    } 
+    catch (RenderingException re) 
+    {
+    } 
+    finally 
+    {
+        SecondaryResourceFetchThread.doneAddingImages();
+    }
+
+}    
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#eventOccurred(net.rim.device.api.browser.Event)
+ */
+public Object eventOccurred(Event event) 
+{
+    int eventId = event.getUID();
+
+    switch (eventId) 
+    {
+        case Event.EVENT_URL_REQUESTED : 
+        {
+            UrlRequestedEvent urlRequestedEvent = (UrlRequestedEvent) event;    
+
+            PrimaryResourceFetchThread thread = new PrimaryResourceFetchThread(urlRequestedEvent.getURL(),
+                                                                                     urlRequestedEvent.getHeaders(), 
+                                                                                     urlRequestedEvent.getPostData(),
+                                                                                     event, this);
+            thread.start();
+
+            break;
+
+        } 
+        case Event.EVENT_BROWSER_CONTENT_CHANGED: 
+        {                
+            // Browser field title might have changed update title.
+            BrowserContentChangedEvent browserContentChangedEvent = (BrowserContentChangedEvent) event; 
+
+            if (browserContentChangedEvent.getSource() instanceof BrowserContent) 
+            { 
+                BrowserContent browserField = (BrowserContent) browserContentChangedEvent.getSource(); 
+                String newTitle = browserField.getTitle();
+                if (newTitle != null) 
+                {
+                    synchronized (getAppEventLock()) 
+                    { 
+                        _mainScreen.setTitle(newTitle);
+                    }                                               
+                }                                       
+            }                   
+
+            break;                
+
+        } 
+        case Event.EVENT_REDIRECT : 
+        {
+            RedirectEvent e = (RedirectEvent) event;
+            String referrer = e.getSourceURL();
+
+            switch (e.getType()) 
+            {  
+                case RedirectEvent.TYPE_SINGLE_FRAME_REDIRECT :
+                    // Show redirect message.
+                    Application.getApplication().invokeAndWait(new Runnable() 
+                    {
+                        public void run() 
+                        {
+                            Status.show("You are being redirected to a different page...");
+                        }
+                    });
+
+                break;
+
+                case RedirectEvent.TYPE_JAVASCRIPT :
+                    break;
+
+                case RedirectEvent.TYPE_META :
+                    // MSIE and Mozilla don't send a Referer for META Refresh.
+                    referrer = null;     
+                    break;
+
+                case RedirectEvent.TYPE_300_REDIRECT :
+                    // MSIE, Mozilla, and Opera all send the original
+                    // request's Referer as the Referer for the new
+                    // request.
+                    Object eventSource = e.getSource();
+                    if (eventSource instanceof HttpConnection) 
+                    {
+                        referrer = ((HttpConnection)eventSource).getRequestProperty(REFERER);
+                    }
+
+                    break;
+                }
+
+                HttpHeaders requestHeaders = new HttpHeaders();
+                requestHeaders.setProperty(REFERER, referrer);
+                PrimaryResourceFetchThread thread = new PrimaryResourceFetchThread(e.getLocation(), requestHeaders,null, event, this);
+                thread.start();
+                break;
+
+        } 
+        case Event.EVENT_CLOSE :
+            // TODO: close the appication
+            break;
+
+        case Event.EVENT_SET_HEADER :        // No cache support.
+        case Event.EVENT_SET_HTTP_COOKIE :   // No cookie support.
+        case Event.EVENT_HISTORY :           // No history support.
+        case Event.EVENT_EXECUTING_SCRIPT :  // No progress bar is supported.
+        case Event.EVENT_FULL_WINDOW :       // No full window support.
+        case Event.EVENT_STOP :              // No stop loading support.
+        default :
+    }
+
+    return null;
+}
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#getAvailableHeight(net.rim.device.api.browser.BrowserContent)
+ */
+public int getAvailableHeight(BrowserContent browserField) 
+{
+    // Field has full screen.
+    return Display.getHeight();
+}
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#getAvailableWidth(net.rim.device.api.browser.BrowserContent)
+ */
+public int getAvailableWidth(BrowserContent browserField) 
+{
+    // Field has full screen.
+    return Display.getWidth();
+}
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#getHistoryPosition(net.rim.device.api.browser.BrowserContent)
+ */
+public int getHistoryPosition(BrowserContent browserField) 
+{
+    // No history support.
+    return 0;
+}
+
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#getHTTPCookie(java.lang.String)
+ */
+public String getHTTPCookie(String url) 
+{
+    // No cookie support.
+    return null;
+}
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#getResource(net.rim.device.api.browser.RequestedResource,
+ *      net.rim.device.api.browser.BrowserContent)
+ */
+public HttpConnection getResource( RequestedResource resource, BrowserContent referrer) 
+{
+    if (resource == null) 
+    {
+        return null;
+    }
+
+    // Check if this is cache-only request.
+    if (resource.isCacheOnly()) 
+    {
+        // No cache support.
+        return null;
+    }
+
+    String url = resource.getUrl();
+
+    if (url == null) 
+    {
+        return null;
+    }
+
+    // If referrer is null we must return the connection.
+    if (referrer == null) 
+    {
+        HttpConnection connection = Utilities.makeConnection(resource.getUrl(), resource.getRequestHeaders(), null);
+
+        return connection;
+
+    } 
+    else 
+    {
+        // If referrer is provided we can set up the connection on a separate thread.
+        SecondaryResourceFetchThread.enqueue(resource, referrer);
+    }
+
+    return null;
+}
+
+/**
+ * @see net.rim.device.api.browser.RenderingApplication#invokeRunnable(java.lang.Runnable)
+ */
+public void invokeRunnable(Runnable runnable) 
+{       
+    (new Thread(runnable)).start();
+}    
+</code></pre>
+
+<p>}</p>
+
+<p>class PrimaryResourceFetchThread extends Thread 
+{</p>
+
+<pre><code>private BrowserFieldDemo _application;
+private Event _event;
+private byte[] _postData;
+private HttpHeaders _requestHeaders;
+private String _url;
+
+PrimaryResourceFetchThread(String url, HttpHeaders requestHeaders, byte[] postData, 
+                              Event event, BrowserFieldDemo application) 
+{
+    _url = url;
+    _requestHeaders = requestHeaders;
+    _postData = postData;
+    _application = application;
+    _event = event;
+}
+
+public void run() 
+{
+    HttpConnection connection = Utilities.makeConnection(_url, _requestHeaders, _postData);
+    _application.processConnection(connection, _event);        
+}
+</code></pre>
+
+<p>}</p>

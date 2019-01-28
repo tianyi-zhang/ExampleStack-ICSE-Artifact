@@ -1,0 +1,214 @@
+<p>Here my <strong>almost generic</strong> Java app to update <strong>version code and version name</strong></p>
+
+<p>Almost generic, because file parsing is not 100% guarantee (works fine with well formatted xml manifest and should be OK in most case)</p>
+
+<p>Choices/prerequisite:</p>
+
+<ul>
+<li>versionName is supposed to be <strong>major.minor.point</strong> (as advised by Android doc)</li>
+<li>versionName can be preserved, reset to 1.0.0, or incremented (one single part of it and trailing part(s) is/are set to 0)</li>
+<li>versionCode will be replaced by <strong>Unix Time</strong></li>
+</ul>
+
+<p>Code:</p>
+
+<pre><code>package com.mycompany.tools;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class IncrementVersion
+{
+    enum INCREMENT
+    {
+        MAJOR, // increment 1rst component of version Code (i.e. 'major') add trailing '.0.0'
+        MINOR, // preserve major, increment 2nd component of version Code (i.e. 'minor'), add trailing '.0'
+        POINT, // preserver major, minor, increment 3rd component of version Code (i.e. 'point')
+        NONE, // do not change versionName, only change version code (to current Unix times)
+        RESET // RESET -&gt; reset verseionNAme to 1.0.0
+    }
+
+
+    // update this to select which version name part to update
+    static final INCREMENT increment = INCREMENT.NONE;
+
+    static final String projectName = "com.mycompany.myproject";
+    // OR static final String projectName = "com.mycompany"; -&gt; match all my projects :-)
+
+    public static void main(String[] args)
+    {
+        File directory = new File("");
+
+        for (File projectDirecotry : directory.listFiles())
+        {
+            if (projectDirecotry.getName().startsWith(projectName))
+            {
+                exec(projectDirecotry);
+            }
+        }
+    }
+
+    private static void exec(File projectDirectory)
+    {
+        File androidManifestFile = new File(projectDirectory, "AndroidManifest.xml");
+        if (androidManifestFile.exists())
+        {
+            writeFile(androidManifestFile, readFile(androidManifestFile));
+        }
+    }
+
+    private static void writeFile(File androidManifestFile, String newContent)
+    {
+        BufferedWriter bw = null;
+        try
+        {
+            bw = new BufferedWriter(new FileWriter(androidManifestFile));
+            bw.write(newContent);
+        } catch (Throwable th)
+        {
+            th.printStackTrace();
+        } finally
+        {
+            if (bw != null)
+            {
+                try
+                {
+                    bw.close();
+                } catch (Throwable th)
+                {
+                }
+            }
+        }
+    }
+
+    private static String readFile(File androidManifestFile)
+    {
+        StringBuilder sb = new StringBuilder();
+        BufferedReader br = null;
+        try
+        {
+            br = new BufferedReader(new FileReader(androidManifestFile));
+            String line;
+            while ((line = br.readLine()) != null)
+            {
+                sb.append(parse(line)).append('\n');
+                //              System.out.println(line);
+            }
+        } catch (Throwable th)
+        {
+            th.printStackTrace();
+        } finally
+        {
+            if (br != null)
+            {
+                try
+                {
+                    br.close();
+                } catch (Throwable th)
+                {
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    //  public static final DateFormat dateTimeFormat = new SimpleDateFormat("yyyyMMddHHmm", Locale.ROOT);
+
+    public static long getUnixTime()
+    {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    private static String parse(String line)
+    {
+        {
+            //      android:versionCode="1"
+            // use 201408221404 instead
+            String versionCodePrefix = "android:versionCode=\"";
+
+            int indexOfVersionCodePrefix = line.indexOf(versionCodePrefix);
+            if (indexOfVersionCodePrefix != -1)
+            {
+                indexOfVersionCodePrefix += versionCodePrefix.length();
+                versionCodePrefix = line.substring(0, indexOfVersionCodePrefix);
+                String versionCode = line.substring(indexOfVersionCodePrefix, line.length());
+
+                int indexOfVersionCodeSuffix = versionCode.indexOf('"');
+                if (indexOfVersionCodeSuffix != -1)
+                {
+                    String versionCodeSuffix = versionCode.substring(indexOfVersionCodeSuffix);
+                    //                  versionCode = versionCode.substring(0, indexOfVersionCodeSuffix);
+                    //                  return versionCodePrefix + (Integer.parseInt(versionCode) + 1) + versionCodeSuffix;
+                    // 1409302337
+                    return versionCodePrefix + getUnixTime() + versionCodeSuffix;
+                }
+            }
+        }
+
+        {
+            if (increment != INCREMENT.NONE)
+            {
+                //      android:versionName="1.0.0" &gt;
+
+                String versionNamePrefix = "android:versionName=\"";
+
+                int indexOfVersionNamePrefix = line.indexOf(versionNamePrefix);
+                if (indexOfVersionNamePrefix != -1)
+                {
+                    indexOfVersionNamePrefix += versionNamePrefix.length();
+                    versionNamePrefix = line.substring(0, indexOfVersionNamePrefix);
+                    String versionName = line.substring(indexOfVersionNamePrefix, line.length());
+
+                    int indexOfVersionCodeSuffix = versionName.indexOf('"');
+                    if (indexOfVersionCodeSuffix != -1)
+                    {
+                        String versionNameSuffix = versionName.substring(indexOfVersionCodeSuffix);
+                        versionName = versionName.substring(0, indexOfVersionCodeSuffix);
+
+                        Pattern pattern = Pattern.compile("([^\\.])*\\.([^\\.])*\\.([^\\.])*");
+                        Matcher m = pattern.matcher(versionName);
+                        if (m.matches())
+                        {
+                            int major = Integer.parseInt(m.group(1));
+                            int minor = Integer.parseInt(m.group(2));
+                            int point = Integer.parseInt(m.group(3));
+
+                            switch (increment)
+                            {
+                            case MAJOR:
+                                major += 1;
+                                minor = 0;
+                                point = 0;
+                                break;
+                            case MINOR:
+                                minor += 1;
+                                point = 0;
+                                break;
+                            case POINT:
+                                point += 1;
+                                break;
+                            case RESET:
+                                major = 1;
+                                minor = 0;
+                                point = 0;
+                                break;
+                            default:
+                                break;
+                            }
+
+                            return versionNamePrefix + major + '.' + minor + '.' + point + versionNameSuffix;
+                        }
+                    }
+                }
+            }
+        }
+
+        return line;
+    }
+}
+</code></pre>

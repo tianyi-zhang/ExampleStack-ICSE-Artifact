@@ -1,0 +1,80 @@
+<p>First, the <a href="http://java.sun.com/javase/6/docs/api/java/util/Locale.html" rel="nofollow"><code>java.util.Locale</code></a> indeed doesn't have a <code>Locale.ARABIC</code> constant. But that shouldn't stop you from defining it yourself using the <code>Locale</code> constructor taking the language code:</p>
+
+<pre><code>public static final Locale ARABIC = new Locale("ar");
+</code></pre>
+
+<p>Second, <a href="http://java.sun.com/javase/6/docs/api/java/util/Properties.html" rel="nofollow">by default</a> the properties files are under the <code>ResourceBundle</code> hoods read as an <code>InputStream</code> with the <code>ISO-8859-1</code> encoding. So you'll really need to have two different properties files, one in <code>UTF-8</code> encoding which you use to maintain the values (e.g. <code>text_ar.properties.utf8</code>) and other in <code>ISO-8859-1</code> encoding (e.g. <code>text_ar.properties</code>) which you just use to provide to the Java application. You can use the <code>native2ascii</code> tool to convert from <code>UTF-8</code> file to <code>ISO-8859-1</code> file as follows:</p>
+
+<pre><code>c:\path\to\jdk\bin\native2ascii.exe -encoding UTF-8 text_ar.properties.utf8 text_ar.properties
+</code></pre>
+
+<p>This will convert non <code>ISO-8859-1</code> characters to Unicode codepoints. E.g. <code>??????</code> would become <code>\u0627\u0644\u0642\u064a\u0645\u0629</code> (which thus makes it unmaintainable, hence the recommendation to keep the original for editing).</p>
+
+<p>Or, if you're already on Java 6, then you can make use of <a href="http://java.sun.com/javase/6/docs/api/java/util/ResourceBundle.Control.html#newBundle%28java.lang.String,%20java.util.Locale,%20java.lang.String,%20java.lang.ClassLoader,%20boolean%29" rel="nofollow"><code>ResourceBundle.Control#newBundle()</code></a> and the <a href="http://java.sun.com/javase/6/docs/api/java/util/PropertyResourceBundle.html#PropertyResourceBundle%28java.io.Reader%29" rel="nofollow"><code>PropertyResourceBundle</code> constructor taking an <code>Reader</code></a> to read the properties files using <code>UTF-8</code> by default.</p>
+
+<p>Here's a kickoff example assuming that there's a "plain" <code>UTF-8</code> encoded <code>text_ar.properties</code> file in the classpath with the following content:</p>
+
+<pre><code>key=??????
+</code></pre>
+
+<hr>
+
+<pre><code>package com.stackoverflow.q2183245;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.Locale;
+import java.util.PropertyResourceBundle;
+import java.util.ResourceBundle;
+import java.util.ResourceBundle.Control;
+
+public class Test {
+
+    private static final Locale ARABIC = new Locale("ar");
+    private static final Control UTF8CONTROL = new UTF8Control();
+
+    public static void main(String args[]) throws Exception {
+        ResourceBundle bundle = ResourceBundle.getBundle("text", ARABIC, UTF8CONTROL);
+        System.out.println(bundle.getString("key")); // Prints ??????
+    }
+
+}
+
+class UTF8Control extends Control {
+    public ResourceBundle newBundle
+        (String baseName, Locale locale, String format, ClassLoader loader, boolean reload)
+            throws IllegalAccessException, InstantiationException, IOException
+    {
+        String bundleName = toBundleName(baseName, locale);
+        String resourceName = toResourceName(bundleName, "properties");
+        ResourceBundle bundle = null;
+        InputStream stream = null;
+        if (reload) {
+            URL url = loader.getResource(resourceName);
+            if (url != null) {
+                URLConnection connection = url.openConnection();
+                if (connection != null) {
+                    connection.setUseCaches(false);
+                    stream = connection.getInputStream();
+                }
+            }
+        } else {
+            stream = loader.getResourceAsStream(resourceName);
+        }
+        if (stream != null) {
+            try {
+                // This line is changed to make it to read properties files as UTF-8.
+                bundle = new PropertyResourceBundle(new InputStreamReader(stream, "UTF-8"));
+            } finally {
+                stream.close();
+            }
+        }
+        return bundle;
+    }
+}
+</code></pre>
+
+<p><em>Note: the <code>newBundle()</code> method is copypasted from original source and slightly changed to make the code example less verbose, if you want you can revert it to original and just change the line with <code>PropertyResourceBundle</code> construct to let it take an <code>UTF-8</code> encoded <code>Reader</code>.</em></p>

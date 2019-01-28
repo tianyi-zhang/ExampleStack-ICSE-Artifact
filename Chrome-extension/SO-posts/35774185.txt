@@ -1,0 +1,134 @@
+<p>Your problem is (1) that the adapter itself does not have a method for tracking the RSSI value and (2) your adapter's list item view has no way to show the RSSI value and the adapter it self does not have a method for tracking the RSSI value. Here are the problems in detail:</p>
+
+<p><strong>Problem 1</strong> The list adapter is not capable of tracking the RSSI value.</p>
+
+<p>You are adding the device and RSSI value to the adapter with this call:</p>
+
+<pre><code>mLeDeviceListAdapter.addDevice(device,rssi);
+</code></pre>
+
+<p>BUT the adapter only has a method like this:</p>
+
+<pre><code>public void addDevice(BluetoothDevice device) {
+    if (!mLeDevices.contains(device)) {
+        mLeDevices.add(device);
+
+    }
+}
+</code></pre>
+
+<p>As you can see the methods do not match. I would propose doing the following:
+First create a new class that will hold both the BluetoothDevice and the RSSI value. Something like this:</p>
+
+<pre><code>private class LeScanRecord {
+    public final BluetoothDevice device;
+    public final int rssi;
+
+    public LeScanRecord(BluetoothDevice device, int rssi) {
+        this.device = device;
+        this.rssi = rssi;
+    }
+}
+</code></pre>
+
+<p>Then change you adapter to accept track instances of the new class (note that this addressed <strong>Problem 2</strong> by filling in the text field with the RSSI value):</p>
+
+<pre><code>/**
+ * Adapter for the scan record devices
+ */
+private class LeDeviceListAdapter extends ArrayAdapter&lt;LeScanRecord &gt;
+{
+    /**
+     * View inflater
+     */
+    private final LayoutInflater inflater;
+
+    public LeDeviceListAdapter ()
+    {
+        super(MainActivity.this, R.layout.listitem_device);
+        inflater = MainActivity.this.getLayoutInflater();
+    }
+    @Override
+    public void add(LeScanRecord object)
+    {
+        for (int i = 0; i &lt; getCount(); i++)
+        {
+            if (getItem(i).device.equals(object.device))
+            {
+                return; // do not add duplicates
+            }
+        }
+        super.add(object);
+    }
+
+    @Override
+    public View getView(int position, View convertView, ViewGroup parent)
+    {
+        ViewHolder viewHolder;
+        // General ListView optimization code.
+        if (view == null) {
+            view = mInflator.inflate(R.layout.listitem_device,viewGroup, false);
+
+            viewHolder = new ViewHolder();
+            viewHolder.deviceAddress = (TextView) view.findViewById(R.id.device_address);
+            viewHolder.deviceName = (TextView) view.findViewById(R.id.device_name);
+            viewHolder.rssi= (TextView) view.findViewById(R.id.device_signal);
+            view.setTag(viewHolder);
+        } else {
+            viewHolder = (ViewHolder) view.getTag();
+        }
+
+        LeScanRecord record = getItem(position);
+        final String deviceName = record.device.getName();
+        if (deviceName != null &amp;&amp; deviceName.length() &gt; 0){
+            viewHolder.deviceName.setText(deviceName);
+
+        }
+        else {
+            viewHolder.deviceName.setText(R.string.unknown_device);
+        }
+        viewHolder.deviceAddress.setText(record.device.getAddress());
+        viewHolder.rssi.setText(Integer.valueOf(record.rssi));
+
+
+        return view;
+    }
+}
+
+static class ViewHolder {
+    public TextView deviceName;
+    public TextView deviceAddress;
+    public TextView rssi;
+}
+</code></pre>
+
+<p>The last thing to do is add instances of the scan record to the adapter. So change:</p>
+
+<pre><code>@Override
+public void onLeScan(final BluetoothDevice device, final int rssi, byte[] scanRecord) {
+    //final LeDeviceListAdapter deviceLe = new LeDeviceListAdapter(device, rssi, scanRecord);
+    runOnUiThread(new Runnable() {
+        @Override
+        public void run() {
+            mLeDeviceListAdapter.addDevice(device,rssi);
+            mLeDeviceListAdapter.notifyDataSetChanged();
+
+        }
+    });
+}
+</code></pre>
+
+<p>To:</p>
+
+<pre><code>@Override
+public void onLeScan(final BluetoothDevice device, final int rssi, byte[] scanRecord) {
+    runOnUiThread(new Runnable() {
+        @Override
+        public void run() {
+            mLeDeviceListAdapter.add(new LeScanRecord(device, rssi));
+            mLeDeviceListAdapter.notifyDataSetChanged();
+
+        }
+    });
+}
+</code></pre>

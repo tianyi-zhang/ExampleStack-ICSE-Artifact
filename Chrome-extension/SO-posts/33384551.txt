@@ -1,0 +1,110 @@
+<p>First of all, you should use Retrofit 2 version equal or above 2.0 beta2.
+Second, create new class extends <code>RequestBody</code>:</p>
+
+<pre><code>    public class ProgressRequestBody extends RequestBody {
+    private File mFile;
+    private String mPath;
+    private UploadCallbacks mListener;
+
+    private static final int DEFAULT_BUFFER_SIZE = 2048;
+
+    public interface UploadCallbacks {
+        void onProgressUpdate(int percentage);
+        void onError();
+        void onFinish();
+    }
+
+    public ProgressRequestBody(final File file, final  UploadCallbacks listener) {
+        mFile = file;
+        mListener = listener;            
+    }
+
+    @Override
+    public MediaType contentType() {
+        // i want to upload only images
+        return MediaType.parse("image/*");
+    }
+
+    @Override
+    public void writeTo(BufferedSink sink) throws IOException {
+        long fileLength = mFile.length();
+        byte[] buffer = new byte[DEFAULT_BUFFER_SIZE];
+        FileInputStream in = new FileInputStream(mFile);
+        long uploaded = 0;
+
+        try {
+            int read;
+            Handler handler = new Handler(Looper.getMainLooper());
+            while ((read = in.read(buffer)) != -1) {
+
+                // update progress on UI thread
+                handler.post(new ProgressUpdater(uploaded, fileLength));
+
+                uploaded += read;
+                sink.write(buffer, 0, read);
+            }
+        } finally {
+            in.close();
+        }
+    }
+
+    private class ProgressUpdater implements Runnable {
+        private long mUploaded;
+        private long mTotal;
+        public ProgressUpdater(long uploaded, long total) {
+            mUploaded = uploaded;
+            mTotal = total;
+        }
+
+        @Override
+        public void run() {
+            mListener.onProgressUpdate((int)(100 * mUploaded / mTotal));            
+        }
+    }
+}
+</code></pre>
+
+<p>Third, create interface</p>
+
+<pre><code>@Multipart
+    @POST("/upload")        
+    // without filename field it doesn't work :(
+    // upload is a POST field
+    Call&lt;JsonObject&gt; uploadImage(@Part("upload\"; filename=\"1\" ") ProgressRequestBody file);
+</code></pre>
+
+<p>Now you can get progress of your upload.</p>
+
+<p>In your <code>activity</code> (or <code>fragment</code>):</p>
+
+<pre><code>class MyActivity extends AppCompatActivity implements ProgressRequestBody.UploadCallbacks {
+        ProgressBar progressBar;
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+
+            progressBar = findViewById(R.id.progressBar);
+        }
+
+        @Override
+        public void onProgressUpdate(int percentage) {
+            // set current progress
+            progressBar.setProgress(percentage);
+        }
+
+        @Override
+        public void onError() {
+            // do something on error
+        }
+
+        @Override
+        public void onFinish() {
+            // do something on upload finished
+            // for example start next uploading at queue
+            progressBar.setProgress(100);
+        }
+
+
+    }
+</code></pre>

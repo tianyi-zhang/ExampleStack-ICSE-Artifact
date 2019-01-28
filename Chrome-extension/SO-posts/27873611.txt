@@ -1,0 +1,385 @@
+<p>Here is what I did.</p>
+
+<p>My original objective was to implement a simple media player utilizing the prepareAsynch() method. This would allow for a more robust design in that one would not have to just hope that the media player reaches the prepared state before the start() method was called.</p>
+
+<p>As noted above, pskink set me straight about the IntentService not being appropriate for handling the media player control.</p>
+
+<p>I then assumed I would use a Service, I started looking at handling button presses and keeping the media player states consistent with the UI.</p>
+
+<p>Based on some reading I did regarding features included in Lollipop, I went back to a project I had downloaded from:</p>
+
+<p><a href="http://www.binpress.com/tutorial/using-android-media-style-notifications-with-media-session-controls/165" rel="nofollow">http://www.binpress.com/tutorial/using-android-media-style-notifications-with-media-session-controls/165</a></p>
+
+<p>The activity starts a service which handles the button inputs as well as media player control:</p>
+
+<pre><code>public class MainActivity extends Activity {
+
+@Override
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    setContentView(R.layout.activity_main);
+
+    Intent intent = new Intent( getApplicationContext(), MediaPlayerService.class );
+    intent.setAction( MediaPlayerService.ACTION_PLAY );
+    startService( intent );
+}
+}
+</code></pre>
+
+<p>The MediaPlayerService was as follows:</p>
+
+<pre><code>/**
+ * Created by paulruiz on 10/28/14.
+ */
+public class MediaPlayerService extends Service {
+
+public static final String ACTION_PLAY = "action_play";
+public static final String ACTION_PAUSE = "action_pause";
+public static final String ACTION_REWIND = "action_rewind";
+public static final String ACTION_FAST_FORWARD = "action_fast_foward";
+public static final String ACTION_NEXT = "action_next";
+public static final String ACTION_PREVIOUS = "action_previous";
+public static final String ACTION_STOP = "action_stop";
+
+private MediaPlayer mMediaPlayer;
+private MediaSessionManager mManager;
+private MediaSession mSession;
+private MediaController mController;
+
+@Override
+public IBinder onBind(Intent intent) {
+    return null;
+}
+
+private void handleIntent( Intent intent ) {
+    if( intent == null || intent.getAction() == null )
+        return;
+
+    String action = intent.getAction();
+
+    if( action.equalsIgnoreCase( ACTION_PLAY ) ) {
+        mController.getTransportControls().play();
+    } else if( action.equalsIgnoreCase( ACTION_PAUSE ) ) {
+        mController.getTransportControls().pause();
+    } else if( action.equalsIgnoreCase( ACTION_FAST_FORWARD ) ) {
+        mController.getTransportControls().fastForward();
+    } else if( action.equalsIgnoreCase( ACTION_REWIND ) ) {
+        mController.getTransportControls().rewind();
+    } else if( action.equalsIgnoreCase( ACTION_PREVIOUS ) ) {
+        mController.getTransportControls().skipToPrevious();
+    } else if( action.equalsIgnoreCase( ACTION_NEXT ) ) {
+        mController.getTransportControls().skipToNext();
+    } else if( action.equalsIgnoreCase( ACTION_STOP ) ) {
+        mController.getTransportControls().stop();
+    }
+}
+
+private Notification.Action generateAction( int icon, String title, String intentAction ) {
+    Intent intent = new Intent( getApplicationContext(), MediaPlayerService.class );
+    intent.setAction( intentAction );
+    PendingIntent pendingIntent = PendingIntent.getService(getApplicationContext(), 1, intent, 0);
+    return new Notification.Action.Builder( icon, title, pendingIntent ).build();
+}
+
+private void buildNotification( Notification.Action action ) {
+        Notification.MediaStyle style = new Notification.MediaStyle();
+
+        Intent intent = new Intent( getApplicationContext(), MediaPlayerService.class );
+        intent.setAction( ACTION_STOP );
+        PendingIntent pendingIntent = PendingIntent.getService(getApplicationContext(), 1, intent, 0);
+        Notification.Builder builder = new Notification.Builder( this )
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle( "Media Title" )
+                .setContentText( "Media Artist" )
+                .setDeleteIntent( pendingIntent )
+                .setStyle(style);
+
+        builder.addAction( generateAction( android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS ) );
+        builder.addAction( generateAction( android.R.drawable.ic_media_rew, "Rewind", ACTION_REWIND ) );
+        builder.addAction( action );
+        builder.addAction( generateAction( android.R.drawable.ic_media_ff, "Fast Foward", ACTION_FAST_FORWARD ) );
+        builder.addAction( generateAction( android.R.drawable.ic_media_next, "Next", ACTION_NEXT ) );
+        style.setShowActionsInCompactView(0,1,2,3,4);
+
+        NotificationManager notificationManager = (NotificationManager) getSystemService( Context.NOTIFICATION_SERVICE );
+        notificationManager.notify( 1, builder.build() );
+}
+
+@Override
+public int onStartCommand(Intent intent, int flags, int startId) {
+    if( mManager == null ) {
+        initMediaSessions();
+    }
+
+    handleIntent( intent );
+    return super.onStartCommand(intent, flags, startId);
+}
+
+private void initMediaSessions() {
+    mMediaPlayer = new MediaPlayer();
+
+    mSession = new MediaSession(getApplicationContext(), "simple player session");
+    mController =new MediaController(getApplicationContext(), mSession.getSessionToken());
+
+    mSession.setCallback(new MediaSession.Callback(){
+        @Override
+        public void onPlay() {
+            super.onPlay();
+            Log.e( "MediaPlayerService", "onPlay");
+            buildNotification( generateAction( android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE ) );
+        }
+
+        @Override
+        public void onPause() {
+            super.onPause();
+            Log.e( "MediaPlayerService", "onPause");
+            buildNotification(generateAction(android.R.drawable.ic_media_play, "Play", ACTION_PLAY));
+        }
+
+        @Override
+        public void onSkipToNext() {
+            super.onSkipToNext();
+            Log.e( "MediaPlayerService", "onSkipToNext");
+            //Change media here
+            buildNotification( generateAction( android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE ) );
+        }
+
+        @Override
+        public void onSkipToPrevious() {
+            super.onSkipToPrevious();
+            Log.e( "MediaPlayerService", "onSkipToPrevious");
+            //Change media here
+            buildNotification( generateAction( android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE ) );
+        }
+
+        @Override
+        public void onFastForward() {
+            super.onFastForward();
+            Log.e( "MediaPlayerService", "onFastForward");
+            //Manipulate current media here
+        }
+
+        @Override
+        public void onRewind() {
+            super.onRewind();
+            Log.e( "MediaPlayerService", "onRewind");
+            //Manipulate current media here
+        }
+
+        @Override
+        public void onStop() {
+            super.onStop();
+            Log.e( "MediaPlayerService", "onStop");
+            //Stop media player here
+            NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            notificationManager.cancel( 1 );
+            Intent intent = new Intent( getApplicationContext(), MediaPlayerService.class );
+            stopService( intent );
+        }
+
+        @Override
+        public void onSeekTo(long pos) {
+            super.onSeekTo(pos);
+        }
+
+        @Override
+        public void onSetRating(Rating rating) {
+            super.onSetRating(rating);
+        }
+        }
+    );
+}
+</code></pre>
+
+<p>As the author notes, the actual media player instantiation and implementation is not present, however: "And with that we now have a fully working MediaStyle notification on our lock screen and in the notification drawer that takes advantage of MediaSession for playback control. Enjoy!"</p>
+
+<p>I made several modifications.<br>
+The primary changes were to the method initMediaSessions().  Code was added to instantiate and initialize the media player.  This is where the prepareAsync() and setOnPreparedListener() calls were added. 
+Changes were also made to the onPlay() and onPause() callbacks to include media player control methods.</p>
+
+<pre><code>public void initMediaSessions () {
+   Uri uri =  Uri.parse("http://devimages.apple.com/iphone/samples/bipbop/bipbopall.m3u8" );
+
+     //String fileName = "android.resource://" + getPackageName() + "/" + R.raw.georgeharrisonlivinginthematerialworld;
+   //Uri uri = Uri.parse(fileName);
+
+
+    try {
+        mMediaPlayer = new MediaPlayer();
+
+    } catch (IllegalArgumentException e) {
+        Toast.makeText(getApplicationContext(), "IllegalArgumentException", Toast.LENGTH_LONG).show();
+    } catch (SecurityException e) {
+        Toast.makeText(getApplicationContext(), "SecurityException", Toast.LENGTH_LONG).show();
+    } catch (IllegalStateException e) {
+        Toast.makeText(getApplicationContext(), "IllegalStateException", Toast.LENGTH_LONG).show();
+    }
+
+    try {
+        mMediaPlayer.setDataSource(this, uri);
+
+    } catch (IllegalArgumentException e) {
+        Toast.makeText(getApplicationContext(), "IllegalArgumentException", Toast.LENGTH_LONG).show();
+    } catch (SecurityException e) {
+        Toast.makeText(getApplicationContext(), "SecurityException", Toast.LENGTH_LONG).show();
+    } catch (IllegalStateException e) {
+        Toast.makeText(getApplicationContext(), "IllegalStateException", Toast.LENGTH_LONG).show();
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+
+    mMediaPlayer.setOnPreparedListener(this);
+
+    try {
+        mMediaPlayer.prepareAsync();
+    } catch (IllegalArgumentException e) {
+        Toast.makeText(getApplicationContext(), "IllegalArgumentException", Toast.LENGTH_LONG).show();
+    } catch (SecurityException e) {
+        Toast.makeText(getApplicationContext(), "SecurityException", Toast.LENGTH_LONG).show();
+    } catch (IllegalStateException e) {
+        Toast.makeText(getApplicationContext(), "IllegalStateException", Toast.LENGTH_LONG).show();
+    }
+
+    mManager= (MediaSessionManager)getSystemService(Context.MEDIA_SESSION_SERVICE);
+    mSession = new MediaSession(getApplicationContext(), "simple player session");
+    mController =new MediaController(getApplicationContext(), mSession.getSessionToken());
+
+    mSession.setCallback(new MediaSession.Callback(){
+        @Override
+        public void onPlay() {
+            super.onPlay();
+            Log.e("MediaPlayerService", "onPlay");
+
+            if(first_time_through == true)
+            {
+                first_time_through = false;
+            }
+            else {
+                try {
+                    mMediaPlayer.start();
+                } catch (IllegalArgumentException e) {
+                    Toast.makeText(getApplicationContext(), "IllegalArgumentException", Toast.LENGTH_LONG).show();
+                } catch (SecurityException e) {
+                    Toast.makeText(getApplicationContext(), "SecurityException", Toast.LENGTH_LONG).show();
+                } catch (IllegalStateException e) {
+                    Toast.makeText(getApplicationContext(), "IllegalStateException", Toast.LENGTH_LONG).show();
+                }
+            }
+            buildNotification(generateAction(android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE));
+        }
+
+        @Override
+        public void onPause() {
+
+            super.onPause();
+            mMediaPlayer.pause();
+            Log.e( "MediaPlayerService", "onPause");
+            buildNotification(generateAction(android.R.drawable.ic_media_play, "Play", ACTION_PLAY));
+        }
+
+        @Override
+        public void onSkipToNext() {
+            super.onSkipToNext();
+            Log.e( "MediaPlayerService", "onSkipToNext");
+            //Change media here
+            buildNotification( generateAction( android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE ) );
+        }
+
+        @Override
+        public void onSkipToPrevious() {
+            super.onSkipToPrevious();
+            Log.e( "MediaPlayerService", "onSkipToPrevious");
+            //Change media here
+            buildNotification( generateAction( android.R.drawable.ic_media_pause, "Pause", ACTION_PAUSE ) );
+        }
+
+        @Override
+        public void onFastForward() {
+            super.onFastForward();
+            Log.e( "MediaPlayerService", "onFastForward");
+            //Manipulate current media here
+        }
+
+        @Override
+        public void onRewind() {
+            super.onRewind();
+            Log.e( "MediaPlayerService", "onRewind");
+            //Manipulate current media here
+        }
+
+        @Override
+        public void onStop() {
+            super.onStop();
+            Log.e( "MediaPlayerService", "onStop");
+            //Stop media player here
+            NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            notificationManager.cancel( 1 );
+            Intent intent = new Intent( getApplicationContext(), MediaPlayerService.class );
+            stopService( intent );
+        }
+
+        @Override
+        public void onSeekTo(long pos) {
+            super.onSeekTo(pos);
+        }
+
+        @Override
+        public void onSetRating(Rating rating) {
+            super.onSetRating(rating);
+        }
+        }
+    );
+}
+</code></pre>
+
+<p>The activity starts the MediaPlayerService with the ACTION_PLAY intent action:</p>
+
+<pre><code>    intent.setAction( MediaPlayerService.ACTION_PLAY );
+</code></pre>
+
+<p>The first_time_through logic was added to the onPlay() callback to prevent the mMediaPlayer.start() method from being called before the onPrepared() call back was executed. The following was added to the MediaPlayerService class:</p>
+
+<pre><code>public static boolean first_time_through = true;
+</code></pre>
+
+<p>The onPrepared() callback was also added to the MediaPlayerService.</p>
+
+<pre><code>/** Called when MediaPlayer is ready */
+public void onPrepared(MediaPlayer player) {
+    try {
+
+        mMediaPlayer.start();
+    } catch (IllegalStateException e) {
+        Toast.makeText(getApplicationContext(), "IllegalStateException in onPrepared", Toast.LENGTH_LONG).show();
+    }
+}
+</code></pre>
+
+<p>Since I tried this with an HLS source the following line was added to the AndroidManifest.xml file:</p>
+
+<pre><code>     &lt;uses-permission android:name="android.permission.INTERNET" /&gt;
+</code></pre>
+
+<p>In order to allow the lock screen notifications to control the media the following was also added to the AndroidManifest.xml file:</p>
+
+<pre><code>    &lt;permission android:name="android.permission.MEDIA_CONTENT_CONTROL" /&gt;
+</code></pre>
+
+<p>As it currently exists the app only allows two dynamic media player states, namely: Playing and Paused.   Pressing the other buttons can lead to unexpected behavior.  Furthermore, not all the media control methods are applicable to both .mp3 and an HLS sources. I will attempt to clean this up.</p>
+
+<p>The first_time_through logic could probably be replaced by modifying the initialization but I'm not sure they too wouldn't have possible race conditions.</p>
+
+<p>I tested this on a MacBook Pro using the "Nexus 5 21 API x86" emulator.  The .mp3 file seems to play just fine.  When I use the HLS source, audio is generally lost in about 20 seconds or so.  The HLS source is actually a video file.  When audio is lost,  the following appear in the logcat:</p>
+
+<pre><code>01-10 01:25:22.074    1219-1237/system_process I/ActivityManager? Waited long enough for: ServiceRecord{3ca21a0b u0 com.google.android.gms/.wearable.service.WearableService}
+ 01-10 01:25:26.204     931-1216/? I/AudioFlinger? BUFFER TIMEOUT: remove(4096) from active list on thread 0xb62b8000
+ 01-10 01:25:34.675    2076-2100/com.android.calendar D/InitAlarmsService? Clearing and rescheduling alarms.
+ 01-10 01:25:59.696    1219-1232/system_process I/MediaFocusControl? AudioFocus  abandonAudioFocus() from android.media.AudioManager@1c78d923com.android.music.MediaPlaybackService$3@5af4e20
+</code></pre>
+
+<p>When I use this same audio source on my Samsung Galaxy S5, using a simplified (API 4.4.2 version of the app) the audio plays just fine. Furthermore, as expected, the same HLS source plays ok when started from Safari. I don't think there is too much to gain by looking into the HLS playback by the emulator.</p>
+
+<p>Thanks again pskink.</p>
+
+<p>Jim</p>

@@ -1,0 +1,238 @@
+<p>I would say that the problem is in the</p>
+
+<pre><code>criteria.setPowerRequirement(Criteria.POWER_LOW);
+</code></pre>
+
+<p>that maybe is just returning passive location provider. I would remove that, users now are aware that this kind of apps consume battery, so it wont be a forced criteria.</p>
+
+<p>Anyways, I have a more complex class to retrieve location. Let me explain.</p>
+
+<p>First, <a href="http://developer.android.com/guide/topics/location/strategies.html" rel="nofollow">from here</a> i use this great function to determine  whether one Location reading is better than the current Location.</p>
+
+<pre><code> /** 
+ * @param location
+ *            The new Location that you want to evaluate
+ * @param currentBestLocation
+ *            The current Location fix, to which you want to compare the new
+ *            one
+ */
+protected boolean isBetterLocation(Location location,
+        Location currentBestLocation) {
+    if (currentBestLocation == null) {
+        // A new location is always better than no location
+        return true;
+    }
+
+    // Check whether the new location fix is newer or older
+    long timeDelta = location.getTime() - currentBestLocation.getTime();
+    boolean isSignificantlyNewer = timeDelta &gt; TWO_MINUTES;
+    boolean isSignificantlyOlder = timeDelta &lt; -TWO_MINUTES;
+    boolean isNewer = timeDelta &gt; 0;
+
+    // If it's been more than two minutes since the current location, use
+    // the new location
+    // because the user has likely moved
+    if (isSignificantlyNewer) {
+        return true;
+        // If the new location is more than two minutes older, it must be
+        // worse
+    } else if (isSignificantlyOlder) {
+        return false;
+    }
+
+    // Check whether the new location fix is more or less accurate
+    int accuracyDelta = (int) (location.getAccuracy() - currentBestLocation
+            .getAccuracy());
+    boolean isLessAccurate = accuracyDelta &gt; 0;
+    boolean isMoreAccurate = accuracyDelta &lt; 0;
+    boolean isSignificantlyLessAccurate = accuracyDelta &gt; 200;
+
+    // Check if the old and new location are from the same provider
+    boolean isFromSameProvider = isSameProvider(location.getProvider(),
+            currentBestLocation.getProvider());
+
+    // Determine location quality using a combination of timeliness and
+    // accuracy
+    if (isMoreAccurate) {
+        return true;
+    } else if (isNewer &amp;&amp; !isLessAccurate) {
+        return true;
+    } else if (isNewer &amp;&amp; !isSignificantlyLessAccurate
+            &amp;&amp; isFromSameProvider) {
+        return true;
+    }
+    return false;
+}
+
+/** Checks whether two providers are the same */
+private boolean isSameProvider(String provider1, String provider2) {
+    if (provider1 == null) {
+        return provider2 == null;
+    }
+    return provider1.equals(provider2);
+}
+</code></pre>
+
+<p>Then, i create my own class that implements LocationListener (the activity, or a helper class, up to you). I just consider gps and network provider, but it is easily extensible</p>
+
+<pre><code>public class LocationObserver implements LocationListener {
+
+    LocationManager lm;
+    boolean gps_enabled = false;
+    boolean network_enabled = false, network_connected = false;
+
+
+    Context context;
+    Long timeout; 
+    int minTime;
+    int minDistance;
+    Handler handler = new Handler();
+    private Location currentLocation = null;
+
+    public LocationObserver(Context pContext, int minTime,
+            int minDistance, long timeout) {
+
+            this.context = pContext;
+        this.timeout = timeout; 
+        this.minDistance = minDistance;
+        this.minTime = minTime;
+    }
+</code></pre>
+
+<p>I create a method start where i consider which one is the best provider, or if i can listen to more than one</p>
+
+<pre><code>    public void start() {
+        if (lm == null)
+            lm = (LocationManager) context
+                    .getSystemService(Context.LOCATION_SERVICE);
+
+        // exceptions will be thrown if provider is not permitted.
+        try {
+            gps_enabled = lm.isProviderEnabled(LocationManager.GPS_PROVIDER);
+        } catch (Exception ex) {
+                //dont worry yet
+        }
+        try {
+            network_enabled = lm
+                    .isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+
+            ConnectivityManager cm = (ConnectivityManager) context
+                    .getSystemService(Context.CONNECTIVITY_SERVICE);
+
+            NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
+            network_connected = activeNetwork != null
+                    &amp;&amp; activeNetwork.isConnectedOrConnecting();
+        } catch (Exception ex) {
+              //dont wory yet
+        }
+
+            //now, lets see what happend,  
+
+             //don't start listeners if no provider is enabled
+        if (!gps_enabled &amp;&amp; !network_enabled) {
+
+            //nothing enabled, alert the user to enable any provide 
+                   //Settings.ACTION_LOCATION_SOURCE_SETTINGS;
+
+
+
+        }
+
+        else { // one provider is enabled, and the other one is not
+
+
+            if (gps_enabled) { // gps enabled, network disabled
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,
+                        minTime, minDistance, this);
+
+                //Consider asking the user to also enable network location ( Settings.ACTION_LOCATION_SOURCE_SETTINGS;=
+
+
+            } else { // gps disabled, network enabled
+
+
+                // check if actually there is a conection
+                if (network_connected) {
+                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,
+                            minTime, minDistance, this);
+
+                    //OK, Network is working, 
+                    //consider asking the user to enable also gps (Settings.ACTION_LOCATION_SOURCE_SETTINGS;)
+
+                } 
+
+                //if network is not enabled, having the network location enabled is useles
+
+                else  {
+
+                     //ask the user to connect to any network ( Settings.ACTION_WIRELESS_SETTINGS)
+                }
+
+            }
+        }
+
+
+            //retrieve the lastKnownLocation (we will see this function later) and call the callback to start using it
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+
+                Location l = getLastKnownLocation();
+                onLocationChanged(l);
+
+            }
+        }, timeout);
+
+    }
+</code></pre>
+
+<p>We made our own getLastKnownLocation(), that considers all the enabled providers, and returns the best location</p>
+
+<pre><code>    public Location getLastKnownLocation() {
+
+        Location net_loc = null, gps_loc = null;
+        if (gps_enabled)
+            gps_loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+        if (network_enabled)
+            net_loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+
+        // if there are both values use the best one
+        if (gps_loc != null &amp;&amp; net_loc != null) {
+            if (isBetterLocation(gps_loc, net_loc))
+                return gps_loc;
+            else
+                return net_loc;
+
+        }
+
+        else if (gps_loc != null) {
+            return gps_loc;
+
+        } else if (net_loc != null) {
+            return net_loc;
+
+        } else
+            return null;
+    }
+</code></pre>
+
+<p>And finally,  we write the     onLocationChanged callback, that the providers will call with any update. Since all the providers will call it, probably the upcoming location is worse than the one that we already have, so we also compare them</p>
+
+<pre><code>public synchronized void onLocationChanged(Location location) {
+
+        if (location == null || currentLocation == null
+                || isBetterLocation(location, currentLocation)) {
+            currentLocation = location;
+
+
+            //do whatever you need with the new location
+
+        }
+    }
+
+}
+</code></pre>
+
+<p>Also, what i use to do is to keep checking with a timer if a location come after the firstcall to getlastknowlocation. If an specific time passes, i check everything againg, to see what providers are enabled, or ask the user again to enable the disabled ones.</p>
+
+<p>Also, some people like to rely directly in the Play Services Location Apis, where you dont have to worry about providers and without needing to focus on the details of the underlying location technology. <a href="https://developer.android.com/google/play-services/location.html" rel="nofollow">https://developer.android.com/google/play-services/location.html</a></p>

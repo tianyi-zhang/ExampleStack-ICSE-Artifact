@@ -1,0 +1,414 @@
+<h1>Introduction</h1>
+
+<p>If a program <em>depends on</em> a library it usually means that it <em>uses</em> methods of the library. Removing a dependency is therefore not a simple task. You effectively want to take away code that is - at least formally - required by the program.</p>
+
+<p>There are three ways of removing dependencies:</p>
+
+<ol>
+<li>Adapt the <strong>source code</strong> to not depend on the library and compile it from scratch.</li>
+<li>Modify the <strong>bytecode</strong> to remove references to the library the project depends on.</li>
+<li>Manipulate the <strong>runtime</strong> to not require the dependency. The easiest way is to recreate the required classes and to put them into the jar file.</li>
+</ol>
+
+<p>None of these ways are really pretty. All of them can require a lot of work. None are guaranteed to work without side effects.</p>
+
+<h1>Solution</h1>
+
+<p>I will describe my solution by presenting the files and steps I used to solve the problem. To reproduce, you will need the following files (in a single directory):</p>
+
+<p><strong>lib/xxx-v.v.v.jar</strong>: The library jars (<em>httpclient</em> and dependencies, <strong>excluding</strong> commons-logging-1.1.3.jar)<br>
+<strong>jarjar-1.4.jar</strong>: Used for repackaging the jars<br>
+<strong>rules.txt</strong>: The jarjar rules</p>
+
+<pre><code>rule org.apache.http.** my.http.@1
+rule org.apache.commons.logging.** my.logging.@1
+</code></pre>
+
+<p><strong>build.xml</strong>: Ant build configuration</p>
+
+<pre><code>&lt;project name="MyProject" basedir="."&gt;
+    &lt;target name="logimpl"&gt;
+        &lt;javac srcdir="java/src" destdir="java/bin" target="1.5" /&gt;
+        &lt;jar jarfile="out/logimpl.jar" basedir="java/bin" /&gt;
+    &lt;/target&gt;
+    &lt;target name="merge"&gt;
+        &lt;zip destfile="httpclient-4.3.1.jar"&gt;
+            &lt;zipgroupfileset dir="out" includes="*.jar"/&gt;
+        &lt;/zip&gt;
+    &lt;/target&gt;
+&lt;/project&gt;
+</code></pre>
+
+<p><strong>java/src/Log.java</strong></p>
+
+<pre><code>package my.logging;
+
+public interface Log {
+    public boolean isDebugEnabled();
+    public void debug(Object message);
+    public void debug(Object message, Throwable t);
+
+    public boolean isInfoEnabled();
+    public void info(Object message);
+    public void info(Object message, Throwable t);
+
+    public boolean isWarnEnabled();
+    public void warn(Object message);
+    public void warn(Object message, Throwable t);
+
+    public boolean isErrorEnabled();
+    public void error(Object message);
+    public void error(Object message, Throwable t);
+
+    public boolean isFatalEnabled();
+    public void fatal(Object message);
+    public void fatal(Object message, Throwable t);
+}
+</code></pre>
+
+<p><strong>java/src/LogFactory.java</strong></p>
+
+<pre><code>package my.logging;
+
+public class LogFactory {
+
+    private static Log log;
+
+    public static Log getLog(Class&lt;?&gt; clazz) {
+        return getLog(clazz.getName());
+    }
+
+    public static Log getLog(String name) {
+        if(log == null) {
+            log = new Log() {
+                public boolean isWarnEnabled() { return false; }
+                public boolean isInfoEnabled() { return false; }
+                public boolean isFatalEnabled() { return false; }
+                public boolean isErrorEnabled() {return false; }
+                public boolean isDebugEnabled() { return false; }
+                public void warn(Object message, Throwable t) {}
+                public void warn(Object message) {}
+                public void info(Object message, Throwable t) {}
+                public void info(Object message) {}
+                public void fatal(Object message, Throwable t) {}
+                public void fatal(Object message) {}
+                public void error(Object message, Throwable t) {}
+                public void error(Object message) {}
+                public void debug(Object message, Throwable t) {}
+                public void debug(Object message) {}
+            };
+        }
+        return log;
+    }
+
+}
+</code></pre>
+
+<p><strong>do_everything.sh</strong></p>
+
+<pre class="lang-sh prettyprint-override"><code>#!/bin/sh
+
+# Repackage library
+mkdir -p out
+for jf in lib/*.jar; do
+    java -jar jarjar-1.4.jar process rules.txt $jf `echo $jf | sed 's/lib\//out\//'`
+done
+
+# Compile logging implementation
+mkdir -p java/bin
+ant logimpl
+
+# Merge jar files
+ant merge
+</code></pre>
+
+<p>That's it. Open up a console and execute</p>
+
+<pre><code>cd my_directory &amp;&amp; ./do_everything.sh
+</code></pre>
+
+<p>This will create a folder "out" containing single jar files and "httpclient-4.3.1.jar" which is the final, independent and working jar file. So, what did we just do?</p>
+
+<ol>
+<li>Repackaged <em>httpclient</em> (now in <code>my.http</code>)</li>
+<li>Modified the library to use <code>my.logging</code> instead of <code>org.apache.commons.logging</code></li>
+<li>Compiled required classes to be used by the library (<code>my.logging.Log</code> and <code>my.logging.LogFactory</code>).</li>
+<li>Merged the repackaged libraries and the compiled classes into a single jar file, httpclient-4.3.1.jar.</li>
+</ol>
+
+<p>Pretty simple, isn't it? Just read the shell script line by line to discover the single steps. To check whether all dependencies were removed you can run</p>
+
+<pre><code>java -jar jarjar-1.4.jar find class httpclient-4.3.1.jar commons-logging-1.1.3.jar
+</code></pre>
+
+<p>I tried the generated jar file with SE7 and Android 4.4, it worked in both cases (see below for remarks).</p>
+
+<h2>Class file version</h2>
+
+<p>Every class file has a <em>major version</em> and a <em>minor version</em> (both depend on the compiler). The Android SDK requires class files to have a major version less than 0x33 (so everything pre 1.7 / JDK 7). I added the <code>target="1.5"</code> attribute to the ant <code>javac</code> task so the generated class files have a major version of 0x31 and can therefore be included in your Android app.</p>
+
+<hr>
+
+<h1>Alternative (bytecode manipulation)</h1>
+
+<p>You're lucky. Logging is (almost always) a one-way operation. It barely causes side effects affecting the main program. That means that removing <em>commons-logging</em> should be possible as it won't affect the <em>functionality</em> of the program.</p>
+
+<p>I chose the second way, <em>bytecode manipulation</em>, which you suggested in your question. The concept is basically just this (A is <em>httpclient</em>, B is <em>commons-logging</em>):</p>
+
+<ol>
+<li>If the return type of a method of A is part of B, the return type will be changed to <code>java.lang.Object</code>.</li>
+<li>If any argument of a method of A has a type that is part of B, the argument type will be changed to <code>java.lang.Object</code>.</li>
+<li>Invocations of methods belonging to B are removed entirely. <code>pop</code> and constant instructions are inserted to repair the VM stack.</li>
+<li>Types belonging to B are removed from descriptors of methods called from A. This requires the target class (the class containing the called method) to be processed. All object types belonging to B will be replaced with <code>java.lang.Object</code>.</li>
+<li>Instructions that attempt to access fields of classes belonging to B are removed. <code>pop</code> and constant instructions are inserted to repair the VM stack.</li>
+<li>If a method tries to access a field of a type that belongs to B, the field signature referenced by the instruction is changed to <code>java.lang.Object</code>. This requires the target class (the class containing the accessed field) to be processed.</li>
+<li>Fields of a type contained in B but belonging to classes of A are modified so that their type is <code>java.lang.Object</code>.</li>
+</ol>
+
+<p>As you can see, the idea behind this is to replace all referenced classes with <code>java.lang.Object</code> and to remove all accesses to class members belonging to <em>commons-logging</em>.</p>
+
+<p>I don't know whether this is reliable and I did not test the library after applying the manipulator. But from what I saw (the disassembled class files and no VM errors while loading the class files) I am fairly sure the code works.</p>
+
+<p>I tried to document almost everything the program does. It uses the <a href="http://asm.ow2.org/" rel="nofollow">ASM Tree API</a> which provides rather simple access to the class file structure. And - to avoid unnecessary negative reviews - this is "quick 'n' dirty" code. I did not really test it a lot and I bet there are faster ways of bytecode manipulation. But this program seems to fulfill the OP's needs and that's all I wrote it for.</p>
+
+<pre><code>import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+
+
+public class DependencyFinder {
+
+   public static void main(String[] args) throws IOException {
+      if(args.length &lt; 2) return;
+
+      DependencyFinder df = new DependencyFinder();
+      df.analyze(new File(args[0]), new File(args[1]), "org.apache.http/.*", "org.apache.commons.logging..*");
+   }
+
+   @SuppressWarnings("unchecked")
+   public void analyze(File inputFile, File outputFile, String sClassRegex, String dpClassRegex) throws IOException {
+      JarFile inJar = new JarFile(inputFile);
+      JarOutputStream outJar = new JarOutputStream(new FileOutputStream(outputFile));
+
+      for(Enumeration&lt;JarEntry&gt; entries = inJar.entries(); entries.hasMoreElements();) {
+         JarEntry inEntry = entries.nextElement();
+         InputStream inStream = inJar.getInputStream(inEntry);
+
+         JarEntry outEntry = new JarEntry(inEntry.getName());
+         outEntry.setTime(inEntry.getTime());
+         outJar.putNextEntry(outEntry);
+         OutputStream outStream = outJar;
+
+         // Only process class files, copy all other resources
+         if(inEntry.getName().endsWith(".class")) {
+            // Initialize class reader and writer
+            ClassReader classReader = new ClassReader(inStream);
+            ClassWriter classWriter = new ClassWriter(0);
+            String className = classReader.getClassName();
+
+            // Check whether to process this class
+            if(className.matches(sClassRegex)) {
+               System.out.println("Processing " + className);
+               // Parse entire class
+               ClassNode classNode = new ClassNode(Opcodes.ASM4);
+               classReader.accept(classNode, 0);
+
+               // Check super class and interfaces
+               String superClassName = classNode.superName;
+               if(superClassName.matches(dpClassRegex)) {
+                  throw new RuntimeException(className + " extends " + superClassName);
+               }
+               for(String iface : (List&lt;String&gt;) classNode.interfaces) {
+                  if(iface.matches(dpClassRegex)) {
+                     throw new RuntimeException(className + " implements " + superClassName);         
+                  }
+               }
+
+               // Process methods
+               for(MethodNode method : (List&lt;MethodNode&gt;) classNode.methods) {
+                  Type methodDesc = Type.getMethodType(method.desc);
+                  boolean changed = false;
+                  // Change return type if necessary
+                  Type retType = methodDesc.getReturnType();
+                  if(retType.getClassName().matches(dpClassRegex)) {
+                     retType = Type.getObjectType("java/lang/Object");
+                     changed = true;
+                  }
+                  // Change argument types if necessary
+                  Type[] argTypes = methodDesc.getArgumentTypes();
+                  for(int i = 0; i &lt; argTypes.length; i++) {
+                     if(argTypes[i].getClassName().matches(dpClassRegex)) {
+                        argTypes[i] = Type.getObjectType("java/lang/Object");
+                        changed = true;
+                     }
+                  }
+                  if(changed) {
+                     // Update method descriptor
+                     System.out.print("Changing " + method.name + methodDesc);
+                     methodDesc = Type.getMethodType(retType, argTypes);
+                     method.desc = methodDesc.getDescriptor();
+                     System.out.println(" to " + methodDesc);
+                  }
+                  // Remove method invocations
+                  InsnList insns = method.instructions;
+                  for(int i = 0; i &lt; insns.size(); i++) {
+                     AbstractInsnNode insn = insns.get(i);
+                     // Ignore all other nodes
+                     if(insn instanceof MethodInsnNode) {
+                        MethodInsnNode mnode = (MethodInsnNode) insn;
+                        Type[] cArgTypes = Type.getArgumentTypes(mnode.desc);
+                        Type cRetType = Type.getReturnType(mnode.desc);
+
+                        if(mnode.owner.matches(dpClassRegex)) {
+                           // The method belongs to one of the classes we want to get rid of
+                           System.out.println("Removing method call " + mnode.owner + "." +
+                                 mnode.name + " in " + method.name);
+                           boolean isStatic = (mnode.getOpcode() == Opcodes.INVOKESTATIC);
+                           if(!isStatic) {
+                              // pop instance
+                              insns.insertBefore(insn, new InsnNode(Opcodes.POP));
+                           }
+                           for(int j = 0; j &lt; cArgTypes.length; j++) {
+                              // pop argument on stack
+                              insns.insertBefore(insn, new InsnNode(Opcodes.POP));
+                           }
+                           // Insert a constant value to repair the stack
+                           if(cRetType.getSort() != Type.VOID) {
+                              InsnNode valueInsn = getValueInstruction(cRetType);
+                              insns.insertBefore(insn, valueInsn);
+                           }
+                           // Remove the actual method call
+                           insns.remove(insn);
+                           // Go back one instruction to not skip the next one
+                           i--;
+                        } else {
+                           changed = false;
+                           if(cRetType.getClassName().matches(dpClassRegex)) {
+                              // Change return type
+                              cRetType = Type.getObjectType("java/lang/Object");
+                              changed = true;
+                           }
+                           for(int j = 0; j &lt; cArgTypes.length; j++) {
+                              if(cArgTypes[j].getClassName().matches(dpClassRegex)) {
+                                 // Change argument type
+                                 cArgTypes[j] = Type.getObjectType("java/lang/Object");
+                                 changed = true;
+                              }
+                           }
+                           if(changed) {
+                              // Update method invocation
+                              System.out.println("Patching method call " + mnode.owner + "." +
+                                    mnode.name + " in " + method.name);
+                              mnode.desc = Type.getMethodDescriptor(cRetType, cArgTypes);
+                           }
+                        }
+                     } else if(insn instanceof FieldInsnNode) {
+                        // Yeah I lied... we must not ignore all other instructions
+                        FieldInsnNode fnode = (FieldInsnNode) insn;
+                        Type fieldType = Type.getType(fnode.desc);
+                        if(fnode.owner.matches(dpClassRegex)) {
+                           System.out.println("Removing field access to " + fnode.owner + "." +
+                                 fnode.name + " in " + method.name);
+                           // Patch code
+                           switch(fnode.getOpcode()) {
+                           case Opcodes.PUTFIELD:
+                           case Opcodes.GETFIELD:
+                              // Pop instance
+                              insns.insertBefore(insn, new InsnNode(Opcodes.POP));
+                              if(fnode.getOpcode() == Opcodes.PUTFIELD) break;
+                           case Opcodes.GETSTATIC:
+                              // Repair stack
+                              insns.insertBefore(insn, getValueInstruction(fieldType));
+                              break;
+                           default:
+                              throw new RuntimeException("Invalid opcode");
+                           }
+                           // Remove instruction
+                           insns.remove(fnode);
+                           i--;
+                        } else {
+                           if(fieldType.getClassName().matches(dpClassRegex)) {
+                              // Change field type
+                              System.out.println("Patching field access to " + fnode.owner +
+                                    "." + fnode.name + " in " + method.name);
+                              fieldType = Type.getObjectType("java/lang/Object");
+                           }
+                           // Update field type
+                           fnode.desc = fieldType.getDescriptor();
+                        }
+                     }
+                  }
+               }
+               // Process fields
+               for(FieldNode field : (List&lt;FieldNode&gt;) classNode.fields) {
+                  Type fieldType = Type.getType(field.desc);
+                  if(fieldType.getClassName().matches(dpClassRegex)) {
+                     System.out.print("Changing " + fieldType.getClassName() + " " + field.name);
+                     fieldType = Type.getObjectType("java/lang/Object");
+                     field.desc = fieldType.getDescriptor();
+                     System.out.println(" to " + fieldType.getClassName());
+                  }
+               }
+               // Class processed
+               classNode.accept(classWriter);
+            } else {
+               // Nothing changed
+               classReader.accept(classWriter, 0);
+            }
+            // Write class to JAR entry
+            byte[] bClass = classWriter.toByteArray();
+            outStream.write(bClass);
+         } else {
+            // Copy file
+            byte[] buffer = new byte[1024 * 64];
+            int read;
+            while((read = inStream.read(buffer)) != -1) {
+               outStream.write(buffer, 0, read);
+            }
+         }
+
+         outJar.closeEntry();
+      }
+      outJar.flush();
+      outJar.close();
+      inJar.close();
+   }
+
+   InsnNode getValueInstruction(Type type) {
+      switch(type.getSort()) {
+      case Type.INT:
+      case Type.BOOLEAN:
+         return new InsnNode(Opcodes.ICONST_0);
+      case Type.LONG:
+         return new InsnNode(Opcodes.LCONST_0);
+      case Type.OBJECT:
+      case Type.ARRAY:
+         return new InsnNode(Opcodes.ACONST_NULL);
+      default:
+         // I am lazy, I did not implement all types
+         throw new RuntimeException("Type not implemented: " + type);
+      }
+   }
+
+}
+</code></pre>

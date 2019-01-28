@@ -1,0 +1,255 @@
+<p>Here is the complete code that load the images in background and stores it to sdcard.if the image is already there then it wont make request to server.
+package com.packsmooch.utils;</p>
+
+<pre><code>import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.Stack;
+
+
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.widget.ImageView;
+
+public class Albumartloader 
+{
+    private HashMap&lt;String, Bitmap&gt; cache = new HashMap&lt;String, Bitmap&gt;();
+
+    private File cacheDir;
+    private Bitmap  useThisBitmap;
+
+    public Albumartloader(Context context) 
+    {   
+        photoLoaderThread.setPriority(Thread.NORM_PRIORITY - 1);
+        if (android.os.Environment.getExternalStorageState().equals(android.os.Environment.MEDIA_MOUNTED))
+            cacheDir = new File(android.os.Environment.getExternalStorageDirectory(),"Streaming_Service/AlbumArt/");
+        else
+            cacheDir = context.getCacheDir();
+
+        if (!cacheDir.exists())
+            cacheDir.mkdirs();
+    }
+
+    public void DisplayImage(String url, Activity activity, ImageView imageView) 
+    {
+         if(!url.equals(""))
+         {
+             if (cache.containsKey(url))
+             {
+                 imageView.setImageBitmap(cache.get(url));
+             }
+             else
+             {
+                queuePhoto(url, activity, imageView);
+            }
+         }
+    }
+
+    private void queuePhoto(String url, Activity activity, ImageView imageView) 
+    {
+        photosQueue.Clean(imageView);
+        PhotoToLoad p = new PhotoToLoad(url, imageView);
+
+        synchronized (photosQueue.photosToLoad) 
+        {
+            photosQueue.photosToLoad.push(p);
+            photosQueue.photosToLoad.notifyAll();
+        }
+
+        // start thread if it's not started yet
+        if (photoLoaderThread.getState() == Thread.State.NEW)
+            photoLoaderThread.start();
+    }
+
+    public Bitmap getBitmap(String url) 
+    {
+        try
+        {
+            // I identify images by hashcode. Not a perfect solution, good for the
+            // demo.
+            String filename = String.valueOf(url.hashCode());
+            File f = new File(cacheDir, filename);
+
+            // from SD cache
+            Bitmap b = decodeFile(f);
+            if (b != null)
+                return b;
+
+            // from web
+            try {
+                Bitmap bitmap = null;       
+                if(!url.equals("")){
+                InputStream is = new URL(url).openStream();
+                OutputStream os = new FileOutputStream(f);
+                Utils.CopyStream(is, os);
+                os.close();
+                bitmap = decodeFile(f);
+                }
+                return bitmap;
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                return null;
+            }
+        }
+        catch(Exception e)
+        {
+            return null;    
+        }
+    }
+
+    /*decodes image and scales it to reduce memory consumption
+     * @param file path
+     * @throws FileNotFoundException
+     * @return bitmap
+     * */
+    private Bitmap decodeFile(File f){
+        Bitmap b = null;
+        try {
+
+            useThisBitmap = null;
+            //Decode image size
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            final int IMAGE_MAX_SIZE =50;
+            BitmapFactory.decodeStream(new FileInputStream(f), null, o);
+            int scale = 2;
+            if (o.outHeight &gt; IMAGE_MAX_SIZE || o.outWidth &gt; IMAGE_MAX_SIZE) {
+                scale = 2 ^ (int) Math.ceil(Math.log(IMAGE_MAX_SIZE / (double) Math.max(o.outHeight, o.outWidth)) / Math.log(0.5));
+            }
+
+            //Decode with inSampleSize
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+
+            o2.inSampleSize = scale;
+            b = BitmapFactory.decodeStream(new FileInputStream(f), null, o2);
+            useThisBitmap = b;
+
+        } catch (FileNotFoundException e) {
+
+        }
+        catch(Exception e)
+        {
+
+        }
+        finally{
+            System.gc();
+        }
+        return useThisBitmap;
+    }
+
+
+    // Task for the queue
+    private class PhotoToLoad 
+    {
+        public String url;
+        public ImageView imageView;
+
+        public PhotoToLoad(String u, ImageView i) {
+            url = u;
+            imageView = i;
+        }
+    }
+
+    PhotosQueue photosQueue = new PhotosQueue();
+
+    public void stopThread() 
+    {
+        photoLoaderThread.interrupt();
+    }
+
+    // stores list of photos to download
+    class PhotosQueue {
+        private Stack&lt;PhotoToLoad&gt; photosToLoad = new Stack&lt;PhotoToLoad&gt;();
+
+        // removes all instances of this ImageView
+        public void Clean(ImageView image) {
+            for (int j = 0; j &lt; photosToLoad.size();) {
+                if (photosToLoad.get(j).imageView == image)
+                    photosToLoad.remove(j);
+                else
+                    ++j;
+            }
+        }
+    }
+
+    class PhotosLoader extends Thread {
+        public void run() {
+            try {
+                while (true) {
+                    // thread waits until there are any images to load in the
+                    // queue
+                    if (photosQueue.photosToLoad.size() == 0)
+                        synchronized (photosQueue.photosToLoad) {
+                            photosQueue.photosToLoad.wait();
+                        }
+                    if (photosQueue.photosToLoad.size() != 0) {
+                        PhotoToLoad photoToLoad;
+                        synchronized (photosQueue.photosToLoad) {
+                            photoToLoad = photosQueue.photosToLoad.pop();
+                        }
+                        Bitmap bmp = getBitmap(photoToLoad.url);
+                        cache.put(photoToLoad.url, bmp);
+                        if (((String) photoToLoad.imageView.getTag())
+                                .equals(photoToLoad.url)) {
+                            BitmapDisplayer bd = new BitmapDisplayer(bmp,
+                                    photoToLoad.imageView);
+                            Activity a = (Activity) photoToLoad.imageView
+                                    .getContext();
+                            a.runOnUiThread(bd);
+                        }
+                    }
+                    if (Thread.interrupted())
+                        break;
+                }
+            } catch (InterruptedException e) {
+                // allow thread to exit
+            }
+        }
+    }
+
+    PhotosLoader photoLoaderThread = new PhotosLoader();
+
+    // Used to display bitmap in the UI thread
+    class BitmapDisplayer implements Runnable {
+        Bitmap bitmap;
+        ImageView imageView;
+
+        public BitmapDisplayer(Bitmap b, ImageView i) {
+            bitmap = b;
+            imageView = i;
+        }
+
+        public void run() 
+        {
+            if (bitmap != null)
+                imageView.setImageBitmap(bitmap);
+        }
+    }
+
+    public void clearCache() 
+    {
+        // clear memory cache
+        cache.clear();
+        // clear SD cache
+        File[] files = cacheDir.listFiles();
+        for (File f : files)
+            f.delete();
+    }
+}
+</code></pre>
+
+<p>Here is the usage:</p>
+
+<pre><code>Albumartloader  albumartloader=new Albumartloader(this);
+imageview.settag(urlofimage);
+albumartloader.DisplayImage(url of image,activity context,imageview);
+</code></pre>
+
+<p>Best usage:-you can use it for listview when you need to display number of images from server and dont want to wait for all images to download.</p>

@@ -1,0 +1,142 @@
+<p>Since nobody posted an answer to my question I bring here another solution which I used to accomplish a somewhat similar task.</p>
+
+<p>I figured I could use an AsyncTask to download file and when the download reached the 10% of total start the MediaPlayer using interface callbacks. And along the update the MediaPlayer whenever another 20% has been downloaded.</p>
+
+<p>Here is the source for the said AsyncTask: <a href="https://gist.github.com/2hamed/63a31bd55fc6514d12b5" rel="nofollow">https://gist.github.com/2hamed/63a31bd55fc6514d12b5</a></p>
+
+<pre><code>public class DownloadAndPlayAsyncTask extends AsyncTask&lt;String, Integer, Integer&gt; {
+    private static final String TAG = "DownloadAndPlayAsync";
+    DownloadCallback downloadCallback;
+    File tempFile, fullFile;
+
+    private void createFiles(String url) {
+        tempFile = Util.getTempFilePath(url);
+        fullFile = Util.getFilePath(url);
+    }
+
+    public void setOnDownloadCallback(DownloadCallback callback) {
+        downloadCallback = callback;
+    }
+
+    @Override
+    protected Integer doInBackground(String... strings) {
+
+        if (Util.isFileDownloaded(strings[0])) {
+            createFiles(strings[0]);
+            return 1;
+        }
+        InputStream input = null;
+        OutputStream output = null;
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(strings[0]);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.connect();
+
+            // expect HTTP 200 OK, so we don't mistakenly save error report
+            // instead of the file
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                Log.d(TAG, "Server returned HTTP " + connection.getResponseCode()
+                        + " " + connection.getResponseMessage());
+                return -1;
+            }
+
+            // this will be useful to display download percentage
+            // might be -1: server did not report the length
+            int fileLength = connection.getContentLength();
+            createFiles(strings[0]);
+            // download the file
+            input = connection.getInputStream();
+            output = new FileOutputStream(tempFile);
+
+            byte data[] = new byte[4096];
+            long total = 0;
+            int count;
+            while ((count = input.read(data)) != -1) {
+                // allow canceling with back button
+                if (isCancelled()) {
+                    input.close();
+                    return null;
+                }
+                total += count;
+                // publishing the progress....
+                if (fileLength &gt; 0) // only if total length is known
+                    publishProgress((int) (total * 100 / fileLength));
+                output.write(data, 0, count);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return -1;
+        } finally {
+            try {
+                if (output != null)
+                    output.close();
+                if (input != null)
+                    input.close();
+            } catch (IOException ignored) {
+            }
+
+            if (connection != null)
+                connection.disconnect();
+        }
+        return 0;
+    }
+
+    @Override
+    protected void onPreExecute() {
+        super.onPreExecute();
+    }
+
+    @Override
+    protected void onPostExecute(Integer result) {
+        super.onPostExecute(result);
+        if (result == 0) {
+            try {
+                Util.copy(tempFile, fullFile);
+                tempFile.delete();
+                if (downloadCallback != null) {
+                    downloadCallback.onFinished(fullFile.getAbsolutePath());
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else if (result == 1) {
+            if (downloadCallback != null) {
+                downloadCallback.onFinished(fullFile.getAbsolutePath());
+            }
+        } else {
+            if (downloadCallback != null) {
+                downloadCallback.onFailed();
+            }
+        }
+    }
+
+    @Override
+    protected void onProgressUpdate(Integer... values) {
+        super.onProgressUpdate(values);
+        if (downloadCallback != null) {
+            downloadCallback.onProgressUpdate(values[0], tempFile.getAbsolutePath());
+        }
+    }
+
+    @Override
+    protected void onCancelled(Integer result) {
+        super.onCancelled(result);
+    }
+
+    @Override
+    protected void onCancelled() {
+        super.onCancelled();
+    }
+
+    public interface DownloadCallback {
+        void onProgressUpdate(int progress, String filePath);
+
+        void onFinished(String fullFile);
+
+        void onFailed();
+    }
+}
+</code></pre>
+
+<p>if you notice there is the <code>DownloadCallback</code> at the end of the code.</p>

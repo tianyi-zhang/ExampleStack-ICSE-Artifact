@@ -1,0 +1,243 @@
+<p>Since all third party libraries had issues, I've decided to gather what I can find (mostly from <a href="https://blog.stylingandroid.com/recyclerview-fastscroll-part-2/#comment-67201"><strong>here</strong></a>), fix everything and publish my own POC of the fast-scroller of the RecyclerView :</p>
+
+<p><a href="https://github.com/AndroidDeveloperLB/LollipopContactsRecyclerViewFastScroller">https://github.com/AndroidDeveloperLB/LollipopContactsRecyclerViewFastScroller</a></p>
+
+<p>usage:</p>
+
+<ol>
+<li><p>make a RecyclerView.Adapter that implements BubbleTextGetter, which given a position in the data will return the text to show in the bubble-popup.</p></li>
+<li><p>position the FastScroller inside the layout that container the RecyclerView (probably at the right area).</p></li>
+<li><p>Customize the FastScroller FastScroller </p></li>
+</ol>
+
+<p>Some disadvantages:</p>
+
+<ol>
+<li>doesn't support orientation change, but it's probably easy to fix.</li>
+<li>doesn't support other layoutManagers. Only LinearLayoutManager </li>
+<li>Needs API 11 and above.</li>
+</ol>
+
+<p>Code:</p>
+
+<p><strong>BubbleTextGetter</strong></p>
+
+<pre><code>public interface BubbleTextGetter
+  {
+  String getTextToShowInBubble(int pos);
+  }
+</code></pre>
+
+<p><strong>recycler_view_fast_scroller__fast_scroller.xml</strong></p>
+
+<pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;merge xmlns:android="http://schemas.android.com/apk/res/android"
+       xmlns:tools="http://schemas.android.com/tools"
+       android:layout_width="wrap_content"
+       android:layout_height="match_parent"&gt;
+
+  &lt;TextView
+    android:id="@+id/fastscroller_bubble"
+    android:layout_gravity="right|end"
+    android:gravity="center"
+    android:textSize="48sp" tools:text="A"
+    android:layout_width="wrap_content"
+    android:textColor="#FFffffff"
+    android:layout_height="wrap_content"
+    android:background="@drawable/recycler_view_fast_scroller__bubble"
+    android:visibility="visible"/&gt;
+
+  &lt;ImageView
+    android:id="@+id/fastscroller_handle"
+    android:layout_width="wrap_content"
+    android:layout_marginRight="8dp"
+    android:layout_marginLeft="8dp"
+    android:layout_height="wrap_content"
+    android:src="@drawable/recycler_view_fast_scroller__handle"/&gt;
+
+&lt;/merge&gt;
+</code></pre>
+
+<p><strong>MainActivity</strong></p>
+
+<pre><code>...
+fastScroller=(FastScroller)findViewById(R.id.fastscroller);
+fastScroller.setRecyclerView(recyclerView);
+</code></pre>
+
+<p><strong>FastScroller</strong> </p>
+
+<pre><code>public class FastScroller extends LinearLayout
+  {
+  private static final int BUBBLE_ANIMATION_DURATION=100;
+  private static final int TRACK_SNAP_RANGE=5;
+
+  private TextView bubble;
+  private View handle;
+  private RecyclerView recyclerView;
+  private final ScrollListener scrollListener=new ScrollListener();
+  private int height;
+
+  private ObjectAnimator currentAnimator=null;
+
+  public FastScroller(final Context context,final AttributeSet attrs,final int defStyleAttr)
+    {
+    super(context,attrs,defStyleAttr);
+    initialise(context);
+    }
+
+  public FastScroller(final Context context)
+    {
+    super(context);
+    initialise(context);
+    }
+
+  public FastScroller(final Context context,final AttributeSet attrs)
+    {
+    super(context,attrs);
+    initialise(context);
+    }
+
+  private void initialise(Context context)
+    {
+    setOrientation(HORIZONTAL);
+    setClipChildren(false);
+    LayoutInflater inflater=LayoutInflater.from(context);
+    inflater.inflate(R.layout.recycler_view_fast_scroller__fast_scroller,this,true);
+    bubble=(TextView)findViewById(R.id.fastscroller_bubble);
+    handle=findViewById(R.id.fastscroller_handle);
+    bubble.setVisibility(INVISIBLE);
+    }
+
+  @Override
+  protected void onSizeChanged(int w,int h,int oldw,int oldh)
+    {
+    super.onSizeChanged(w,h,oldw,oldh);
+    height=h;
+    }
+
+  @Override
+  public boolean onTouchEvent(@NonNull MotionEvent event)
+    {
+    final int action=event.getAction();
+    switch(action)
+      {
+      case MotionEvent.ACTION_DOWN:
+        if(event.getX()&lt;handle.getX())
+          return false;
+        if(currentAnimator!=null)
+          currentAnimator.cancel();
+        if(bubble.getVisibility()==INVISIBLE)
+          showBubble();
+        handle.setSelected(true);
+      case MotionEvent.ACTION_MOVE:
+        setPosition(event.getY());
+        setRecyclerViewPosition(event.getY());
+        return true;
+      case MotionEvent.ACTION_UP:
+      case MotionEvent.ACTION_CANCEL:
+        handle.setSelected(false);
+        hideBubble();
+        return true;
+      }
+    return super.onTouchEvent(event);
+    }
+
+  public void setRecyclerView(RecyclerView recyclerView)
+    {
+    this.recyclerView=recyclerView;
+    recyclerView.setOnScrollListener(scrollListener);
+    }
+
+  private void setRecyclerViewPosition(float y)
+    {
+    if(recyclerView!=null)
+      {
+      int itemCount=recyclerView.getAdapter().getItemCount();
+      float proportion;
+      if(handle.getY()==0)
+        proportion=0f;
+      else if(handle.getY()+handle.getHeight()&gt;=height-TRACK_SNAP_RANGE)
+        proportion=1f;
+      else
+        proportion=y/(float)height;
+      int targetPos=getValueInRange(0,itemCount-1,(int)(proportion*(float)itemCount));
+      recyclerView.scrollToPosition(targetPos);
+      String bubbleText=((BubbleTextGetter)recyclerView.getAdapter()).getTextToShowInBubble(targetPos);
+      bubble.setText(bubbleText);
+      }
+    }
+
+  private int getValueInRange(int min,int max,int value)
+    {
+    int minimum=Math.max(min,value);
+    return Math.min(minimum,max);
+    }
+
+  private void setPosition(float y)
+    {
+    int bubbleHeight=bubble.getHeight();
+    int handleHeight=handle.getHeight();
+    handle.setY(getValueInRange(0,height-handleHeight,(int)(y-handleHeight/2)));
+    bubble.setY(getValueInRange(0,height-bubbleHeight-handleHeight/2,(int)(y-bubbleHeight)));
+    }
+
+  private void showBubble()
+    {
+    AnimatorSet animatorSet=new AnimatorSet();
+    bubble.setVisibility(VISIBLE);
+    if(currentAnimator!=null)
+      currentAnimator.cancel();
+    currentAnimator=ObjectAnimator.ofFloat(bubble,"alpha",0f,1f).setDuration(BUBBLE_ANIMATION_DURATION);
+    currentAnimator.start();
+    }
+
+  private void hideBubble()
+    {
+    if(currentAnimator!=null)
+      currentAnimator.cancel();
+    currentAnimator=ObjectAnimator.ofFloat(bubble,"alpha",1f,0f).setDuration(BUBBLE_ANIMATION_DURATION);
+    currentAnimator.addListener(new AnimatorListenerAdapter()
+    {
+    @Override
+    public void onAnimationEnd(Animator animation)
+      {
+      super.onAnimationEnd(animation);
+      bubble.setVisibility(INVISIBLE);
+      currentAnimator=null;
+      }
+
+    @Override
+    public void onAnimationCancel(Animator animation)
+      {
+      super.onAnimationCancel(animation);
+      bubble.setVisibility(INVISIBLE);
+      currentAnimator=null;
+      }
+    });
+    currentAnimator.start();
+    }
+
+  private class ScrollListener extends OnScrollListener
+    {
+    @Override
+    public void onScrolled(RecyclerView rv,int dx,int dy)
+      {
+      View firstVisibleView=recyclerView.getChildAt(0);
+      int firstVisiblePosition=recyclerView.getChildPosition(firstVisibleView);
+      int visibleRange=recyclerView.getChildCount();
+      int lastVisiblePosition=firstVisiblePosition+visibleRange;
+      int itemCount=recyclerView.getAdapter().getItemCount();
+      int position;
+      if(firstVisiblePosition==0)
+        position=0;
+      else if(lastVisiblePosition==itemCount-1)
+        position=itemCount-1;
+      else
+        position=firstVisiblePosition;
+      float proportion=(float)position/(float)itemCount;
+      setPosition(height*proportion);
+      }
+    }
+  }
+</code></pre>

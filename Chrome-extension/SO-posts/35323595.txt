@@ -1,0 +1,91 @@
+<p>That was quite a task :-)</p>
+
+<p>It is handled by the completer you are using. The <code>complete()</code> method of the completer has to use for the search only what comes after the last blank.</p>
+
+<p>If you look for example at the <code>FileNameCompleter</code> of the library: this is not done at all, so you will find no completion, because the completer searches for <code>&lt;input1&gt; &lt;input2&gt;</code> and not only for <code>&lt;input2&gt;</code> :-)</p>
+
+<p>You will have to do your own implementation of a completer that is able to find input2.</p>
+
+<p>Additionally the <code>CompletionHandler</code> has to append what you found to what you already typed.</p>
+
+<p>Here is a basic implementation changing the default <code>FileNameCompleter</code>:</p>
+
+<pre><code>  protected int matchFiles(final String buffer, final String translated, final File[] files,
+         final List&lt;CharSequence&gt; candidates) {
+      // THIS IS NEW
+      String[] allWords = translated.split(" ");
+      String lastWord = allWords[allWords.length - 1];
+      // the lastWord is used when searching the files now
+      // ---
+
+      if (files == null) {
+         return -1;
+      }
+
+      int matches = 0;
+
+      // first pass: just count the matches
+      for (File file : files) {
+         if (file.getAbsolutePath().startsWith(lastWord)) {
+            matches++;
+         }
+      }
+      for (File file : files) {
+         if (file.getAbsolutePath().startsWith(lastWord)) {
+            CharSequence name = file.getName() + (matches == 1 &amp;&amp; file.isDirectory() ? this.separator() : " ");
+            candidates.add(this.render(file, name).toString());
+         }
+      }
+
+      final int index = buffer.lastIndexOf(this.separator());
+
+      return index + this.separator().length();
+   }
+</code></pre>
+
+<p>And here the <code>complete()</code>-Method of the <code>CompletionHandler</code> changing the default <code>CandidateListCompletionHandler</code>:</p>
+
+<pre><code>  @Override
+   public boolean complete(final ConsoleReader reader, final List&lt;CharSequence&gt; candidates, final int pos)
+         throws IOException {
+      CursorBuffer buf = reader.getCursorBuffer();
+
+      // THIS IS NEW
+      String[] allWords = buf.toString().split(" ");
+      String firstWords = "";
+      if (allWords.length &gt; 1) {
+         for (int i = 0; i &lt; allWords.length - 1; i++) {
+            firstWords += allWords[i] + " ";
+         }
+      }
+      //-----
+
+      // if there is only one completion, then fill in the buffer
+      if (candidates.size() == 1) {
+         String value = Ansi.stripAnsi(candidates.get(0).toString());
+
+         if (buf.cursor == buf.buffer.length() &amp;&amp; this.printSpaceAfterFullCompletion &amp;&amp; !value.endsWith(" ")) {
+            value += " ";
+         }
+
+         // fail if the only candidate is the same as the current buffer
+         if (value.equals(buf.toString())) {
+            return false;
+         }
+
+         CandidateListCompletionHandler.setBuffer(reader, firstWords + " " + value, pos);
+
+         return true;
+      } else if (candidates.size() &gt; 1) {
+         String value = this.getUnambiguousCompletions(candidates);
+         CandidateListCompletionHandler.setBuffer(reader, value, pos);
+      }
+
+      CandidateListCompletionHandler.printCandidates(reader, candidates);
+
+      // redraw the current console buffer
+      reader.drawLine();
+
+      return true;
+   }
+</code></pre>

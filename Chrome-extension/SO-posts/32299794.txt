@@ -1,0 +1,107 @@
+<p>So after about a day trying to figure this out, I finally managed to solve this problem.</p>
+
+<p><strong>After you have done all these steps, you should end up with:</strong></p>
+
+<ul>
+<li>An outer recyclerview which is not hindered by the scroll events of an inner recyclerview - scrolling in the inner recyclerview is disabled. This is useful in the scenario when you want to use the collapsing toolbar approach with both the outer and inner recyclerview.</li>
+<li>The elements in the inner recyclerview can be clicked on (what use is an inner recyclerview showing a list of items if they cannot be clicked upon).</li>
+</ul>
+
+<p>Firstly, I watched a few videos on the topic of touch in android: <a href="https://www.youtube.com/watch?v=SYoN-OvdZ3M&amp;list=PLonJJ3BVjZW6CtAMbJz1XD8ELUs1KXaTD&amp;index=19" rel="nofollow">https://www.youtube.com/watch?v=SYoN-OvdZ3M&amp;list=PLonJJ3BVjZW6CtAMbJz1XD8ELUs1KXaTD&amp;index=19</a></p>
+
+<p>I got the video link from  here: <a href="http://stackoverflow.com/questions/9586032/android-difference-between-onintercepttouchevent-and-dispatchtouchevent">Android: Difference between onInterceptTouchEvent and dispatchTouchEvent?</a></p>
+
+<p>Now, I had to customise my onDispatchTouchEvent:</p>
+
+<pre><code>@Override
+public boolean dispatchTouchEvent(MotionEvent ev) {
+    final int action = ev.getAction();
+    final int actionMasked = action &amp; MotionEvent.ACTION_MASK;
+    Log.e("actionmasked", "" + actionMasked);
+    switch (actionMasked) {
+        case MotionEvent.ACTION_DOWN:
+            return super.dispatchTouchEvent(ev);
+        case MotionEvent.ACTION_MOVE:
+            return true;
+        case MotionEvent.ACTION_CANCEL:
+            return true;
+        case MotionEvent.ACTION_UP:
+            return super.dispatchTouchEvent(ev);
+        default:
+            return super.dispatchTouchEvent(ev);
+    }
+</code></pre>
+
+<p>I have called super.dispatchTouchEvent(ev) in both DOWN and UP and the default cases as we want the child of the inner recyclerview to handle those events. The event must go from the viewgroup which is this custom recyclerview (ScrollThroughRecyclerView) to the views within the recyclerview.</p>
+
+<p>For MOVE and CANCEL, we return true to say that the inner recyclerview has handled those events and the event can return back to the parent which will allow the outer recyclerview to scroll properly. This will not hinder the app behavior of the collapsing toolbar.</p>
+
+<p>Now we need a custom onInterceptTouchEvent method:</p>
+
+<pre><code>@Override
+public boolean onInterceptTouchEvent(MotionEvent e) {
+    final int action = e.getAction();
+    final int actionMasked = action &amp; MotionEvent.ACTION_MASK;
+    if (actionMasked == MotionEvent.ACTION_DOWN) {
+        return false; //intercepted by the viewgroup and passed down to child
+    } else if (actionMasked == MotionEvent.ACTION_UP) {
+        return false; //intercepted by the viewgroup and passed down to child
+    }
+    return super.onInterceptTouchEvent(e);
+}
+</code></pre>
+
+<p>For both UP and DOWN, we return false as we want the child inside the inner recyclerview to handle those events (from UP and DOWN, we can determine which item in the recyclerview was actually clicked on).</p>
+
+<p>For everything else, we use the default behavior so I have called: super.onInterceptTouchEvent(e)</p>
+
+<p>Now in the recyclerview adapter:</p>
+
+<pre><code>@Override
+public void onBindViewHolder(RecyclerView.ViewHolder holder, final int position) {
+    if (holder instanceof PostViewHolder) {
+        ((PostViewHolder) holder).rl.setOnTouchListener(onTouchListener);
+    }
+</code></pre>
+
+<p>Set a touchlistener onto the view you are listening for touch event on in your recyclerview. For me, since I'm listening to clicks on the entire line of the recyclerview, I set the touch listener on rl, which stands for relativeLayout of the line that are displayed in the recyclerview.</p>
+
+<p>The touchlistener will not receive the DOWN and UP motionevent that the viewgroup passed through in onInterceptTouchEvent method.</p>
+
+<p>Since we have only got a DOWN and an UP motionevent, to detect clicks can be a bit more tedious than the general way of saying setOnClickListener. Furthermore, since you are using Touch, the Touch actually overrides the onClickListener and nothing is called on onClickListener. For detecting the clicks on the item in the recyclerview through onTouchListener, you will need this method:</p>
+
+<pre><code>View.OnTouchListener onTouchListener = new View.OnTouchListener() {
+    private float startX;
+    private float startY;
+    private static final int CLICK_ACTION_THRESHHOLD = 5;
+    @Override
+    public boolean onTouch(View v, MotionEvent event) {
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                startX = event.getX();
+                startY = event.getY();
+                break;
+            case MotionEvent.ACTION_UP: {
+                float endX = event.getX();
+                float endY = event.getY();
+                if (isAClick(startX, endX, startY, endY)) {
+                    Log.e("UserClick", "user has clicked");// WE HAVE A CLICK!!
+                }
+                break;
+            }
+            default:
+                return true;
+        }
+        return true;
+    }
+
+    private boolean isAClick(float startX, float endX, float startY, float endY) {
+        float differenceX = Math.abs(startX - endX);
+        float differenceY = Math.abs(startY - endY);
+        if (differenceX &gt; CLICK_ACTION_THRESHHOLD || differenceY &gt; CLICK_ACTION_THRESHHOLD) {
+            return false;
+        }
+        return true;
+    }
+};
+</code></pre>

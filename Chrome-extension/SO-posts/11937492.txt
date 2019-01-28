@@ -1,0 +1,230 @@
+<p>Please see my static getLogger() implementation (use same "sun.*" magic on JDK 7 as default java Logger doit)</p>
+
+<ul>
+<li><p>note static logging methods (with static import) without ugly log property...</p>
+
+<p>import static my.pakg.Logger.*;</p></li>
+</ul>
+
+<p>And their speed is equivalent to native Java implementation (checked with 1 million of log traces)</p>
+
+<pre><code>package my.pkg;
+
+import java.text.MessageFormat;
+import java.util.Arrays;
+import java.util.IllegalFormatException;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+
+import sun.misc.JavaLangAccess;
+import sun.misc.SharedSecrets;
+
+
+public class Logger {
+static final int CLASS_NAME = 0;
+static final int METHOD_NAME = 1;
+
+// Private method to infer the caller's class and method names
+protected static String[] getClassName() {
+    JavaLangAccess access = SharedSecrets.getJavaLangAccess();
+    Throwable throwable = new Throwable();
+    int depth = access.getStackTraceDepth(throwable);
+
+    boolean lookingForLogger = true;
+    for (int i = 0; i &lt; depth; i++) {
+        // Calling getStackTraceElement directly prevents the VM
+        // from paying the cost of building the entire stack frame.
+        StackTraceElement frame = access.getStackTraceElement(throwable, i);
+        String cname = frame.getClassName();
+        boolean isLoggerImpl = isLoggerImplFrame(cname);
+        if (lookingForLogger) {
+            // Skip all frames until we have found the first logger frame.
+            if (isLoggerImpl) {
+                lookingForLogger = false;
+            }
+        } else {
+            if (!isLoggerImpl) {
+                // skip reflection call
+                if (!cname.startsWith("java.lang.reflect.") &amp;&amp; !cname.startsWith("sun.reflect.")) {
+                    // We've found the relevant frame.
+                    return new String[] {cname, frame.getMethodName()};
+                }
+            }
+        }
+    }
+    return new String[] {};
+    // We haven't found a suitable frame, so just punt.  This is
+    // OK as we are only committed to making a "best effort" here.
+}
+
+protected static String[] getClassNameJDK5() {
+    // Get the stack trace.
+    StackTraceElement stack[] = (new Throwable()).getStackTrace();
+    // First, search back to a method in the Logger class.
+    int ix = 0;
+    while (ix &lt; stack.length) {
+        StackTraceElement frame = stack[ix];
+        String cname = frame.getClassName();
+        if (isLoggerImplFrame(cname)) {
+            break;
+        }
+        ix++;
+    }
+    // Now search for the first frame before the "Logger" class.
+    while (ix &lt; stack.length) {
+        StackTraceElement frame = stack[ix];
+        String cname = frame.getClassName();
+        if (isLoggerImplFrame(cname)) {
+            // We've found the relevant frame.
+            return new String[] {cname, frame.getMethodName()};
+        }
+        ix++;
+    }
+    return new String[] {};
+    // We haven't found a suitable frame, so just punt.  This is
+    // OK as we are only committed to making a "best effort" here.
+}
+
+
+private static boolean isLoggerImplFrame(String cname) {
+    // the log record could be created for a platform logger
+    return (
+            cname.equals("my.package.Logger") ||
+            cname.equals("java.util.logging.Logger") ||
+            cname.startsWith("java.util.logging.LoggingProxyImpl") ||
+            cname.startsWith("sun.util.logging."));
+}
+
+protected static java.util.logging.Logger getLogger(String name) {
+    return java.util.logging.Logger.getLogger(name);
+}
+
+protected static boolean log(Level level, String msg, Object... args) {
+    return log(level, null, msg, args);
+}
+
+protected static boolean log(Level level, Throwable thrown, String msg, Object... args) {
+    String[] values = getClassName();
+    java.util.logging.Logger log = getLogger(values[CLASS_NAME]);
+    if (level != null &amp;&amp; log.isLoggable(level)) {
+        if (msg != null) {
+            log.log(getRecord(level, thrown, values[CLASS_NAME], values[METHOD_NAME], msg, args));
+        }
+        return true;
+    }
+    return false;
+}
+
+protected static LogRecord getRecord(Level level, Throwable thrown, String className, String methodName, String msg, Object... args) {
+    LogRecord record = new LogRecord(level, format(msg, args));
+    record.setSourceClassName(className);
+    record.setSourceMethodName(methodName);
+    if (thrown != null) {
+        record.setThrown(thrown);
+    }
+    return record;
+}
+
+private static String format(String msg, Object... args) {
+    if (msg == null || args == null || args.length == 0) {
+        return msg;
+    } else if (msg.indexOf('%') &gt;= 0) {
+        try {
+            return String.format(msg, args);
+        } catch (IllegalFormatException esc) {
+            // none
+        }
+    } else if (msg.indexOf('{') &gt;= 0) {
+        try {
+            return MessageFormat.format(msg, args);
+        } catch (IllegalArgumentException exc) {
+            // none
+        }
+    }
+    if (args.length == 1) {
+        Object param = args[0];
+        if (param != null &amp;&amp; param.getClass().isArray()) {
+            return msg + Arrays.toString((Object[]) param);
+        } else if (param instanceof Throwable){
+            return msg;
+        } else {
+            return msg + param;
+        }
+    } else {
+        return msg + Arrays.toString(args);
+    }
+}
+
+public static void severe(String msg, Object... args) {
+    log(Level.SEVERE, msg, args);
+}
+
+public static void warning(String msg, Object... args) {
+    log(Level.WARNING, msg, args);
+}
+
+public static void info(Throwable thrown, String format, Object... args) {
+    log(Level.INFO, thrown, format, args);
+}
+
+public static void warning(Throwable thrown, String format, Object... args) {
+    log(Level.WARNING, thrown, format, args);
+}
+
+public static void warning(Throwable thrown) {
+    log(Level.WARNING, thrown, thrown.getMessage());
+}
+
+public static void severe(Throwable thrown, String format, Object... args) {
+    log(Level.SEVERE, thrown, format, args);
+}
+
+public static void severe(Throwable thrown) {
+    log(Level.SEVERE, thrown, thrown.getMessage());
+}
+
+public static void info(String msg, Object... args) {
+    log(Level.INFO, msg, args);
+}
+
+public static void fine(String msg, Object... args) {
+    log(Level.FINE, msg, args);
+}
+
+public static void finer(String msg, Object... args) {
+    log(Level.FINER, msg, args);
+}
+
+public static void finest(String msg, Object... args) {
+    log(Level.FINEST, msg, args);
+}
+
+public static boolean isLoggableFinest() {
+    return isLoggable(Level.FINEST);
+}
+
+public static boolean isLoggableFiner() {
+    return isLoggable(Level.FINER);
+}
+
+public static boolean isLoggableFine() {
+    return isLoggable(Level.FINE);
+}
+
+public static boolean isLoggableInfo() {
+    return isLoggable(Level.INFO);
+}
+
+public static boolean isLoggableWarning() {
+    return isLoggable(Level.WARNING);
+}
+public static boolean isLoggableSevere() {
+    return isLoggable(Level.SEVERE);
+}
+
+private static boolean isLoggable(Level level) {
+    return log(level, null);
+}
+
+}
+</code></pre>

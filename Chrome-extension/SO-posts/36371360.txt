@@ -1,0 +1,290 @@
+<p>Firstly, It is not a good approach to write all of your code in onCreate of an Activity. Instead create new classes and write all of your functionalities with-in that and just call them according to your need. </p>
+
+<p>Secondly, I don't know about what different solutions you have tried so far. I am posting a separate sample service which updates User Location in background.</p>
+
+<pre><code>import android.Manifest;
+import android.app.AlertDialog;
+import android.app.Service;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.provider.Settings;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+
+public class GPSTracker extends Service implements LocationListener {
+
+private final Context mContext;
+
+// flag for GPS status
+boolean isGPSEnabled = false;
+
+// flag for network status
+boolean isNetworkEnabled = false;
+
+// flag for GPS status
+boolean canGetLocation = false;
+
+Location location; // location
+double latitude; // latitude
+double longitude; // longitude
+
+// The minimum distance to change Updates in meters
+private static final long MIN_DISTANCE_CHANGE_FOR_UPDATES = 10; // 10 meters
+
+// The minimum time between updates in milliseconds
+private static final long MIN_TIME_BW_UPDATES = 1000 * 60 * 2; // 2 minute
+
+// Declaring a Location Manager
+protected LocationManager locationManager;
+
+public GPSTracker(Context context) {
+    this.mContext = context;
+    getLocation();
+}
+
+public Location getLocation() {
+    try {
+        if (checkPlayServices()) {
+            locationManager = (LocationManager) mContext.getSystemService(LOCATION_SERVICE);
+
+            // getting GPS status
+            isGPSEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+
+            // getting network status
+            isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+
+            if (!isGPSEnabled &amp;&amp; !isNetworkEnabled) {
+                // no network provider is enabled
+                if (!isGPSEnabled) {
+                    showSettingsAlert();
+                } else if (!isNetworkEnabled) {
+                    UIHelper.showShortToastInCenter(mContext, mContext.getResources().getString(R.string.error_location)); // Unable to get your current location. Please check your internet connection
+                }
+            } else {
+                this.canGetLocation = true;
+                if (!checkFineLocationPermission() &amp;&amp; !checkCoarseLocationPermission()) {
+                    openNotification();
+                    location = new Location("");
+                    location.setLatitude(0.0d);
+                    location.setLongitude(0.0d);
+                    return location;
+                }
+                if (isNetworkEnabled) {
+                    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_BW_UPDATES, MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                    if (locationManager != null) {
+                        location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (location != null) {
+                            latitude = location.getLatitude();
+                            longitude = location.getLongitude();
+                        }
+                    }
+                }
+                // if GPS Enabled get lat/long using GPS Services
+                if (isGPSEnabled) {
+                    if (location == null) {
+                        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, MIN_TIME_BW_UPDATES, MIN_DISTANCE_CHANGE_FOR_UPDATES, this);
+                        if (locationManager != null) {
+                            location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            if (location != null) {
+                                latitude = location.getLatitude();
+                                longitude = location.getLongitude();
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    return location;
+}
+
+/**
+ * Stop using GPS listener Calling this function will stop using GPS in your
+ * app.
+ */
+public void stopUsingGPS() {
+    if (locationManager != null) {
+        locationManager.removeUpdates(GPSTracker.this);
+    }
+}
+
+/**
+ * Function to get latitude
+ */
+public double getLatitude() {
+    if (location != null) {
+        latitude = location.getLatitude();
+    }
+    // return latitude
+    return latitude;
+}
+
+/**
+ * Function to get longitude
+ */
+public double getLongitude() {
+    if (location != null) {
+        longitude = location.getLongitude();
+    }
+
+    // return longitude
+    return longitude;
+}
+
+/**
+ * Function to show settings alert dialog On pressing Settings button will
+ * launch Settings Options
+ */
+public void showSettingsAlert() {
+    AlertDialog.Builder alertDialog = new AlertDialog.Builder(mContext);
+
+    // Setting DialogHelp Title
+    alertDialog.setTitle(mContext.getResources().getString(R.string.gps_settings)); // GPS settings
+
+    // Setting DialogHelp Message
+    alertDialog.setMessage(mContext.getResources().getString(R.string.gps_settings_text)); // GPS is not enabled. Do you want to go to settings menu?
+
+    // On pressing Settings button
+    alertDialog.setPositiveButton(mContext.getResources().getString(R.string.open_settings), new DialogInterface.OnClickListener() { // Open Settings
+        public void onClick(DialogInterface dialog, int which) {
+            Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            mContext.startActivity(intent);
+        }
+    });
+
+    // on pressing cancel button
+    alertDialog.setNegativeButton(mContext.getResources().getString(R.string.dismiss), new DialogInterface.OnClickListener() { // Dismiss
+        public void onClick(DialogInterface dialog, int which) {
+            dialog.cancel();
+        }
+    });
+
+    // Showing Alert Message
+    alertDialog.show();
+}
+
+@Override
+public void onLocationChanged(Location location) {
+    locationManager.removeUpdates(this);
+}
+
+@Override
+public void onProviderDisabled(String provider) {
+}
+
+@Override
+public void onProviderEnabled(String provider) {
+}
+
+@Override
+public void onStatusChanged(String provider, int status, Bundle extras) {
+}
+
+@Override
+public IBinder onBind(Intent arg0) {
+    return null;
+}
+
+private boolean checkCoarseLocationPermission() {
+    int result = mContext.checkCallingOrSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
+    return result == PackageManager.PERMISSION_GRANTED;
+}
+
+private boolean checkFineLocationPermission() {
+    int result = mContext.checkCallingOrSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION);
+    return result == PackageManager.PERMISSION_GRANTED;
+}
+
+private void openNotification() {
+    AlertDialog.Builder builder = new AlertDialog.Builder(mContext);
+    builder.setIcon(android.R.drawable.ic_dialog_alert)
+            .setTitle(mContext.getResources().getString(R.string.location_permission)) // Location Permissions
+            .setMessage(mContext.getResources().getString(R.string.location_permission_text)) // Please allow this application to use "Location" in order to fetch your current location
+            .setCancelable(false)
+            .setPositiveButton(mContext.getResources().getString(R.string.open_settings), new DialogInterface.OnClickListener() { // Open Settings
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dialog.dismiss();
+                    mContext.startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS));
+                }
+            })
+            .setNegativeButton(mContext.getResources().getString(R.string.dismiss), new DialogInterface.OnClickListener() { // Dismiss
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dialog.dismiss();
+                }
+            });
+    builder.create().show();
+}
+
+private boolean checkPlayServices() {
+    GoogleApiAvailability googleAPI = GoogleApiAvailability.getInstance();
+    int result = googleAPI.isGooglePlayServicesAvailable(mContext);
+    if (result != ConnectionResult.SUCCESS) {
+        if (googleAPI.isUserResolvableError(result)) {
+            googleAPI.getErrorDialog((MainActivity) mContext, result, MainActivity.REQUEST_CODE_RECOVER_PLAY_SERVICES).show();
+        }
+        return false;
+    }
+    return true;
+}
+}
+</code></pre>
+
+<p>Now in the MainActivity:</p>
+
+<pre><code>public class MainActivity extends FragmentActivity{
+
+
+private GPSTracker locationTracker;
+public static final int REQUEST_CODE_RECOVER_PLAY_SERVICES = 1001;
+
+
+@Override
+protected void onResume() {
+    super.onResume();
+    if (locationTracker == null)
+        locationTracker = new GPSTracker(MainActivity.this);
+    else
+        locationTracker.getLocation(); 
+    LatLng latLong = new LatLng(locationTracker.getLatitude(), locationTracker.getLongitude()); // This is give you User Current 
+}
+
+@Override
+protected void onPause() {
+    if (locationTracker != null)
+        locationTracker.stopUsingGPS();
+    super.onPause();
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    switch (requestCode) {
+        case REQUEST_CODE_RECOVER_PLAY_SERVICES:
+            if (resultCode == RESULT_CANCELED) {
+                UIHelper.showLongToastInCenter(MainActivity.this, getResources().getString(R.string.play_services_error)); // Google Play Services must be installed on this device
+                finish();
+            }
+            break;
+    }
+    super.onActivityResult(requestCode, resultCode, data);
+}
+}
+</code></pre>
+
+<p>In AndroidManifest.xml, add these following permissions:</p>
+
+<pre><code>&lt;uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /&gt;
+&lt;uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /&gt;
+</code></pre>

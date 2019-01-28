@@ -1,0 +1,287 @@
+<p><em>nb- First thing to note, this is done using Java 7, creating a transparent window in Java 6 is done differently and is not possible below update 10 (I believe)</em></p>
+
+<p>Basically, this creates a transparent window, sized and positioned to cover the entire virtual screen (that is, if you have multiple screens, it will cover all of them).</p>
+
+<p>I then use a <code>JPanel</code> as the primary container to capture mouse events and perform paint effects.</p>
+
+<p>The panel is made transparent.  This allows what ever is below the panel (and the frame) to remain visible.  I've then over painted this with a transparent color (I did this just to highlight the fact).</p>
+
+<p>When you click and drag an area, it is exposed.</p>
+
+<p><img src="http://i.stack.imgur.com/04Kn3.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.EventQueue;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Area;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+
+public class MySnipTool {
+
+    public static void main(String[] args) {
+        new MySnipTool();
+    }
+
+    public MySnipTool() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ex) {
+                }
+
+                JFrame frame = new JFrame("Testing");
+                frame.setUndecorated(true);
+                frame.setBackground(new Color(0, 0, 0, 0));
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                frame.setLayout(new BorderLayout());
+                frame.add(new CapturePane());
+                Rectangle bounds = getVirtualBounds();
+                frame.setLocation(bounds.getLocation());
+                frame.setSize(bounds.getSize());
+                frame.setAlwaysOnTop(true);
+                frame.setVisible(true);
+            }
+        });
+    }
+
+    public class CapturePane extends JPanel {
+
+        private Rectangle selectionBounds;
+        private Point clickPoint;
+
+        public CapturePane() {
+            setOpaque(false);
+
+            MouseAdapter mouseHandler = new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    if (SwingUtilities.isLeftMouseButton(e) &amp;&amp; e.getClickCount() == 2) {
+                        System.exit(0);
+                    }
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    clickPoint = e.getPoint();
+                    selectionBounds = null;
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    clickPoint = null;
+                }
+
+                @Override
+                public void mouseDragged(MouseEvent e) {
+                    Point dragPoint = e.getPoint();
+                    int x = Math.min(clickPoint.x, dragPoint.x);
+                    int y = Math.min(clickPoint.y, dragPoint.y);
+                    int width = Math.max(clickPoint.x - dragPoint.x, dragPoint.x - clickPoint.x);
+                    int height = Math.max(clickPoint.y - dragPoint.y, dragPoint.y - clickPoint.y);
+                    selectionBounds = new Rectangle(x, y, width, height);
+                    repaint();
+                }
+            };
+
+            addMouseListener(mouseHandler);
+            addMouseMotionListener(mouseHandler);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g.create();
+            g2d.setColor(new Color(255, 255, 255, 128));
+
+            Area fill = new Area(new Rectangle(new Point(0, 0), getSize()));
+            if (selectionBounds != null) {
+                fill.subtract(new Area(selectionBounds));
+            }
+            g2d.fill(fill);
+            if (selectionBounds != null) {
+                g2d.setColor(Color.BLACK);
+                g2d.draw(selectionBounds);
+            }
+            g2d.dispose();
+        }
+    }
+
+    public static Rectangle getVirtualBounds() {
+        Rectangle bounds = new Rectangle(0, 0, 0, 0);
+
+        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        GraphicsDevice lstGDs[] = ge.getScreenDevices();
+        for (GraphicsDevice gd : lstGDs) {
+            bounds.add(gd.getDefaultConfiguration().getBounds());
+        }
+        return bounds;
+    }
+}
+</code></pre>
+
+<p>Equally, you could just create a transparent frame that the user can resize.  You will be responsible for implementing all the resize code yourself, but the solution would still be a viable one.</p>
+
+<p><strong>Updated</strong></p>
+
+<p>You may also need to check to see if the OS/hardware can support transparancy...</p>
+
+<pre><code>GraphicsConfiguration config = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration();
+if (!AWTUtilities.isTranslucencyCapable(config)) {
+    System.out.println("Transluceny is not supported");
+}
+
+if (!AWTUtilities.isTranslucencySupported(AWTUtilities.Translucency.PERPIXEL_TRANSPARENT)) {
+    System.out.println("PerPeixel Transparency is not supported");
+}
+</code></pre>
+
+<p><strong>Updated with alternative approach</strong></p>
+
+<p>This is an alternative approach to the problem.  Basically it takes a snap shot of the screen and renders it to the window.  This then allows us to control the highlighting/selection as we need.</p>
+
+<p>The drawback to this is that it is a static result, you won't get any currently running animation effects.</p>
+
+<p><img src="http://i.stack.imgur.com/EAWZQ.png" alt="enter image description here"></p>
+
+<pre><code>import java.awt.AWTException;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.EventQueue;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
+import java.awt.HeadlessException;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.Robot;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.UIManager;
+import javax.swing.UnsupportedLookAndFeelException;
+
+public class SnipWithScreenShoot {
+
+    public static void main(String[] args) {
+        new SnipWithScreenShoot();
+    }
+
+    public SnipWithScreenShoot() {
+        EventQueue.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                } catch (ClassNotFoundException ex) {
+                } catch (InstantiationException ex) {
+                } catch (IllegalAccessException ex) {
+                } catch (UnsupportedLookAndFeelException ex) {
+                }
+
+                try {
+                    JFrame frame = new JFrame("Test");
+                    frame.setUndecorated(true);
+                    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                    frame.setLayout(new BorderLayout());
+                    frame.add(new TestPane());
+                    frame.pack();
+                    frame.setLocationRelativeTo(null);
+                    frame.setVisible(true);
+                } catch (AWTException exp) {
+                    exp.printStackTrace();
+                    System.out.println("That sucks");
+                }
+            }
+
+        });
+    }
+
+    public class TestPane extends JPanel {
+
+        private BufferedImage image;
+        private Rectangle selection;
+
+        public TestPane() throws AWTException {
+            Robot bot = new Robot();
+            image = bot.createScreenCapture(getVirtualBounds());
+
+            MouseAdapter handler = new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    selection = new Rectangle(e.getPoint());
+                    repaint();
+                }
+
+                @Override
+                public void mouseDragged(MouseEvent e) {
+                    Point p = e.getPoint();
+                    int width = Math.max(selection.x - e.getX(), e.getX() - selection.x);
+                    int height = Math.max(selection.y - e.getY(), e.getY() - selection.y);
+                    selection.setSize(width, height);
+                    repaint();
+                }
+            };
+
+            addMouseListener(handler);
+            addMouseMotionListener(handler);
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            return image == null ? super.getPreferredSize() : new Dimension(image.getWidth(), image.getHeight());
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (image != null) {
+                Graphics2D g2d = (Graphics2D) g.create();
+                g2d.drawImage(image, WIDTH, 0, this);
+                if (selection != null) {
+                    g2d.setColor(new Color(225, 225, 255, 128));
+                    g2d.fill(selection);
+                    g2d.setColor(Color.GRAY);
+                    g2d.draw(selection);
+                }
+                g2d.dispose();
+            }
+        }
+
+    }
+
+    public static Rectangle getVirtualBounds() {
+
+        Rectangle bounds = new Rectangle(0, 0, 0, 0);
+
+        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        GraphicsDevice lstGDs[] = ge.getScreenDevices();
+        for (GraphicsDevice gd : lstGDs) {
+
+            bounds.add(gd.getDefaultConfiguration().getBounds());
+
+        }
+
+        return bounds;
+
+    }
+
+}
+</code></pre>

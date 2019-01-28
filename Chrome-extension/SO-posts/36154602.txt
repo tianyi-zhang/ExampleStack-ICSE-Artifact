@@ -1,0 +1,259 @@
+<p>Ok, I resolve that problem. </p>
+
+<p>Delete:</p>
+
+<pre><code>mViewPager.setOffscreenPageLimit(10);
+</code></pre>
+
+<p>Override methods to save fragments state:</p>
+
+<pre><code>public void onViewStateRestored(@Nullable Bundle savedInstanceState)
+
+public void onSaveInstanceState(Bundle outState)
+</code></pre>
+
+<p>And I've created my own FragmentStatePagerAdapter class. I needed to don't save fragment state on tab which was deleted.</p>
+
+<p>Code:</p>
+
+<pre class="lang-java prettyprint-override"><code>public class FragStatePagerAdaper extends PagerAdapter {
+
+    private static final String TAG = "FragStatePagerAdapter";
+    private static final boolean DEBUG = true;
+
+    private final FragmentManager mFragmentManager;
+    private FragmentTransaction mCurTransaction = null;
+
+    private ArrayList&lt;Fragment.SavedState&gt; mSavedState = new ArrayList&lt;Fragment.SavedState&gt;();
+    /** Cached fragments */
+    private ArrayList&lt;Fragment&gt; mFragments = new ArrayList&lt;Fragment&gt;();
+    private Fragment mCurrentPrimaryItem = null;
+
+    private List&lt;DummyFragment&gt; mFragmentList = new ArrayList&lt;&gt;();
+    private List&lt;String&gt; mFragmentTitleList = new ArrayList&lt;&gt;();
+
+    public FragStatePagerAdaper(FragmentManager fm) {
+        mFragmentManager = fm;
+    }
+
+    /**
+     * Return the Fragment associated with a specified position.
+     */
+    public DummyFragment getItem(int num) throws IndexOutOfBoundsException{
+        return mFragmentList.get(num);
+    }
+
+    @Override
+    public void startUpdate(ViewGroup container) {
+    }
+
+    @Override
+    public Object instantiateItem(ViewGroup container, int position) {
+        // If we already have this item instantiated, there is nothing
+        // to do.  This can happen when we are restoring the entire pager
+        // from its saved state, where the fragment manager has already
+        // taken care of restoring the fragments we previously had instantiated.
+        if (mFragments.size() &gt; position) {
+            Fragment f = mFragments.get(position);
+            if (f != null) {
+                return f;
+            }
+        }
+
+        if (mCurTransaction == null) {
+            mCurTransaction = mFragmentManager.beginTransaction();
+        }
+
+        Fragment fragment = getItem(position);
+        if (DEBUG) Log.v(TAG, "Adding item #" + position + ": f=" + fragment);
+        if (mSavedState.size() &gt; position) {
+            Fragment.SavedState fss = mSavedState.get(position);
+            if (fss != null) {
+                fragment.setInitialSavedState(fss);
+            }
+        }
+        while (mFragments.size() &lt;= position) {
+            mFragments.add(null);
+        }
+        fragment.setMenuVisibility(false);
+        fragment.setUserVisibleHint(false);
+        mFragments.set(position, fragment);
+        mCurTransaction.add(container.getId(), fragment);
+
+        return fragment;
+    }
+
+    @Override
+    public void destroyItem(ViewGroup container, int position, Object object) {
+        Fragment fragment = (Fragment) object;
+
+        if (mCurTransaction == null) {
+            mCurTransaction = mFragmentManager.beginTransaction();
+        }
+        if (DEBUG) Log.v(TAG, "Removing item #" + position + ": f=" + object
+                + " v=" + ((Fragment)object).getView());
+        while (mSavedState.size() &lt;= position) {
+            mSavedState.add(null);
+        }
+
+        mSavedState.set(position, fragment.isAdded()
+                    ? mFragmentManager.saveFragmentInstanceState(fragment) : null);
+
+        mFragments.set(position, null);
+
+        mCurTransaction.remove(fragment);
+    }
+
+    public void addTab(String title) throws Exception {
+        if(isTabExist(title)){
+            throw new Exception("Tabs already exist!");
+        }
+        mFragmentList.add(new DummyFragment());
+        mFragmentTitleList.add(title);
+    }
+
+    //look here!
+    public void removeTab(int position){
+        Log.d(TAG, "removeTab: position = " + position);
+        mFragmentTitleList.remove(position);
+        mFragmentList.remove(position);
+        mSavedState.remove(position);  // &lt;---- here!
+    }
+
+    private boolean isTabExist(String name){
+        for(int i = 0; i &lt; mFragmentTitleList.size(); i++) {
+            if (mFragmentTitleList.get(i).equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public int getTabPosition(String tabName) throws IndexOutOfBoundsException{
+        for(int i = 0; i &lt; mFragmentTitleList.size(); i++) {
+            if (mFragmentTitleList.get(i).equals(tabName)) {
+                return i;
+            }
+        }
+        throw new IndexOutOfBoundsException();
+    }
+
+    @Override
+    public void setPrimaryItem(ViewGroup container, int position, Object object) {
+        Fragment fragment = (Fragment)object;
+        if (fragment != mCurrentPrimaryItem) {
+            if (mCurrentPrimaryItem != null) {
+                mCurrentPrimaryItem.setMenuVisibility(false);
+                mCurrentPrimaryItem.setUserVisibleHint(false);
+            }
+            if (fragment != null) {
+                fragment.setMenuVisibility(true);
+                fragment.setUserVisibleHint(true);
+            }
+            mCurrentPrimaryItem = fragment;
+        }
+    }
+
+    @Override
+    public void finishUpdate(ViewGroup container) {
+        if (mCurTransaction != null) {
+            mCurTransaction.commitAllowingStateLoss();
+            mCurTransaction = null;
+            mFragmentManager.executePendingTransactions();
+        }
+
+        ArrayList&lt;Fragment&gt; update = new ArrayList&lt;Fragment&gt;();
+        for (int i=0, n=mFragments.size(); i &lt; n; i++) {
+            Fragment f = mFragments.get(i);
+            if (f == null) continue;
+            int pos = getItemPosition(f);
+            while (update.size() &lt;= pos) {
+                update.add(null);
+            }
+            update.set(pos, f);
+        }
+        mFragments = update;
+    }
+
+
+    @Override
+    public boolean isViewFromObject(View view, Object object) {
+        return ((Fragment)object).getView() == view;
+    }
+
+    @Override
+    public Parcelable saveState() {
+        Bundle state = null;
+        if (mSavedState.size() &gt; 0) {
+            state = new Bundle();
+            Fragment.SavedState[] fss = new Fragment.SavedState[mSavedState.size()];
+            mSavedState.toArray(fss);
+            state.putParcelableArray("states", fss);
+        }
+        for (int i=0; i&lt;mFragments.size(); i++) {
+            Fragment f = mFragments.get(i);
+            if (f != null &amp;&amp; f.isAdded()) {
+                if (state == null) {
+                    state = new Bundle();
+                }
+                String key = "f" + i;
+                mFragmentManager.putFragment(state, key, f);
+            }
+        }
+        return state;
+    }
+
+    @Override
+    public void restoreState(Parcelable state, ClassLoader loader) {
+        if (state != null) {
+            Bundle bundle = (Bundle)state;
+            bundle.setClassLoader(loader);
+            Parcelable[] fss = bundle.getParcelableArray("states");
+            mSavedState.clear();
+            mFragments.clear();
+            if (fss != null) {
+                for (int i=0; i&lt;fss.length; i++) {
+                    mSavedState.add((Fragment.SavedState)fss[i]);
+                }
+            }
+            Iterable&lt;String&gt; keys = bundle.keySet();
+            for (String key: keys) {
+                if (key.startsWith("f")) {
+                    int index = Integer.parseInt(key.substring(1));
+                    Fragment f = mFragmentManager.getFragment(bundle, key);
+                    if (f != null) {
+                        while (mFragments.size() &lt;= index) {
+                            mFragments.add(null);
+                        }
+                        f.setMenuVisibility(false);
+                        mFragments.set(index, f);
+                    } else {
+                        Log.w(TAG, "Bad fragment at key " + key);
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public int getItemPosition(Object object) {
+        if (mFragmentList.contains(object)) return mFragmentList.indexOf(object);
+        else return POSITION_NONE;
+    }
+
+    @Override
+    public int getCount() {
+        return mFragmentList.size();
+    }
+
+    @Override
+    public CharSequence getPageTitle(int position) {
+        return mFragmentTitleList.get(position);
+    }
+
+}
+</code></pre>
+
+
+
+<p><strong>Greetings!</strong></p>

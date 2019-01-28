@@ -1,0 +1,76 @@
+<p>You can do this with your own classloader.</p>
+
+<p><strong>The classLoader:</strong><br>
+Write a class loader which loads class files from diferent classloader using a rewrite. </p>
+
+<p>For example you could add library as a prefix to the classpath when fetching the resource.</p>
+
+<p>I have created a classloader using this teqnuiqe.
+<a href="https://github.com/espenbrekke/dependent/blob/master/src/main/java/no/dependent/hacks/PathRewritingClassLoader.java" rel="nofollow">https://github.com/espenbrekke/dependent/blob/master/src/main/java/no/dependent/hacks/PathRewritingClassLoader.java</a><br></p>
+
+<p>It replaces the method findClass in URLClassLoader with one adding a prefix. <br></p>
+
+<pre><code>protected Class&lt;?&gt; findClass(final String name) throws ClassNotFoundException {
+    Class result;
+    try {
+        result = (Class)AccessController.doPrivileged(new PrivilegedExceptionAction() {
+            public Class&lt;?&gt; run() throws ClassNotFoundException {
+
+// This is where the prefix is added:
+                String path = PathRewritingClassLoader.this.prefix + name.replace('.', '/').concat(".class");
+                Resource res = PathRewritingClassLoader.this._ucp.getResource(path, false);
+                if(res != null) {
+                    try {
+                        return PathRewritingClassLoader.this._defineClass(name, res);
+                    } catch (IOException var4) {
+                        throw new ClassNotFoundException(name, var4);
+                    }
+                } else {
+                    return null;
+                }
+            }
+        }, this._acc);
+    } catch (PrivilegedActionException var4) {
+        throw (ClassNotFoundException)var4.getException();
+    }
+
+    if(result == null) {
+        throw new ClassNotFoundException(name);
+    } else {
+        return result;
+    }
+}
+</code></pre>
+
+<p>We also have to rewrite resource loading</p>
+
+<pre><code>@Override
+public URL getResource(String name){
+    return super.getResource(prefix+name);
+}
+</code></pre>
+
+<p>Here is how it is used:<br></p>
+
+<pre><code>_dependentClassLoader = new PathRewritingClassLoader("private", (URLClassLoader)DependentFactory.class.getClassLoader());
+Class myImplementationClass=_dependentClassLoader.loadClass("my.hidden.Implementation");
+</code></pre>
+
+<p><strong>Building your jar:</strong><br>
+In your build you place all the library and private classes under your selected prefix. In my gradle build I have a simple loop collecting all the dependencies.<br></p>
+
+<pre><code>task packageImplementation {
+dependsOn cleanImplementationClasses
+
+doLast {
+    def paths = project.configurations.runtime.asPath
+    paths.split(':').each { dependencyJar -&gt;
+        println "unpacking" + dependencyJar
+
+        ant.unzip(src: dependencyJar,
+                dest: "build/classes/main/private/",
+                overwrite: "true")
+        }
+    }
+}
+</code></pre>

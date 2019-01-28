@@ -1,0 +1,167 @@
+<p>The main reason why the glow appeared darker with your initial approach is most likely that you did not use an image with a premultiplied alpha component. The JavaDoc of <a href="http://docs.oracle.com/javase/8/docs/api/java/awt/image/ConvolveOp.html" rel="nofollow">ConvolveOp</a> contains some information about how the alpha component is treated during a convolution. </p>
+
+<p>You could work around this with an "almost fully transparent white". But alternatively, you may simply use an image with premultiplied alpha, i.e. one with the type <code>TYPE_INT_ARGB_PRE</code>. </p>
+
+<p>Here is a <a href="http://stackoverflow.com/help/mcve">MCVE</a> that draws a panel with some text, and some pulsing glow around the text (remove the timer and set a fixed radius to remove the pulse - I couldn't resist playing around a little here ...). </p>
+
+<p><img src="http://i.stack.imgur.com/YtVAP.png" alt="Glow"></p>
+
+<pre><code>import java.awt.AlphaComposite;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.image.BufferedImage;
+import java.awt.image.ConvolveOp;
+import java.awt.image.Kernel;
+
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+
+public class TextGlowTest
+{
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                createAndShowGUI();
+            }
+        });
+    }
+
+    private static void createAndShowGUI()
+    {
+        JFrame f = new JFrame();
+        f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        f.getContentPane().add(new TextGlowPanel());
+        f.setSize(300,200);
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+    }
+}
+
+class TextGlowPanel extends JPanel
+{
+    private BufferedImage image;
+    private int radius = 1;
+
+    TextGlowPanel()
+    {
+        Timer t = new Timer(50, new ActionListener()
+        {
+            long startMillis = -1;
+
+            @Override
+            public void actionPerformed(ActionEvent e)
+            {
+                if (startMillis == -1)
+                {
+                    startMillis = System.currentTimeMillis();
+                }
+                long d = System.currentTimeMillis() - startMillis;
+                double s = d / 1000.0;
+                radius = (int)(1 + 15 * (Math.sin(s * 3) * 0.5 + 0.5));
+                repaint();
+            }
+        });
+        t.start();
+    }
+
+    @Override
+    protected void paintComponent(Graphics gr)
+    {
+        super.paintComponent(gr);
+        gr.setColor(Color.GRAY);
+
+        int w = getWidth();
+        int h = getHeight();
+        gr.fillRect(0, 0, w, h);
+
+        if (image == null || image.getWidth() != w || image.getHeight() != h)
+        {
+            // Must be prmultiplied!
+            image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB_PRE);
+        }
+
+        Graphics2D g = image.createGraphics();
+        Font font = g.getFont().deriveFont(70.0f).deriveFont(Font.BOLD);
+        g.setFont(font);
+
+        g.setComposite(AlphaComposite.Src);
+        g.setColor(new Color(255,255,255,0));
+        g.fillRect(0,0,w,h);
+
+        g.setComposite(AlphaComposite.SrcOver);
+        g.setColor(new Color(255,255,255,0));
+        g.fillRect(0,0,w,h);
+
+        g.setColor(Color.WHITE);
+        g.drawString("Glow!", 50, 100);
+
+        image = getGaussianBlurFilter(radius, true).filter(image, null);
+        image = getGaussianBlurFilter(radius, false).filter(image, null);
+
+        g.dispose();
+
+        g = image.createGraphics();
+        g.setFont(font);
+        g.setColor(Color.BLUE);
+        g.drawString("Glow!", 50, 100);
+        g.dispose();
+
+        gr.drawImage(image, 0, 0, null);
+    }
+
+
+    // From
+    // http://www.java2s.com/Code/Java/Advanced-Graphics/GaussianBlurDemo.htm
+    public static ConvolveOp getGaussianBlurFilter(
+        int radius, boolean horizontal)
+    {
+        if (radius &lt; 1)
+        {
+            throw new IllegalArgumentException("Radius must be &gt;= 1");
+        }
+
+        int size = radius * 2 + 1;
+        float[] data = new float[size];
+
+        float sigma = radius / 3.0f;
+        float twoSigmaSquare = 2.0f * sigma * sigma;
+        float sigmaRoot = (float) Math.sqrt(twoSigmaSquare * Math.PI);
+        float total = 0.0f;
+
+        for (int i = -radius; i &lt;= radius; i++)
+        {
+            float distance = i * i;
+            int index = i + radius;
+            data[index] =
+                (float) Math.exp(-distance / twoSigmaSquare) / sigmaRoot;
+            total += data[index];
+        }
+
+        for (int i = 0; i &lt; data.length; i++)
+        {
+            data[i] /= total;
+        }
+
+        Kernel kernel = null;
+        if (horizontal)
+        {
+            kernel = new Kernel(size, 1, data);
+        }
+        else
+        {
+            kernel = new Kernel(1, size, data);
+        }
+        return new ConvolveOp(kernel, ConvolveOp.EDGE_NO_OP, null);
+    }
+}
+</code></pre>

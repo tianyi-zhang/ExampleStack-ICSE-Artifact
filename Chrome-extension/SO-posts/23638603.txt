@@ -1,0 +1,485 @@
+<p>Update...I believe that I have solved my problem.</p>
+
+<p>First, the original issue that I was dealing with was where I was receiving the message below when trying to log in with a known good userid/password:</p>
+
+<pre><code>org.springframework.security.ldap.authentication.ad.ActiveDirectoryLdapAuthenticationProvider - Active Directory authentication failed: Supplied password was invalid
+</code></pre>
+
+<p>I can confirm that this issue was resolved once I created a new user whose userid and sAMAccountName values in Active Directory were the same. The authentication piece
+did not work until I did this and started testing with that user.</p>
+
+<p>The second issue that I dealt with was after I started using the user with matching userid and sAMAccountNames. I started receiving the following message when trying to log in:</p>
+
+<pre><code>org.springframework.dao.IncorrectResultSizeDataAccessException: Incorrect result size: expected 1, actual 0
+</code></pre>
+
+<p>I ended up implementing my own custom authentication provider and had to make some tweaks to it to get it to work with our Active Directory system. I have posted each of the class 
+files that I created below.</p>
+
+<p>Lastly, there must exist an Active Directory group that matches the constant's value in the ActiveDirectoryGrantedAuthoritiesMapper class, and your user must be included in this group.
+See this line in that file:</p>
+
+<pre><code>private String ROLE_ADMIN = "ExtranetUsers";
+</code></pre>
+
+<p>There's probably more issues to solve that I haven't encountered yet, but I can say that I am now successfully logging to my Spring application via Active Directory.</p>
+
+<p>I put all of the class files that I created for my custom authentication provider in a package called com.mycompany.pima.security. Please note that implementing this custom 
+authentication provider is what I did in addition to the configurations in login.jsp, web.xml, servlet-context.xml, root-context.xml, spring-security-context.xml and pom.xml.
+The files in the the com.mycompany.pima.security package are:</p>
+
+<p>ActiveDirectoryLdapAuthenticationProvider.java: (see my comments in the searchForUser() method for what I did that finally worked)</p>
+
+<pre><code>package com.mycompany.pima.security;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.IncorrectResultSizeDataAccessException;
+import org.springframework.ldap.core.DirContextOperations;
+import org.springframework.ldap.core.DistinguishedName;
+import org.springframework.ldap.core.support.DefaultDirObjectFactory;
+import org.springframework.ldap.support.LdapUtils;
+import org.springframework.security.authentication.AccountExpiredException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.CredentialsExpiredException;
+import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authentication.LockedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.ldap.SpringSecurityLdapTemplate;
+import     org.springframework.security.ldap.authentication.AbstractLdapAuthenticationProvider;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
+
+import javax.naming.AuthenticationException;
+import javax.naming.Context;
+import javax.naming.NamingException;
+import javax.naming.OperationNotSupportedException;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.SearchControls;
+import javax.naming.ldap.InitialLdapContext;
+
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class ActiveDirectoryLdapAuthenticationProvider extends AbstractLdapAuthenticationProvider {
+private static final Pattern SUB_ERROR_CODE = Pattern.compile(".*data\\s([0-9a-f]{3,4}).*");
+
+// Error codes
+private static final int USERNAME_NOT_FOUND = 0x525;
+private static final int INVALID_PASSWORD = 0x52e;
+private static final int NOT_PERMITTED = 0x530;
+private static final int PASSWORD_EXPIRED = 0x532;
+private static final int ACCOUNT_DISABLED = 0x533;
+private static final int ACCOUNT_EXPIRED = 0x701;
+private static final int PASSWORD_NEEDS_RESET = 0x773;
+private static final int ACCOUNT_LOCKED = 0x775;
+
+private final String domain;
+private final String rootDn;
+private final String url;
+private boolean convertSubErrorCodesToExceptions;
+
+private static final Logger logger = LoggerFactory.getLogger(ActiveDirectoryLdapAuthenticationProvider.class);
+
+// Only used to allow tests to substitute a mock LdapContext
+ContextFactory contextFactory = new ContextFactory();
+
+/**
+ * @param domain the domain for which authentication should take place
+ */
+//    public ActiveDirectoryLdapAuthenticationProvider(String domain) {
+//        this (domain, null);
+//    }
+
+/**
+ * @param domain the domain name (may be null or empty)
+ * @param url an LDAP url (or multiple URLs)
+ */
+public ActiveDirectoryLdapAuthenticationProvider(String domain, String url) {
+
+    Assert.isTrue(StringUtils.hasText(url), "Url cannot be empty");
+    this.domain = StringUtils.hasText(domain) ? domain.toLowerCase() : null;
+    //this.url = StringUtils.hasText(url) ? url : null;
+    this.url = url;
+    rootDn = this.domain == null ? null : rootDnFromDomain(this.domain);
+}
+
+@Override
+protected DirContextOperations doAuthentication(UsernamePasswordAuthenticationToken auth) {
+
+    String username = auth.getName();
+    String password = (String)auth.getCredentials();
+    DirContext ctx = bindAsUser(username, password);
+
+    try {
+        return searchForUser(ctx, username);
+
+    } catch (NamingException e) {
+        logger.error("Failed to locate directory entry for authenticated user: " + username, e);
+        throw badCredentials(e);
+    } finally {
+        LdapUtils.closeContext(ctx);
+    }
+}
+
+/**
+ * Creates the user authority list from the values of the {@code memberOf} attribute obtained from the user's
+ * Active Directory entry.
+ */
+@Override
+protected Collection&lt;? extends GrantedAuthority&gt; loadUserAuthorities(DirContextOperations userData, String username, String password) {
+    String[] groups = userData.getStringAttributes("memberOf");
+
+    if (groups == null) {
+        logger.debug("No values for 'memberOf' attribute.");
+        return AuthorityUtils.NO_AUTHORITIES;
+    }
+
+    if (logger.isDebugEnabled()) {
+        logger.debug("'memberOf' attribute values: " + Arrays.asList(groups));
+    }
+
+    ArrayList&lt;GrantedAuthority&gt; authorities = new ArrayList&lt;GrantedAuthority&gt;(groups.length);
+
+    for (String group : groups) {
+        authorities.add(new SimpleGrantedAuthority(new DistinguishedName(group).removeLast().getValue()));
+    }
+
+    return authorities;
+}
+
+private DirContext bindAsUser(String username, String password) {
+    // TODO. add DNS lookup based on domain
+    final String bindUrl = url;
+
+    Hashtable&lt;String,String&gt; env = new Hashtable&lt;String,String&gt;();
+    env.put(Context.SECURITY_AUTHENTICATION, "simple");
+
+    String bindPrincipal = createBindPrincipal(username);
+
+    env.put(Context.SECURITY_PRINCIPAL, bindPrincipal);
+    env.put(Context.PROVIDER_URL, bindUrl);
+    env.put(Context.SECURITY_CREDENTIALS, password);
+    env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
+    env.put(Context.OBJECT_FACTORIES, DefaultDirObjectFactory.class.getName());
+
+    try {
+        return contextFactory.createContext(env);
+    } catch (NamingException e) {
+        if ((e instanceof AuthenticationException) || (e instanceof OperationNotSupportedException)) {
+            handleBindException(bindPrincipal, e);
+            throw badCredentials(e);
+        } else {
+            throw LdapUtils.convertLdapException(e);
+        }
+    }
+}
+
+void handleBindException(String bindPrincipal, NamingException exception) {
+
+    if (logger.isDebugEnabled()) {
+        logger.debug("Authentication for " + bindPrincipal + " failed:" + exception);
+    }
+
+    int subErrorCode = parseSubErrorCode(exception.getMessage());
+
+    if (subErrorCode &gt; 0) {
+        logger.info("Active Directory authentication failed: " + subCodeToLogMessage(subErrorCode));
+
+        if (convertSubErrorCodesToExceptions) {
+            raiseExceptionForErrorCode(subErrorCode, exception);
+        }
+    } else {
+        logger.debug("Failed to locate AD-specific sub-error code in message");
+    }
+}
+
+int parseSubErrorCode(String message) {
+    Matcher m = SUB_ERROR_CODE.matcher(message);
+
+    if (m.matches()) {
+        return Integer.parseInt(m.group(1), 16);
+    }
+
+    return -1;
+}
+
+void raiseExceptionForErrorCode(int code, NamingException exception) {
+
+    String hexString = Integer.toHexString(code);
+    Throwable cause = new ActiveDirectoryAuthenticationException(hexString, exception.getMessage(), exception);
+    switch (code) {
+        case PASSWORD_EXPIRED:
+            throw new CredentialsExpiredException(messages.getMessage("LdapAuthenticationProvider.credentialsExpired",
+                    "User credentials have expired"), cause);
+        case ACCOUNT_DISABLED:
+            throw new DisabledException(messages.getMessage("LdapAuthenticationProvider.disabled",
+                    "User is disabled"), cause);
+        case ACCOUNT_EXPIRED:
+            throw new AccountExpiredException(messages.getMessage("LdapAuthenticationProvider.expired",
+                    "User account has expired"), cause);
+        case ACCOUNT_LOCKED:
+            throw new LockedException(messages.getMessage("LdapAuthenticationProvider.locked",
+                    "User account is locked"), cause);
+        default:
+            throw badCredentials(cause);
+    }
+}
+
+String subCodeToLogMessage(int code) {
+    switch (code) {
+        case USERNAME_NOT_FOUND:
+            return "User was not found in directory";
+        case INVALID_PASSWORD:
+            return "Supplied password was invalid";
+        case NOT_PERMITTED:
+            return "User not permitted to logon at this time";
+        case PASSWORD_EXPIRED:
+            return "Password has expired";
+        case ACCOUNT_DISABLED:
+            return "Account is disabled";
+        case ACCOUNT_EXPIRED:
+            return "Account expired";
+        case PASSWORD_NEEDS_RESET:
+            return "User must reset password";
+        case ACCOUNT_LOCKED:
+            return "Account locked";
+    }
+
+    return "Unknown (error code " + Integer.toHexString(code) +")";
+}
+
+private BadCredentialsException badCredentials() {
+    return new BadCredentialsException(messages.getMessage(
+                    "LdapAuthenticationProvider.badCredentials", "Bad credentials"));
+}
+
+private BadCredentialsException badCredentials(Throwable cause) {
+    return (BadCredentialsException) badCredentials().initCause(cause);
+}
+
+@SuppressWarnings("deprecation")
+private DirContextOperations searchForUser(DirContext ctx, String username) throws NamingException {
+    SearchControls searchCtls = new SearchControls();
+    searchCtls.setSearchScope(SearchControls.SUBTREE_SCOPE);
+
+    // This was the original setting for searchFilter:
+    // String searchFilter = "(&amp;(objectClass=user)(userPrincipalName={0}))";
+
+    // These are some of the values that I played around with:
+    // String searchFilter = "(&amp;(objectClass=user)(|(userPrincipalName={0})(sAMAccountName={1})))";
+    // String searchFilter = "(&amp;(objectClass=user)((sAMAccountName={1})))";
+    // String searchFilter = "(&amp;(sAMAccountName=" + username + "))";
+
+    // This is the final searchFilter value that I used that actually worked:
+    String searchFilter = "(&amp;(cn=" + username + "))";
+
+    final String bindPrincipal = createBindPrincipal(username);
+
+    String searchRoot = rootDn != null ? rootDn : searchRootFromPrincipal(bindPrincipal);
+    // This is also something that I had to add to match my OU path:
+    searchRoot = "ou=ExternalUsers," + searchRoot;
+
+    try {
+        return SpringSecurityLdapTemplate.searchForSingleEntryInternal(ctx, searchCtls, searchRoot, searchFilter,
+            new Object[]{bindPrincipal});
+    } catch (IncorrectResultSizeDataAccessException incorrectResults) {
+        if (incorrectResults.getActualSize() == 0) {
+            UsernameNotFoundException userNameNotFoundException = new UsernameNotFoundException("User " + username + " not found in directory.", username);
+            userNameNotFoundException.initCause(incorrectResults);
+            throw badCredentials(userNameNotFoundException);
+        }
+        // Search should never return multiple results if properly configured, so just rethrow
+        throw incorrectResults;
+    }
+}
+
+private String searchRootFromPrincipal(String bindPrincipal) {
+    int atChar = bindPrincipal.lastIndexOf('@');
+
+    if (atChar &lt; 0) {
+        logger.debug("User principal '" + bindPrincipal + "' does not contain the domain, and no domain has been configured");
+        throw badCredentials();
+    }
+
+    return rootDnFromDomain(bindPrincipal.substring(atChar+ 1, bindPrincipal.length()));
+}
+
+private String rootDnFromDomain(String domain) {
+    String[] tokens = StringUtils.tokenizeToStringArray(domain, ".");
+    StringBuilder root = new StringBuilder();
+
+    for (String token : tokens) {
+        if (root.length() &gt; 0) {
+            root.append(',');
+        }
+        root.append("dc=").append(token);
+    }
+
+    return root.toString();
+}
+
+String createBindPrincipal(String username) {
+    if (domain == null || username.toLowerCase().endsWith(domain)) {
+        return username;
+    }
+    return username + "@" + domain;
+}
+
+/**
+ * By default, a failed authentication (LDAP error 49) will result in a {@code BadCredentialsException}.
+ * &lt;p&gt;
+ * If this property is set to {@code true}, the exception message from a failed bind attempt will be parsed
+ * for the AD-specific error code and a {@link CredentialsExpiredException}, {@link DisabledException},
+ * {@link AccountExpiredException} or {@link LockedException} will be thrown for the corresponding codes. All
+ * other codes will result in the default {@code BadCredentialsException}.
+ *
+ * @param convertSubErrorCodesToExceptions {@code true} to raise an exception based on the AD error code.
+ */
+public void setConvertSubErrorCodesToExceptions(boolean convertSubErrorCodesToExceptions) {
+    this.convertSubErrorCodesToExceptions = convertSubErrorCodesToExceptions;
+}
+
+static class ContextFactory {
+    DirContext createContext(Hashtable&lt;?,?&gt; env) throws NamingException {
+        return new InitialLdapContext(env, null);
+    }
+}
+}
+</code></pre>
+
+<p>ActiveDirectoryGrantedAuthoritiesMapper.java: (see my comment about the Active Directory group that must exist for the value given to ROLE_ADMIN. Also
+ROLE_ADMIN <strong><em>MUST</em></strong> be referenced in the spring-security-context.xml file in the security:intercept-url tag)</p>
+
+<pre><code>package com.mycompany.pima.security;
+
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.mapping.GrantedAuthoritiesMapper;
+
+public class ActiveDirectoryGrantedAuthoritiesMapper implements GrantedAuthoritiesMapper {
+
+// Constants for group defined in LDAP
+// The string "ExtranetUsers" in the ROLE_ADMIN var below actually maps to the name
+// of an Active Directory group.
+private String ROLE_ADMIN = "ExtranetUsers";
+
+private static final Logger logger = LoggerFactory.getLogger(ActiveDirectoryGrantedAuthoritiesMapper.class);
+
+public ActiveDirectoryGrantedAuthoritiesMapper() {
+
+}
+
+@Override
+public Collection&lt;? extends GrantedAuthority&gt; mapAuthorities(
+        final Collection&lt;? extends GrantedAuthority&gt; authorities) {
+
+    Set&lt;SecurityContextAuthority&gt; roles = EnumSet.noneOf(SecurityContextAuthority.class);
+
+    for (GrantedAuthority authority : authorities) {
+
+        // authority.getAuthority() returns the role in LDAP nomenclature
+        if (ROLE_ADMIN.equals(authority.getAuthority())) {
+            roles.add(SecurityContextAuthority.ROLE_ADMIN);
+        }
+    }
+    return roles;
+}
+ }
+</code></pre>
+
+<p>ActiveDirectoryAuthenticationException.java:</p>
+
+<pre><code>package com.mycompany.pima.security;
+
+import org.springframework.security.core.AuthenticationException;
+
+@SuppressWarnings("serial")
+public final class ActiveDirectoryAuthenticationException extends AuthenticationException {
+private final String dataCode;
+
+ActiveDirectoryAuthenticationException(String dataCode, String message, Throwable cause) {
+    super(message, cause);
+    this.dataCode = dataCode;
+}
+
+public String getDataCode() {
+    return dataCode;
+}
+}
+</code></pre>
+
+<p>SecurityContextAuthority.java:</p>
+
+<pre><code>package com.mycompany.pima.security;
+
+import org.springframework.security.core.GrantedAuthority;
+
+public enum SecurityContextAuthority implements GrantedAuthority {
+
+// These roles are specified in the security context (security.xml) and are
+// mapped to LDAP roles by the ActiveDirectoryGrantedAuthoritiesMapper
+ROLE_ADMIN;
+
+@Override
+public String getAuthority() {
+    return name();
+}   
+}
+</code></pre>
+
+<p>Then I had to adjust my spring-security-context.xml file. Here is what it looks like now:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;beans:beans xmlns:security="http://www.springframework.org/schema/security"
+xmlns:beans="http://www.springframework.org/schema/beans"     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.springframework.org/schema/beans     http://www.springframework.org/schema/beans/spring-beans-3.0.xsd     http://www.springframework.org/schema/security     http://www.springframework.org/schema/security/spring-security-3.1.xsd"&gt;
+
+&lt;security:http pattern="/login" security="none" /&gt;
+&lt;security:http pattern="/logerror" security="none" /&gt;
+
+&lt;!-- LDAP server details --&gt;
+&lt;security:authentication-manager&gt;
+    &lt;security:authentication-provider ref="ldapActiveDirectoryAuthProvider" /&gt;
+&lt;/security:authentication-manager&gt;
+
+&lt;beans:bean id="grantedAuthoritiesMapper" class="com.mycompany.pima.security.ActiveDirectoryGrantedAuthoritiesMapper"/&gt;
+
+&lt;beans:bean id="ldapActiveDirectoryAuthProvider" class="org.springframework.security.ldap.authentication.ad.ActiveDirectoryLdapAuthenticationProvider"&gt;
+    &lt;beans:constructor-arg value="addomain.mycompany.com" /&gt;
+    &lt;beans:constructor-arg value="ldap://dev_ad_system.addomain.mycompany.com:389/" /&gt;
+    &lt;beans:property name="authoritiesMapper" ref="grantedAuthoritiesMapper" /&gt;
+    &lt;beans:property name="useAuthenticationRequestCredentials" value="true" /&gt;
+    &lt;beans:property name="convertSubErrorCodesToExceptions" value="true" /&gt;
+&lt;/beans:bean&gt;
+
+&lt;security:http auto-config="true" pattern="/**"&gt;
+    &lt;!-- Login pages --&gt;
+    &lt;security:form-login login-page="/login" default-target-url="/users"
+        login-processing-url="/j_spring_security_check" authentication-failure-url="/login?error=true" /&gt;
+    &lt;security:logout logout-success-url="/login"/&gt;
+
+       &lt;!-- Security zones --&gt;
+       &lt;!-- ROLE_ADMIN mentioned in the line below must match the name of the constant in the ActiveDirectoryGrantedAuthoritiesMapper.java file. --&gt;
+    &lt;security:intercept-url pattern="/**" access="ROLE_ADMIN" /&gt;
+
+&lt;/security:http&gt;
+
+&lt;/beans:beans&gt;
+</code></pre>
+
+<p>I hope this helps someone, as I know how complicated and frustrating this can be.</p>
+
+<p>Thanks!</p>
+
+<p>-Stephen Spalding</p>

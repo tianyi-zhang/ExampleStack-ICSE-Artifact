@@ -1,0 +1,198 @@
+<p>You can create a special <code>Stroke</code> that internally consists of these asterisks/stars. Then, you can use <code>stroke.createStrokedShape(shape)</code> to create a new shape that represents another shape, painted with this stroke.</p>
+
+<p>There is an (Apache-Licensed) implementation of such a stroke at <a href="http://www.jhlabs.com/java/java2d/strokes/" rel="nofollow">http://www.jhlabs.com/java/java2d/strokes/</a> (also included in the code below, with link and copyright infos)</p>
+
+<p>Thre result may look like this:</p>
+
+<p><a href="http://i.stack.imgur.com/D5HTx.png" rel="nofollow"><img src="http://i.stack.imgur.com/D5HTx.png" alt="Stars!"></a></p>
+
+<p>as created with the following standalone example:</p>
+
+<pre><code>import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.Stroke;
+import java.awt.font.FontRenderContext;
+import java.awt.font.GlyphVector;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.FlatteningPathIterator;
+import java.awt.geom.GeneralPath;
+import java.awt.geom.PathIterator;
+import java.awt.geom.Rectangle2D;
+
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+
+public class StarShapes
+{
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                createAndShowGUI();
+            }
+        });
+    }
+
+    private static void createAndShowGUI()
+    {
+        JFrame f = new JFrame();
+        f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        f.getContentPane().add(new StarShapesPanel());
+        f.setSize(600,400);
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+    }
+
+}
+
+class StarShapesPanel extends JPanel
+{
+    @Override
+    protected void paintComponent(Graphics gr)
+    {
+        super.paintComponent(gr);
+        Graphics2D g = (Graphics2D)gr;
+        g.setRenderingHint(
+            RenderingHints.KEY_ANTIALIASING,
+            RenderingHints.VALUE_ANTIALIAS_ON);
+
+        Font starFont = new Font("Monospaced", Font.BOLD, 20);
+        Shape starShape = createShape(starFont, "*");
+        Stroke stroke = new ShapeStroke(new Shape[] { starShape }, 12.0f);
+
+        Font textFont = new Font("Serif", Font.PLAIN, 250);
+        Shape textShape = createShape(textFont,  "Stars!");
+        g.translate(10,  250);
+        Shape strokedTextShape = 
+            stroke.createStrokedShape(textShape);
+        g.fill(strokedTextShape);
+    }
+
+    private static Shape createShape(Font font, String s)
+    {
+        FontRenderContext fontRenderContext = 
+            new FontRenderContext(null,true,true);
+        GlyphVector glyphVector = 
+            font.createGlyphVector(fontRenderContext, s);
+        return glyphVector.getOutline();
+    }
+
+}
+
+
+
+//============================================================================
+// From http://www.jhlabs.com/java/java2d/strokes/
+
+/*
+Copyright 2006 Jerry Huxtable
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+class ShapeStroke implements Stroke {
+    private Shape shapes[];
+    private float advance;
+    private boolean stretchToFit = false;
+    private boolean repeat = true;
+    private AffineTransform t = new AffineTransform();
+    private static final float FLATNESS = 1;
+
+    public ShapeStroke( Shape shapes, float advance ) {
+        this( new Shape[] { shapes }, advance );
+    }
+
+    public ShapeStroke( Shape shapes[], float advance ) {
+        this.advance = advance;
+        this.shapes = new Shape[shapes.length];
+
+        for ( int i = 0; i &lt; this.shapes.length; i++ ) {
+            Rectangle2D bounds = shapes[i].getBounds2D();
+            t.setToTranslation( -bounds.getCenterX(), -bounds.getCenterY() );
+            this.shapes[i] = t.createTransformedShape( shapes[i] );
+        }
+    }
+
+    public Shape createStrokedShape( Shape shape ) {
+        GeneralPath result = new GeneralPath();
+        PathIterator it = new FlatteningPathIterator( shape.getPathIterator( null ), FLATNESS );
+        float points[] = new float[6];
+        float moveX = 0, moveY = 0;
+        float lastX = 0, lastY = 0;
+        float thisX = 0, thisY = 0;
+        int type = 0;
+        boolean first = false;
+        float next = 0;
+        int currentShape = 0;
+        int length = shapes.length;
+
+        float factor = 1;
+
+        while ( currentShape &lt; length &amp;&amp; !it.isDone() ) {
+            type = it.currentSegment( points );
+            switch( type ){
+            case PathIterator.SEG_MOVETO:
+                moveX = lastX = points[0];
+                moveY = lastY = points[1];
+                result.moveTo( moveX, moveY );
+                first = true;
+                next = 0;
+                break;
+
+            case PathIterator.SEG_CLOSE:
+                points[0] = moveX;
+                points[1] = moveY;
+                // Fall into....
+
+            case PathIterator.SEG_LINETO:
+                thisX = points[0];
+                thisY = points[1];
+                float dx = thisX-lastX;
+                float dy = thisY-lastY;
+                float distance = (float)Math.sqrt( dx*dx + dy*dy );
+                if ( distance &gt;= next ) {
+                    float r = 1.0f/distance;
+                    float angle = (float)Math.atan2( dy, dx );
+                    while ( currentShape &lt; length &amp;&amp; distance &gt;= next ) {
+                        float x = lastX + next*dx*r;
+                        float y = lastY + next*dy*r;
+                        t.setToTranslation( x, y );
+                        t.rotate( angle );
+                        result.append( t.createTransformedShape( shapes[currentShape] ), false );
+                        next += advance;
+                        currentShape++;
+                        if ( repeat )
+                            currentShape %= length;
+                    }
+                }
+                next -= distance;
+                first = false;
+                lastX = thisX;
+                lastY = thisY;
+                break;
+            }
+            it.next();
+        }
+
+        return result;
+    }
+
+}
+</code></pre>

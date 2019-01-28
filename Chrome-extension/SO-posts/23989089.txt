@@ -1,0 +1,114 @@
+<p>After looking for the gingerbread implement for <code>recreate</code>, I'd like to use following codes (for gingerbread):</p>
+
+<pre><code>activity.mMainThread.mAppThread.scheduleRelaunchActivity(activity.mToken, null, null, 0, false, null);
+</code></pre>
+
+<p>For these codes, it's from the implementation in higher api.</p>
+
+<pre><code>public void recreate() {
+    if (mParent != null) {
+        throw new IllegalStateException("Can only be called on top-level activity");
+    }
+    if (Looper.myLooper() != mMainThread.getLooper()) {
+        throw new IllegalStateException("Must be called from main thread");
+    }
+    mMainThread.requestRelaunchActivity(mToken, null, null, 0, false, null, false);
+}
+</code></pre>
+
+<p>Api-10 has no requestRelaunchActivity, however, from the diff, i found this:</p>
+
+<pre><code>             public final void scheduleRelaunchActivity(IBinder token,
+                     List&lt;ResultInfo&gt; pendingResults, List&lt;Intent&gt; pendingNewIntents,
+                     int configChanges, boolean notResumed, Configuration config) {
+    -            ActivityClientRecord r = new ActivityClientRecord();
+    -
+    -            r.token = token;
+    -            r.pendingResults = pendingResults;
+    -            r.pendingIntents = pendingNewIntents;
+    -            r.startsNotResumed = notResumed;
+    -            r.createdConfig = config;
+    -
+    -            synchronized (mPackages) {
+    -                mRelaunchingActivities.add(r);
+    -            }
+    -
+    -            queueOrSendMessage(H.RELAUNCH_ACTIVITY, r, configChanges);
+    +            requestRelaunchActivity(token, pendingResults, pendingNewIntents,
+    +                    configChanges, notResumed, config, true);
+             }
+</code></pre>
+
+<p>So I think I could use <code>scheduleRelaunchActivity</code> instead of <code>requestRelaunchActivity</code>.</p>
+
+<p>And I have written them using reflect:</p>
+
+<pre><code>package me.piebridge.util;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.List;
+
+import android.annotation.TargetApi;
+import android.app.Activity;
+import android.content.res.Configuration;
+import android.os.Build;
+import android.os.IBinder;
+
+public class GingerBreadUtil {
+
+    private static Field scanField(Class&lt;?&gt; clazz, String... names) {
+        for (String name : names) {
+            Field field;
+            try {
+                field = clazz.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException e) {
+            }
+            try {
+                field = clazz.getField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException e) {
+            }
+        }
+        return null;
+    }
+
+    public static void recreate(Activity activity) {
+        if (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.GINGERBREAD_MR1) {
+            recreateHC(activity);
+        } else {
+            try {
+                recreateGB(activity);
+            } catch (InvocationTargetException e) {
+                e.getTargetException().printStackTrace();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
+    private static void recreateHC(Activity activity) {
+        ((Activity) activity).recreate();
+    }
+
+    private static void recreateGB(Activity activity) throws IllegalArgumentException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
+        Field Activity$mToken = scanField(Activity.class, "mToken");
+        IBinder mToken = (IBinder) Activity$mToken.get(activity);
+        Field Activity$mMainThread = scanField(Activity.class, "mMainThread");
+        Object mMainThread = Activity$mMainThread.get(activity);
+        Field ActivityThread$mAppThread = scanField(mMainThread.getClass(), "mAppThread");
+        Object mAppThread = ActivityThread$mAppThread.get(mMainThread);
+        Method method = mAppThread.getClass().getMethod("scheduleRelaunchActivity",
+            IBinder.class, List.class, List.class, int.class, boolean.class, Configuration.class);
+        method.invoke(mAppThread, mToken, null, null, 0, false, null);
+    }
+
+}
+</code></pre>
+
+<p>I'm using these codes for the back-porting of xposed framework.</p>

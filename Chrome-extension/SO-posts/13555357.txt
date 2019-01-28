@@ -1,0 +1,179 @@
+<p>You can examine <code>AbstractApplicationContext.doClose()</code> method and see that no interruption of application context closing has been provided by the Spring developers
+</p>
+
+<pre><code>protected void doClose() {
+    boolean actuallyClose;
+    synchronized (this.activeMonitor) {
+        actuallyClose = this.active &amp;&amp; !this.closed;
+        this.closed = true;
+    }
+
+    if (actuallyClose) {
+        if (logger.isInfoEnabled()) {
+            logger.info("Closing " + this);
+        }
+
+        try {
+            // Publish shutdown event.
+            publishEvent(new ContextClosedEvent(this));
+        }
+        catch (Throwable ex) {
+            logger.warn("Exception thrown from ApplicationListener handling ContextClosedEvent", ex);
+        }
+
+        // Stop all Lifecycle beans, to avoid delays during individual destruction.
+        try {
+            getLifecycleProcessor().onClose();
+        }
+        catch (Throwable ex) {
+            logger.warn("Exception thrown from LifecycleProcessor on context close", ex);
+        }
+
+        // Destroy all cached singletons in the context's BeanFactory.
+        destroyBeans();
+
+        // Close the state of this context itself.
+        closeBeanFactory();
+
+        // Let subclasses do some final clean-up if they wish...
+        onClose();
+
+        synchronized (this.activeMonitor) {
+            this.active = false;
+        }
+    }
+}
+</code></pre>
+
+<p>So you can't prevent the application context from closing.</p>
+
+<h1>Testing the service with TestContext framework</h1>
+
+<p>If you are using Spring test context framework with JUnit, I think you can use it to test services that implement Lifecycle, I used the technique from <a href="https://src.springframework.org/svn/spring-batch-admin/trunk/spring-batch-integration/src/test/java/org/springframework/batch/integration/retry/RepeatTransactionalPollingIntegrationTests.java" rel="nofollow">one of the internal Spring tests</a>  </p>
+
+<p>Slightly modified LifecycleBean(I've added <code>waitForTermination()</code> method):</p>
+
+<pre><code>public class LifecycleBean implements Lifecycle {
+
+    private static final Logger log = LoggerFactory
+            .getLogger(LifecycleBean.class);
+
+    private final Thread thread = new Thread("Lifecycle") {
+        {
+            setDaemon(false);
+            setUncaughtExceptionHandler(new UncaughtExceptionHandler() {
+
+                @Override
+                public void uncaughtException(Thread t, Throwable e) {
+                    log.error("Abnormal thread termination", e);
+                }
+            });
+        }
+
+        public void run() {
+            for (int i = 0; i &lt; 10 &amp;&amp; !isInterrupted(); ++i) {
+                log.info("Hearbeat {}", i);
+                try {
+                    sleep(1000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        };
+    };
+
+    @Override
+    public void start() {
+        log.info("Starting bean");
+        thread.start();
+    }
+
+    @Override
+    public void stop() {
+        log.info("Stopping bean");
+        thread.interrupt();
+        waitForTermination();
+    }
+
+    @Override
+    public boolean isRunning() {
+        return thread.isAlive();
+    }
+
+    public void waitForTermination() {
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+    }
+}
+</code></pre>
+
+<p>Test class:</p>
+
+<pre><code>@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration("classpath:Test-context.xml")
+public class LifecycleBeanTest {
+
+    @Autowired
+    LifecycleBean bean;
+
+    Lifecycle appContextLifeCycle;
+
+    @Autowired
+    public void setLifeCycle(ApplicationContext context){
+        this.appContextLifeCycle = (Lifecycle)context;
+    }
+
+    @Test
+    public void testLifeCycle(){
+        //"start" application context
+        appContextLifeCycle.start();
+
+        bean.waitForTermination();
+    }
+}
+</code></pre>
+
+<p>Test-context.xml content:</p>
+
+<pre><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd"&gt;
+
+&lt;bean class="LifecycleBean"/&gt;
+&lt;/beans&gt;
+</code></pre>
+
+<p>P.S. starting and stopping the context is not a thing you may want to do many times on the same application context, so you may need to put <code>@DirtiesContext</code>annotation on your test methods for the best results.</p>
+
+<h2>Answer to the new version of the question</h2>
+
+<p>DefaultLifecycleProcessor uses <code>beanFactory.getBeanNamesForType(Lifecycle.class, false, false);</code> to retrieve the list of the beans implementing Lifecycle
+From getBeanNamesForType javadoc:</p>
+
+<blockquote>
+  <p><b> NOTE: This method introspects top-level beans only.</b> It does
+  <i>not</i> check nested beans which might match the specified type
+  as well.</p>
+</blockquote>
+
+<p>So this method does not list the inner beans (they were called nested when only xml configuration was available - they are declared as nested <em>bean</em> xml elements).</p>
+
+<p>Consider the following example from the documentation</p>
+
+<pre><code>&lt;bean id="outer" class="..."&gt;
+  &lt;!-- Instead of using a reference to target, just use an inner bean --&gt;
+  &lt;property name="target"&gt;
+    &lt;bean class="com.mycompany.PersonImpl"&gt;
+      &lt;property name="name"&gt;&lt;value&gt;Tony&lt;/value&gt;&lt;/property&gt;
+      &lt;property name="age"&gt;&lt;value&gt;51&lt;/value&gt;&lt;/property&gt;
+    &lt;/bean&gt;
+  &lt;/property&gt;
+&lt;/bean&gt;
+</code></pre>
+
+<p>Start() and Stop() are merely events that are propagated by the application context they are not connected with lifetime of the application context, for example you can implement a download manager with some service beans - when the user hits "pause" button, you will broadcast the "stop" event, then when the user hits "start" button, you can resume the processing by broadcasting the "start" event. Spring is usable here, because it dispatches events in the proper order.</p>

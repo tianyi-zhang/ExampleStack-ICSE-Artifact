@@ -1,0 +1,119 @@
+<p>The <a href="http://docs.spring.io/spring/docs/3.2.x/javadoc-api/org/springframework/web/bind/annotation/ModelAttribute.html"><code>@ModelAttribute</code></a> annotation in this case is used to identify an object that Spring should add as a model attribute. Model attributes are an abstraction from the <code>HttpServletRequest</code> attributes. Basically, they are objects identified by some key that will find their way into the <code>HttpServletRequest</code> attributes. You can do this by manually adding an attribute with <code>Model#addAttribute(String, Object)</code>, have a <code>@ModelAttribute</code> annotated method, or by annotating a method parameter with <code>@ModelAttribute</code>.</p>
+
+<p>The thing you need to understand is how Spring resolves your handler method parameters and injects arguments. It uses the <a href="http://docs.spring.io/spring/docs/3.2.x/javadoc-api/org/springframework/web/method/support/HandlerMethodArgumentResolver.html%60"><code>HandlerMethodArgumentResolver</code></a> interface to do so. There are a number of implementing classes (see javadoc) and each has the responsibility to <code>resolveArgument()</code> by returning the argument that Spring will use to <code>invoke()</code> your handler method through reflection. Spring will only call the <code>resolveArgument()</code> method if the <code>HandlerMethodArgumentResolver</code> <code>supportsParameter()</code> method returns <code>true</code> for the specific parameter. </p>
+
+<p>The <code>HandlerMethodArgumentResolver</code> implementation in question here is <a href="http://docs.spring.io/spring/docs/3.2.x/javadoc-api/org/springframework/web/servlet/mvc/method/annotation/ServletModelAttributeMethodProcessor.html"><code>ServletModelAttributeMethodProcessor</code></a> which extends from <a href="http://docs.spring.io/spring/docs/3.2.x/javadoc-api/org/springframework/web/method/annotation/ModelAttributeMethodProcessor.html"><code>ModelAttributeMethodProcessor</code></a> which states</p>
+
+<blockquote>
+  <p>Resolves method arguments annotated with @ModelAttribute and handles
+  return values from methods annotated with @ModelAttribute.</p>
+</blockquote>
+
+<p>Spring (3.2) will <a href="http://docs.spring.io/spring/docs/3.2.x/javadoc-api/org/springframework/web/servlet/mvc/method/annotation/RequestMappingHandlerAdapter.html">register</a> this <code>HandlerMethodArgumentResolver</code> and others </p>
+
+<pre><code>private List&lt;HandlerMethodArgumentResolver&gt; getDefaultArgumentResolvers() {
+        List&lt;HandlerMethodArgumentResolver&gt; resolvers = new ArrayList&lt;HandlerMethodArgumentResolver&gt;();
+
+    // Annotation-based argument resolution
+    resolvers.add(new RequestParamMethodArgumentResolver(getBeanFactory(), false));
+    resolvers.add(new RequestParamMapMethodArgumentResolver());
+    resolvers.add(new PathVariableMethodArgumentResolver());
+    resolvers.add(new ServletModelAttributeMethodProcessor(false));
+    resolvers.add(new RequestResponseBodyMethodProcessor(getMessageConverters()));
+    resolvers.add(new RequestPartMethodArgumentResolver(getMessageConverters()));
+    resolvers.add(new RequestHeaderMethodArgumentResolver(getBeanFactory()));
+    resolvers.add(new RequestHeaderMapMethodArgumentResolver());
+    resolvers.add(new ServletCookieValueMethodArgumentResolver(getBeanFactory()));
+    resolvers.add(new ExpressionValueMethodArgumentResolver(getBeanFactory()));
+
+    // Type-based argument resolution
+    resolvers.add(new ServletRequestMethodArgumentResolver());
+    resolvers.add(new ServletResponseMethodArgumentResolver());
+    resolvers.add(new HttpEntityMethodProcessor(getMessageConverters()));
+    resolvers.add(new RedirectAttributesMethodArgumentResolver());
+    resolvers.add(new ModelMethodProcessor());
+    resolvers.add(new MapMethodProcessor());
+    resolvers.add(new ErrorsMethodArgumentResolver());
+    resolvers.add(new SessionStatusMethodArgumentResolver());
+    resolvers.add(new UriComponentsBuilderMethodArgumentResolver());
+
+    // Custom arguments
+    if (getCustomArgumentResolvers() != null) {
+        resolvers.addAll(getCustomArgumentResolvers());
+    }
+
+    // Catch-all
+    resolvers.add(new RequestParamMethodArgumentResolver(getBeanFactory(), true));
+    resolvers.add(new ServletModelAttributeMethodProcessor(true));
+
+    return resolvers;
+}
+</code></pre>
+
+<p>When Spring needs to invoke your handler method, it'll iterate through the parameter types and through the above list and use the first one that <code>supportsParameter()</code>.</p>
+
+<p>Notice that two instances of <code>ServletModelAttributeMethodProcessor</code> are added (one after a <code>//catch all</code> comment). The <code>ModelAttributeMethodProcessor</code> has a <code>annotationNotRequired</code> field which tells it if it should look for the <code>@ModelAttribute</code> or not. The first instance must look for <code>@ModelAttribute</code>, the second one doesn't. Spring does this so that you can register your own <code>HandlerMethodArgumentResolver</code> instances, see the <code>// Custom arguments</code> comment. </p>
+
+<hr>
+
+<p>Specifically</p>
+
+<pre><code>@RequestMapping(value = "/", method = RequestMethod.POST)
+public String sayHello(Person person, Model model) {
+    model.addAttribute("person", person);
+    return "home";
+}
+</code></pre>
+
+<p>In this case, it doesn't matter if your <code>Person</code> parameter is annotated or not. A <code>ModelAttributeMethodProcessor</code> will resolve it and bind form fields, ie. request parameters, to the fields of the instance. You shouldn't even need to add it to the <code>model</code> as the <code>ModelAttributeMethodProcessor</code> class will handle that.</p>
+
+<p>In your <code>showHelloPage()</code> method</p>
+
+<pre><code>model.addAttribute("person", new Person());
+</code></pre>
+
+<p>is needed with the <code>&lt;form&gt;</code> taglib. That's how it resolves its <code>input</code> fields.</p>
+
+<hr>
+
+<blockquote>
+  <p>So my question is - what is the use of the "ModelAttribute"
+  anonnatation?</p>
+</blockquote>
+
+<p>To automatically add the specified parameter (or method return value) to the model.</p>
+
+<blockquote>
+  <p>Is it some way to omit a "modelAttribute" attribute in a form?</p>
+</blockquote>
+
+<p>No, the <code>form</code> binding looks for an object in the <code>Model</code> and binds its fields to html <code>input</code> elements. </p>
+
+<blockquote>
+  <p>And the second part, what is the way (maybe some annotation) to make a
+  form automatically bind inputs' values to the proper bean's properties
+  (which would be declared as a method parameter)? Without a need of adding 
+  an empty bean before sending a form (as I have to do it now).</p>
+</blockquote>
+
+<p>A Spring <code>&lt;form&gt;</code> tag latches onto a model attribute object and uses its fields to create <code>input</code> and <code>label</code> elements. It doesn't matter how the object ended up in the model as long as it did. If it can't find a model attribute with the name (key) you specified, it throws exceptions, as you saw.</p>
+
+<pre><code> &lt;form:form method="post" modelAttribute="person"&gt;
+</code></pre>
+
+<p>The alternative to providing an empty bean is to create the html yourself. All Spring's <code>&lt;form&gt;</code> does is use the bean's field names to create an <code>input</code> element. So this</p>
+
+<pre><code>&lt;form:form method="post" modelAttribute="person"&gt;
+    &lt;form:label path="firstName"&gt;First name&lt;/form:label&gt;
+    &lt;form:input path="firstName" /&gt;
+</code></pre>
+
+<p>Creates something like</p>
+
+<pre><code>&lt;form method="post" action="[some action url]"&gt;
+    &lt;label for="firstName"&gt;First name&lt;label&gt;
+    &lt;input type="text" name="firstName" value="[whatever value firstName field had]" /&gt;
+    ...
+</code></pre>
+
+<p>Spring binds request parameters to instance fields using the <code>name</code> attribute.</p>

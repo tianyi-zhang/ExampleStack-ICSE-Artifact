@@ -1,0 +1,135 @@
+<p>I wrap the Ref in a Guava Supplier to avoid the dependency on Objectify during unit testing of my pojos. The suppliers are translated to a datastore Key in a similar manner as Ref.</p>
+
+<p>This class is mostly copied from the Objectify <a href="https://github.com/objectify/objectify/blob/master/src/main/java/com/googlecode/objectify/impl/translate/RefTranslatorFactory.java" rel="nofollow">RefTranslatorFactory</a>:</p>
+
+<pre><code>public class RefSupplierTranslatorFactory
+    extends ValueTranslatorFactory&lt;Supplier&lt;?&gt;, com.google.appengine.api.datastore.Key&gt; {
+@SuppressWarnings({ "unchecked", "rawtypes" })
+public RefSupplierTranslatorFactory() {
+    super((Class) Supplier.class);
+}
+
+@Override
+protected ValueTranslator&lt;Supplier&lt;?&gt;, com.google.appengine.api.datastore.Key&gt; createValueTranslator(
+        TypeKey&lt;Supplier&lt;?&gt;&gt; tk, CreateContext ctx, Path path) {
+
+    final LoadConditions loadConditions = new LoadConditions(tk.getAnnotation(Load.class));
+
+    return new ValueTranslator&lt;Supplier&lt;?&gt;, com.google.appengine.api.datastore.Key&gt;(
+            com.google.appengine.api.datastore.Key.class) {
+
+        @Override
+        protected Supplier&lt;?&gt; loadValue(com.google.appengine.api.datastore.Key value, LoadContext ctx, Path path)
+                throws SkipException {
+            Ref&lt;Object&gt; ref = ctx.loadRef(Key.create(value), loadConditions);
+            return new RefSupplier(ref);
+        }
+
+        @Override
+        protected com.google.appengine.api.datastore.Key saveValue(Supplier&lt;?&gt; value, boolean index,
+                SaveContext ctx, Path path) throws SkipException {
+            return ctx.saveRef(Ref.create(value.get()), loadConditions);
+        }
+    };
+}
+
+public static class RefSupplier
+        implements Serializable, Supplier&lt;Object&gt; {
+    private static final long serialVersionUID = 1L;
+    final private Ref&lt;?&gt; ref;
+
+    public RefSupplier(Ref&lt;?&gt; ref) {
+        this.ref = ref;
+    }
+
+    @Override
+    public Object get() {
+        return ref.get();
+    }
+
+}
+}
+</code></pre>
+
+<p>Say I have the following Pojos:</p>
+
+<pre><code>@Entity
+public static class CarWithSupplier {
+    @Id
+    Long id;
+    Supplier&lt;SteeringWheel&gt; steeringWheel;
+    List&lt;Supplier&lt;Tire&gt;&gt; tires;
+}
+
+@Entity
+public static class SteeringWheel {
+    @Id
+    Long id;
+}
+
+@Entity
+public static class Tire {
+    @Id
+    Long id;
+}
+</code></pre>
+
+<p>I am able to run a unit test without dependency on Objectify:</p>
+
+<pre><code>@Test
+public void testSupplier() {
+    CarWithSupplier car = carWithSupplier();
+    assertNotNull(car.steeringWheel);
+    assertNotNull(car.tires);
+    assertEquals(2, car.tires.size());
+}
+
+protected CarWithSupplier carWithSupplier() {
+    CarWithSupplier car = new CarWithSupplier();
+    car.steeringWheel = Suppliers.ofInstance(steeringWheel());
+    final Supplier&lt;Tire&gt; leftFrontTire = Suppliers.ofInstance(tire());
+    final Supplier&lt;Tire&gt; rightFrontTire = Suppliers.ofInstance(tire());
+    car.tires = ImmutableList.of(leftFrontTire, rightFrontTire);
+    return car;
+}
+</code></pre>
+
+<p>Extending the unit test, but setting up the necessary objectify resources during test setup I am able to get the same unit test to run against the datastore:</p>
+
+<pre><code>@Before
+public void setUpObjectify() throws Exception {
+    helper.setUp();
+    closeable = ObjectifyService.begin();
+    final ObjectifyFactory factory = ObjectifyService.factory();
+    factory.getTranslators().add(new RefSupplierTranslatorFactory());
+    factory.register(CarWithSupplier.class);
+    factory.register(SteeringWheel.class);
+    factory.register(Tire.class);
+}
+
+@Override
+protected CarWithSupplier carWithSupplier() {
+    final CarWithSupplier car = super.carWithSupplier();
+    final Objectify ofy = ObjectifyService.ofy();
+    Key&lt;CarWithSupplier&gt; key = ofy.save().entity(car).now();
+    return ofy.load().key(key).now();
+}
+
+@Override
+protected Tire tire() {
+    final Tire tire = super.tire();
+    ObjectifyService.ofy().save().entity(tire).now();
+    return tire;
+}
+
+@Override
+protected SteeringWheel steeringWheel() {
+    final SteeringWheel steeringWheel = super.steeringWheel();
+    ObjectifyService.ofy().save().entity(steeringWheel).now();
+    return steeringWheel;
+}
+</code></pre>
+
+<p>Unit testing of my pojos is valuable since they are populated initially using the JSON response from third party web API services (using Gson).  I find it valuable to separate testing of Gson parsing from testing objectify datastore function. I later test them altogether during integration testing.</p>
+
+<p>I haven't put this through extensive use yet so I welcome input from @stickfigure if this may cause issues or otherwise take away advantages of using Ref directly.</p>

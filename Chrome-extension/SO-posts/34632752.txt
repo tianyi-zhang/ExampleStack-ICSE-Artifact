@@ -1,0 +1,177 @@
+<p><strong>First of all we will get source and destination points between which we have to draw route. Then we will pass these attribute to below function.</strong>   </p>
+
+<pre><code> public String makeURL (double sourcelat, double sourcelog, double destlat, double destlog ){
+    StringBuilder urlString = new StringBuilder();
+    urlString.append("http://maps.googleapis.com/maps/api/directions/json");
+    urlString.append("?origin=");// from
+    urlString.append(Double.toString(sourcelat));
+    urlString.append(",");
+    urlString
+            .append(Double.toString( sourcelog));
+    urlString.append("&amp;destination=");// to
+    urlString
+            .append(Double.toString( destlat));
+    urlString.append(",");
+    urlString.append(Double.toString( destlog));
+    urlString.append("&amp;sensor=false&amp;mode=driving&amp;alternatives=true");
+    urlString.append("&amp;key=YOUR_API_KEY");
+    return urlString.toString(); }
+</code></pre>
+
+<p><strong>This function will make the url that we will send to get Direction API response. Then we will parse that response . The parser class is</strong></p>
+
+<pre><code>public class JSONParser {
+
+static InputStream is = null;
+static JSONObject jObj = null;
+static String json = "";
+// constructor
+public JSONParser() {
+}
+public String getJSONFromUrl(String url) {
+
+    // Making HTTP request
+    try {
+        // defaultHttpClient
+        DefaultHttpClient httpClient = new DefaultHttpClient();
+        HttpPost httpPost = new HttpPost(url);
+
+        HttpResponse httpResponse = httpClient.execute(httpPost);
+        HttpEntity httpEntity = httpResponse.getEntity();
+        is = httpEntity.getContent();           
+
+    } catch (UnsupportedEncodingException e) {
+        e.printStackTrace();
+    } catch (ClientProtocolException e) {
+        e.printStackTrace();
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    try {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                is, "iso-8859-1"), 8);
+        StringBuilder sb = new StringBuilder();
+        String line = null;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line + "\n");
+        }
+
+        json = sb.toString();
+        is.close();
+    } catch (Exception e) {
+        Log.e("Buffer Error", "Error converting result " + e.toString());
+    }
+    return json;
+
+}}
+</code></pre>
+
+<p><strong>This parser will return us string. We will call it like that.</strong></p>
+
+<pre><code>JSONParser jParser = new JSONParser();String json = jParser.getJSONFromUrl(url);
+</code></pre>
+
+<p><strong>Now we will send this string to our drawpath function. The drawpath function</strong></p>
+
+<pre><code>public void drawPath(String  result) {
+
+try {
+        //Tranform the string into a json object
+       final JSONObject json = new JSONObject(result);
+       JSONArray routeArray = json.getJSONArray("routes");
+       JSONObject routes = routeArray.getJSONObject(0);
+       JSONObject overviewPolylines = routes.getJSONObject("overview_polyline");
+       String encodedString = overviewPolylines.getString("points");
+       List&lt;LatLng&gt; list = decodePoly(encodedString);
+       Polyline line = mMap.addPolyline(new PolylineOptions()
+                                .addAll(list)
+                                .width(12)
+                                .color(Color.parseColor("#05b1fb"))//Google maps blue color
+                                .geodesic(true)
+                );
+       /*
+       for(int z = 0; z&lt;list.size()-1;z++){
+            LatLng src= list.get(z);
+            LatLng dest= list.get(z+1);
+            Polyline line = mMap.addPolyline(new PolylineOptions()
+            .add(new LatLng(src.latitude, src.longitude), new LatLng(dest.latitude,   dest.longitude))
+            .width(2)
+            .color(Color.BLUE).geodesic(true));
+        }
+       */
+} 
+catch (JSONException e) {
+
+}} 
+</code></pre>
+
+<p><strong>Above code will draw the path on mMap. The code of decodePoly is</strong></p>
+
+<pre><code>private List&lt;LatLng&gt; decodePoly(String encoded) {
+
+List&lt;LatLng&gt; poly = new ArrayList&lt;LatLng&gt;();
+int index = 0, len = encoded.length();
+int lat = 0, lng = 0;
+
+while (index &lt; len) {
+    int b, shift = 0, result = 0;
+    do {
+        b = encoded.charAt(index++) - 63;
+        result |= (b &amp; 0x1f) &lt;&lt; shift;
+        shift += 5;
+    } while (b &gt;= 0x20);
+    int dlat = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+        b = encoded.charAt(index++) - 63;
+        result |= (b &amp; 0x1f) &lt;&lt; shift;
+        shift += 5;
+    } while (b &gt;= 0x20);
+    int dlng = ((result &amp; 1) != 0 ? ~(result &gt;&gt; 1) : (result &gt;&gt; 1));
+    lng += dlng;
+
+    LatLng p = new LatLng( (((double) lat / 1E5)),
+             (((double) lng / 1E5) ));
+    poly.add(p);
+}
+
+return poly;}
+</code></pre>
+
+<p><strong>As direction call may take time so we will do all this in Asynchronous task. My Asynchronous task was</strong></p>
+
+<pre><code>private class connectAsyncTask extends AsyncTask&lt;Void, Void, String&gt;{
+private ProgressDialog progressDialog;
+String url;
+connectAsyncTask(String urlPass){
+    url = urlPass;
+}
+@Override
+protected void onPreExecute() {
+    // TODO Auto-generated method stub
+    super.onPreExecute();
+    progressDialog = new ProgressDialog(MainActivity.this);
+    progressDialog.setMessage("Fetching route, Please wait...");
+    progressDialog.setIndeterminate(true);
+    progressDialog.show();
+}
+@Override
+protected String doInBackground(Void... params) {
+    JSONParser jParser = new JSONParser();
+    String json = jParser.getJSONFromUrl(url);
+    return json;
+}
+@Override
+protected void onPostExecute(String result) {
+    super.onPostExecute(result);   
+    progressDialog.hide();        
+    if(result!=null){
+        drawPath(result);
+    }
+}}
+</code></pre>
+
+<p><strong>Try This Code it work for me</strong></p>

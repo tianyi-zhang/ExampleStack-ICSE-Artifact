@@ -1,0 +1,386 @@
+<p>Well the problem is most mobile browsers do not support the file dialog. IIRC iOS 6 is the first mobile browser to support this functionality. I did write some code in my <a href="https://github.com/macdonst/corinthian" rel="nofollow">Corinthian</a> project, not under active development, that does monkey patch this functionality. </p>
+
+<p>First you'd need to write an Android plugin to start an intent to provide the file dialog. I'm using OI File Manager.</p>
+
+<pre><code>package org.apache.cordova;
+
+import org.apache.cordova.api.CallbackContext;
+import org.apache.cordova.api.CordovaPlugin;
+import org.apache.cordova.api.LOG;
+import org.apache.cordova.api.PluginResult;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.HashMap;
+
+/**
+ * This class exposes methods in DroidGap that can be called from JavaScript.
+ */
+public class App extends CordovaPlugin {
+
+    /**
+     * Executes the request and returns PluginResult.
+     *
+     * @param action            The action to execute.
+     * @param args              JSONArry of arguments for the plugin.
+     * @param callbackContext   The callback context from which we were invoked.
+     * @return                  A PluginResult object with a status and message.
+     */
+    public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
+        PluginResult.Status status = PluginResult.Status.OK;
+        String result = "";
+
+        try {
+            if (action.equals("clearCache")) {
+                this.clearCache();
+            }
+            else if (action.equals("show")) {
+                // This gets called from JavaScript onCordovaReady to show the webview.
+                // I recommend we change the name of the Message as spinner/stop is not
+                // indicative of what this actually does (shows the webview).
+                cordova.getActivity().runOnUiThread(new Runnable() {
+                    public void run() {
+                        webView.postMessage("spinner", "stop");
+                    }
+                });
+            }
+            else if (action.equals("loadUrl")) {
+                this.loadUrl(args.getString(0), args.optJSONObject(1));
+            }
+            else if (action.equals("cancelLoadUrl")) {
+                this.cancelLoadUrl();
+            }
+            else if (action.equals("clearHistory")) {
+                this.clearHistory();
+            }
+            else if (action.equals("backHistory")) {
+                this.backHistory();
+            }
+            else if (action.equals("overrideButton")) {
+                this.overrideButton(args.getString(0), args.getBoolean(1));
+            }
+            else if (action.equals("overrideBackbutton")) {
+                this.overrideBackbutton(args.getBoolean(0));
+            }
+            else if (action.equals("exitApp")) {
+                this.exitApp();
+            }
+            callbackContext.sendPluginResult(new PluginResult(status, result));
+            return true;
+        } catch (JSONException e) {
+            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
+            return false;
+        }
+    }
+
+    //--------------------------------------------------------------------------
+    // LOCAL METHODS
+    //--------------------------------------------------------------------------
+
+    /**
+     * Clear the resource cache.
+     */
+    public void clearCache() {
+        this.webView.clearCache(true);
+    }
+
+    /**
+     * Load the url into the webview.
+     *
+     * @param url
+     * @param props         Properties that can be passed in to the DroidGap activity (i.e. loadingDialog, wait, ...)
+     * @throws JSONException
+     */
+    public void loadUrl(String url, JSONObject props) throws JSONException {
+        LOG.d("App", "App.loadUrl("+url+","+props+")");
+        int wait = 0;
+        boolean openExternal = false;
+        boolean clearHistory = false;
+
+        // If there are properties, then set them on the Activity
+        HashMap&lt;String, Object&gt; params = new HashMap&lt;String, Object&gt;();
+        if (props != null) {
+            JSONArray keys = props.names();
+            for (int i = 0; i &lt; keys.length(); i++) {
+                String key = keys.getString(i);
+                if (key.equals("wait")) {
+                    wait = props.getInt(key);
+                }
+                else if (key.equalsIgnoreCase("openexternal")) {
+                    openExternal = props.getBoolean(key);
+                }
+                else if (key.equalsIgnoreCase("clearhistory")) {
+                    clearHistory = props.getBoolean(key);
+                }
+                else {
+                    Object value = props.get(key);
+                    if (value == null) {
+
+                    }
+                    else if (value.getClass().equals(String.class)) {
+                        params.put(key, (String)value);
+                    }
+                    else if (value.getClass().equals(Boolean.class)) {
+                        params.put(key, (Boolean)value);
+                    }
+                    else if (value.getClass().equals(Integer.class)) {
+                        params.put(key, (Integer)value);
+                    }
+                }
+            }
+        }
+
+        // If wait property, then delay loading
+
+        if (wait &gt; 0) {
+            try {
+                synchronized(this) {
+                    this.wait(wait);
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        this.webView.showWebPage(url, openExternal, clearHistory, params);
+    }
+
+    /**
+     * Cancel loadUrl before it has been loaded (Only works on a CordovaInterface class)
+     */
+    @Deprecated
+    public void cancelLoadUrl() {
+        this.cordova.cancelLoadUrl();
+    }
+
+    /**
+     * Clear page history for the app.
+     */
+    public void clearHistory() {
+        this.webView.clearHistory();
+    }
+
+    /**
+     * Go to previous page displayed.
+     * This is the same as pressing the backbutton on Android device.
+     */
+    public void backHistory() {
+        cordova.getActivity().runOnUiThread(new Runnable() {
+            public void run() {
+                webView.backHistory();
+            }
+        });
+    }
+
+    /**
+     * Override the default behavior of the Android back button.
+     * If overridden, when the back button is pressed, the "backKeyDown" JavaScript event will be fired.
+     *
+     * @param override      T=override, F=cancel override
+     */
+    public void overrideBackbutton(boolean override) {
+        LOG.i("App", "WARNING: Back Button Default Behaviour will be overridden.  The backbutton event will be fired!");
+        webView.bindButton(override);
+    }
+
+    /**
+     * Override the default behavior of the Android volume buttons.
+     * If overridden, when the volume button is pressed, the "volume[up|down]button" JavaScript event will be fired.
+     *
+     * @param button        volumeup, volumedown
+     * @param override      T=override, F=cancel override
+     */
+    public void overrideButton(String button, boolean override) {
+        LOG.i("DroidGap", "WARNING: Volume Button Default Behaviour will be overridden.  The volume event will be fired!");
+        webView.bindButton(button, override);
+    }
+
+    /**
+     * Return whether the Android back button is overridden by the user.
+     *
+     * @return boolean
+     */
+    public boolean isBackbuttonOverridden() {
+        return webView.isBackButtonBound();
+    }
+
+    /**
+     * Exit the Android application.
+     */
+    public void exitApp() {
+        this.webView.postMessage("exit", null);
+    }
+
+}
+
+package com.simonmacdonald.corinthian;
+
+import org.apache.cordova.api.Plugin;
+import org.apache.cordova.api.PluginResult;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.net.Uri;
+import android.util.Log;
+
+public class FileDialog extends Plugin {
+    private static final int PICK_FILE_RESULT_CODE = 8974;
+    private static final int PICK_DIRECTORY_RESULT_CODE = 8975;
+    private static final String LOG_TAG = "FileDialog";
+    public String callbackId;
+
+    /**
+     * Executes the request and returns PluginResult.
+     *
+     * @param action        The action to execute.
+     * @param args          JSONArry of arguments for the plugin.
+     * @param callbackId    The callback id used when calling back into JavaScript.
+     * @return              A PluginResult object with a status and message.
+     */
+    @Override
+    public PluginResult execute(String action, JSONArray args, String callbackId) {
+        this.callbackId = callbackId;
+
+        JSONObject options = args.optJSONObject(0);
+
+        if (action.equals("pickFile")) {
+            showDialog(options, PICK_FILE_RESULT_CODE);
+        } else if (action.equals("pickFolder")) {
+            showDialog(options, PICK_DIRECTORY_RESULT_CODE);
+        }
+        else {
+            return new PluginResult(PluginResult.Status.INVALID_ACTION);
+        }
+        PluginResult r = new PluginResult(PluginResult.Status.NO_RESULT);
+        r.setKeepCallback(true);
+        return r;
+    }
+
+    private void showDialog(JSONObject options, int type) {
+        Intent intent;
+        if (type == PICK_FILE_RESULT_CODE) {
+            intent = new Intent("org.openintents.action.PICK_FILE");
+        } else {
+            intent = new Intent("org.openintents.action.PICK_DIRECTORY");
+        }
+        if (options != null) {
+            String title = options.optString("title");
+            if (title != null) {
+                intent.putExtra("org.openintents.extra.TITLE", title);
+            }
+            String button = options.optString("button");
+            if (button != null) {
+                intent.putExtra("org.openintents.extra.BUTTON_TEXT", button);
+            }
+        }
+        //intent.setData(Uri.fromFile(new File("/")));
+        try {
+            this.cordova.startActivityForResult((Plugin)this,intent,PICK_FILE_RESULT_CODE);
+        } catch (ActivityNotFoundException e) {
+            showDownloadDialog();
+        }
+    }
+
+    private void showDownloadDialog() {
+        final Context context = this.cordova.getContext();
+        Runnable runnable = new Runnable() {
+            public void run() {
+
+                AlertDialog.Builder dialog = new AlertDialog.Builder(context);
+                dialog.setTitle("Install File Manager?");
+                dialog.setMessage("This requires the free OI File Manager app. Would you like to install it now?");
+                dialog.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dlg, int i) {
+                        dlg.dismiss();
+                        Intent intent = new Intent(Intent.ACTION_VIEW,
+                            Uri.parse("market://search?q=pname:org.openintents.filemanager")
+                        );
+                        try {
+                            context.startActivity(intent);
+                        } catch (ActivityNotFoundException e) {
+//                          We don't have the market app installed, so download it directly.
+                            Intent in = new Intent(Intent.ACTION_VIEW);
+                            in.setData(Uri.parse("http://openintents.googlecode.com/files/FileManager-1.2.apk"));
+                            context.startActivity(in);
+
+                        }
+
+                    }
+                });
+                dialog.setNegativeButton("No", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dlg, int i) {
+                        dlg.dismiss();
+                    }
+                });
+                dialog.create();
+                dialog.show();
+            }
+        };
+        this.cordova.getActivity().runOnUiThread(runnable);
+    }
+
+    @Override
+    public void onActivityResult(int reqCode, int resultCode, Intent data) {
+      //super.onActivityResult(reqCode, resultCode, data);
+      //Log.d(LOG_TAG, "Data is " + data.getData().toString());
+      Log.d(LOG_TAG, "we are in on activity result");
+      switch (reqCode) {
+      case PICK_FILE_RESULT_CODE:
+      case PICK_DIRECTORY_RESULT_CODE: {
+          if (resultCode==Activity.RESULT_OK &amp;&amp; data!=null &amp;&amp; data.getData()!=null) {
+              String filePath = "file://" + data.getData().getPath();
+              Log.d(LOG_TAG, "The data is = " + filePath);
+              Log.d(LOG_TAG, "Calling succes with callback id = " + this.callbackId);
+              this.success(new PluginResult(PluginResult.Status.OK, filePath), this.callbackId);
+          }
+          break;
+      }
+  }
+    }
+}
+</code></pre>
+
+<p>Then you'd need to write your JavaScript interface:</p>
+
+<pre><code>FileDialog: {
+    pickFile: function(successCallback, errorCallback, options) {
+        var win = typeof successCallback !== 'function' ? null : function(f) {
+            window.resolveLocalFileSystemURI(f, function(fileEntry) {
+                successCallback(fileEntry);
+            }, fail);
+        };
+        cordova.exec(win, errorCallback, "FileDialog", "pickFile", [options]);
+    },
+    pickFolder: function(successCallback, errorCallback, options) {
+        var win = typeof successCallback !== 'function' ? null : function(d) {
+            window.resolveLocalFileSystemURI(d, function(dirEntry) {
+                successCallback(dirEntry);
+            }, fail);
+        };
+        cordova.exec(win, errorCallback, "FileDialog", "pickFolder", [options]);
+    },
+    patch: function() {
+        var inputs = document.getElementsByTagName("input");
+        for (var i=0; i &lt; inputs.length; i++) {
+           if (inputs[i].getAttribute('type') == 'file'){
+               var me = inputs[i];
+               inputs[i].addEventListener("click", function() {
+                   corinthian.FileDialog.pickFile(function(fileEntry) {
+                       me.value = fileEntry.fullPath;
+                   });
+               });
+           }
+        }
+    }
+}
+</code></pre>
+
+<p>and finally monkey patch by calling FileDialog.patch(); once you have received the deviceready event in PhoneGap.</p>
+
+<p>Hope this helps...</p>

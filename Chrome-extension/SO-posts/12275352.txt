@@ -1,0 +1,118 @@
+<h3>Dissecting the Problem</h3>
+
+<p>As per your last update, <code>where</code> you mentioned the origin of the exception, the problem lies in the following lines.</p>
+
+<pre><code>int /*long*/[] ppv = new int /*long*/[1];
+result = COM.CoCreateInstance(appClsid, 0, COM.CLSCTX_INPROC_HANDLER | COM.CLSCTX_INPROC_SERVER, COM.IIDIUnknown, ppv);
+if (result != COM.S_OK) OLE.error(OLE.ERROR_CANNOT_CREATE_OBJECT, result);
+</code></pre>
+
+<p>Now the second line in the above code is trying create a single uninitialized object of the class associated with a specified CLSID. Now in your case you are directly providing the XLSX file path, and therefore it uses the <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms693715%28v=vs.85%29.aspx" rel="nofollow">GetClassFile()</a> which returns the CLSID associated with the specified file name. Now if it would have failed then you should have gotten the exception at line <strong>186</strong> of <code>OleClientSite</code>. Also, you are able to get a proper <code>program id</code> from the <code>file class id</code> otherwise an exception at line <strong>189</strong> would have resulted. </p>
+
+<h3>Checking the Error Code</h3>
+
+<p>In your stacktrace you got an error code <code>-2147221164</code>. Now to check what it really means. Start up your Visual Studio and select from menu <code>Tools</code> -> <code>Error Lookup</code>. Put the error code there and click lookup. And it gives... </p>
+
+<p><img src="http://i.stack.imgur.com/C5DBZ.png" alt="enter image description here"></p>
+
+<p>Now the question is if the <code>class is not registered</code> then you should have got this problem while getting the <code>program id</code> from the <code>class id</code> at line <strong>189</strong>. And this makes thing weird. Therefore, before proceeding ahead follow the <strong>Second Check</strong>.</p>
+
+<p>As per MSDN entry of <a href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms686615%28v=vs.85%29.aspx" rel="nofollow">CoCreateInstance</a>, the above error message could also mean thatthe type of server you requested in the CLSCTX enumeration is not registered or the values for the server types in the registry are corrupt.</p>
+
+<h3>Second Check</h3>
+
+<p>As a second check and to nail the real problem, just try this <a href="http://git.eclipse.org/c/platform/eclipse.platform.swt.git/tree/examples/org.eclipse.swt.snippets/src/org/eclipse/swt/snippets/Snippet261.java" rel="nofollow">SWT Snippet</a> and update the result in your question.</p>
+
+<h3>Third Check</h3>
+
+<p>I have written this simple test class. Try to run it and post the console output. Also, uncomment the <strong>line 57</strong> and run again and post its output too.</p>
+
+<p><strong>Note -</strong> You have to change the File constructor parameter.</p>
+
+<pre><code>import java.io.File;
+
+import org.eclipse.swt.internal.ole.win32.COM;
+import org.eclipse.swt.internal.ole.win32.GUID;
+import org.eclipse.swt.internal.win32.OS;
+import org.eclipse.swt.layout.FillLayout;
+import org.eclipse.swt.ole.win32.OLE;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
+
+public class TestCode 
+{
+    public static void main(String[] args)
+    {
+        Display display = new Display();
+        Shell shell = new Shell(display);
+
+        shell.setText("Excel Example");
+        shell.setLayout(new FillLayout());
+
+        try{
+            check(new File("output.xlsx"));
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
+        shell.open();
+
+        while (!shell.isDisposed()) {
+            if (!display.readAndDispatch())
+                display.sleep();
+        }
+        display.dispose();
+    }
+
+    static void check(File file)
+    {
+        GUID fileClsid = new GUID();
+        char[] fileName = (file.getAbsolutePath()+"\0").toCharArray();
+        int result = COM.GetClassFile(fileName, fileClsid);
+        if (result != COM.S_OK) 
+            OLE.error(OLE.ERROR_INVALID_CLASSID, result);
+
+        System.out.println(fileClsid);
+
+        String progID = getProgID(fileClsid); 
+        if (progID == null) 
+            OLE.error(OLE.ERROR_INVALID_CLASSID, result);
+
+        System.out.println(progID);
+
+
+        int [] ppv = new int[1];
+
+        int server_type = COM.CLSCTX_INPROC_HANDLER | COM.CLSCTX_INPROC_SERVER;
+
+        //server_type |= COM.CLSCTX_LOCAL_SERVER; 
+
+        result = COM.CoCreateInstance(fileClsid, 0, server_type, COM.IIDIUnknown, ppv);
+        if (result != COM.S_OK) 
+            OLE.error(OLE.ERROR_CANNOT_CREATE_OBJECT, result);
+    }
+
+    static String getProgID(GUID clsid)
+    {
+        if (clsid != null)
+        {
+            int [] lplpszProgID = new int [1];
+            if (COM.ProgIDFromCLSID(clsid, lplpszProgID) == COM.S_OK)
+            {
+                int  hMem = lplpszProgID[0];
+                int length = OS.GlobalSize(hMem);
+                int  ptr = OS.GlobalLock(hMem);
+                char[] buffer = new char[length];
+                COM.MoveMemory(buffer, ptr, length);
+                OS.GlobalUnlock(hMem);
+                OS.GlobalFree(hMem);
+
+                String result = new String(buffer);
+                int index = result.indexOf("\0");
+                return result.substring(0, index);
+            }
+        }
+        return null;
+    }
+}
+</code></pre>

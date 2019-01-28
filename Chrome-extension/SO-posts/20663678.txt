@@ -1,0 +1,230 @@
+<p>This is how you do it.</p>
+
+<pre><code> package com.example.frequencytest;
+
+
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+
+import jfftpack.javasource.ca.uol.aig.fftpack.RealDoubleFFT;
+import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.Menu;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+public class MainActivity extends Activity implements OnClickListener {
+
+    int frequency = 44100;
+    int channelConfiguration = AudioFormat.CHANNEL_IN_MONO;
+    int audioEncoding = AudioFormat.ENCODING_PCM_16BIT;
+    private RealDoubleFFT transformer;
+    int blockSize = 1024;
+    public double movingAvg = 0.0;
+    public int movingAvgCnt = 0;
+    public BufferedWriter buf = null;
+    File tempFile = new File("sdcard/Data_Log.txt");
+
+    Button startStopButton;
+    boolean started = false;
+
+    RecordAudio recordTask;
+    TextView textView1;
+
+    ImageView imageView;
+    Bitmap bitmap;
+    Canvas canvas;
+    Paint paint;
+
+    //AudioRecord audioRecord;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        startStopButton = (Button) this.findViewById(R.id.StartStopButton);
+        startStopButton.setOnClickListener(this);
+
+        transformer = new RealDoubleFFT(blockSize);
+
+        imageView = (ImageView) this.findViewById(R.id.ImageView01);
+        textView1 = (TextView) findViewById(R.id.textView1);
+        bitmap = Bitmap.createBitmap((int) 1024, (int) 300,
+                Bitmap.Config.ARGB_8888);
+        canvas = new Canvas(bitmap);
+        paint = new Paint();
+        paint.setColor(Color.GREEN);
+        paint.setStrokeWidth(2);
+        imageView.setImageBitmap(bitmap);
+
+    }
+
+    public class RecordAudio extends AsyncTask&lt;Void, double[], Void&gt; {
+
+        @Override
+        protected Void doInBackground(Void... arg0) {
+
+            try {
+                int bufferSize = AudioRecord.getMinBufferSize(frequency, 
+                        channelConfiguration, audioEncoding); 
+                AudioRecord audioRecord = new AudioRecord( 
+                        MediaRecorder.AudioSource.MIC, frequency, 
+                        channelConfiguration, audioEncoding, bufferSize); 
+
+                short[] buffer = new short[blockSize];
+                double[] toTransform = new double[blockSize];
+                audioRecord.startRecording();
+
+                // started = true; hopes this should true before calling
+                // following while loop
+
+                while (started) {
+                    int bufferReadResult = audioRecord.read(buffer, 0,
+                            blockSize);
+
+                    for (int i = 0; i &lt; blockSize &amp;&amp; i &lt; bufferReadResult; i++) {
+                        toTransform[i] = (double) buffer[i] / 32768.0;
+                    }
+                        toTransform = HanningWindow(toTransform,0,blockSize);
+                        transformer.ft(toTransform);
+                        publishProgress(toTransform);
+                }
+
+                audioRecord.stop();
+                buf.close();
+
+            } catch (Throwable t) {
+                t.printStackTrace();
+                Log.e("AudioRecord", "Recording Failed");
+            }
+            return null;
+        }
+
+        @Override
+        protected void onProgressUpdate(double[]... toTransform) {
+
+            canvas.drawColor(Color.BLACK);
+
+            double average = 0.0;
+            int averageCnt=1;
+            for (int i = 0; i &lt; toTransform[0].length; i++) {
+                int x = i;
+                int downy = (int) (100 - (toTransform[0][i] * 10));
+                int upy = 100;
+
+                if(i&gt;2 &amp;&amp; i&lt;(toTransform[0].length/2)){
+                    average += Math.sqrt(Math.abs(toTransform[0][i]));
+                    averageCnt++;
+                }
+                canvas.drawLine(x, downy, x, upy, paint);              
+            }
+            average = average/averageCnt;
+            movingAvg += average;
+            movingAvgCnt++;
+            if(movingAvgCnt==5){
+                movingAvg = movingAvg/movingAvgCnt;
+
+                textView1.setText(""+movingAvg);
+                try{
+                      buf.append("" + average + ","+movingAvg);
+                      buf.newLine();
+                   }catch (IOException e)
+                       {
+                          e.printStackTrace();
+                       }
+                movingAvg = 0.0;
+                movingAvgCnt = 0;
+            }   
+            imageView.invalidate();
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.main, menu);
+        return true;
+    }
+
+    public void onClick(View arg0) {
+        // TODO Auto-generated method stub
+        if (started) {
+            started = false;
+            startStopButton.setText("Start");
+            recordTask.cancel(true);
+        } else {
+            started = true;
+            startStopButton.setText("Stop");
+            setupTempFile();
+            recordTask = new RecordAudio();
+            recordTask.execute();
+        }
+    }
+
+    public void setupTempFile(){
+        Log.d("Process", "startRecording");
+
+        if (tempFile.exists()){tempFile.delete();}
+        if (!tempFile.exists())
+           {
+              try
+              {
+                 tempFile.createNewFile();
+              } 
+              catch (IOException e)
+              {
+                 // TODO Auto-generated catch block
+                 e.printStackTrace();
+              }
+              try
+               {
+                  //BufferedWriter for performance, true to set append to file flag
+                  buf = new BufferedWriter(new FileWriter(tempFile, true)); 
+                  buf.append("Data Val, Moving Average");
+                  buf.newLine();
+               }
+               catch (IOException e)
+               {
+                  // TODO Auto-generated catch block
+                  e.printStackTrace();
+               }
+
+           }
+    }
+    public short[] HanningWindow(short[] signal_in, int pos, int size)
+    {
+        for (int i = pos; i &lt; pos + size; i++)
+        {
+            int j = i - pos; // j = index into Hann window function
+            signal_in[i] = (short) (signal_in[i] * 0.5 * (1.0 - Math.cos(2.0 * Math.PI * j / size)));
+        }
+        return signal_in;
+    }
+
+    public double[] HanningWindow(double[] signal_in, int pos, int size)
+    {
+        for (int i = pos; i &lt; pos + size; i++)
+        {
+            int j = i - pos; // j = index into Hann window function
+            signal_in[i] = (double) (signal_in[i] * 0.5 * (1.0 - Math.cos(2.0 * Math.PI * j / size)));
+        }
+        return signal_in;
+    }
+</code></pre>
+
+<p>}</p>

@@ -1,0 +1,611 @@
+<p>I had a similar need but the solution posted here was not quite right (efficient) for me.  I needed the check-box-tree's model to be built lazily as my full tree-model could be huge (with many thousands of nodes). Also, keeping the set of all the checkedPaths was a cost that seemed excessive and unnecessary for my data-set and usage :  all I needed was the map of nodes which were actually selected and deselected by the user as that is the minimalist info from which the subordinate nodes could be inferred. </p>
+
+<p>So I "enhanced" the solution above to be lazy in building the tree-model (only add to the model when a node is actually expanded by user) and in displaying it (only set state of subordinate nodes when a user actually checks/un-checks a parent node).</p>
+
+<p>I also added to JCheckBoxTree's interface to provide treeModel and expand-listener from outside. To use this you need to provide alternate implementation of the portion of the code below the comment "Your Domain specific stuff goes here", based on your own domain. The TreeExpansionListener does the lazy insertion of nodes, using the domain-object's expand method.</p>
+
+<pre><code>package contrib.backup.checkboxtree;
+
+import javax.swing.*;
+import javax.swing.event.TreeExpansionEvent;
+import javax.swing.event.TreeExpansionListener;
+import javax.swing.tree.*;
+import java.awt.BorderLayout;
+import java.awt.Component;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Random;
+
+public class MyDomainCheckBoxTree extends JFrame {
+
+    HashSet&lt;TreePath&gt; includedPaths = new HashSet&lt;&gt;();
+    HashSet&lt;TreePath&gt; excludedPaths = new HashSet&lt;&gt;();
+    TreeModel treeModel;
+
+    public MyDomainCheckBoxTree(boolean testDefault) {
+        super();
+        setSize(500, 500);
+        this.getContentPane().setLayout(new BorderLayout());
+
+        final JCheckBoxTree cbt;
+        if( testDefault ) {
+            treeModel = null;
+            cbt = new JCheckBoxTree();
+        }
+        else {
+            treeModel = buildModel();
+            LazyCheckBoxCellRenderer treeCellRenderer = new LazyCheckBoxCellRenderer();
+            cbt = new JCheckBoxTree(treeModel, null, treeCellRenderer);
+            treeCellRenderer.setCheckBoxTree(cbt);
+            cbt.addTreeExpansionListener(new NodeExpansionListener());
+        }
+
+        JScrollPane s = new JScrollPane();
+        s.getViewport().add(cbt);
+        getContentPane().add(s, BorderLayout.CENTER);
+
+        //this.getContentPane().add(cbt);
+
+        cbt.addCheckChangeEventListener(new JCheckBoxTree.CheckChangeEventListener() {
+            public void checkStateChanged(JCheckBoxTree.CheckChangeEvent event) {
+                updatePaths(cbt, event);
+                // For Debugging (correctness and laziness)
+                System.out.println("\n========== Current State ========");
+                System.out.println("+ + + Included Paths: ");
+                printPaths(includedPaths);
+                System.out.println("- - - Excluded Paths: ");
+                printPaths(excludedPaths);
+                System.out.println("Size of node-checkState cache = " + cbt.nodesCheckingState.size());
+                //
+            }
+        });
+        this.setDefaultCloseOperation(EXIT_ON_CLOSE);
+    }
+
+    // (As prelude)Purges any of clickedPath's children from the 2 path-sets.
+    // Then adds/removes clickedPath from the 2 path-sets if appropriate.
+    protected void updatePaths(JCheckBoxTree cbt,
+                               JCheckBoxTree.CheckChangeEvent event){
+        boolean  parentAlreadyIncluded = false;
+        boolean  parentAlreadyExcluded = false;
+        TreePath clickedPath = (TreePath) event.getSource();
+        HashSet&lt;TreePath&gt;  toBeRemoved = new HashSet&lt;&gt;();
+
+        //When a node is included/excluded, its children are implied as included/excluded.
+        // Note: The direct-parent check is needed to avoid problem if immediate-parent is excluded
+        // but grand-father/higher-ancestor is included
+        for( TreePath exp : excludedPaths){
+            if( clickedPath.isDescendant(exp) ) // exp is descended from clickedPath
+                toBeRemoved.add(exp);
+            if( isParent(exp, clickedPath)) // clickedPath is child of exp
+                parentAlreadyExcluded = true;
+        }
+        excludedPaths.removeAll(toBeRemoved);
+        toBeRemoved.clear();
+
+        for( TreePath inp : includedPaths) {
+            if(clickedPath.isDescendant(inp)) // inp is descended from clickedPath
+                toBeRemoved.add(inp);
+            if( isParent(inp, clickedPath)) // clickedPath is child of inp
+                parentAlreadyIncluded = true;
+        }
+        includedPaths.removeAll(toBeRemoved);
+        toBeRemoved.clear();
+
+        // Now add/remove clickedPath from the path-sets as appropriate
+        if( cbt.getCheckMode(clickedPath) ){ //selected =&gt; to be included
+            if(!parentAlreadyIncluded)
+                includedPaths.add(clickedPath);
+            excludedPaths.remove(clickedPath);
+        }else {    //deselected =&gt; to be excluded
+            if( !parentAlreadyExcluded )
+                excludedPaths.add(clickedPath);
+            includedPaths.remove(clickedPath);
+        }
+    }
+
+    // returns true if aPath is immediate parent of bPath; both must be non-null
+    protected boolean isParent(TreePath aPath, TreePath bPath){
+        return aPath.equals(bPath.getParentPath());
+    }
+
+    protected void printPaths(HashSet&lt;TreePath&gt; pathSet){
+        TreePath[] paths = pathSet.toArray(new TreePath[pathSet.size()]);
+        for (TreePath tp : paths) {
+            for (Object pathPart : tp.getPath()) {
+                System.out.print(pathPart + ",");
+            }
+            System.out.println();
+        }
+    }
+
+    private class LazyCheckBoxCellRenderer extends JPanel implements TreeCellRenderer {
+        JCheckBoxTree cbt;
+        JCheckBox checkBox;
+
+        public LazyCheckBoxCellRenderer() {
+            super();
+            this.setLayout(new BorderLayout());
+            checkBox = new JCheckBox();
+            add(checkBox, BorderLayout.CENTER);
+            setOpaque(false);
+        }
+
+        public void setCheckBoxTree(JCheckBoxTree someCbt) { cbt = someCbt;}
+
+        @Override
+        public Component getTreeCellRendererComponent(JTree tree, Object value,
+                                                      boolean selected, boolean expanded, boolean leaf, int row,
+                                                      boolean hasFocus) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode)value;
+            Object obj = node.getUserObject();
+
+            checkBox.setText(obj.toString());
+
+            if (obj instanceof Boolean)
+                checkBox.setText("Retrieving data...");
+            else
+            {
+                TreePath tp = new TreePath(node.getPath());
+                JCheckBoxTree.CheckedNode cn = null;
+                if( cbt != null )
+                    cn = cbt.getCheckedNode(tp);
+                if (cn == null) {
+                    return this;
+                }
+                checkBox.setSelected(cn.isSelected);
+                checkBox.setText(obj.toString());
+                checkBox.setOpaque(cn.isSelected &amp;&amp; cn.hasChildren &amp;&amp; ! cn.allChildrenSelected);
+            }
+            return this;
+        }
+    }
+
+    public static void main(String args[]) {
+        boolean test = false;
+        if( args.length &gt; 0 &amp;&amp; args[0].equalsIgnoreCase("test") )
+            test = true;
+        MyDomainCheckBoxTree m = new MyDomainCheckBoxTree(test);
+        m.setVisible(true);
+    }
+
+    // Make sure expansion is threaded and updating the tree model
+    // only occurs within the event dispatching thread.
+    class NodeExpansionListener implements TreeExpansionListener
+    {
+        public void treeExpanded(TreeExpansionEvent event) {
+            final DefaultMutableTreeNode node = JCheckBoxTree.getTreeNode(event.getPath());
+            Object obj = node.getUserObject();
+
+            //Expand by adding any children nodes
+            Thread runner = new Thread() {
+                public void run() {
+                    if (obj != null &amp;&amp; ((MyDomainObject)obj).expand(node)) {
+                        Runnable runnable = new Runnable() {
+                            public void run() {
+                                ((DefaultTreeModel)treeModel).reload(node);
+                            }
+                        };
+                        SwingUtilities.invokeLater(runnable);
+                    }
+                }
+            };
+            runner.start();
+        }
+
+        public void treeCollapsed(TreeExpansionEvent event) {}
+    }
+
+    //====================== Your Domain specific stuff goes here
+
+    protected TreeModel buildModel() {
+        DefaultMutableTreeNode topNode = new DefaultMutableTreeNode("Root");
+        DefaultMutableTreeNode node;
+        String[] categories = {"Product","Place","Critter"};
+        for (String cat : categories) {
+            MyDomainObject d = new MyDomainObject(cat);
+            d.hasChildren = true;
+            node = new DefaultMutableTreeNode(d);
+
+            topNode.add(node);
+            node.add( new DefaultMutableTreeNode(true));
+        }
+
+        return new DefaultTreeModel(topNode);
+    }
+
+    //sample impl of a domain-object; should have expand method
+    class MyDomainObject {
+        protected Object data;
+        protected boolean  hasChildren;
+
+        public MyDomainObject(Object obj) {
+            data = obj;
+            hasChildren = new Random().nextBoolean();
+        }
+
+        // Expand the tree at parent node and add nodes.
+        public boolean expand(DefaultMutableTreeNode parent) {
+            DefaultMutableTreeNode flagNode = (DefaultMutableTreeNode) parent.getFirstChild();
+            if (flagNode == null)    // No flag
+                return false;
+            Object obj = flagNode.getUserObject();
+            if (!(obj instanceof Boolean))
+                return false;      // Already expanded
+
+            parent.removeAllChildren();  // Remove FlagNode
+
+            Object[] children = getChildren();
+            if (children == null)
+                return true;
+
+            // Create a sorted list of domain-objects
+            ArrayList sortedChildDomainObjects = new ArrayList();
+
+            for (Object child : children) {
+                MyDomainObject newNode = new MyDomainObject(child);
+                //System.out.println("Size of arraylist=" + sortedChildDomainObjects.size());
+                boolean isAdded = false;
+                for (int i = 0; i &lt; sortedChildDomainObjects.size(); i++) {
+                    MyDomainObject nd = (MyDomainObject) sortedChildDomainObjects.get(i);
+                    if (newNode.compareTo(nd) &lt; 0) {
+                        sortedChildDomainObjects.add(i, newNode);
+                        isAdded = true;
+                        break;
+                    }
+                }
+                if (!isAdded)
+                    sortedChildDomainObjects.add(newNode);
+            }
+
+            // Add children nodes under parent in the tree
+            for (Object aChild : sortedChildDomainObjects) {
+                MyDomainObject nd = (MyDomainObject) aChild;
+                DefaultMutableTreeNode node = new DefaultMutableTreeNode(nd);
+                parent.add(node);
+
+                if (nd.hasChildren)
+                    node.add(new DefaultMutableTreeNode(true));
+            }
+
+            return true;
+        }
+
+        private int compareTo(MyDomainObject toCompare) {
+            assert toCompare.data != null;
+            return data.toString().compareToIgnoreCase(toCompare.data.toString());
+        }
+
+        //should be Domain specific; dummy impl provided
+        private Object[]  getChildren(){
+            if( data == null || (!hasChildren))
+                return null;
+
+            Random   rand = new Random();
+
+            Object[] children = new Object[rand.nextInt(20)];
+            for( int i=0; i &lt; children.length; i++){
+                children[i] = data.toString() + "-" + rand.nextInt(1024); ;
+            }
+            return children;
+        }
+
+        public String toString() {
+            return data != null ? data.toString() : "(EMPTY)";
+        }
+    }
+
+
+}
+</code></pre>
+
+<p>My altered/lazy version of JCheckBoxTree is as follows:</p>
+
+<pre><code>package contrib.backup.checkboxtree;
+
+import javax.swing.JCheckBox;
+import javax.swing.JPanel;
+import javax.swing.JTree;
+import javax.swing.event.EventListenerList;
+import javax.swing.event.TreeExpansionEvent;
+import javax.swing.event.TreeWillExpandListener;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeSelectionModel;
+import javax.swing.tree.ExpandVetoException;
+import javax.swing.tree.TreeCellRenderer;
+import javax.swing.tree.TreeModel;
+import javax.swing.tree.TreeNode;
+import javax.swing.tree.TreePath;
+import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.util.EventListener;
+import java.util.EventObject;
+import java.util.HashMap;
+
+public class JCheckBoxTree extends JTree {
+
+    JCheckBoxTree selfPointer = this;
+
+    // Data structure to quickly indicate the state of each node
+    // It totally replaces the "selection" mechanism of the JTree
+    protected class CheckedNode {
+        boolean isSelected;
+        boolean hasChildren;
+        boolean allChildrenSelected;
+
+        public CheckedNode(boolean isSelected_, boolean hasChildren_, boolean allChildrenSelected_) {
+            isSelected = isSelected_;
+            hasChildren = hasChildren_;
+            allChildrenSelected = allChildrenSelected_;
+        }
+    }
+    //CHANGED Data struct to hold nodes lazily (as they are expanded).REMOVED other data-struct
+    HashMap&lt;TreePath, CheckedNode&gt; nodesCheckingState;
+
+    // Defining a new event type for the checking mechanism and preparing event-handling mechanism
+    protected EventListenerList listenerList = new EventListenerList();
+
+    public class CheckChangeEvent extends EventObject {
+        public CheckChangeEvent(Object source) {
+            super(source);
+        }
+    }
+
+    public interface CheckChangeEventListener extends EventListener {
+        void checkStateChanged(CheckChangeEvent event);
+    }
+
+    public void addCheckChangeEventListener(CheckChangeEventListener listener) {
+        listenerList.add(CheckChangeEventListener.class, listener);
+    }
+    public void removeCheckChangeEventListener(CheckChangeEventListener listener) {
+        listenerList.remove(CheckChangeEventListener.class, listener);
+    }
+
+    void fireCheckChangeEvent(CheckChangeEvent evt) {
+        Object[] listeners = listenerList.getListenerList();
+        for (int i = 0; i &lt; listeners.length; i++) {
+            if (listeners[i] == CheckChangeEventListener.class) {
+                ((CheckChangeEventListener) listeners[i + 1]).checkStateChanged(evt);
+            }
+        }
+    }
+
+    // Override
+    public void setModel(TreeModel newModel) {
+        super.setModel(newModel);
+        resetCheckingState();
+    }
+
+    // Returns true in case that the node is selected, has children but not all of them are selected
+    public boolean isSelectedPartially(TreePath path) {
+        CheckedNode cn = getCheckedNode(path);
+        return cn.isSelected &amp;&amp; cn.hasChildren &amp;&amp; !cn.allChildrenSelected;
+    }
+
+    private void resetCheckingState() {
+        nodesCheckingState = new HashMap&lt;&gt;();
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode)getModel().getRoot();
+        if (node == null) {
+            return;
+        }
+        addSubtreeToCheckingStateTracking(node);
+    }
+
+    // Builds up data structure for the checking mechanism. CHANGED to be lazy (do if expanded)
+    private void addSubtreeToCheckingStateTracking(DefaultMutableTreeNode node) {
+        TreeNode[] path = node.getPath();
+        TreePath tp = new TreePath(path);
+        CheckedNode cn = new CheckedNode(false, node.getChildCount() &gt; 0, false);
+        nodesCheckingState.put(tp, cn);
+        if( isExpanded(tp) ) {
+            for (int i = 0; i &lt; node.getChildCount(); i++) {
+                DefaultMutableTreeNode treeNode = getTreeNode(tp.pathByAddingChild(node.getChildAt(i)));
+                addSubtreeToCheckingStateTracking(treeNode);
+            }
+        }
+    }
+
+
+    // Overriding cell renderer by a class that ignores the original "selection" mechanism
+    // It decides how to show the nodes due to the checking-mechanism
+    private class CheckBoxCellRenderer extends JPanel implements TreeCellRenderer {
+        JCheckBox checkBox;
+        public CheckBoxCellRenderer() {
+            super();
+            this.setLayout(new BorderLayout());
+            checkBox = new JCheckBox();
+            add(checkBox, BorderLayout.CENTER);
+            setOpaque(false);
+        }
+
+        @Override
+        public Component getTreeCellRendererComponent(JTree tree, Object value,
+                                                      boolean selected, boolean expanded, boolean leaf, int row,
+                                                      boolean hasFocus) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode)value;
+            Object obj = node.getUserObject();
+            TreePath tp = new TreePath(node.getPath());
+            CheckedNode cn = getCheckedNode(tp);
+            if (cn == null) {
+                return this;
+            }
+            checkBox.setSelected(cn.isSelected);
+            checkBox.setText(obj.toString());
+            checkBox.setOpaque(cn.isSelected &amp;&amp; cn.hasChildren &amp;&amp; ! cn.allChildrenSelected);
+            return this;
+        }
+    }
+
+    // CHANGED to simply delegate to others
+    public JCheckBoxTree(){
+        this(JTree.getDefaultTreeModel(), null, null);
+    }
+
+    // added NEW, arg can be passed null.
+    public JCheckBoxTree(TreeModel treeModel){
+        this(treeModel, null, null);
+    }
+
+    // CHANGED; with added params, any or all of which may be null
+    public JCheckBoxTree(TreeModel treeModel,
+                         TreeWillExpandListener tweListener,
+                         TreeCellRenderer treeCellRenderer) {
+        super(treeModel);
+
+        // Disabling toggling by double-click
+        this.setToggleClickCount(0);
+        // Overriding cell renderer by new one defined above OR provided one
+        if( treeCellRenderer == null )
+            treeCellRenderer = new CheckBoxCellRenderer();
+        //cellRenderer = treeCellRenderer;
+        this.setCellRenderer(treeCellRenderer);
+
+        // Overriding selection model by an empty one
+        DefaultTreeSelectionModel dtsm = new DefaultTreeSelectionModel() {
+            // Totally disabling the selection mechanism
+            public void setSelectionPath(TreePath path) {
+            }
+            public void addSelectionPath(TreePath path) {
+            }
+            public void removeSelectionPath(TreePath path) {
+            }
+            public void setSelectionPaths(TreePath[] pPaths) {
+            }
+        };
+
+        // Calling checking mechanism on mouse click
+        this.addMouseListener(new MouseListener() {
+            public void mouseClicked(MouseEvent arg0) {
+                TreePath tp = selfPointer.getPathForLocation(arg0.getX(), arg0.getY());
+                if (tp == null) {
+                    return;
+                }
+                boolean checkMode = ! getCheckMode(tp);
+                checkSubTree(tp, checkMode, false); // func CHANGED for laziness
+
+                updatePredecessorsWithCheckMode(tp);
+                // Firing the check change event
+                //fireCheckChangeEvent(new CheckChangeEvent(new Object())); //REPLACED by next-line
+                fireCheckChangeEvent(new CheckChangeEvent(tp));
+                // Repainting tree after the data structures were updated
+                selfPointer.repaint();
+            }
+            public void mouseEntered(MouseEvent arg0) {
+            }
+            public void mouseExited(MouseEvent arg0) {
+            }
+            public void mousePressed(MouseEvent arg0) {
+            }
+            public void mouseReleased(MouseEvent arg0) {
+            }
+        });
+
+        // added NEW for lazy action
+        // Do the checkbox update just before the tree expands
+        if( tweListener == null )
+            tweListener =
+                    new TreeWillExpandListener() {
+                        @Override
+                        public void treeWillExpand(TreeExpansionEvent event) throws ExpandVetoException {
+                            TreePath expandingNodePath = event.getPath();
+                            boolean checkMode = getCheckMode(expandingNodePath);
+                            checkSubTree(expandingNodePath, checkMode, true);
+                        }
+
+                        @Override
+                        public void treeWillCollapse(TreeExpansionEvent event) throws ExpandVetoException {
+                        }
+                    };
+
+        this.addTreeWillExpandListener(tweListener);
+        this.setSelectionModel(dtsm);
+    }
+
+
+    // added NEW
+    public boolean getCheckMode( TreePath nodePath ){
+        CheckedNode checkedNode = getCheckedNode(nodePath);
+        return checkedNode.isSelected;
+    }
+
+    // added NEW.
+    // Fetches checked-node if available or lazily add it with
+    // checkMode inherited from 'nearest' ancestor.
+    CheckedNode getCheckedNode(TreePath nodePath){
+        CheckedNode checkedNode = nodesCheckingState.get(nodePath);
+        if( checkedNode == null ){
+            DefaultMutableTreeNode node = getTreeNode(nodePath);
+            boolean ancestorCheckedMode = getAncestorCheckMode(nodePath);
+            checkedNode = new CheckedNode(ancestorCheckedMode, node.getChildCount() &gt; 0, ancestorCheckedMode);
+            nodesCheckingState.put(nodePath, checkedNode);
+        }
+        return checkedNode;
+    }
+
+    // added NEW
+    // Returns the checkedMode of the nearest ancestor that can be found, else false
+    protected boolean getAncestorCheckMode(TreePath  nodePath){
+        TreePath parentPath = nodePath.getParentPath();
+        if( parentPath == null ) {// nodePath is root so has null parent
+            return false;
+        }
+        else {
+            CheckedNode checkedNode = nodesCheckingState.get(parentPath);
+            if( checkedNode == null )
+                return getAncestorCheckMode(parentPath);
+            else
+                return checkedNode.isSelected;
+        }
+    }
+
+    // When a node is checked/unchecked, updating the states of the predecessors
+    protected void updatePredecessorsWithCheckMode(TreePath tp) {
+        TreePath parentPath = tp.getParentPath();
+        // If it is the root, stop the recursive calls and return
+        if (parentPath == null) {
+            return;
+        }
+        CheckedNode parentCheckedNode = getCheckedNode(parentPath);
+        DefaultMutableTreeNode parentNode = getTreeNode(parentPath);
+        parentCheckedNode.allChildrenSelected = true;
+        parentCheckedNode.isSelected = false;
+        for (int i = 0 ; i &lt; parentNode.getChildCount() ; i++) {
+            TreePath childPath = parentPath.pathByAddingChild(parentNode.getChildAt(i));
+            CheckedNode childCheckedNode = getCheckedNode(childPath);
+            // It is enough that even one subtree is not fully selected
+            // to determine that the parent is not fully selected
+            if (! childCheckedNode.allChildrenSelected) {
+                parentCheckedNode.allChildrenSelected = false;
+            }
+            // If at least one child is selected, selecting also the parent
+            if (childCheckedNode.isSelected) {
+                parentCheckedNode.isSelected = true;
+            }
+        }
+        // Go to upper predecessor
+        updatePredecessorsWithCheckMode(parentPath);
+    }
+
+    // Recursively checks/unchecks a subtree. NEW: modified to perform lazily.
+    // NEW arg goOneLevelDown will be false when checkbox is clicked, true when expanding a node.
+    protected void checkSubTree(TreePath tp, boolean check, boolean goOneLevelDown) {
+        CheckedNode cn =  getCheckedNode(tp);
+        cn.isSelected = check;
+        DefaultMutableTreeNode node = getTreeNode(tp);
+        if( isExpanded(tp) || goOneLevelDown ){
+            for (int i = 0 ; i &lt; node.getChildCount() ; i++) {
+                checkSubTree(tp.pathByAddingChild(node.getChildAt(i)), check, false);
+            }
+        }
+        cn.allChildrenSelected = check;
+    }
+
+    public static DefaultMutableTreeNode getTreeNode(TreePath path)
+    {
+        return (DefaultMutableTreeNode)(path.getLastPathComponent());
+    }
+}
+</code></pre>

@@ -1,0 +1,207 @@
+<p>I have implemented the idea proposed by Marcel Stör.</p>
+
+<blockquote>
+  <p>Why go with token i.e. Authentication subclasses? Doesn't Authentication.getPrincipal() return an instance of UserDetails in your case?</p>
+  
+  <p>If you supplied your own UserDetails implementation (one with a setUsername() method) while authenticating you're home free if I understand your case correctly.</p>
+</blockquote>
+
+<p>And I want to share the implementation:</p>
+
+<p>This is the UserDetails object with the modifiable username. I made it a subclass of <code>org.springframework.security.core.userdetails.User</code> because I use it together with Jdbc User Details Service that normaly create this classes.</p>
+
+<pre><code>import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.User;
+/**
+ * Extension of {@link User} where it is possible to change the username.
+ */
+public class UpdateableUserDetails extends User {
+
+    /** The Constant serialVersionUID. */
+    private static final long serialVersionUID = 9034840503529809003L;
+
+    /**
+     * The user name that can be modified.
+     * It "overrides" the username field from class {@link User}.
+     */
+    private String modfiableUsername;
+
+    /**
+     * Construct the &lt;code&gt;User&lt;/code&gt; with the details required by
+     * {@link org.springframework.security.authentication.dao.DaoAuthenticationProvider}.
+     *
+     * @param username the username presented to the
+     *        &lt;code&gt;DaoAuthenticationProvider&lt;/code&gt;
+     * @param password the password that should be presented to the
+     *        &lt;code&gt;DaoAuthenticationProvider&lt;/code&gt;
+     * @param enabled set to &lt;code&gt;true&lt;/code&gt; if the user is enabled
+     * @param accountNonExpired set to &lt;code&gt;true&lt;/code&gt; if the account has not
+     *        expired
+     * @param credentialsNonExpired set to &lt;code&gt;true&lt;/code&gt; if the credentials
+     *        have not expired
+     * @param accountNonLocked set to &lt;code&gt;true&lt;/code&gt; if the account is not
+     *        locked
+     * @param authorities the authorities that should be granted to the caller
+     *        if they presented the correct username and password and the user
+     *        is enabled. Not null.
+     *
+     * @throws IllegalArgumentException if a &lt;code&gt;null&lt;/code&gt; value was passed
+     *         either as a parameter or as an element in the
+     *         &lt;code&gt;GrantedAuthority&lt;/code&gt; collection
+     */
+    public UpdateableUserDetails(final String username, final String password, final boolean enabled,
+            final boolean accountNonExpired, final boolean credentialsNonExpired, final boolean accountNonLocked,
+            final Collection&lt;? extends GrantedAuthority&gt; authorities) throws IllegalArgumentException {
+        super(username, password, enabled, accountNonExpired, credentialsNonExpired, accountNonLocked, authorities);
+        this.modfiableUsername = username;
+    }
+
+    /**
+     * Calls the more complex constructor with all boolean arguments set to {@code true}.
+     * @param username the username presented to the
+     *        &lt;code&gt;DaoAuthenticationProvider&lt;/code&gt;
+     * @param password the password that should be presented to the
+     *        &lt;code&gt;DaoAuthenticationProvider&lt;/code&gt;
+      * @param authorities the authorities that should be granted to the caller
+     *        if they presented the correct username and password and the user
+     *        is enabled. Not null.
+     */
+    public UpdateableUserDetails(final String username, final String password,
+            final Collection&lt;? extends GrantedAuthority&gt; authorities) {
+        super(username, password, authorities);
+        this.modfiableUsername = username;
+    }
+
+    /**
+     * Return the modifiable username instead of the fixed one.
+     *
+     * @return the username
+     */
+    @Override
+    public String getUsername() {
+        return this.modfiableUsername;
+    }
+
+    public void setUsername(final String username) {
+        this.modfiableUsername = username;
+    }
+
+    /**
+     * Returns {@code true} if the supplied object is a {@code User} instance with the
+     * same {@code username} value.
+     * &lt;p&gt;
+     * In other words, the objects are equal if they have the same user name, representing the
+     * same principal.
+     *
+     * @param rhs the other object
+     * @return true if equals
+     */
+    @Override
+    public boolean equals(final Object rhs) {
+        if (rhs instanceof User) {
+            return this.modfiableUsername.equals(((User) rhs).getUsername());
+        }
+        return false;
+    }
+
+    /**
+     * Returns the hashcode.
+     * 
+     * In order not to get any problems with any hash sets that based on the fact that this hash is not changed
+     * over livetime and not to fail one of the constraints for {@link Object#hashCode()},
+     * this method always returns the same constant hash value.
+     * 
+     * I expect that this is no such deal, because we expect not to have so many logged in users, so the hash sets
+     * that use this as an key will not get so slow.  
+     *
+     * @return the hash
+     */
+    @Override
+    public int hashCode() {
+        return 1;
+    }
+
+    /**
+     * Like {@link User#toString()}, but print the modifiable user name.
+     *
+     * @return the string representation with all details
+     */
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(super.toString()).append(": ");
+        sb.append("Username: ").append(this.modfiableUsername).append("; ");
+        sb.append("Password: [PROTECTED]; ");
+        sb.append("Enabled: ").append(isEnabled()).append("; ");
+        sb.append("AccountNonExpired: ").append(isAccountNonExpired()).append("; ");
+        sb.append("credentialsNonExpired: ").append(isCredentialsNonExpired()).append("; ");
+        sb.append("AccountNonLocked: ").append(isAccountNonLocked()).append("; ");
+
+        if (!getAuthorities().isEmpty()) {
+            sb.append("Granted Authorities: ");
+
+            boolean first = true;
+            for (GrantedAuthority auth : getAuthorities()) {
+                if (!first) {
+                    sb.append(",");
+                }
+                first = false;
+
+                sb.append(auth);
+            }
+        } else {
+            sb.append("Not granted any authorities");
+        }
+        return sb.toString();
+    }    
+}
+</code></pre>
+
+<p>The Subclass for the <code>UserDetailsService</code></p>
+
+<pre><code>import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.jdbc.JdbcDaoImpl;
+/**
+ * Create {@link UpdateableUserDetails} instead of {@link org.springframework.security.core.userdetails.User} user details.
+ */
+public class JdbcDaoForUpdatableUsernames extends JdbcDaoImpl {
+
+    /**
+     * Instantiates a new jdbc dao for updatable usernames impl.
+     *
+     * @param privilegesService the privileges service
+     */
+    public JdbcDaoForUpdatableUsernames(final PrivilegesService privilegesService) {
+        super(privilegesService);
+    }
+
+    /**
+     * Can be overridden to customize the creation of the final UserDetailsObject which is
+     * returned by the &lt;tt&gt;loadUserByUsername&lt;/tt&gt; method.
+     *
+     * @param username the name originally passed to loadUserByUsername
+     * @param userFromUserQuery the object returned from the execution of the
+     * @param combinedAuthorities the combined array of authorities from all the authority loading queries.
+     * @return the final UserDetails which should be used in the system.
+     */
+    @Override
+    protected UserDetails createUserDetails(final String username, final UserDetails userFromUserQuery,
+            final List&lt;GrantedAuthority&gt; combinedAuthorities) {
+        String returnUsername = userFromUserQuery.getUsername();
+
+        if (!isUsernameBasedPrimaryKey()) {
+            returnUsername = username;
+        }
+
+        return new UpdateableUserDetails(returnUsername,
+                userFromUserQuery.getPassword(),
+                userFromUserQuery.isEnabled(),
+                true,
+                true,
+                true,
+                combinedAuthorities);
+    }
+}
+</code></pre>
+
+<p><em>I hope someone can use it too.</em></p>

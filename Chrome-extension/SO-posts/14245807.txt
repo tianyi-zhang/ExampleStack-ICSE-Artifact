@@ -1,0 +1,137 @@
+<p>Unfortunately the documentation is slightly misleading there. </p>
+
+<p>It will only throw the exception if your class had a field whose type didn't match what is in the JSON, and even then it does some crazy things to try and fix it (converting an <code>int</code> in the JSON to a <code>String</code> in your class for example). If you had something like a <code>Date</code> field in your POJO and it encountered an <code>int</code> in the JSON, it'd throw it. Fields that are present in the JSON but not in your POJO are silently ignored, fields that are missing in the JSON but exist in your POJO are set to <code>null</code>.</p>
+
+<p>At present, GSON does not provide a mechanism for any sort of "strict" deserialization where you would have something like a <code>@Required</code> annotation for fields in your POJO.  </p>
+
+<p>In your case ... I'd simply expand my POJO to include an inner error object ... something like:</p>
+
+<pre><code>class Dummy {
+   private String foo;
+   private int bar;
+   private Error error;
+
+   private class Error {
+        String publicMsg;
+        String msg;
+   }
+
+   public boolean isError() {
+       return error != null;
+   }
+
+   // setters and getters for your data, the error msg, etc.
+}
+</code></pre>
+
+<p>Your other option is to write a custom deserializer that throws the exception if the JSON is the error such as:</p>
+
+<pre><code>class MyDeserializer implements JsonDeserializer&lt;Dummy&gt;
+{
+    @Override
+    public Dummy deserialize(JsonElement json, Type typeOfT, 
+                              JsonDeserializationContext context)
+                    throws JsonParseException
+    {
+        JsonObject jsonObject = (JsonObject) json;
+
+        if (jsonObject.get("error") != null)
+        {
+            throw new JsonParseException("Error!");
+        }
+
+        return new Gson().fromJson(json, Dummy.class);
+    }
+} 
+</code></pre>
+
+<p><strong>Edit to Add:</strong> Someone upvoted this recently and re-reading it I thought "Huh, you know, you could do this yourself and it might be handy".</p>
+
+<p>Here's a re-usable deserializer and annotation that will do exactly what the OP wanted. The limitation is that if the POJO required a custom deserializer as-is, you'd have to go a little further and either pass in a <code>Gson</code> object in the constructor to deserialize to object itself or move the annotation checking out into a separate method and use it in your deserializer. You could also improve on the exception handling by creating your own exception and pass it to the <code>JsonParseException</code> so it can be detected via <code>getCause()</code> in the caller.</p>
+
+<p>That all said, in the vast majority of cases, this will work:</p>
+
+<pre><code>public class App
+{
+
+    public static void main(String[] args)
+    {
+        Gson gson =
+            new GsonBuilder()
+            .registerTypeAdapter(TestAnnotationBean.class, new AnnotatedDeserializer&lt;TestAnnotationBean&gt;())
+            .create();
+
+        String json = "{\"foo\":\"This is foo\",\"bar\":\"this is bar\"}";
+        TestAnnotationBean tab = gson.fromJson(json, TestAnnotationBean.class);
+        System.out.println(tab.foo);
+        System.out.println(tab.bar);
+
+        json = "{\"foo\":\"This is foo\"}";
+        tab = gson.fromJson(json, TestAnnotationBean.class);
+        System.out.println(tab.foo);
+        System.out.println(tab.bar);
+
+        json = "{\"bar\":\"This is bar\"}";
+        tab = gson.fromJson(json, TestAnnotationBean.class);
+        System.out.println(tab.foo);
+        System.out.println(tab.bar);
+    }
+}
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.FIELD)
+@interface JsonRequired
+{
+}
+
+class TestAnnotationBean
+{
+    @JsonRequired public String foo;
+    public String bar;
+}
+
+class AnnotatedDeserializer&lt;T&gt; implements JsonDeserializer&lt;T&gt;
+{
+
+    public T deserialize(JsonElement je, Type type, JsonDeserializationContext jdc) throws JsonParseException
+    {
+        T pojo = new Gson().fromJson(je, type);
+
+        Field[] fields = pojo.getClass().getDeclaredFields();
+        for (Field f : fields)
+        {
+            if (f.getAnnotation(JsonRequired.class) != null)
+            {
+                try
+                {
+                    f.setAccessible(true);
+                    if (f.get(pojo) == null)
+                    {
+                        throw new JsonParseException("Missing field in JSON: " + f.getName());
+                    }
+                }
+                catch (IllegalArgumentException ex)
+                {
+                    Logger.getLogger(AnnotatedDeserializer.class.getName()).log(Level.SEVERE, null, ex);
+                }
+                catch (IllegalAccessException ex)
+                {
+                    Logger.getLogger(AnnotatedDeserializer.class.getName()).log(Level.SEVERE, null, ex);
+                }
+            }
+        }
+        return pojo;
+
+    }
+}
+</code></pre>
+
+<p>Output: </p>
+
+<pre>
+This is foo
+this is bar
+This is foo
+null
+Exception in thread "main" com.google.gson.JsonParseException: Missing field in JSON: foo
+</pre>

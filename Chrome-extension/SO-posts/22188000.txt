@@ -1,0 +1,189 @@
+<p>I believe the best way of storing an image to an SQLLite database is to use the Base 64 algorithm. which converts an image to plain text and back again. You can download the full example Android project at: <a href="http://developersfound.com/Base64FromStream.zip">http://developersfound.com/Base64FromStream.zip</a>. This program does not store the image but it does convert the image from image to text and back again.</p>
+
+<p>Here is the class:</p>
+
+<pre><code>package com.example.TestProject;
+
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.util.Base64;
+import android.util.Log;
+
+import java.io.*;
+import java.net.URL;
+import java.net.URLConnection;
+import java.nio.channels.FileChannel;
+
+public class Base64CODEC {
+    private int IO_BUFFER_SIZE = 64;
+    //private int IO_BUFFER_SIZE = 8192;
+    private URL urlObject = null;
+    private URLConnection myConn = null;
+    ByteArrayOutputStream os = null;
+
+    public void Base64CODEC() {}
+
+    public Bitmap Base64ImageFromURL(String url) {
+        Bitmap bitmap = null;
+        InputStream in = null;
+        BufferedOutputStream out = null;
+
+        try {
+            urlObject = new URL(url);
+            myConn = urlObject.openConnection();
+            in = myConn.getInputStream();
+
+            final ByteArrayOutputStream dataStream = new ByteArrayOutputStream();
+            out = new BufferedOutputStream(dataStream, IO_BUFFER_SIZE);
+
+            copyCompletely(in, out);
+
+            final byte[] data = dataStream.toByteArray();
+            BitmapFactory.Options options = new BitmapFactory.Options();
+
+            bitmap = BitmapFactory.decodeByteArray(data, 0, data.length, options);
+        } catch (IOException e) {
+            Log.e("TAG", "Could not load Bitmap from: " + url);
+        } finally {
+            //closeStream(in);
+            try {
+                in.close();
+            } catch (IOException e) {
+                e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+            }
+            //closeStream(out);
+            try {
+                out.close();
+            } catch (IOException e) {
+                e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+            }
+        }
+
+        return bitmap;
+    }
+
+    private void copyCompletely(InputStream input, OutputStream output) throws IOException {
+        // if both are file streams, use channel IO
+        if ((output instanceof FileOutputStream) &amp;&amp; (input instanceof FileInputStream)) {
+            try {
+                FileChannel target = ((FileOutputStream) output).getChannel();
+                FileChannel source = ((FileInputStream) input).getChannel();
+
+                source.transferTo(0, Integer.MAX_VALUE, target);
+
+                source.close();
+                target.close();
+
+                return;
+            } catch (Exception e) { /* failover to byte stream version */
+            }
+        }
+
+        byte[] buf = new byte[8192];
+        while (true) {
+            int length = input.read(buf);
+            if (length &lt; 0)
+                break;
+            output.write(buf, 0, length);
+        }
+
+        try {
+            input.close();
+        } catch (IOException ignore) {
+        }
+        try {
+            output.close();
+        } catch (IOException ignore) {}
+    }
+
+    public String convertToBase64(Bitmap bitmap) {
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.PNG,100,os);
+        byte[] byteArray = os.toByteArray();
+        return Base64.encodeToString(byteArray, 0);
+    }
+
+    public Bitmap convertToBitmap(String base64String) {
+        byte[] decodedString = Base64.decode(base64String, Base64.DEFAULT);
+        Bitmap bitmapResult = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.length);
+        return bitmapResult;
+    }
+
+}
+</code></pre>
+
+<p>And here is the main activity that uses the class:</p>
+
+<pre><code>package com.example.TestProject;
+
+import android.app.Activity;
+import android.graphics.Bitmap;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.view.View;
+import android.widget.ImageView;
+
+public class MainActivity extends Activity implements Runnable {
+
+    private Thread thread = null;
+    private Bitmap bitmap = null;
+    private Base64CODEC base64CODEC = null;
+    private ImageView imgViewSource = null;
+    private ImageView imgViewDestination = null;
+    private boolean isSourceImageVisible = false;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+    }
+
+    public void CmdLoadImage_Click(View view) {
+        try {
+            if(isSourceImageVisible == true) {
+                imgViewSource.setImageBitmap(null);
+                imgViewDestination.setImageBitmap(null);
+                isSourceImageVisible = false;
+            }
+            else {
+                base64CODEC = new Base64CODEC();
+                thread = new Thread(this);
+                thread.start();
+            }
+        }
+        catch (NullPointerException e) {}
+
+    }
+
+    public void CmdEncodeImage_Click(View view) {
+        Base64CODEC base64CODEC = new Base64CODEC();
+        try {
+            String base64String = base64CODEC.convertToBase64(bitmap);
+            imgViewDestination = (ImageView) findViewById(R.id.imgViewDestination);
+            Bitmap imgViewDestinationBitmap = base64CODEC.convertToBitmap(base64String);
+            imgViewDestination.setImageBitmap(imgViewDestinationBitmap);
+        }
+        catch (NullPointerException e) {
+            //
+        }
+    }
+
+    @Override
+    public void run() {
+        bitmap = base64CODEC.Base64ImageFromURL("http://developersfound.com/me.png");
+        handler.sendEmptyMessage(0);
+    }
+
+    private Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            imgViewSource = (ImageView) findViewById(R.id.imgViewSource);
+            imgViewSource.setImageBitmap(bitmap);
+            isSourceImageVisible = true;
+            thread = null;
+        }
+    };
+
+}
+</code></pre>

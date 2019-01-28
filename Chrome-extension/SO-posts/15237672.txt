@@ -1,0 +1,146 @@
+<p>The ratio between the size of a video and a network upload capacity in a given interval of time is to low to simultaneously upload/record video stream, unless the user has a very fast LTE cellular connection.  </p>
+
+<p>However, when the recording is done, you can upload the file to your server via a FTP protocol. It is recommended to give each recorded file an <code>Universal Unique Identifier (UUID)</code> to be able to make the difference between all the other recorded files. I used this code (not tested for Android, but works fine on JavaSE 7). Since it is a quite long (but quick) process, I made you a summary. (Nice, huh?)</p>
+
+<h2>Summary</h2>
+
+<p>1) Generate a UUID with <code>UUID.randomUUID().toString();</code> that will be used during the whole process to identify the recorded file.<br>
+2) Record the file with as name <code>"sdcard/" + uuid + ".3gp"</code><br>
+3) When recording ends, upload the file to your server via a FTP upload.<br>
+4) Order your remote server to execute the PHP script that do whatever it needs to do with the recorded file, like database manipulation, etc. (if there is such a script, if you don't need to do this, just skip this step).<br>
+5) Order your remote server to delete the file, if needed to. (done via another PHP script)</p>
+
+<h2>Code</h2>
+
+<pre><code>import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.net.URL;
+import java.net.URLConnection;
+
+public class FTPUploader {
+    static void doUpload(String uuid) {
+
+      File fileSource = new File("/sdcard/" + uuid + ".3gp");
+      // Or new File("/sdcard/recording.3gp");
+
+      String fileName = fileSource.getName();
+
+      /** YOUR SERVER'S INFORMATIONS **/
+      String userName = "USERNAME";
+      String password = "PASSWORD";
+      String ftpServer = "FTP.SERVER.COM";
+      /****/
+
+      StringBuffer sb = new StringBuffer("ftp://");
+
+      sb.append(userName);
+      sb.append(':');
+      sb.append(password);
+      sb.append('@');
+
+      sb.append(ftpServer);
+      sb.append("/"); 
+            /**WARNING: Path extension; it will be added after connection
+            *The file must be at your server's root. Otherwise the PHP script won't detect it.
+            **/
+      sb.append(fileName);
+
+      sb.append(";type=i");
+
+
+      BufferedInputStream bis = null;
+      BufferedOutputStream bos = null;
+      try {
+
+            URL url = new URL(sb.toString());
+            URLConnection urlc = url.openConnection();
+            bos = new BufferedOutputStream(urlc.getOutputStream());
+            bis = new BufferedInputStream(new FileInputStream(fileSource));
+
+            int i;
+
+            // read byte by byte until end of stream
+            while ((i = bis.read()) != -1) {
+                  bos.write(i);
+            }
+      } catch (Exception e) {
+            e.printStackTrace();
+      } finally {
+
+            if (bis != null)
+                  try {
+                        bis.close();
+                  } catch (IOException ioe) {
+                        ioe.printStackTrace();
+                        System.out.println("IO exception after if bis " + ioe);
+                  }
+            if (bos != null)
+                  try {
+                        bos.close();
+                  } catch (IOException ioe) {
+                        ioe.printStackTrace();
+                        System.out.println("IO exception after if " + ioe);
+                  }
+      }
+}
+}  
+
+
+
+import java.util.UUID;
+
+public class Main {
+
+
+protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+
+
+        String uuid = UUID.randomUUID().toString();
+        //Assuming you set your file's name as uuid + ".3gp"
+        FTPUploader.doUpload(uuid);            
+        //Launches a FTP Upload
+
+
+        //Then, if you want to ask your server to "process" the file you gave him, you can perform a simple HTTP request:
+
+        try {
+    String url = "http://YOURSITE.COM/shell.php";
+    String charset = "iso-8859-1";
+    String param1 = uuid;
+    String query = String.format("id=%s", URLEncoder.encode(param1, charset));
+
+        URLConnection connection = new URL(url + "?" + query).openConnection();
+        connection.setRequestProperty("Accept-Charset", charset);
+        connection.getInputStream();
+
+    } catch (UnsupportedEncodingException e) {
+        e.printStackTrace();
+    }
+        //This try {}catch{} requests a PHP script: this script is "triggered" just like if it was loaded in your web browser, with as parameter the file UUID (`shell.php?id=UUID`), so that he knows wich file on his server he has to process.
+
+}  
+</code></pre>
+
+<p><strong>BONUS</strong>: If you want to delete the file from your server when you are done with it, you can execute the same line as before, but replacing "shell.php" by another PHP script that you can call "delete.php". It would contain the following lines:</p>
+
+<pre><code>&lt;?php
+$recordedFile = $_GET['id'] . ".3gp";
+unlink($recordedFile);
+?&gt;
+</code></pre>
+
+<p>For example: Following request <code>http://www.YOURSERVER.com/delete.php?id=123456789</code> deletes <code>http://www.YOURSERVER.com/123456789.3gp</code> on your server.  </p>
+
+<h2>Another sample code</h2>
+
+<p>Few weeks ago, I set up an Java app (I called it Atom...) that analyses the voice and answer all the questions (using Google (unofficial) Voice Recognition API and Wolfram|Alpha API). You should definitely <a href="http://github.com/chlkbumper/AtomDesktop" rel="nofollow">take a look at it on GitHub</a>, there are all the files used, both Desktop-side and <strong>Server-side</strong>. Hope I've helped!</p>
+
+<h2>EDIT: To work with your Helix server</h2>
+
+<p>I found this tutorial about <a href="http://manage.simplehelix.com/knowledgebase/42/How-To-Manage-and-Use-FTP.html" rel="nofollow">How to Manage and Use FTP</a> on <a href="http://simplehelix.com" rel="nofollow">simplehelix.com</a>, and this video <a href="http://www.youtube.com/watch?v=QsGPqkobCs8" rel="nofollow">Windows Server 2008 R2 - Configuring an FTP Server</a>. You only have to follow the instructions, but <strong>skip</strong> the step called <em>Logging into an FTP account</em> because it only explains how to manage the files from an application client (like FileZilla or CuteFTP). This <strong>is</strong> done with of the Java snippet I've written above. Also, if it can help you, I found <a href="http://www.youtube.com/watch?v=tFjFyKKcqjk" rel="nofollow">this video</a>.</p>
+
+<p><strong>NOTE:</strong> In the first code (Java), unless the root directory that your FTP server accesses is the folder that contains every media files, you will <strong>have to</strong> replace <code>sb.append("/");</code> by the path to the folder where the streamable media files are/should be located. Form example, <code>sb.append("/username/media/");</code>.</p>

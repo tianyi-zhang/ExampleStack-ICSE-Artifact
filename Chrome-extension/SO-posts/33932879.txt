@@ -1,0 +1,459 @@
+<p>I am giving the full code below of that changed fragment. I did it 3 years back and that time Sherlock library was used. I think now you have to replace that by appcompat library.</p>
+
+<pre><code>package net.sf.andpdf.pdfviewer;
+
+import java.io.*;
+import java.nio.channels.FileChannel;
+
+import android.app.Activity;
+import android.content.res.Configuration;
+import android.graphics.*;
+import android.widget.ImageView;
+import android.widget.TextView;
+import net.sf.andpdf.nio.ByteBuffer;
+import net.sf.andpdf.pdfviewer.gui.TouchImageView;
+import net.sf.andpdf.refs.HardReference;
+import android.app.ProgressDialog;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.Display;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+
+import com.sun.pdfview.PDFFile;
+import com.sun.pdfview.PDFImage;
+import com.sun.pdfview.PDFPage;
+import com.sun.pdfview.PDFPaint;
+import com.sun.pdfview.decrypt.PDFAuthenticationFailureException;
+import com.sun.pdfview.decrypt.PDFPassword;
+import com.sun.pdfview.font.PDFFont;
+
+
+
+
+public class PdfViewerFragment extends SherlockFragment  {
+
+    private static final int STARTPAGE = 1;
+    private static float STARTZOOM = 1f;
+
+
+    private static final String TAG = "PDFVIEWER";
+    private static final String FTAG = "PDFVIEWERFRG";
+
+    public static final String EXTRA_PDFFILENAME = "net.sf.andpdf.extra.PDFFILENAME";
+    public static final String EXTRA_SHOWIMAGES = "net.sf.andpdf.extra.SHOWIMAGES";
+    public static final String EXTRA_ANTIALIAS = "net.sf.andpdf.extra.ANTIALIAS";
+    public static final String EXTRA_USEFONTSUBSTITUTION = "net.sf.andpdf.extra.USEFONTSUBSTITUTION";
+    public static final String EXTRA_KEEPCACHES = "net.sf.andpdf.extra.KEEPCACHES";
+
+    public static final boolean DEFAULTSHOWIMAGES = true;
+    public static final boolean DEFAULTANTIALIAS = true;
+    public static final boolean DEFAULTUSEFONTSUBSTITUTION = false;
+    public static final boolean DEFAULTKEEPCACHES = true;
+
+    private String pdffilename;
+    private PDFFile mPdfFile;
+    private int mPage;
+    private float mZoom;
+    private File mTmpFile;
+    private ProgressDialog progress;
+
+    private TextView tv_page_no;
+    String imgFileName;
+    private ImageView rightArrow;
+    private ImageView leftArrow;
+
+    private PDFPage mPdfPage;
+
+    private Thread backgroundThread;
+    private Activity activity;
+
+    TouchImageView tiv;
+
+    @Override
+    public void onAttach(Activity activity) {
+        Log.i(FTAG, "PDFFragment.onAttatch");
+        this.activity = activity;
+        super.onAttach(activity);
+    }
+
+    /** Called when the activity is first created. */
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        Display display = activity.getWindowManager().getDefaultDisplay();
+        int width = display.getWidth();
+        int height = display.getHeight();
+
+        if(activity.getResources().getConfiguration().orientation ==  Configuration.ORIENTATION_LANDSCAPE )
+        {
+            STARTZOOM = (1f*width)/800.0f;
+
+        }
+        else
+        {
+            STARTZOOM = (1f*height)/800.0f;
+
+        }
+        Log.i(FTAG, "PDFFragment: onCreate");
+    }
+
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        Log.i(FTAG, "PDFFragment: onCreateView");
+
+        View docView = inflater.inflate(R.layout.doc_viewer, container, false);
+        setRetainInstance(true);
+
+        boolean showImages = activity.getIntent().getBooleanExtra(PdfViewerFragment.EXTRA_SHOWIMAGES, PdfViewerFragment.DEFAULTSHOWIMAGES);
+        PDFImage.sShowImages = showImages;
+        boolean antiAlias = activity.getIntent().getBooleanExtra(PdfViewerFragment.EXTRA_ANTIALIAS, PdfViewerFragment.DEFAULTANTIALIAS);
+        PDFPaint.s_doAntiAlias = antiAlias;
+        boolean useFontSubstitution = activity.getIntent().getBooleanExtra(PdfViewerFragment.EXTRA_USEFONTSUBSTITUTION, PdfViewerFragment.DEFAULTUSEFONTSUBSTITUTION);
+        PDFFont.sUseFontSubstitution= useFontSubstitution;
+        boolean keepCaches = activity.getIntent().getBooleanExtra(PdfViewerFragment.EXTRA_KEEPCACHES, PdfViewerFragment.DEFAULTKEEPCACHES);
+        HardReference.sKeepCaches= keepCaches;
+
+        Bundle args = getArguments();
+        if (args != null) {
+            Log.i(FTAG, "Args Value: "+args.getString(EXTRA_PDFFILENAME));
+            pdffilename = args.getString(EXTRA_PDFFILENAME);;
+        } else {
+            // TODO: open a default document
+            pdffilename = "/mnt/sdcard/documents/3.pdf";
+        }
+
+        tiv = (TouchImageView) docView.findViewById(R.id.imageView); 
+        leftArrow = (ImageView) docView.findViewById(R.id.leftArrow);
+        rightArrow = (ImageView) docView.findViewById(R.id.rightArrow);
+
+        leftArrow.setVisibility(View.GONE);
+        rightArrow.setVisibility(View.GONE);
+
+        if (pdffilename == null)
+        {
+            pdffilename = "No file selected";
+        }
+        else if(pdffilename.contains(".pdf"))
+        {
+            imgFileName= pdffilename.substring(0, pdffilename.lastIndexOf("."))+"_1.jpg";
+
+            mPage = STARTPAGE;
+            mZoom = STARTZOOM;
+            progress = ProgressDialog.show(activity, "Loading", "Loading PDF Page", true, true);
+
+            leftArrow.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    prevPage();
+                }
+            });
+
+            rightArrow.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    nextPage();
+                }
+            });
+
+            tv_page_no = (TextView) docView.findViewById(R.id.navigationText);
+
+            tiv.setParent(this);
+            setContent(null);
+        }
+        else if(pdffilename.contains(".jpg") || pdffilename.contains(".jpeg") || pdffilename.contains(".png") || pdffilename.contains(".gif") || pdffilename.contains(".bmp"))
+        {
+            imgFileName = pdffilename;
+            tiv.setImageLocation(imgFileName);
+        }
+        else
+        {
+            pdffilename = "Invalid file extension";
+        }
+
+        return docView;
+    }
+
+    @Override
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        Log.i(FTAG, "PDFFragment: onViewCreated");
+        super.onViewCreated(view, savedInstanceState);
+    }
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+        super.onActivityCreated(savedInstanceState);
+        Log.i(FTAG, "PDFFragment: onActivityCreated");
+    }
+
+    @Override
+    public void onStart() {
+        Log.i(FTAG, "PDFFragment.onStart");
+        super.onStart();
+        //Bundle args = getArguments();
+    }
+
+    @Override
+    public void onResume() {
+        Log.i(FTAG, "PDFFragment.onResume");
+        super.onResume();
+    }
+
+    @Override
+    public void onPause() {
+        Log.i(FTAG, "PDFFragment.onPause");
+        super.onPause();
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        Log.i(FTAG, "PDFFragment.onSaveInstanceState");
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override
+    public void onStop() {
+        Log.i(FTAG, "PDFFragment.onStop");
+        super.onStop();
+    }
+
+    @Override
+    public void onDestroyView() {
+        Log.i(FTAG, "PDFFragment.onDestroyView");
+        super.onDestroyView();
+    }
+
+    @Override
+    public void onDestroy() {
+        Log.i(FTAG, "PDFFragment.onDestroy");
+        super.onDestroy();
+        if (mTmpFile != null) {
+            mTmpFile.delete();
+            mTmpFile = null;
+        }
+    }
+
+    @Override
+    public void onDetach() {
+        Log.i(FTAG, "PDFFragment.onDetach");
+        super.onDetach();
+    }
+
+    private boolean setContent(String password) {
+        try {
+            parsePDF(pdffilename, password);
+            if(new File(imgFileName).exists())
+            {
+                tiv.setImageLocation(imgFileName);
+                updateTexts(1);
+                progress.dismiss();
+            }
+            else
+                startRenderThread(mPage, mZoom);
+        }
+        catch (PDFAuthenticationFailureException e) {
+
+        } catch (Exception e) {
+
+        }
+        return true;
+    }
+
+    public synchronized void startRenderThread(final int page, final float zoom) {
+        if (backgroundThread != null)
+            return;
+
+        backgroundThread = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    if (mPdfFile != null) {
+                        generatePDFPage(page, zoom);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, e.getMessage(), e);
+                }
+                backgroundThread = null;
+            }
+        });
+        backgroundThread.start();
+    }
+
+
+    public void nextPage() {
+        if (mPdfFile != null) {
+            if (mPage &lt; mPdfFile.getNumPages()) {
+                mPage += 1;
+                imgFileName= pdffilename.substring(0, pdffilename.lastIndexOf("."))+"_"+String.valueOf(mPage)+".jpg";
+                if(new File(imgFileName).exists())
+                {
+                    tiv.setImageLocation(imgFileName);
+                    updateTexts(mPage);
+                    progress.dismiss();
+                }
+                else
+                {
+                    progress = ProgressDialog.show(activity, "Loading", "Loading PDF Page " + mPage, true, true);
+                    startRenderThread(mPage, STARTZOOM);
+                }
+            }
+        }
+    }
+
+    public void prevPage() {
+        if (mPdfFile != null) {
+            if (mPage &gt; 1) {
+                mPage -= 1;
+                imgFileName= pdffilename.substring(0, pdffilename.lastIndexOf("."))+"_"+String.valueOf(mPage)+".jpg";
+                if(new File(imgFileName).exists())
+                {
+                    tiv.setImageLocation(imgFileName);
+                    updateTexts(mPage);
+                    progress.dismiss();
+                }
+                else
+                {
+                    progress = ProgressDialog.show(activity, "Loading", "Loading PDF Page " + mPage, true, true);
+                    startRenderThread(mPage, STARTZOOM);
+                }
+            }
+        }
+    }
+
+    protected void updateTexts(int pageNo) {
+
+        if (mPdfFile != null) {
+            tv_page_no.setText("Page "+pageNo+"/"+mPdfFile.getNumPages());
+            if(mPdfFile.getNumPages() &gt; 1)
+            {
+                if(pageNo==1)
+                    leftArrow.setVisibility(View.GONE);
+                else
+                    leftArrow.setVisibility(View.VISIBLE);
+
+                if(pageNo == mPdfFile.getNumPages())
+                    rightArrow.setVisibility(View.GONE);
+                else
+                    rightArrow.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    public void generatePDFPage(final int page, float zoom) throws Exception {
+
+        try {
+            // Only load the page if it's a different page (i.e. not just changing the zoom level)
+            if (mPdfPage == null || mPdfPage.getPageNumber() != page) {
+                mPdfPage = mPdfFile.getPage(page, true);
+            }
+
+            float width = mPdfPage.getWidth();
+            float height = mPdfPage.getHeight();
+
+            RectF clip = null;
+
+            Bitmap bmp =  mPdfPage.getImage((int)(width*zoom), (int)(height*zoom), clip, true, true);
+            //imgFileName +=  String.valueOf(page)+".jpg";
+
+            FileOutputStream fo = null;
+            try {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                bmp.compress(Bitmap.CompressFormat.JPEG, 50, bytes);
+                File f = new File(imgFileName);
+                f.createNewFile();
+                fo = new FileOutputStream(f);
+                fo.write(bytes.toByteArray());
+            } catch (IOException e) {
+                e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+            } catch (Exception ex) {
+
+            } finally {
+                if (fo != null) {
+                    try {
+                        fo.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+                    }
+                }
+            }
+
+            activity.runOnUiThread(new Runnable() {
+                public void run() {
+                    tiv.setImageLocation(imgFileName);
+                    //tiv.setImageBitmap(BitmapFactory.decodeFile(imgFileName));
+                    updateTexts(page);
+                    if (progress != null)
+                        progress.dismiss();
+                }
+            });
+
+
+
+
+        } catch (Throwable e) {
+            Log.e(TAG, e.getMessage(), e);
+
+        }
+
+    }
+
+    public void parsePDF(String filename, String password) throws PDFAuthenticationFailureException {
+        pdffilename =  filename;
+        try {
+            File f = new File(filename);
+            long len = f.length();
+            if (len == 0) {
+
+            }
+            else {
+
+                openFile(f, password);
+            }
+        }
+        catch (PDFAuthenticationFailureException e) {
+            throw e;
+        } catch (Throwable e) {
+            e.printStackTrace();
+
+        }
+
+    }
+
+    /**
+     * &lt;p&gt;Open a specific pdf file.  Creates a DocumentInfo from the file,
+     * and opens that.&lt;/p&gt;
+     *
+     * &lt;p&gt;&lt;b&gt;Note:&lt;/b&gt; Mapping the file locks the file until the PDFFile
+     * is closed.&lt;/p&gt;
+     *
+     * @param file the file to open
+     * @throws IOException
+     */
+    public void openFile(File file, String password) throws IOException {
+        // first open the file for random access
+        RandomAccessFile raf = null;
+        try
+        {
+            raf = new RandomAccessFile(file, "r");
+            // extract a file channel
+            FileChannel channel = raf.getChannel();
+
+            // now memory-map a byte-buffer
+            ByteBuffer bb = ByteBuffer.NEW(channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size()));
+            // create a PDFFile from the data
+            if (password == null)
+                mPdfFile = new PDFFile(bb);
+            else
+                mPdfFile = new PDFFile(bb, new PDFPassword(password));
+
+
+        } catch (Exception ex)
+        {
+
+        } finally {
+            raf.close();
+        }
+
+
+    }
+
+}
+</code></pre>

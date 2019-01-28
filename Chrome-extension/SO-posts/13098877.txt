@@ -1,0 +1,74 @@
+<p>If you're talking about the Java ServerSocket, there's no <code>listen</code> method for it, presumably since it's distinct from a client-side socket. In that case, once it has a port number (either in the constructor or as part of a <code>bind</code>), it can just go ahead and listen automagically.</p>
+
+<p>The reason "regular" sockets (a la BSD) have a listen is because the same type is used for client <em>and</em> server, so you need to decide yourself how you're going to use it. That's not the case with <code>ServerSocket</code> since, well, it's a <em>server</em> socket :-)</p>
+
+<p>To be honest, I'm not sure why you'd care whether or not the listening is active before <code>accept</code> is called. It's the "listen" call (which is implicit in this class) that should mark your server open for business. At that point, the communication layers should start allowing incoming calls to be queued up waiting for you to call <code>accept</code>. That's generally the way they work, queuing the requests in case your program is a little slow in accepting them.</p>
+
+<hr>
+
+<p>In terms as to why it does it, it's actually supposed to according to the source code. In the OpenJDK6 <code>source/share/classes/java/net/ServerSocket.java</code>, the constructors all end up calling a single constructor:</p>
+
+<pre><code>public ServerSocket(int port, int backlog, InetAddress bindAddr)
+throws IOException {
+    setImpl();
+    if (port &lt; 0 || port &gt; 0xFFFF)
+        throw new IllegalArgumentException(
+                   "Port value out of range: " + port);
+    if (backlog &lt; 1)
+      backlog = 50;
+    try {
+        bind(new InetSocketAddress(bindAddr, port), backlog);
+    } catch(SecurityException e) {
+        close();
+        throw e;
+    } catch(IOException e) {
+        close();
+        throw e;
+    }
+}
+</code></pre>
+
+<p>And that call to <code>bind</code> (same file) follows:</p>
+
+<pre><code>public void bind(SocketAddress endpoint, int backlog) throws IOException {
+    if (isClosed())
+        throw new SocketException("Socket is closed");
+    if (!oldImpl &amp;&amp; isBound())
+        throw new SocketException("Already bound");
+    if (endpoint == null)
+        endpoint = new InetSocketAddress(0);
+    if (!(endpoint instanceof InetSocketAddress))
+        throw new IllegalArgumentException("Unsupported address type");
+    InetSocketAddress epoint = (InetSocketAddress) endpoint;
+    if (epoint.isUnresolved())
+        throw new SocketException("Unresolved address");
+    if (backlog &lt; 1)
+      backlog = 50;
+    try {
+        SecurityManager security = System.getSecurityManager();
+        if (security != null)
+            security.checkListen(epoint.getPort());
+        getImpl().bind(epoint.getAddress(), epoint.getPort());
+        getImpl().listen(backlog);
+        bound = true;
+    } catch(SecurityException e) {
+        bound = false;
+        throw e;
+    } catch(IOException e) {
+        bound = false;
+        throw e;
+    }
+}
+</code></pre>
+
+<p>The relevant bit there is:</p>
+
+<pre><code>getImpl().bind(epoint.getAddress(), epoint.getPort());
+getImpl().listen(backlog);
+</code></pre>
+
+<p>meaning that both the <code>bind</code> <em>and</em> <code>listen</code> are done at the lower level when you create the socket.</p>
+
+<p>So the question is not so much "why is it suddenly appearing in <code>netstat</code>?" but "why wasn't it appearing in <code>netstat</code> before?"</p>
+
+<p>I'd probably put that down to a mis-read on your part, or a not-so-good implementation of <code>netstat</code>. The former is more likely unless you were specifically testing for a socket you hadn't called <code>accept</code> on, which would be unlikely.</p>

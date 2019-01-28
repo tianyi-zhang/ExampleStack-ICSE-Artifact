@@ -1,0 +1,79 @@
+<p>I think you'll need to iterate across all the addresses, and additionally check if the broadcast address is <code>null</code> as well.</p>
+
+<p>Consider that you might have addresses that you aren't expecting assigned to the interface as well. On my Linux system, with your code the first address I see is an IPv6 address, with a null broadcast (since there is no such thing as an IPv6 broadcast - though you can use multicast to achieve the same effect).</p>
+
+<p>You need to completely remove the <code>1st way</code> section of code. When you <code>continue;</code> there you'll go to the next interface instead of considering the possibility that there are two addresses.</p>
+
+<p>The other reason why you always want to iterate all the addresses that can have broadcasts is because you need to consider that you might have addresses on two networks assigned to an interface. For example, you might have an interface with both <code>192.168.0.1/24</code> and <code>172.16.0.1/24</code> assigned.</p>
+
+<p>Also, consider using a <code>Set</code> to store the broadcast addresses to protect against the case where you might have two addresses on the same subnet assigned.</p>
+
+<p>Finally, since using broadcast addresses will restrict you to talking only to hosts that have an IP address in the same subnet, you might miss hosts that are not configured properly with the same subnet/netmask. So you might want to consider using multicast for this; you could use the <a href="http://www.iana.org/assignments/multicast-addresses/multicast-addresses.xml" rel="nofollow">IPv4</a> (or <a href="http://www.iana.org/assignments/ipv6-multicast-addresses/ipv6-multicast-addresses.xml" rel="nofollow">IPv6</a>) all nodes multicast addresses to reach all hosts on the subnet, regardless of the configured address. (224.0.0.1 and FF01::1, respectively)</p>
+
+<p><strong>Edit</strong>: <strike>You also have a bug on the <code>2nd way</code>, related to your use of the iterator. Since you're getting a new <code>.iterator()</code> each time around the for loop, you're lucky there isn't an infinite loop here.</strike> I changed your code to this, and it works for me:</p>
+
+<pre><code>$ cat Broadcasts.java 
+import java.net.*;
+import java.util.*;
+
+public class Broadcasts
+{
+    public static void main(String[] args)
+    {
+        HashSet&lt;InetAddress&gt; listOfBroadcasts = new HashSet&lt;InetAddress&gt;();
+        Enumeration list;
+        try {
+            list = NetworkInterface.getNetworkInterfaces();
+
+            while(list.hasMoreElements()) {
+                NetworkInterface iface = (NetworkInterface) list.nextElement();
+
+                if(iface == null) continue;
+
+                if(!iface.isLoopback() &amp;&amp; iface.isUp()) {
+                    //System.out.println("Found non-loopback, up interface:" + iface);
+
+                    Iterator it = iface.getInterfaceAddresses().iterator();
+                    while (it.hasNext()) {
+                        InterfaceAddress address = (InterfaceAddress) it.next();
+                        //System.out.println("Found address: " + address);
+                        if(address == null) continue;
+                        InetAddress broadcast = address.getBroadcast();
+                        if(broadcast != null) 
+                        {
+                            System.out.println("Found broadcast: " + broadcast);
+                            listOfBroadcasts.add(broadcast);
+                        }
+                    }
+                }
+            }
+        } catch (SocketException ex) {
+            System.err.println("Error while getting network interfaces");
+            ex.printStackTrace();
+        }
+
+        // return listOfBroadcasts;
+    }
+}
+</code></pre>
+
+<p>Another problem you may run into is the try/catch around basically the <em>entire</em> function, which would cause this code to stop if it hit something unexpected. It would be better to surround possible failure points with a try/catch and do something sane (like skip the interface or address), but I didn't look at which methods can throw exceptions.</p>
+
+<p><strong>Edit 2</strong>: I misread your code; your iterator was fine. ;-) The problem (which I pointed out earlier) was that your <code>1st way</code> is short-circuiting your <code>2nd way</code>; since it hits the <code>continue;</code> statement, if the first address is <code>null</code> you don't even try to loop through them all.</p>
+
+<p>In any case, run with those <code>println</code> statements and post the results if you're still having trouble.</p>
+
+<p><strong>Edit 3</strong>: OK, I give up. ;-) Based on the output you posted, it looks like you are running into a bug in the <code>NetworkInterface</code> class.</p>
+
+<p>I don't know if it would help to turn off the <code>preferIPv4Stack</code> option, but you should test that. I searched around a little bit for bug reports that describe this behavior and could not find any.</p>
+
+<p>Since you're on Linux, you could always take the fallback approach of shelling out and calling something like:</p>
+
+<pre><code>/sbin/ip addr | perl -ne 'print "$1\n" if $_  =~ /inet.* brd ([0-9\.]*)/'
+</code></pre>
+
+<p>... which should return you a list of broadcast addresses.</p>
+
+<p><strong>Edit 4</strong>: I just noticed in the JavaDoc for <a href="http://download.oracle.com/javase/6/docs/api/java/net/NetworkInterface.html" rel="nofollow">NetworkInterface</a> there is a <code>getSubInterfaces()</code> call. Maybe you need to call this in order to make sure you get all the addresses? (it might help to post the output of <code>/sbin/ip addr</code> and <code>/sbin/ifconfig</code>)</p>
+
+<p><strong>Edit 5</strong>: Regarding the just-added bounty. (This question is over a year old!) Could someone please run the code in my answer above (edited to make it easy to copy/paste/run) and tell me if it works? If it doesn't, please edit the question and note the exact errors/problems.</p>

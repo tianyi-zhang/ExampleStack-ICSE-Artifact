@@ -1,0 +1,351 @@
+<p>Basic answer is to use SmbFileInputStream to get <strong>InputStream</strong> You probably use this.</p>
+
+<p>Now the tricky part is how to offer InputStream to other apps.</p>
+
+<p>One possible approach, how many apps provide streaming of any InputStream to other apps on device, is to use <strong>http:</strong> URL scheme, and tunel your stream over http.
+Then apps that can handle http URLs can open and use your data.</p>
+
+<p>For this you have to make some kind of http server, which sounds difficult, but actually is achievable task. Good source to start with is <strong><a href="https://github.com/NanoHttpd/nanohttpd" rel="nofollow">nanohttpd</a></strong> library which is just one java source, originally used to list files in dirs, but you can adapt it to stream your InputStream over http. That's what I did with success.</p>
+
+<p>Your url would look like http:// localhost:12345 where 12345 is port on which your server listens for requests. This port may be obtained from ServerSocket.getLocalPort(). Then give this URL to some app and your server waits for connection and sends data.</p>
+
+<p>A note about http streaming: some apps (e.g. video players) like seekable http streams (http Range header). Since you can get also SmbRandomAccessFile, you can make your tiny server to provide any part of data in file. Android's built-in video player needs such seekable http stream in order to allow seeking in video file, otherwise it gives "Video can't be played" error. Your server must be ready to handle disconnects and multiple connects with different Range values.</p>
+
+<p>Basic tasks of http server:</p>
+
+<ol>
+<li>create ServerSocket</li>
+<li>create Thread waiting for connection (Socket accept = serverSocket.accept()), one thread may be ok since you'd handle single client at a time</li>
+<li>read http request (socket.getInputStream()), mainly check GET method and Range header)</li>
+<li>send headers, mainly Content-Type, Content-Length, Accept-Ranges, Content-Range headers</li>
+<li>send actual binary data, which is plain copying of InputStream (file) to OutputStream (socket)</li>
+<li>handle disconnects, errors, exceptions</li>
+</ol>
+
+<p>Good luck in implementation.</p>
+
+<p>EDIT:</p>
+
+<p>Here's my class that does the thing. It references some non-present classes for file, which should be trivial for you to replace by your file class.</p>
+
+<pre><code>/**
+ * This is simple HTTP local server for streaming InputStream to apps which are capable to read data from url.
+ * Random access input stream is optionally supported, depending if file can be opened in this mode. 
+ */
+public class StreamOverHttp{
+   private static final boolean debug = false;
+
+   private final Browser.FileEntry file;
+   private final String fileMimeType;
+
+   private final ServerSocket serverSocket;
+   private Thread mainThread;
+
+   /**
+    * Some HTTP response status codes
+    */
+   private static final String 
+      HTTP_BADREQUEST = "400 Bad Request",
+      HTTP_416 = "416 Range not satisfiable",
+      HTTP_INTERNALERROR = "500 Internal Server Error";
+
+   public StreamOverHttp(Browser.FileEntry f, String forceMimeType) throws IOException{
+      file = f;
+      fileMimeType = forceMimeType!=null ? forceMimeType : file.mimeType;
+      serverSocket = new ServerSocket(0);
+      mainThread = new Thread(new Runnable(){
+         @Override
+         public void run(){
+            try{
+               while(true) {
+                  Socket accept = serverSocket.accept();
+                  new HttpSession(accept);
+               }
+            }catch(IOException e){
+               e.printStackTrace();
+            }
+         }
+
+      });
+      mainThread.setName("Stream over HTTP");
+      mainThread.setDaemon(true);
+      mainThread.start();
+   }
+
+   private class HttpSession implements Runnable{
+      private boolean canSeek;
+      private InputStream is;
+      private final Socket socket;
+
+      HttpSession(Socket s){
+         socket = s;
+         BrowserUtils.LOGRUN("Stream over localhost: serving request on "+s.getInetAddress());
+         Thread t = new Thread(this, "Http response");
+         t.setDaemon(true);
+         t.start();
+      }
+
+      @Override
+      public void run(){
+         try{
+            openInputStream();
+            handleResponse(socket);
+         }catch(IOException e){
+            e.printStackTrace();
+         }finally {
+            if(is!=null) {
+               try{
+                  is.close();
+               }catch(IOException e){
+                  e.printStackTrace();
+               }
+            }
+         }
+      }
+
+      private void openInputStream() throws IOException{
+         // openRandomAccessInputStream must return RandomAccessInputStream if file is ssekable, null otherwise
+         is = openRandomAccessInputStream(file);
+         if(is!=null)
+            canSeek = true;
+         else
+            is = openInputStream(file, 0);
+      }
+
+      private void handleResponse(Socket socket){
+         try{
+            InputStream inS = socket.getInputStream();
+            if(inS == null)
+               return;
+            byte[] buf = new byte[8192];
+            int rlen = inS.read(buf, 0, buf.length);
+            if(rlen &lt;= 0)
+               return;
+
+            // Create a BufferedReader for parsing the header.
+            ByteArrayInputStream hbis = new ByteArrayInputStream(buf, 0, rlen);
+            BufferedReader hin = new BufferedReader(new InputStreamReader(hbis));
+            Properties pre = new Properties();
+
+            // Decode the header into params and header java properties
+            if(!decodeHeader(socket, hin, pre))
+               return;
+            String range = pre.getProperty("range");
+
+            Properties headers = new Properties();
+            if(file.fileSize!=-1)
+               headers.put("Content-Length", String.valueOf(file.fileSize));
+            headers.put("Accept-Ranges", canSeek ? "bytes" : "none");
+
+            int sendCount;
+
+            String status;
+            if(range==null || !canSeek) {
+               status = "200 OK";
+               sendCount = (int)file.fileSize;
+            }else {
+               if(!range.startsWith("bytes=")){
+                  sendError(socket, HTTP_416, null);
+                  return;
+               }
+               if(debug)
+                  BrowserUtils.LOGRUN(range);
+               range = range.substring(6);
+               long startFrom = 0, endAt = -1;
+               int minus = range.indexOf('-');
+               if(minus &gt; 0){
+                  try{
+                     String startR = range.substring(0, minus);
+                     startFrom = Long.parseLong(startR);
+                     String endR = range.substring(minus + 1);
+                     endAt = Long.parseLong(endR);
+                  }catch(NumberFormatException nfe){
+                  }
+               }
+
+               if(startFrom &gt;= file.fileSize){
+                  sendError(socket, HTTP_416, null);
+                  inS.close();
+                  return;
+               }
+               if(endAt &lt; 0)
+                  endAt = file.fileSize - 1;
+               sendCount = (int)(endAt - startFrom + 1);
+               if(sendCount &lt; 0)
+                  sendCount = 0;
+               status = "206 Partial Content";
+               ((RandomAccessInputStream)is).seek(startFrom);
+
+               headers.put("Content-Length", "" + sendCount);
+               String rangeSpec = "bytes " + startFrom + "-" + endAt + "/" + file.fileSize;
+               headers.put("Content-Range", rangeSpec);
+            }
+            sendResponse(socket, status, fileMimeType, headers, is, sendCount, buf, null);
+            inS.close();
+            if(debug)
+               BrowserUtils.LOGRUN("Http stream finished");
+         }catch(IOException ioe){
+            if(debug)
+               ioe.printStackTrace();
+            try{
+               sendError(socket, HTTP_INTERNALERROR, "SERVER INTERNAL ERROR: IOException: " + ioe.getMessage());
+            }catch(Throwable t){
+            }
+         }catch(InterruptedException ie){
+            // thrown by sendError, ignore and exit the thread
+            if(debug)
+               ie.printStackTrace();
+         }
+      }
+
+      private boolean decodeHeader(Socket socket, BufferedReader in, Properties pre) throws InterruptedException{
+         try{
+            // Read the request line
+            String inLine = in.readLine();
+            if(inLine == null)
+               return false;
+            StringTokenizer st = new StringTokenizer(inLine);
+            if(!st.hasMoreTokens())
+               sendError(socket, HTTP_BADREQUEST, "Syntax error");
+
+            String method = st.nextToken();
+            if(!method.equals("GET"))
+               return false;
+
+            if(!st.hasMoreTokens())
+               sendError(socket, HTTP_BADREQUEST, "Missing URI");
+
+            while(true) {
+               String line = in.readLine();
+               if(line==null)
+                  break;
+   //            if(debug &amp;&amp; line.length()&gt;0) BrowserUtils.LOGRUN(line);
+               int p = line.indexOf(':');
+               if(p&lt;0)
+                  continue;
+               final String atr = line.substring(0, p).trim().toLowerCase();
+               final String val = line.substring(p + 1).trim();
+               pre.put(atr, val);
+            }
+         }catch(IOException ioe){
+            sendError(socket, HTTP_INTERNALERROR, "SERVER INTERNAL ERROR: IOException: " + ioe.getMessage());
+         }
+         return true;
+      }
+   }
+
+
+   /**
+    * @param fileName is display name appended to Uri, not really used (may be null), but client may display it as file name.
+    * @return Uri where this stream listens and servers.
+    */
+   public Uri getUri(String fileName){
+      int port = serverSocket.getLocalPort();
+      String url = "http://localhost:"+port;
+      if(fileName!=null)
+         url += '/'+URLEncoder.encode(fileName);
+      return Uri.parse(url);
+   }
+
+   public void close(){
+      BrowserUtils.LOGRUN("Closing stream over http");
+      try{
+         serverSocket.close();
+         mainThread.join();
+      }catch(Exception e){
+         e.printStackTrace();
+      }
+   }
+
+   /**
+    * Returns an error message as a HTTP response and
+    * throws InterruptedException to stop further request processing.
+    */
+   private static void sendError(Socket socket, String status, String msg) throws InterruptedException{
+      sendResponse(socket, status, "text/plain", null, null, 0, null, msg);
+      throw new InterruptedException();
+   }
+
+  private static void copyStream(InputStream in, OutputStream out, byte[] tmpBuf, long maxSize) throws IOException{
+
+     while(maxSize&gt;0){
+        int count = (int)Math.min(maxSize, tmpBuf.length);
+        count = in.read(tmpBuf, 0, count);
+        if(count&lt;0)
+           break;
+        out.write(tmpBuf, 0, count);
+        maxSize -= count;
+     }
+  }
+   /**
+    * Sends given response to the socket, and closes the socket.
+    */
+   private static void sendResponse(Socket socket, String status, String mimeType, Properties header, InputStream isInput, int sendCount, byte[] buf, String errMsg){
+      try{
+         OutputStream out = socket.getOutputStream();
+         PrintWriter pw = new PrintWriter(out);
+
+         {
+            String retLine = "HTTP/1.0 " + status + " \r\n";
+            pw.print(retLine);
+         }
+         if(mimeType!=null) {
+            String mT = "Content-Type: " + mimeType + "\r\n";
+            pw.print(mT);
+         }
+         if(header != null){
+            Enumeration&lt;?&gt; e = header.keys();
+            while(e.hasMoreElements()){
+               String key = (String)e.nextElement();
+               String value = header.getProperty(key);
+               String l = key + ": " + value + "\r\n";
+//               if(debug) BrowserUtils.LOGRUN(l);
+               pw.print(l);
+            }
+         }
+         pw.print("\r\n");
+         pw.flush();
+         if(isInput!=null)
+            copyStream(isInput, out, buf, sendCount);
+         else if(errMsg!=null) {
+            pw.print(errMsg);
+            pw.flush();
+         }
+         out.flush();
+         out.close();
+      }catch(IOException e){
+         if(debug)
+            BrowserUtils.LOGRUN(e.getMessage());
+      }finally {
+         try{
+            socket.close();
+         }catch(Throwable t){
+         }
+      }
+   }
+}
+
+/**
+ * Seekable InputStream.
+ * Abstract, you must add implementation for your purpose.
+ */
+abstract class RandomAccessInputStream extends InputStream{
+
+   /**
+    * @return total length of stream (file)
+    */
+   abstract long length();
+
+   /**
+    * Seek within stream for next read-ing.
+    */
+   abstract void seek(long offset) throws IOException;
+
+   @Override
+   public int read() throws IOException{
+      byte[] b = new byte[1];
+      read(b);
+      return b[0]&amp;0xff;
+   }
+}
+</code></pre>

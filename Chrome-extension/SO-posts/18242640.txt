@@ -1,0 +1,77 @@
+<p>Here's an in depth look.</p>
+
+<p>Spring offers a <code>DispatcherServlet</code> class that, typically, handles all your requests. It does this in its <code>doDispatch(HttpServletRequest request, HttpServletResponse response)</code> method </p>
+
+<pre><code>// Actually invoke the handler.
+mv = ha.handle(processedRequest, response, mappedHandler.getHandler());
+</code></pre>
+
+<p>where <code>mv</code> is the final <code>ModelAndView</code> object, <code>ha</code> is a wrapper to your controller method annotated with <code>@RequestMapping</code>.</p>
+
+<p>This will usually go through a stack of method calls ending up at <code>ServletInvocableHandlerMethod.invokeAndHandle</code></p>
+
+<pre><code>at org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle
+at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandleMethod
+at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.handleInternal
+at org.springframework.web.servlet.mvc.method.AbstractHandlerMethodAdapter.handle
+at org.springframework.web.servlet.DispatcherServlet.doDispatch
+</code></pre>
+
+<p>Looking at the source</p>
+
+<pre><code>public final void invokeAndHandle(ServletWebRequest webRequest,
+                ModelAndViewContainer mavContainer, Object... providedArgs) throws Exception {
+
+    Object returnValue = invokeForRequest(webRequest, mavContainer, providedArgs);
+
+    setResponseStatus(webRequest);
+
+    if (returnValue == null) {
+        if (isRequestNotModified(webRequest) || hasResponseStatus() || mavContainer.isRequestHandled()) {
+            mavContainer.setRequestHandled(true);
+            return;
+        }
+    } else if (StringUtils.hasText(this.responseReason)) {
+        mavContainer.setRequestHandled(true);
+        return;
+    }
+
+    mavContainer.setRequestHandled(false);
+
+    try {
+        this.returnValueHandlers.handleReturnValue(returnValue, getReturnValueType(returnValue), mavContainer, webRequest);
+    }
+    catch (Exception ex) {
+        if (logger.isTraceEnabled()) {
+            logger.trace(getReturnValueHandlingErrorMessage("Error handling return value", returnValue), ex);
+        }
+        throw ex;
+    }
+}
+</code></pre>
+
+<p><code>returnValue</code> is the object returned by your <code>@RequestMapping</code> method. It goes through </p>
+
+<pre><code>this.returnValueHandlers.handleReturnValue
+</code></pre>
+
+<p>where Spring determines a <code>HandlerMethodReturnValueHandler</code> to handle that object.</p>
+
+<pre><code>public void handleReturnValue(
+        Object returnValue, MethodParameter returnType,
+        ModelAndViewContainer mavContainer, NativeWebRequest webRequest)
+        throws Exception {
+
+    HandlerMethodReturnValueHandler handler = getReturnValueHandler(returnType); // returns the appropriate handler
+    Assert.notNull(handler, "Unknown return value type [" + returnType.getParameterType().getName() + "]");
+    handler.handleReturnValue(returnValue, returnType, mavContainer, webRequest);
+}
+</code></pre>
+
+<p><code>getReturnValueHandler(returnType);</code> returns the appropriate handler. The <a href="http://static.springsource.org/spring/docs/3.1.x/javadoc-api/org/springframework/web/method/support/HandlerMethodReturnValueHandler.html" rel="nofollow"><code>HandlerMethodReturnValueHandler</code></a> is an interface with a <code>supportsReturnType</code> method that returns <code>true</code> if the handler supports that type (<code>String</code>, <code>View</code>, <code>ResponseEntity</code>, <a href="http://static.springsource.org/spring/docs/3.2.x/spring-framework-reference/html/mvc.html" rel="nofollow">etc. (look for supported return types)</a>). So the method returns the first handler it finds that supports that type and runs it.</p>
+
+<p>Spring, at initialization, registers a whole slew of implementations of <code>HandlerMethodReturnValueHandler</code>. Basically all the <a href="http://static.springsource.org/spring/docs/3.1.x/javadoc-api/org/springframework/web/method/support/HandlerMethodReturnValueHandler.html#supportsReturnType%28org.springframework.core.MethodParameter%29" rel="nofollow">known implementing classes in its javadoc</a>.</p>
+
+<p>For example, if you return a String, Spring will use a <a href="http://static.springsource.org/spring/docs/3.1.x/javadoc-api/org/springframework/web/servlet/mvc/method/annotation/ViewNameMethodReturnValueHandler.html" rel="nofollow"><code>ViewNameMethodReturnValueHandler</code></a> to handle the response.</p>
+
+<p>Now, which return type to use is up to you. If you wanted to return a <code>Model</code> so you can use request attributes in your jsp view, you can either have Spring pass a <code>Model</code> instance to your method or you can create the <code>Model</code> object yourself and pass it to a <code>ModelAndView</code> which your return. It's a matter of style in most cases.</p>

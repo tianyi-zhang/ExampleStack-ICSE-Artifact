@@ -1,0 +1,121 @@
+<p>This can actually be easily done.</p>
+
+<p>The idea is to get access to the <code>WebDriver</code> instance and run the JavaScript on it (if it supports it). Then there's a lot of validating, because we need to make sure we only return what we promised.</p>
+
+<p>The <code>ByJavaScript</code> class itself will look like this:</p>
+
+<pre><code>public class ByJavaScript extends By implements Serializable {
+    private final String script;
+
+    public ByJavaScript(String script) {
+        checkNotNull(script, "Cannot find elements with a null JavaScript expression.");
+        this.script = script;
+    }
+
+    @Override
+    public List&lt;WebElement&gt; findElements(SearchContext context) {
+        JavascriptExecutor js = getJavascriptExecutorFromSearchContext(context);
+
+        // call the JS, inspect and validate response
+        Object response = js.executeScript(script);
+        List&lt;WebElement&gt; elements = getElementListFromJsResponse(response);
+
+        // filter out the elements that aren't descendants of the context node
+        if (context instanceof WebElement) {
+            filterOutElementsWithoutCommonAncestor(elements, (WebElement)context);
+        }
+
+        return elements;
+    }
+
+    private static JavascriptExecutor getJavascriptExecutorFromSearchContext(SearchContext context) {
+        if (context instanceof JavascriptExecutor) {
+            // context is most likely the whole WebDriver
+            return (JavascriptExecutor)context;
+        }
+        if (context instanceof WrapsDriver) {
+            // context is most likely some WebElement
+            WebDriver driver = ((WrapsDriver)context).getWrappedDriver();
+            checkState(driver instanceof JavascriptExecutor, "This WebDriver doesn't support JavaScript.");
+            return (JavascriptExecutor)driver;
+        }
+        throw new IllegalStateException("We can't invoke JavaScript from this context.");
+    }
+
+    @SuppressWarnings("unchecked")  // cast thoroughly checked
+    private static List&lt;WebElement&gt; getElementListFromJsResponse(Object response) {
+        if (response == null) {
+            // no element found
+            return Lists.newArrayList();
+        }
+        if (response instanceof WebElement) {
+            // a single element found
+            return Lists.newArrayList((WebElement)response);
+        }
+        if (response instanceof List) {
+            // found multiple things, check whether every one of them is a WebElement
+            checkArgument(
+                    Iterables.all((List&lt;?&gt;)response, Predicates.instanceOf(WebElement.class)),
+                    "The JavaScript query returned something that isn't a WebElement.");
+            return (List&lt;WebElement&gt;)response;  // cast is checked as far as we can tell
+        }
+        throw new IllegalArgumentException("The JavaScript query returned something that isn't a WebElement.");
+    }
+
+    private static void filterOutElementsWithoutCommonAncestor(List&lt;WebElement&gt; elements, WebElement ancestor) {
+        for (Iterator&lt;WebElement&gt; iter = elements.iterator(); iter.hasNext(); ) {
+            WebElement elem = iter.next();
+
+            // iterate over ancestors
+            while (!elem.equals(ancestor) &amp;&amp; !elem.getTagName().equals("html")) {
+                elem = elem.findElement(By.xpath("./.."));
+            }
+
+            if (!elem.equals(ancestor)) {
+                iter.remove();
+            }
+        }
+    }
+
+    @Override
+    public String toString() {
+          return "By.javaScript: \"" + script + "\"";
+    }
+
+}
+</code></pre>
+
+<p><sup>This code uses <a href="http://guava-libraries.googlecode.com/">the Google Guava library</a>. It is a dependency of Selenium, so you should have it on your classpath. But if there's something you don't understand, look into Guava.</sup></p>
+
+<p>Things to consider:</p>
+
+<ol>
+<li>Document the whole thing.</li>
+<li>Use better and more helpful exceptions. Consider some custom subclasses of <code>WebDriverException</code>. Also add more helpful messages and info.</li>
+<li>Restrict the class' visibility to package. Or embed it into a static factory (as seen in the original <code>By</code> class) so that it won't be accessible directly etc.</li>
+<li>Write tests. I have tried the most obvious usages (element can't be found, search from driver, search from some context) and everything seems to be ok, but I didn't test it extensively.</li>
+</ol>
+
+<p>Usage:</p>
+
+<pre><code>WebElement elem = driver.findElement(new ByJavaScript("return document.querySelector('.haha');"));
+</code></pre>
+
+<p>Now, the original <code>By</code> class is a static factory that gives out various implementations of itself. Unfortunately, we can't add a new static method to it (without changing its source), so we won't be able to type <code>By.javascript("return something;")</code>. We have to create our own static factory to get something similar:</p>
+
+<pre><code>public class MyBy {
+    /**
+     * Returns a {@code By} which locates elements by the JavaScript expression passed to it.
+     * 
+     * @param script The JavaScript expression to run and whose result to return
+     */
+    public static By javascript(String script) {
+        return new ByJavaScript(script);
+    }
+}
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>WebElement elem = driver.findElement(MyBy.javascript("return document.querySelector('.haha');"));
+</code></pre>

@@ -1,0 +1,78 @@
+<p>You could use Spring's PerformanceMonitoringInterceptor and programmatically register the advice using a beanpostprocessor.</p>
+
+<pre><code>@Target({ ElementType.TYPE, ElementType.METHOD })
+@Retention(RetentionPolicy.RUNTIME)
+@Inherited
+@Documented
+public @interface Monitorable
+{
+
+}
+
+
+public class PerformanceMonitorBeanPostProcessor extends ProxyConfig implements BeanPostProcessor, BeanClassLoaderAware, Ordered,
+    InitializingBean
+{
+
+  private Class&lt;? extends Annotation&gt; annotationType = Monitorable.class;
+
+  private ClassLoader beanClassLoader = ClassUtils.getDefaultClassLoader();
+
+  private Advisor advisor;
+
+  public void setBeanClassLoader(ClassLoader classLoader)
+  {
+    this.beanClassLoader = classLoader;
+  }
+
+  public int getOrder()
+  {
+    return LOWEST_PRECEDENCE;
+  }
+
+  public void afterPropertiesSet()
+  {
+    Pointcut pointcut = new AnnotationMatchingPointcut(this.annotationType, true);
+    Advice advice = getInterceptor();
+    this.advisor = new DefaultPointcutAdvisor(pointcut, advice);
+  }
+
+  private Advice getInterceptor()
+  {
+    return new PerformanceMonitoringInterceptor();
+  }
+
+  public Object postProcessBeforeInitialization(Object bean, String beanName)
+  {
+    return bean;
+  }
+
+  public Object postProcessAfterInitialization(Object bean, String beanName)
+  {
+    if(bean instanceof AopInfrastructureBean)
+    {
+      return bean;
+    }
+    Class&lt;?&gt; targetClass = AopUtils.getTargetClass(bean);
+    if(AopUtils.canApply(this.advisor, targetClass))
+    {
+      if(bean instanceof Advised)
+      {
+        ((Advised)bean).addAdvisor(this.advisor);
+        return bean;
+      }
+      else
+      {
+        ProxyFactory proxyFactory = new ProxyFactory(bean);
+        proxyFactory.copyFrom(this);
+        proxyFactory.addAdvisor(this.advisor);
+        return proxyFactory.getProxy(this.beanClassLoader);
+      }
+    }
+    else
+    {
+      return bean;
+    }
+  }
+}
+</code></pre>

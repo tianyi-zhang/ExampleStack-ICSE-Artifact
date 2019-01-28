@@ -1,0 +1,177 @@
+<p>Okay, I sussed it.  I did not appreciate the pre-processing power of a method interceptor.  So I created one and I got my ordered tests.  For the benefit of anyone seeking a solution I will list my code changes here.</p>
+
+<h1>Method interceptor</h1>
+
+<pre><code>import org.testng.IMethodInstance;
+import org.testng.IMethodInterceptor;
+import org.testng.ITestContext;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+/**
+ * @author rcourtright
+ *         Date: 8/11/14
+ *         Time: 2:37 PM
+ */
+public class ErsatzMethodInterceptor implements IMethodInterceptor {
+
+    @Override
+    public List&lt;IMethodInstance&gt; intercept(List&lt;IMethodInstance&gt; methods, ITestContext context) {
+        Map&lt;String,IMethodInstance&gt; orders = new TreeMap&lt;String,IMethodInstance&gt;();
+        for (IMethodInstance iMethodInstance : methods) {
+            if (!iMethodInstance.getMethod().getMethodName().equals("justDoIt")) {
+                continue;
+            }
+            Object obj = iMethodInstance.getInstance();
+            if (!(obj instanceof ErsatzTest)) {
+                continue;
+            }
+            ErsatzTest ersatzTest = (ErsatzTest)obj;
+            String order = ersatzTest.getOrder();
+            orders.put(order,iMethodInstance);
+        }
+        List&lt;IMethodInstance&gt; tests = new ArrayList&lt;IMethodInstance&gt;(orders.size());
+        for (String order : orders.keySet()) {
+            IMethodInstance test = orders.get(order);
+            tests.add(test);
+        }
+        return tests;
+    }
+}
+</code></pre>
+
+<h2>Wire the test class to the interceptor class</h2>
+
+<pre><code>    import org.apache.log4j.Logger;
+import org.testng.ITest;
+import org.testng.annotations.Listeners;
+import org.testng.annotations.Test;
+
+/**
+ * @author rcourtright
+ *         Date: 8/5/14
+ *         Time: 4:45 PM
+ */
+@Listeners(
+    {
+        ErsatzMethodInterceptor.class,
+        ErsatzListener.class
+    }
+)
+public class ErsatzTest implements ITest {
+    private Logger logger = Logger.getLogger(ErsatzTest.class);
+
+    private String order;
+
+    public ErsatzTest(String order) {
+        this.order = order;
+    }
+
+    public String getOrder() {
+        return order;
+    }
+
+    @Test
+    public void justDoIt() {
+        logger.info(order);
+    }
+
+    @Override
+    public String getTestName() {
+        return order;
+    }
+}
+</code></pre>
+
+<h3>Bonus listener to pretty print results to reports</h3>
+
+<pre><code>    import org.apache.log4j.Logger;
+import org.testng.ITestResult;
+import org.testng.TestListenerAdapter;
+import org.testng.internal.BaseTestMethod;
+import org.testng.internal.TestResult;
+
+import java.lang.reflect.Field;
+
+/**
+ * @author rcourtright
+ *         Date: 7/29/14
+ *         Time: 12:03 PM
+ */
+public class ErsatzListener extends TestListenerAdapter {
+
+    private Logger logger = Logger.getLogger(ErsatzListener.class);
+
+    private void setTestNameInXml(ITestResult tr) {
+        try {
+            Field mMethod = TestResult.class.getDeclaredField("m_method");
+            mMethod.setAccessible(true);
+            mMethod.set(tr, tr.getMethod().clone());
+            Field mMethodName = BaseTestMethod.class.getDeclaredField("m_methodName");
+            mMethodName.setAccessible(true);
+            mMethodName.set(tr.getMethod(), tr.getTestName());
+        } catch (IllegalAccessException ex) {
+            logger.error(ex.getLocalizedMessage(), ex);
+        } catch (NoSuchFieldException ex) {
+            logger.error(ex.getLocalizedMessage(), ex);
+        }
+    }
+
+    @Override
+    public void onTestSuccess(ITestResult tr) {
+        setTestNameInXml(tr);
+        super.onTestSuccess(tr);
+    }
+
+    @Override
+    public void onTestFailure(ITestResult tr) {
+        setTestNameInXml(tr);
+        super.onTestFailure(tr);
+    }
+
+    @Override
+    public void onTestSkipped(ITestResult tr) {
+        setTestNameInXml(tr);
+        super.onTestSkipped(tr);
+    }
+
+}
+</code></pre>
+
+Results of test execution
+
+<p>I assume that you have log4j now, so just have a usable log4j.xml on the class path and here we have ordered test results:</p>
+
+<pre><code>$ java org.testng.TestNG testng.xml
+[TestNG] Running:
+  /Users/rcourtright/Desktop/ersatz/testng.xml
+
+
+0 [main] INFO ErsatzTest  - 0-Test
+
+2 [main] INFO ErsatzTest  - 1-Test
+
+3 [main] INFO ErsatzTest  - 2-Test
+
+4 [main] INFO ErsatzTest  - 3-Test
+
+5 [main] INFO ErsatzTest  - 4-Test
+
+6 [main] INFO ErsatzTest  - 5-Test
+
+7 [main] INFO ErsatzTest  - 6-Test
+
+8 [main] INFO ErsatzTest  - 7-Test
+
+9 [main] INFO ErsatzTest  - 8-Test
+
+===============================================
+ersatz-testing
+Total tests run: 9, Failures: 0, Skips: 0
+===============================================
+</code></pre>
+
+<p>In the end, I did not appreciate the power of the method interceptor and that it runs after the factory does whatever it does.  That is, the factory method does not control the order, but this can be changed by using an interceptor.</p>

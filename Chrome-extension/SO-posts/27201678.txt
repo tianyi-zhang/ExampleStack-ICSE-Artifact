@@ -1,0 +1,363 @@
+<p>you can use following code, </p>
+
+<pre><code>public class GeocoderModel {
+
+    private String streetNumber;
+    private String rout;
+    private String subLocality;
+    private String political;
+    private String country;
+
+   // getter and setter
+  }
+</code></pre>
+
+<p>custom geoCoder class:</p>
+
+<pre><code>import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.Editor;
+import android.location.Address;
+import android.util.Log;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.util.Locale;
+
+/**
+ * A class for handling geocoding and reverse geocoding. Geocoding is the
+ * process of transforming a street address or other description of a location
+ * into a (latitude, longitude) coordinate. Reverse geocoding is the process of
+ * transforming a (latitude, longitude) coordinate into a (partial) address. The
+ * amount of detail in a reverse geocoded location description may vary, for
+ * example one might contain the full street address of the closest building,
+ * while another might contain only a city name and postal code.
+ * &lt;p/&gt;
+ * This is a replacement of built-in Geocoder which is not always available.
+ * This implementation parses just a formatted address and is guaranteed to
+ * work.
+ */
+public final class Geocoder {
+
+    private static final String PREFERENCES_GEOCODER = Geocoder.class.getName()
+            + ".GEOCODER";
+    private static final String KEY_ALLOW = Geocoder.class.getName()
+            + ".KEY_ALLOW";
+
+    /*
+     * Status codes which we handle
+     */
+
+    /**
+     * Indicates that no errors occurred; the address was successfully parsed
+     * and at least one geocode was returned.
+     */
+    private static final String STATUS_OK = "OK";
+
+    /**
+     * Indicates that you are over your quota.
+     */
+    private static final String STATUS_OVER_QUERY_LIMIT = "OVER_QUERY_LIMIT";
+
+    private final Context context;
+
+    /**
+     * Constructs a Geocoder whose responses will be localized for the default
+     * system Locale.
+     *
+     * @param context the Context of the calling Activity
+     */
+    public Geocoder(Context context) {
+        this.context = context;
+    }
+
+    /**
+     * Returns an array of Addresses that are known to describe the area
+     * immediately surrounding the given latitude and longitude. The returned
+     * addresses will be localized for the locale provided to this class's
+     * constructor.
+     * &lt;p/&gt;
+     * &lt;p/&gt;
+     * The returned values may be obtained by means of a network lookup. The
+     * results are a best guess and are not guaranteed to be meaningful or
+     * correct. It may be useful to call this method from a thread separate from
+     * your primary UI thread.
+     *
+     * @param latitude   the latitude a point for the search
+     * @param longitude  the longitude a point for the search
+     * @param maxResults max number of addresses to return. Smaller numbers (1 to 5)
+     *                   are recommended
+     * @return a list of Address objects. Returns null or empty list if no
+     * matches were found or there is no backend service available.
+     * @throws IllegalArgumentException if latitude is less than -90 or greater than 90
+     * @throws IllegalArgumentException if longitude is less than -180 or greater than 180
+     * @throws java.io.IOException      if the network is unavailable or any other I/O problem occurs
+     */
+    public GeocoderModel getFromLocation(double latitude, double longitude,
+                                         int maxResults) throws IOException, LimitExceededException {
+        if (latitude &lt; -90.0 || latitude &gt; 90.0) {
+            throw new IllegalArgumentException("latitude == " + latitude);
+        }
+        if (longitude &lt; -180.0 || longitude &gt; 180.0) {
+            throw new IllegalArgumentException("longitude == " + longitude);
+        }
+
+        if (isLimitExceeded(context)) {
+            throw new LimitExceededException();
+        }
+
+        final GeocoderModel results = new GeocoderModel();
+
+        final StringBuilder url = new StringBuilder(
+                "http://maps.googleapis.com/maps/api/geocode/json?sensor=true&amp;latlng=");
+        url.append(latitude);
+        url.append(',');
+        url.append(longitude);
+        url.append("&amp;language=");
+        url.append(Locale.ENGLISH);
+
+        final byte[] data = WebserviceClient.download(url.toString());
+        if (data != null) {
+            this.parseJson(results, maxResults, data);
+        }
+        return results;
+    }
+
+    /**
+     * Returns an array of Addresses that are known to describe the named
+     * location, which may be a place name such as "Dalvik,
+     * Iceland", an address such as "1600 Amphitheatre Parkway, Mountain View,
+     * CA", an airport code such as "SFO", etc.. The returned addresses will be
+     * localized for the locale provided to this class's constructor.
+     * &lt;p/&gt;
+     * &lt;p/&gt;
+     * The query will block and returned values will be obtained by means of a
+     * network lookup. The results are a best guess and are not guaranteed to be
+     * meaningful or correct. It may be useful to call this method from a thread
+     * separate from your primary UI thread.
+     *
+     * @param locationName a user-supplied description of a location
+     * @param maxResults   max number of results to return. Smaller numbers (1 to 5) are
+     *                     recommended
+     * @return a list of Address objects. Returns null or empty list if no
+     * matches were found or there is no backend service available.
+     * @throws IllegalArgumentException if locationName is null
+     * @throws java.io.IOException      if the network is unavailable or any other I/O problem occurs
+     */
+    public GeocoderModel getFromLocationName(String locationName, int
+            maxResults)
+            throws IOException, LimitExceededException {
+        if (locationName == null) {
+            throw new IllegalArgumentException("locationName == null");
+        }
+
+        if (isLimitExceeded(context)) {
+            throw new LimitExceededException();
+        }
+
+        final GeocoderModel results = new GeocoderModel();
+
+        final StringBuilder request = new StringBuilder(
+                "http://maps.googleapis.com/maps/api/geocode/json?sensor=false");
+        request.append("&amp;language=").append(Locale.getDefault().getLanguage());
+        request.append("&amp;address=").append(
+                URLEncoder.encode(locationName, "UTF-8"));
+
+        byte[] data = WebserviceClient.download(request.toString());
+        if (data != null) {
+            try {
+                this.parseJson(results, maxResults, data);
+            } catch (LimitExceededException e) {
+                // LimitExceededException could be thrown if too many calls per
+                // second
+                // If after two seconds, it is thrown again - then it means
+                // there are too much calls per 24 hours
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e1) {
+                    return results;
+                }
+                data = WebserviceClient.download(request.toString());
+                if (data != null) {
+                    try {
+                        this.parseJson(results, maxResults, data);
+                    } catch (LimitExceededException lee) {
+                        // available in 24 hours
+                        setAllowedDate(context,
+                                System.currentTimeMillis() + 86400000L);
+                        throw lee;
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    private void parseJson(GeocoderModel geoCoderModel, int maxResults,
+                           byte[] data) throws LimitExceededException {
+        try {
+            final String json = new String(data, "UTF-8");
+            final JSONObject o = new JSONObject(json);
+            final String status = o.getString("status");
+            if (status.equals(STATUS_OK)) {
+
+                final JSONArray a = o.getJSONArray("results");
+
+                // for (int i = 0; i &lt; maxResults &amp;&amp; i &lt; a.length(); i++) {
+
+                final Address current = new Address(Locale.getDefault());
+                final JSONObject item = a.getJSONObject(0);
+                JSONArray addressComponnet = item
+                        .getJSONArray("address_components");
+
+                for (int i = 0; i &lt; addressComponnet.length(); i++) {
+
+                    JSONObject temp = addressComponnet.getJSONObject(i);
+
+                    Log.d("temp is", temp.toString());
+
+                    JSONArray type = temp.getJSONArray("types");
+
+                    if (type.toString().contains("street_number")) {
+                        geoCoderModel.setStreetNumber(temp
+                                .getString("long_name"));
+                    } else if (type.toString().contains("rout")) {
+                        geoCoderModel.setRout(temp.getString("long_name"));
+                    } else if (type.toString().contains("country")) {
+                        geoCoderModel.setCountry(temp.getString("long_name"));
+                    } else if (type.toString().contains("political")) {
+                        if ((geoCoderModel.getPolitical().length() - geoCoderModel
+                                .getPolitical().replace("|", "").length()) &lt; 3
+                                || type.toString().contains(
+                                "administrative_area_level_1"))
+                            geoCoderModel.setPolitical(temp
+                                    .getString("long_name"));
+                    } else if (type.toString().contains("sublocality")) {
+                        geoCoderModel.setRout(geoCoderModel.getRout() + " "
+                                + temp.getString("long_name"));
+                    }
+
+                }
+            } else if (status.equals(STATUS_OVER_QUERY_LIMIT)) {
+
+                throw new LimitExceededException();
+
+            }
+        } catch (LimitExceededException e) {
+            throw e;
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    /**
+     * Returns true if limit is exceeded and next query is not allowed
+     *
+     * @param context Current context
+     * @return true if limit is exceeded and next query is not allowed; false
+     * otherwise
+     */
+    private static boolean isLimitExceeded(Context context) {
+        return System.currentTimeMillis() &lt;= getAllowedDate(context);
+    }
+
+    /**
+     * Sets date after which next geocoding query is allowed
+     *
+     * @param context Current context
+     * @param date    the date after which next geocoding query is allowed
+     */
+    private static void setAllowedDate(Context context, long date) {
+        final SharedPreferences p = context.getSharedPreferences(
+                PREFERENCES_GEOCODER, Context.MODE_PRIVATE);
+        final Editor e = p.edit();
+        e.putLong(KEY_ALLOW, date);
+        e.commit();
+    }
+
+    /**
+     * Returns date after which the next geocoding query is allowed
+     *
+     * @param context Current context
+     * @return date after which the next geocoding query is allowed
+     */
+    private static long getAllowedDate(Context context) {
+        final SharedPreferences p = context.getSharedPreferences(
+                PREFERENCES_GEOCODER, Context.MODE_PRIVATE);
+        return p.getLong(KEY_ALLOW, 0);
+    }
+
+    /**
+     * Is thrown when the query was over limit before 24 hours
+     */
+    public static final class LimitExceededException extends Exception {
+        private static final long serialVersionUID = -1243645207607944474L;
+    }
+
+}
+</code></pre>
+
+<p>WebserviceClient:</p>
+
+<pre><code>import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLConnection;
+
+public class WebserviceClient {
+
+    public static byte[] download(String url) {
+        InputStream is = null;
+        ByteArrayOutputStream os = null;
+
+        try {
+
+            final URL u = new URL(url);
+            final URLConnection connection = u.openConnection();
+            connection.connect();
+
+            is = connection.getInputStream();
+            os = new ByteArrayOutputStream();
+
+            final byte[] buffer = new byte[5120];
+            int read;
+
+            while (true) {
+                read = is.read(buffer, 0, buffer.length);
+                if (read == -1)
+                    break;
+                os.write(buffer, 0, read);
+            }
+
+            return os.toByteArray();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (is != null)
+                try {
+                    is.close();
+                } catch (IOException ignored) {
+                }
+            if (os != null)
+                try {
+                    os.close();
+                } catch (IOException ignored) {
+                }
+        }
+
+        return null;
+    }
+}
+</code></pre>
+
+<p>you can use following method to get your data.</p>
+
+<pre><code>geocoderModel = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 5);
+</code></pre>
+
+<p>you have all part of address via this code. i hope this help you</p>

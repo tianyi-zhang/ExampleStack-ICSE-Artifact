@@ -1,0 +1,101 @@
+<p>Are you checking if button <code>b</code> is null? As the logcat states <code>java.lang.NullPointerException</code>, strange that you're experiencing the issue, what I have usually is this:</p>
+
+<pre><code>_btnFoo = (Button)findViewById(R.id.btnFoo);
+if (_btnFoo != null){
+   _btnFoo.setOnClickListener(new OnClickListener(){
+      @Override
+      public void onClick(View v){
+         ....
+      }
+   });
+}
+</code></pre>
+
+<p>Its the null pointer exception that sticks out like a sore thumb so something is not initialized there around that.</p>
+
+<p><strong>Edit:</strong> 
+Since my answer was not sufficient enough, I thought of digging around the sources, taken from the ICS 4.0.3 repo, this is a section of the code found here, at lines 14103 in <code>frameworks/base/core/java/android/view/View.java</code></p>
+
+<pre><code>private final class PerformClick implements Runnable {
+    public void run() {
+        performClick();
+    }
+}
+</code></pre>
+
+<p>The meat of the method is in this found at lines 3505 in the same source:</p>
+
+<pre><code>public boolean performClick() {
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+
+        ListenerInfo li = mListenerInfo;
+        if (li != null &amp;&amp; li.mOnClickListener != null) {
+            playSoundEffect(SoundEffectConstants.CLICK);
+            li.mOnClickListener.onClick(this);
+            return true;
+        }
+
+        return false;
+    }
+</code></pre>
+
+<p><s>My guess is that the <code>Runnable</code> within the <code>PerformClick</code> is glitchy since it appears to be cross-threading without any hint of <code>runOnUiThread</code> or similar safeguard.</p>
+
+<p>I'll stress that in the previous sentence - I'll put an open-ended question-mark and use it loosely in the sense of the word as in, not to be taken literally.</s></p>
+
+<p>Jen's comment is proven to be correct as shown here, taken from lines 3010:</p>
+
+<pre><code>case R.styleable.View_onClick:
+    if (context.isRestricted()) {
+        throw new IllegalStateException("The android:onClick attribute cannot "
+                + "be used within a restricted context");
+    }
+
+    final String handlerName = a.getString(attr);
+    if (handlerName != null) {
+        setOnClickListener(new OnClickListener() {
+            private Method mHandler;
+
+            public void onClick(View v) {
+                if (mHandler == null) {
+                    try {
+                        mHandler = getContext().getClass().getMethod(handlerName,
+                                View.class);
+                    } catch (NoSuchMethodException e) {
+                        int id = getId();
+                        String idText = id == NO_ID ? "" : " with id '"
+                                + getContext().getResources().getResourceEntryName(
+                                    id) + "'";
+                        throw new IllegalStateException("Could not find a method " +
+                                handlerName + "(View) in the activity "
+                                + getContext().getClass() + " for onClick handler"
+                                + " on view " + View.this.getClass() + idText, e);
+                    }
+                }
+
+                try {
+                    mHandler.invoke(getContext(), View.this);
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Could not execute non "
+                            + "public method of the activity", e);
+                } catch (InvocationTargetException e) {
+                    throw new IllegalStateException("Could not execute "
+                            + "method of the activity", e);
+                }
+            }
+        });
+    }
+    break;
+</code></pre>
+
+<p>At line 3452, the <code>setOnClickListener</code> method is where the call-back gets registered as shown:</p>
+
+<pre><code>public void setOnClickListener(OnClickListener l) {
+    if (!isClickable()) {
+        setClickable(true);
+    }
+    getListenerInfo().mOnClickListener = l;
+}
+</code></pre>
+
+<p>The answer to the OP's question is there's a bug in the framework as Jens succinctly put it <em>It's a discrepancy in error handling at least. Typically one shouldn't be throwing exceptions in <code>onClick</code> - but I can imagine that this would make it a bit harder to track down errors "in the wild" if no force closes are reported back on apps that do a lot of work in their click handlers.</em></p>

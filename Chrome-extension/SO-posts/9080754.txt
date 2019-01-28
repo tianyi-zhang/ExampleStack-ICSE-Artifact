@@ -1,0 +1,238 @@
+<p>There has above code code working successfully.There has some change
+ in C2DMBroadcastReceiver.java class for receive message and There has
+ add MessageClass.java class for sending message to server</p>
+
+<p><strong>C2DMBroadcastReceiver.java file</strong>  </p>
+
+<pre><code>public class C2DMBroadcastReceiver extends BroadcastReceiver {
+    NotificationManager nm;
+     @Override
+    public final void onReceive(Context context, Intent intent) {
+        if (Constants.RECEIVED_REGISTRATION_ID_FROM_GOOGLE.equals(intent.getAction())) {
+            Log.d(Constants.TAG, "Received a registration ID from Google.");
+            intent.setAction(Constants.REGISTRATION_INTENT);
+            intent.setClassName(context, RegistrationIDReceiver.class.getName());
+        } else if (Constants.RECEIVED_C2DM_MESSAGE_FROM_GOOGLE.equals(intent.getAction())) {
+            Function_notification(context,intent);
+            Log.d(Constants.TAG, "Received a C2DM message from Google.");
+            intent.setAction(Constants.START_C2DM_SERVICE);
+            intent.setClass(context, C2DMService.class);
+        }
+        context.startService(intent);
+    }
+    private void Function_notification(Context context,Intent intent ) {
+
+        Bundle extras = intent.getExtras();
+        Log.d("extras",""+extras);
+        String message2 = (String)extras.get("collapse_key");
+        Log.d("collapse_key","collapse_key=" + message2);
+        String message1 = (String)extras.get("payload");
+        Log.d("extras","payload=" + message1);
+        String error = intent.getStringExtra("error");
+        Log.d("extras","error=" + error);
+    nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+    CharSequence from = "Please Testing for Recive message";
+    CharSequence message = message1;
+    Intent notifyintent = new Intent(context,Akashc2dmActivity.class);
+    PendingIntent contentIntent = PendingIntent.getActivity(context, 0,notifyintent, 0);
+    Notification notif = new Notification(R.drawable.icon,"Please take your Recive message", System.currentTimeMillis());
+    notif.setLatestEventInfo(context, from, message, contentIntent);
+    nm.notify(1, notif);
+
+    }
+}
+
+
+
+&gt; **Add This class in com.technosoft.C2dm_Server_1 package**
+</code></pre>
+
+<p><strong>MessageClass .java file</strong>     </p>
+
+<pre><code>public class MessageClass {
+public static final String PARAM_REGISTRATION_ID = "registration_id";
+
+public static final String PARAM_DELAY_WHILE_IDLE = "delay_while_idle";
+
+public static final String PARAM_COLLAPSE_KEY = "collapse_key";
+
+private static final String UTF8 = "UTF-8";
+
+public static String sendMessage(String auth_token, String registrationId,
+        String message) throws IOException {
+
+    StringBuilder postDataBuilder = new StringBuilder();
+    postDataBuilder.append(PARAM_REGISTRATION_ID).append("=")
+            .append(registrationId);
+    postDataBuilder.append("&amp;").append(PARAM_COLLAPSE_KEY).append("=")
+            .append("1");
+    postDataBuilder.append("&amp;").append("data.payload").append("=")
+    .append(URLEncoder.encode("hello", UTF8));
+
+
+    byte[] postData = postDataBuilder.toString().getBytes(UTF8);
+
+    // Hit the dm URL.
+
+    URL url = new URL("https://android.clients.google.com/c2dm/send");
+    HttpsURLConnection
+            .setDefaultHostnameVerifier(new CustomizedHostnameVerifier());
+    HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+    conn.setDoOutput(true);
+    conn.setUseCaches(false);
+    conn.setRequestMethod("POST");
+    conn.setRequestProperty("Content-Type",
+            "application/x-www-form-urlencoded;charset=UTF-8");
+    conn.setRequestProperty("Content-Length",
+            Integer.toString(postData.length));
+    conn.setRequestProperty("Authorization", "GoogleLogin auth="
+            + auth_token);
+
+    OutputStream out = conn.getOutputStream();
+    out.write(postData);
+    out.close();
+
+    int responseCode = conn.getResponseCode();
+    if (responseCode == 401 || responseCode == 403) {  
+        // The token is too old - return false to retry later, will  
+        // fetch the token  
+        // from DB. This happens if the password is changed or token  
+        // expires. Either admin  
+        // is updating the token, or Update-Client-Auth was received by  
+        // another server,  
+        // and next retry will get the good one from database.  
+        Log.d("C2DM", "Unauthorized - need token");  
+    }  
+    String updatedAuthToken = conn.getHeaderField("Update-Client-Auth");  
+    if (updatedAuthToken != null &amp;&amp; !auth_token.equals(updatedAuthToken)) {  
+        Log.d("C2DM",  
+                "Got updated auth token from datamessaging servers: "  
+                        + updatedAuthToken);  
+        sendMessage(updatedAuthToken,registrationId,
+                message);
+    }  
+    String responseLine = new BufferedReader(new InputStreamReader(  
+            conn.getInputStream())).readLine();  
+
+    // NOTE: You *MUST* use exponential backoff if you receive a 503  
+    // response code.  
+    // Since App Engine's task queue mechanism automatically does this  
+    // for tasks that  
+    // return non-success error codes, this is not explicitly  
+    // implemented here.  
+    // If we weren't using App Engine, we'd need to manually implement  
+    // this.  
+    if (responseLine == null || responseLine.equals("")) {  
+        Log.i("C2DM", "Got " + responseCode  
+                + " response from Google AC2DM endpoint.");  
+        throw new IOException(  
+                "Got empty response from Google AC2DM endpoint.");  
+    }  
+
+    String[] responseParts = responseLine.split("=", 2);  
+    if (responseParts.length != 2) {  
+        Log.e("C2DM", "Invalid message from google: " + responseCode  
+                + " " + responseLine);  
+        throw new IOException("Invalid response from Google "  
+                + responseCode + " " + responseLine);  
+    }  
+
+    if (responseParts[0].equals("id")) {  
+        Log.i("Tag", "Successfully sent data message to device: "  
+                + responseLine);  
+    }  
+
+    if (responseParts[0].equals("Error")) {  
+        String err = responseParts[1];  
+        Log.w("C2DM",  
+                "Got error response from Google datamessaging endpoint: "  
+                        + err);  
+        // No retry.  
+        throw new IOException(err);  
+    }  
+    return responseLine;
+}
+
+private static class CustomizedHostnameVerifier implements HostnameVerifier {
+    public boolean verify(String hostname, SSLSession session) {
+        return true;
+    }
+}
+</code></pre>
+
+<p>}</p>
+
+<blockquote>
+  <p><code>**This class use in RegistrationIDRegistrar.java class**</code></p>
+</blockquote>
+
+<p><strong>RegistrationIDRegistrar.java file</strong>             </p>
+
+<pre><code>class RegistrationIDRegistrar {
+
+    static final String MASHMOBILE_C2DM_SERVER_URL = "http://10.0.1.3:8888";
+    String response;
+private RegistrationIDRegistrar(String url) {
+}
+void registerIdWithC2DMService(final String registrationId){
+    //getAuthentification();
+    Log.d("registrationId", ""+registrationId);
+    try {
+        String auth_key =getToken(Constants.C2DM_APPLICATION_SERVER_ID,Constants.C2DM_APPLICATION_SERVER_Password);
+        Log.d("auth_key", ""+auth_key);
+        response = MessageClass.sendMessage(auth_key,registrationId, "hello test android");
+        Log.d("Response code", ""+response);
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+}  
+public static String getToken(String email, String password)
+        throws IOException {
+    // Create the post data
+    // Requires a field with the email and the password
+    StringBuilder builder = new StringBuilder();
+    builder.append("Email=").append(email);
+    builder.append("&amp;Passwd=").append(password);
+    builder.append("&amp;accountType=GOOGLE");
+    builder.append("&amp;source=MyLittleExample");
+    builder.append("&amp;service=ac2dm");
+
+    // Setup the Http Post
+    byte[] data = builder.toString().getBytes();
+    URL url = new URL("https://www.google.com/accounts/ClientLogin");
+    HttpURLConnection con = (HttpURLConnection) url.openConnection();
+    con.setUseCaches(false);
+    con.setDoOutput(true);
+    con.setRequestMethod("POST");
+    con.setRequestProperty("Content-Type",
+            "application/x-www-form-urlencoded");
+    con.setRequestProperty("Content-Length", Integer.toString(data.length));
+
+    // Issue the HTTP POST request
+    OutputStream output = con.getOutputStream();
+    output.write(data);
+    output.close();
+
+    // Read the response
+    BufferedReader reader = new BufferedReader(new InputStreamReader(
+            con.getInputStream()));
+    String line = null;
+    String auth_key = null;
+    while ((line = reader.readLine()) != null) {
+        if (line.startsWith("Auth=")) {
+            auth_key = line.substring(5);
+            Log.d("auth_key", ""+auth_key);
+        }
+    }
+
+    // Finally get the authentication token
+        // To something useful with it
+        return auth_key;
+    }
+
+   static RegistrationIDRegistrar getInstance() {
+        return new RegistrationIDRegistrar(MASHMOBILE_C2DM_SERVER_URL);
+    }
+}
+</code></pre>

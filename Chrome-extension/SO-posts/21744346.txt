@@ -1,0 +1,759 @@
+<p>code for capture raw image:</p>
+
+<pre><code>import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Looper;
+import android.text.format.DateFormat;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.SurfaceHolder;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.SurfaceHolder.Callback;
+import android.hardware.Camera;
+import android.hardware.Camera.PictureCallback;
+import android.hardware.Camera.ShutterCallback;
+import android.view.KeyEvent;
+import android.app.ProgressDialog;
+import android.app.Dialog;
+import android.os.Handler;
+import android.os.Message;
+import android.widget.Button;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.List;
+import android.hardware.Camera.Size;
+import android.view.Display;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.util.Log;
+
+public class Camera extends Activity implements SurfaceHolder.Callback {
+
+    private int mMode;
+    private boolean mIssdcardExist = false;
+    private VideoPreview mVideoPreview; //?VideoPreview???
+    private int mPrvW = 640, mPrvH = 480;
+    private int mDispW = 640, mDispH = 480;
+    private int mPicW = 2560, mPicH = 1920;
+    private Camera mCamera;
+    private Camera.Parameters mCameraParam;
+    private int mIsPreviewing = 0;
+    private volatile int mIsFocused = 0;
+    private volatile int mIsCapture = 0;
+    private long mFocusStartTime;
+    private long mFocusCallbackTime;
+    private long mCaptureStartTime;
+    private long mShutterCallbackTime;
+    private long mRawPictureCallbackTime;
+    private long mJpegPictureCallbackTime;
+    private final AutoFocusCallback mAutoFocusCallback = new AutoFocusCallback();
+    private final ShutterCallback mShutterCallback = new ShutterCallback();
+    private final RawPictureCallback mRawPictureCallback = new RawPictureCallback();
+    private static final String CAMERA_IMAGE_BUCKET_NAME = Environment.getExternalStorageDirectory().toString() + "/DCIM/CameraEM/";
+    private int mAFEngMode = 0;
+
+    public static final int CAPTURE_ID = Menu.FIRST;
+
+    private String TAG = "EM-Camera";
+
+    private final int DIALOG_PROGRESS = 1000;
+    private ProgressDlgHandler mProgressDlgHandler = new ProgressDlgHandler();
+    private final int EVENT_FULL_SCAN_START = 100;
+    private final int EVENT_FULL_SCAN_COMPLETE = 101;
+    private boolean mIsTest = false;
+    private boolean mProgressDlgExists = false;
+
+    private boolean mIsRawCapture = false;
+    private String mRawCaptureFileName;
+
+    private boolean mIsOnPause = false;
+    private int mPos = 0;
+    private static final int MSG_AF_MODE1_EVENT = 1001;
+    private static final int MSG_AF_MODE3_EVENT = 1003;
+    private static final int MSG_AF_MODE4_EVENT = 1004;
+    private mAFMode1FirstThread threadFirst;
+    private AFMode1Thread mode1Thread;
+    private AFMode2Thread mode2Thread;
+    private AFMode3Thread mode3Thread;
+    private AFMode4Thread mode4Thread;
+    private RawCaptureThread mRawCaptureThread;
+    private boolean mCanBack = true;
+
+    private Button mButtonPass;
+    private Button mButtonFail;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.camera_test);
+
+        Window win = getWindow();
+        win.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        if(Environment.getExternalStorageState().equals(Environment.MEDIA_REMOVED))
+        {
+            mIssdcardExist = false;
+        }
+        else
+        {
+            File file = new File(CAMERA_IMAGE_BUCKET_NAME);
+            if(!file.isDirectory())
+            {
+                file.mkdirs();
+            }
+            mIssdcardExist = true;
+        }
+
+        mButtonPass = (Button) findViewById(R.id.camera_test_pass);
+        mButtonPass.setOnClickListener(mButtonHandler);
+
+        mButtonFail = (Button) findViewById(R.id.camera_test_fail);
+        mButtonFail.setOnClickListener(mButtonHandler);
+    }
+
+        @Override
+    public void onResume() {
+        super.onResume();
+        Log.i(TAG, "onResume ");
+        mVideoPreview = (VideoPreview) findViewById(R.id.camera_preview);
+        mVideoPreview.setAspectRatio(mPrvW, mPrvH);
+        SurfaceHolder holder = mVideoPreview.getHolder();
+        holder.addCallback(this);
+        holder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+
+        mIsTest = false;
+        mIsOnPause = false;
+    }
+
+        @Override
+    public void onPause() {
+        mIsOnPause = true;
+        if(null != mode1Thread &amp;&amp; true == mode1Thread.isAlive()){
+            try{
+                mode1Thread.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        if(null != threadFirst &amp;&amp; true == threadFirst.isAlive()){
+            try{
+                threadFirst.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        if(null != mode2Thread &amp;&amp; true == mode2Thread.isAlive()){
+            try{
+                mode2Thread.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        if(null != mode3Thread &amp;&amp; true == mode3Thread.isAlive()){
+            try{
+                mode3Thread.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        if(null != mode4Thread &amp;&amp; true == mode4Thread.isAlive()){
+            try{
+                mode4Thread.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        if(null != mRawCaptureThread &amp;&amp; true == mRawCaptureThread.isAlive()){
+            try{
+                mRawCaptureThread.join();
+            }catch(Exception e){
+            }
+
+        }
+
+        super.onPause();
+        Log.i(TAG, "super onPause.");
+        this.finish();
+    }
+
+        @Override
+        protected Dialog onCreateDialog(int id){
+            if(id == DIALOG_PROGRESS){
+                ProgressDialog dialog = new ProgressDialog(this);
+                dialog.setMessage("It is in full scan, please wait......");
+                dialog.setCancelable(false);
+                return dialog;
+            }
+            return null;
+        }
+
+        private class ProgressDlgHandler extends Handler {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case EVENT_FULL_SCAN_START:
+                    showDialog(DIALOG_PROGRESS);
+                    mProgressDlgExists = true;
+                    break;
+                case EVENT_FULL_SCAN_COMPLETE:
+                    dismissDialog(DIALOG_PROGRESS);
+                    mProgressDlgExists = false;
+                    break;
+            }
+        }
+    }
+
+
+    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+        mDispW = w;
+        mDispH = h;
+        Log.i(TAG, "surfaceChanged width is : " + w);
+        Log.i(TAG, "surfaceChanged height is : " + h);
+        startPreview();
+    }
+
+    public void surfaceCreated(SurfaceHolder holder) {
+        openCamera();
+        try {
+            mCamera.setPreviewDisplay(holder);
+        } catch (IOException exception) {
+            closeCamera();
+            Log.i(TAG, "surfaceCreated closeCamera ");
+        }       
+    }
+
+    public void surfaceDestroyed(SurfaceHolder arg0) {
+            stopPreview();
+        closeCamera();
+        Log.i(TAG, "surfaceDestroyed closeCamera ");
+    }
+
+    private void openCamera() {
+        if (mCamera == null) {
+            mCamera = Camera.open();
+            Log.i(TAG, "Enter openCamera to init the mCamera.");
+            if(null == mCamera){
+                Log.i(TAG, "init the mCamera is null.");
+            }
+        }
+    }
+    private void closeCamera() {
+        if(null != mCamera){
+            mCamera.release();
+            mCamera = null;
+        }
+    }
+    private void startPreview() {
+        mCameraParam = mCamera.getParameters();
+        //GW616 Camera preview problem
+        // Set a preview size that is closest to the viewfinder height and has
+        // the right aspect ratio.
+        Size size = mCameraParam.getPictureSize();
+        List&lt;Size&gt; sizes = mCameraParam.getSupportedPreviewSizes();
+        Size optimalSize = getOptimalPreviewSize(
+                sizes, (double) size.width / size.height);
+        if (optimalSize != null) {
+            mCameraParam.setPreviewSize(optimalSize.width, optimalSize.height);
+        }
+        //end
+//      mCameraParam.setPreviewSize(mPrvW, mPrvH);
+        mCameraParam.set("fps-mode", 0);    // Frame rate is normal
+        mCameraParam.set("cam-mode", 0);    // Cam mode is preview
+        mCamera.setParameters(mCameraParam);
+        Log.i(TAG, "startPreview width is : " + mPrvW);
+        Log.i(TAG, "startPreview height is : " + mPrvH);
+        mCamera.startPreview();
+        mIsPreviewing = 1;
+    }
+    private void stopPreview() {
+        if(null != mCamera){
+            mCamera.stopPreview();
+        }
+        mIsPreviewing = 0;
+    }
+
+    private Size getOptimalPreviewSize(List&lt;Size&gt; sizes, double targetRatio) {
+        final double ASPECT_TOLERANCE = 0.05;
+        if (sizes == null) return null;
+
+        Size optimalSize = null;
+        double minDiff = Double.MAX_VALUE;
+
+        // Because of bugs of overlay and layout, we sometimes will try to
+        // layout the viewfinder in the portrait orientation and thus get the
+        // wrong size of mSurfaceView. When we change the preview size, the
+        // new overlay will be created before the old one closed, which causes
+        // an exception. For now, just get the screen size
+
+        Display display = getWindowManager().getDefaultDisplay();
+        int targetHeight = Math.min(display.getHeight(), display.getWidth());
+
+        if (targetHeight &lt;= 0) {
+            // We don't know the size of SurefaceView, use screen height
+            WindowManager windowManager = (WindowManager)
+                    getSystemService(this.WINDOW_SERVICE);
+            targetHeight = windowManager.getDefaultDisplay().getHeight();
+        }
+
+        // Try to find an size match aspect ratio and size
+        for (Size size : sizes) {
+            double ratio = (double) size.width / size.height;
+            if (Math.abs(ratio - targetRatio) &gt; ASPECT_TOLERANCE) continue;
+            if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                optimalSize = size;
+                minDiff = Math.abs(size.height - targetHeight);
+            }
+        }
+
+        // Cannot find the one match the aspect ratio, ignore the requirement
+        if (optimalSize == null) {
+            Log.v(TAG, "No preview size match the aspect ratio");
+            minDiff = Double.MAX_VALUE;
+            for (Size size : sizes) {
+                if (Math.abs(size.height - targetHeight) &lt; minDiff) {
+                    optimalSize = size;
+                    minDiff = Math.abs(size.height - targetHeight);
+                }
+            }
+        }
+        Log.v(TAG, String.format(
+                "Optimal preview size is %sx%s",
+                optimalSize.width, optimalSize.height));
+        return optimalSize;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_CAMERA:
+                this.CapturePicture();
+                return true;
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+                return true;
+            case KeyEvent.KEYCODE_SEARCH:
+                return true;
+            case KeyEvent.KEYCODE_FOCUS:
+                return true;        
+            }
+            return super.onKeyDown(keyCode, event);
+    }
+
+    private void CapturePicture(){
+        if(false == mIssdcardExist)
+        {
+            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+            builder.setTitle("sdcard not available");
+            builder.setMessage("Please insert sdcard.");
+            builder.setPositiveButton("OK" , null);
+            builder.create().show();
+            return;
+         }
+
+         if(Environment.getExternalStorageState().equals(Environment.MEDIA_SHARED))
+        {
+            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                    builder.setTitle("sdcard is busy");
+                    builder.setMessage("Sorry, your SD card is busy.");
+                    builder.setPositiveButton("OK" , null);
+                    builder.create().show();
+                    return;
+        }
+
+        if(true == mIsTest)
+        {
+            Toast.makeText(this,"It is in capturing, can not repeat capture.",Toast.LENGTH_LONG).show();
+            if(true == mProgressDlgExists)
+            {
+                showDialog(DIALOG_PROGRESS);
+            }
+            return;
+        }
+
+        Intent intent = getIntent();
+        int TestMode = intent.getIntExtra("TestMode", 0);
+        Log.i(TAG, "The value of TestMode is :" + TestMode);
+        if(1 == TestMode)//AF Mode
+        {
+            mMode = intent.getIntExtra("AFMode", 0);
+            switch(mMode){
+                case 1:
+                    captureMode1();
+                    break;
+                case 2:
+                    captureMode2();
+                    break;
+                case 3:
+                    captureMode3();
+                    break;
+                case 4:
+                    captureMode4();
+                    break;
+            }
+         }
+         else if(2 == TestMode)//RawCapture Mode
+         {
+             RawCapture();
+         }
+         else//not select mode yet
+         {
+             Toast.makeText(this,"Please select the test mode first!",Toast.LENGTH_LONG).show();
+         }
+    }
+
+    private void captureMode1()
+    {           
+        Log.i(TAG, "Enter captureMode1 function.");
+        threadFirst = new mAFMode1FirstThread();
+        threadFirst.start();
+    }
+
+    class mAFMode1FirstThread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode1FirstThread");
+            mIsTest = true;
+
+            mAFEngMode = 0;
+            mCameraParam.set("afeng-mode", mAFEngMode);
+            mCameraParam.set("focus-mode", "auto");
+            mCameraParam.set("focus-meter", "spot");
+            mCamera.setParameters(mCameraParam);
+            mFocusStartTime = System.currentTimeMillis();
+            mIsFocused = 0;
+            mCamera.autoFocus(mAutoFocusCallback);
+
+            mCanBack = false;
+            takePicture();
+            mAFEngMode = 1;
+            mCameraParam.set("afeng-mode", mAFEngMode);
+            mCameraParam.set("focus-mode", "manual");
+            mCamera.setParameters(mCameraParam);
+            mPos = 0;
+            mCameraParam.set("afeng-pos", mPos);
+            mCamera.setParameters(mCameraParam);
+            startPreview();
+            mCanBack = true;
+            Sleep(2000);
+
+            mHandler.sendEmptyMessage(MSG_AF_MODE1_EVENT);          
+
+            Log.i(TAG, "mAFMode1FirstThread finish.");
+        }
+    }
+
+    private Handler mHandler = new Handler(){
+        @Override
+        public void handleMessage(Message msg){
+            switch(msg.what){
+                case MSG_AF_MODE1_EVENT:
+                    mode1Thread = new AFMode1Thread();
+                    mode1Thread.start();
+                    break;
+                case MSG_AF_MODE3_EVENT:
+                    mode3Thread = new AFMode3Thread();
+                    mode3Thread.start();
+                    break;
+                case MSG_AF_MODE4_EVENT:
+                    mode4Thread = new AFMode4Thread();
+                    mode4Thread.start();
+                    break;
+                default:
+                    break;
+            }
+        }
+    };
+
+    @Override
+    public void onBackPressed() {
+        if(false == mCanBack){
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    class AFMode1Thread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode1Thread");
+            if(true == mIsOnPause){
+                mHandler.removeMessages(MSG_AF_MODE1_EVENT);
+                return;
+            }
+            mCanBack = false;
+            takePicture();
+            mPos ++;
+            mCameraParam.set("afeng-pos", mPos);
+            mCamera.setParameters(mCameraParam);            
+            startPreview();
+            mCanBack = true;
+            Sleep(2000);            
+            if(false == mIsOnPause &amp;&amp; mPos &lt;= 50){
+                mHandler.sendEmptyMessage(MSG_AF_MODE1_EVENT);
+            }
+            if(mPos &gt; 50){
+                mIsTest = false;
+            }
+        }
+    }
+
+    private void captureMode2()
+    {   
+        Log.i(TAG, "Enter captureMode2 function.");
+        mode2Thread = new AFMode2Thread();
+        mode2Thread.start();
+    }
+
+    class AFMode2Thread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode2Thread");
+
+            mIsTest = true; 
+            mCanBack = true;
+            mAFEngMode = 1;
+            mCameraParam.set("afeng-mode", mAFEngMode);
+            mCameraParam.set("focus-mode", "fullscan");
+            mCamera.setParameters(mCameraParam);
+            mIsFocused = 0;
+            mCamera.autoFocus(mAutoFocusCallback);
+            mProgressDlgHandler.sendEmptyMessage(EVENT_FULL_SCAN_START);
+
+            mCanBack = false;
+            takePicture();
+            startPreview();
+            mCanBack = true;
+            mIsTest = false;
+            Sleep(2000);
+
+        }
+    }
+
+    private void captureMode3()
+    {
+        Log.i(TAG, "Enter captureMode3 function.");
+        mPos = 0;
+        mode3Thread = new AFMode3Thread();
+        mode3Thread.start();
+    }
+
+    class AFMode3Thread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode3Thread");
+            if(true == mIsOnPause){
+                mHandler.removeMessages(MSG_AF_MODE3_EVENT);
+                return;
+            }
+
+            mIsTest = true;
+
+            mAFEngMode = 1;
+            mCameraParam.set("afeng-mode", mAFEngMode);
+            mCameraParam.set("focus-mode", "fullscan");
+            mCamera.setParameters(mCameraParam);
+            mIsFocused = 0;
+            mCamera.autoFocus(mAutoFocusCallback);
+            mProgressDlgHandler.sendEmptyMessage(EVENT_FULL_SCAN_START);
+
+            mCanBack = false;
+            takePicture();
+            mPos ++;
+            startPreview();
+            mCanBack = true;
+            Sleep(2000);
+
+            if(false == mIsOnPause &amp;&amp; mPos &lt;= 50){
+                mHandler.sendEmptyMessage(MSG_AF_MODE3_EVENT);
+            }
+            if(mPos &gt; 50){
+                mIsTest = false;
+            }
+        }
+    }
+
+    private void captureMode4()
+    {       
+        Log.i(TAG, "Enter captureMode4 function.");
+        mPos = 0;
+        mode4Thread = new AFMode4Thread();
+        mode4Thread.start();
+    }
+
+    class AFMode4Thread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode4Thread");
+            if(true == mIsOnPause){
+                mHandler.removeMessages(MSG_AF_MODE4_EVENT);
+                return;
+            }
+
+            mIsTest = true;
+
+            mAFEngMode = 0;
+            mCameraParam.set("afeng-mode", mAFEngMode);
+            mCameraParam.set("focus-mode", "auto");
+            mCameraParam.set("focus-meter", "spot");
+            mCamera.setParameters(mCameraParam);
+            mIsFocused = 0;
+            mCamera.autoFocus(mAutoFocusCallback);
+            mCanBack = false;
+            takePicture();
+            mPos ++;
+            startPreview();
+            mCanBack = true;
+            Sleep(2000);
+
+            if(false == mIsOnPause &amp;&amp; mPos &lt;= 50){
+                mHandler.sendEmptyMessage(MSG_AF_MODE4_EVENT);
+            }
+            if(mPos &gt; 50){
+                mIsTest = false;
+            }
+        }
+    }
+
+    private void RawCapture()
+    {
+        Log.i(TAG, "Enter RawCapture function.");
+        mRawCaptureThread = new RawCaptureThread();
+        mRawCaptureThread.start();
+    }
+
+    class RawCaptureThread extends Thread{
+        public void run(){
+            Log.i(TAG, "mAFMode4Thread");
+            mCanBack = true;
+
+            mIsTest = true;
+            mIsRawCapture = true;
+
+            mCameraParam.set("rawsave-mode", "on");
+            long dateTaken = System.currentTimeMillis();
+            mRawCaptureFileName = CAMERA_IMAGE_BUCKET_NAME + createName(dateTaken);
+            mCameraParam.set("rawfname", mRawCaptureFileName + ".raw");
+            mCamera.setParameters(mCameraParam);
+            mCamera.autoFocus(mAutoFocusCallback);
+            mCanBack = false;
+            takePicture();
+            startPreview();
+            mCanBack = true;
+            mIsRawCapture = false;
+            mIsTest = false;
+            Sleep(2000);            
+
+        }
+    }
+
+    private final class AutoFocusCallback implements android.hardware.Camera.AutoFocusCallback {
+        public void onAutoFocus(boolean focused, android.hardware.Camera camera) {
+            mFocusCallbackTime = System.currentTimeMillis();
+            mIsFocused = 1;
+            if(1 == mAFEngMode)
+            {
+                mProgressDlgHandler.sendEmptyMessage(EVENT_FULL_SCAN_COMPLETE);
+            }
+        }
+    }
+    private final class ShutterCallback implements android.hardware.Camera.ShutterCallback {
+        public void onShutter() {           
+            mShutterCallbackTime = System.currentTimeMillis();
+        }
+    }  
+    private final class RawPictureCallback implements PictureCallback {
+      public void onPictureTaken(byte [] rawData, android.hardware.Camera camera) {         
+        mRawPictureCallbackTime = System.currentTimeMillis();
+      }
+    }
+    private final class JpegPictureCallback implements PictureCallback {
+      public void onPictureTaken(byte [] jpegData, android.hardware.Camera camera) {           
+         mJpegPictureCallbackTime = System.currentTimeMillis();
+         if (jpegData != null) {
+            storeImage(jpegData);
+         }
+         mIsCapture = 0;
+      }
+    }
+
+    private void takePicture() 
+    {       
+        while (mIsFocused == 0) {
+            Sleep(100);
+        }
+
+        mIsCapture = 1;
+        mCaptureStartTime = System.currentTimeMillis();
+        mCamera.takePicture(mShutterCallback, mRawPictureCallback, new JpegPictureCallback());
+        while (mIsCapture == 1) {
+            Sleep(100);
+        }
+    }
+    private void Sleep(long time) 
+    {
+        try{
+            Thread.sleep(time);
+        } catch (InterruptedException e){
+            e.printStackTrace();
+        }
+    }
+
+    private void storeImage(byte[] jpegData) {
+        long time;
+        long dateTaken = System.currentTimeMillis();
+        String name = CAMERA_IMAGE_BUCKET_NAME + createName(dateTaken) + ".jpg";
+
+        if(true == mIsRawCapture)
+        {
+            name = mRawCaptureFileName  + ".jpg";
+        }
+
+        File fHandle = new File(name);
+        try {
+            OutputStream bos = new FileOutputStream(fHandle);
+            bos.write(jpegData);
+            bos.close();
+            time = System.currentTimeMillis();
+        } catch (Exception ex) {
+            fHandle.delete();
+        }
+    }
+    private static String createName(long dateTaken) {
+        return DateFormat.format("yyyy-MM-dd kk.mm.ss", dateTaken).toString();
+    }
+
+    OnClickListener mButtonHandler = new OnClickListener() {
+        public void onClick(View v) {
+            SharedPreferences sharedPre = getSharedPreferences("test_results", Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = sharedPre.edit();
+
+            if (v.getId() == R.id.camera_test_pass) {
+                Log.i("CameraTest", "-----mButtonHandler----onClick()----camera_test_pass");
+                editor.putBoolean("CameraTest", true);
+            } else if (v.getId() == R.id.camera_test_fail) {
+                Log.i("CameraTest", "-----mButtonHandler----onClick()----camera_test_fail");
+                editor.putBoolean("CameraTest", false);
+            }
+            editor.commit();
+
+            Intent intent = new Intent();
+            intent.setClass(CameraTest.this, SpeakerTest.class);
+            startActivity(intent);
+            finish();
+        }
+    }; 
+
+}
+</code></pre>

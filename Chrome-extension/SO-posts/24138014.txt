@@ -1,0 +1,536 @@
+<p>As I understand the task, if the original image size is 420x320 and block size is 50x50 we will have 7x5 50x50 chunks, 5 70x50 chunks (the last column), 7 50x70 chunks (the last row) and one 70x70 chunk (bottom-right corner).
+Then after shuffling we need to put it all together. However the most likely there will be collisions if we just randomly merge chunks (red cross on the <a href="https://db.tt/lnr7odqG" rel="nofollow">picture</a>).</p>
+
+<p>So in that case I determine randomly the position (X,Y) of big square chunk (70x70) and put all 70x50 chunks in the X column and all 50x70 chunks in the Y row.</p>
+
+<p>There might be some other cases:</p>
+
+<ol>
+<li>if the original image size is 200x180 then we will have 4x2 50x50 chunks and 4 50x80 chunks. Then we shuffle it and should put one higher chunk to one column to preserve original image size;</li>
+<li>if the original image is 230x200 then we will have 3x4 50x50 chunks and 4 80x50 chunks. Then we should put one wider chunk to one row;</li>
+<li>if the original image is 200x200 then your code works perfectly.</li>
+</ol>
+
+<p>As we have chunks with different sizes merge becomes a little more complex - we determine each chunk coordinates depending on the previous chunks size.</p>
+
+<pre><code>package com.example.imagesplitter;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Point;
+import android.graphics.drawable.BitmapDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.provider.MediaStore;
+import android.view.Window;
+import android.widget.Button;
+import android.widget.ImageView;
+
+public class MainActivity extends Activity {
+
+Button split_image;
+Button btnGallery;
+
+ImageView sourceImage;
+Uri selectedImage;
+private final int RESULT_LOAD_IMAGE = 1;
+int chunkSideLength = 50;
+
+ArrayList&lt;Bitmap&gt; chunkedImage;
+
+// Number of rows and columns in chunked image
+int rows, cols;
+
+/** Called when the activity is first created. */
+@Override
+public void onCreate(Bundle savedInstanceState) {
+
+    super.onCreate(savedInstanceState);
+    requestWindowFeature(Window.FEATURE_NO_TITLE);
+    setContentView(R.layout.activity_main);
+
+    sourceImage = (ImageView) findViewById(R.id.source_image);
+
+    alertDialogForCameraImage();
+}
+
+void pickImageFromGallery() {
+
+    Intent pickPhoto = new Intent(Intent.ACTION_PICK,
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+    // startActivityForResult(pickPhoto , 0);
+    startActivityForResult(pickPhoto, RESULT_LOAD_IMAGE);
+}
+
+@Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
+
+    switch (requestCode) {
+
+    case RESULT_LOAD_IMAGE:
+        if (resultCode == Activity.RESULT_OK) {
+            // takenPictureData = handleResultFromChooser(data);
+
+            selectedImage = data.getData();
+            String[] filePathColumn = { MediaStore.Images.Media.DATA };
+
+            Cursor cursor = getContentResolver().query(selectedImage, filePathColumn, null,
+                    null, null);
+            cursor.moveToFirst();
+
+            int columnIndex = cursor.getColumnIndex(filePathColumn[0]);
+            String picturePath = cursor.getString(columnIndex);
+            cursor.close();
+
+            // ImageView imageView = (ImageView) findViewById(R.id.imgView);
+            sourceImage.setImageBitmap(BitmapFactory.decodeFile(picturePath));
+
+            // Function of split the image(divide the image into pieces)
+            splitImage(sourceImage, chunkSideLength);
+        }
+        break;
+    }
+
+    // And show the result in the image view when take picture from camera.
+
+}
+
+public void alertDialogForCameraImage() {
+    AlertDialog.Builder adb = new AlertDialog.Builder(MainActivity.this);
+    adb.setTitle("Pick Image From Gallery: ");
+    adb.setNegativeButton("Gallery", new DialogInterface.OnClickListener() {
+        public void onClick(DialogInterface dialog, int which) {
+
+            pickImageFromGallery();
+
+        }
+    });
+    adb.show();
+}
+
+/**
+ * Splits the source image and show them all into a grid in a new activity
+ * 
+ * @param image
+ *            The source image to split
+ * @param chunkSideLength
+ *            Image parts side length
+ */
+private void splitImage(ImageView image, int chunkSideLength) {
+    Random random = new Random(System.currentTimeMillis());
+
+    // height and weight of higher|wider chunks if they would be
+    int higherChunkSide, widerChunkSide;
+
+    // Getting the scaled bitmap of the source image
+    Bitmap bitmap = ((BitmapDrawable) image.getDrawable()).getBitmap();
+
+    rows = bitmap.getHeight() / chunkSideLength;
+    higherChunkSide = bitmap.getHeight() % chunkSideLength + chunkSideLength;
+
+    cols = bitmap.getWidth() / chunkSideLength;
+    widerChunkSide = bitmap.getWidth() % chunkSideLength + chunkSideLength;
+
+    // To store all the small image chunks in bitmap format in this list
+    chunkedImage = new ArrayList&lt;Bitmap&gt;(rows * cols);
+
+    if (higherChunkSide != chunkSideLength) {
+        if (widerChunkSide != chunkSideLength) {
+            // picture has both higher and wider chunks plus one big square chunk
+
+            ArrayList&lt;Bitmap&gt; widerChunks = new ArrayList&lt;Bitmap&gt;(rows - 1);
+            ArrayList&lt;Bitmap&gt; higherChunks = new ArrayList&lt;Bitmap&gt;(cols - 1);
+            Bitmap squareChunk;
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols - 1; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                // add last chunk in a row to array of wider chunks
+                widerChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, chunkSideLength));
+
+                yCoord += chunkSideLength;
+            }
+
+            // add last row to array of higher chunks
+            int xCoord = 0;
+            for (int x = 0; x &lt; cols - 1; ++x) {
+                higherChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, higherChunkSide));
+                xCoord += chunkSideLength;
+            }
+
+            //save bottom-right big square chunk 
+            squareChunk = Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, higherChunkSide);
+
+            //shuffle arrays
+            Collections.shuffle(chunkedImage);
+            Collections.shuffle(higherChunks);
+            Collections.shuffle(widerChunks);
+
+            //determine random position of big square chunk
+            int bigChunkX = random.nextInt(cols);
+            int bigChunkY = random.nextInt(rows);
+
+            //add wider and higher chunks into resulting array of chunks
+            //all wider(higher) chunks should be in one column(row) to avoid collisions between chunks
+            //We must insert it row by row because they will displace each other from their columns otherwise
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                chunkedImage.add(cols * y + bigChunkX, widerChunks.get(y));
+            }
+
+            //And then we insert the whole row of higher chunks
+            for (int x = 0; x &lt; cols - 1; ++x) {
+                chunkedImage.add(bigChunkY * cols + x, higherChunks.get(x));
+            }
+
+            chunkedImage.add(bigChunkY * cols + bigChunkX, squareChunk);
+        } else {
+            // picture has only number of higher chunks 
+
+            ArrayList&lt;Bitmap&gt; higherChunks = new ArrayList&lt;Bitmap&gt;(cols);
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                yCoord += chunkSideLength;
+            }
+
+            // add last row to array of higher chunks
+            int xCoord = 0;
+            for (int x = 0; x &lt; cols; ++x) {
+                higherChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, higherChunkSide));
+                xCoord += chunkSideLength;
+            }
+
+            //shuffle arrays
+            Collections.shuffle(chunkedImage);
+            Collections.shuffle(higherChunks);
+
+            //add higher chunks into resulting array of chunks
+            //Each higher chunk should be in his own column to preserve original image size
+            //We must insert it row by row because they will displace each other from their columns otherwise
+            List&lt;Point&gt; higherChunksPositions = new ArrayList&lt;Point&gt;(cols);
+            for (int x = 0; x &lt; cols; ++x) {
+                higherChunksPositions.add(new Point(x, random.nextInt(rows)));
+            }
+
+            //sort positions of higher chunks. THe upper-left elements should be first 
+            Collections.sort(higherChunksPositions, new Comparator&lt;Point&gt;() {
+                @Override
+                public int compare(Point lhs, Point rhs) {
+                    if (lhs.y != rhs.y) {
+                        return lhs.y &lt; rhs.y ? -1 : 1;
+                    } else if (lhs.x != rhs.x) {
+                        return lhs.x &lt; rhs.x ? -1 : 1;
+                    }
+                    return 0;
+                }
+            });
+
+            for (int x = 0; x &lt; cols; ++x) {
+                Point currentCoord = higherChunksPositions.get(x);
+                chunkedImage.add(currentCoord.y * cols + currentCoord.x, higherChunks.get(x));
+            }
+
+        }
+    } else {
+        if (widerChunkSide != chunkSideLength) {
+            // picture has only number of wider chunks
+
+            ArrayList&lt;Bitmap&gt; widerChunks = new ArrayList&lt;Bitmap&gt;(rows);
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols - 1; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                // add last chunk in a row to array of wider chunks
+                widerChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, chunkSideLength));
+
+                yCoord += chunkSideLength;
+            }
+
+            //shuffle arrays
+            Collections.shuffle(chunkedImage);
+            Collections.shuffle(widerChunks);
+
+            //add wider chunks into resulting array of chunks
+            //Each wider chunk should be in his own row to preserve original image size
+            for (int y = 0; y &lt; rows; ++y) {
+                chunkedImage.add(cols * y + random.nextInt(cols), widerChunks.get(y));
+            }
+
+        } else {
+            // picture perfectly splits into square chunks
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                yCoord += chunkSideLength;
+            }
+
+            Collections.shuffle(chunkedImage);
+        }
+    }
+
+    // Function of merge the chunks images(after image divided in pieces then i can call this function to combine
+    // and merge the image as one)
+    mergeImage(chunkedImage, bitmap.getWidth(), bitmap.getHeight());
+}
+
+void mergeImage(ArrayList&lt;Bitmap&gt; imageChunks, int width, int height) {
+
+    // create a bitmap of a size which can hold the complete image after merging
+    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_4444);
+
+    // create a canvas for drawing all those small images
+    Canvas canvas = new Canvas(bitmap);
+    int count = 0;
+    Bitmap currentChunk = imageChunks.get(0);
+
+    //Array of previous row chunks bottom y coordinates 
+    int[] yCoordinates = new int[cols];
+    Arrays.fill(yCoordinates, 0);
+
+    for (int y = 0; y &lt; rows; ++y) {
+        int xCoord = 0;
+        for (int x = 0; x &lt; cols; ++x) {
+            currentChunk = imageChunks.get(count);
+            canvas.drawBitmap(currentChunk, xCoord, yCoordinates[x], null);
+            xCoord += currentChunk.getWidth();
+            yCoordinates[x] += currentChunk.getHeight();
+            count++;
+        }
+    }
+
+    /*
+     * The result image is shown in a new Activity
+     */
+
+    Intent intent = new Intent(MainActivity.this, MergedImage.class);
+    intent.putExtra("merged_image", bitmap);
+    startActivity(intent);
+    finish();
+}
+}
+</code></pre>
+
+<p>And sorry for my bad English :)</p>
+
+<p>EDITED:</p>
+
+<p>If you want to get the original image, you need to comment all shufflings and place big square chunk in its old place: in the bottom-right corner</p>
+
+<pre><code>            //shuffle arrays
+/*          Collections.shuffle(chunkedImage);
+            Collections.shuffle(higherChunks);
+            Collections.shuffle(widerChunks);
+*/
+            //determine random position of big square chunk
+            int bigChunkX = cols - 1;
+            int bigChunkY = rows - 1;
+</code></pre>
+
+<p>And this is only true if both image width and height are not divisible by chunkSideLength.
+In other cases you should also comment shufflings and put higher/wider chunks in its old place. The full code of splitImage function with disabled shufflings is below</p>
+
+<pre><code>    private void splitImage(ImageView image, int chunkSideLength) {
+    Random random = new Random(System.currentTimeMillis());
+
+    // height and weight of higher|wider chunks if they would be
+    int higherChunkSide, widerChunkSide;
+
+    // Getting the scaled bitmap of the source image
+    Bitmap bitmap = ((BitmapDrawable) image.getDrawable()).getBitmap();
+
+    rows = bitmap.getHeight() / chunkSideLength;
+    higherChunkSide = bitmap.getHeight() % chunkSideLength + chunkSideLength;
+
+    cols = bitmap.getWidth() / chunkSideLength;
+    widerChunkSide = bitmap.getWidth() % chunkSideLength + chunkSideLength;
+
+    // To store all the small image chunks in bitmap format in this list
+    chunkedImage = new ArrayList&lt;Bitmap&gt;(rows * cols);
+
+    if (higherChunkSide != chunkSideLength) {
+        if (widerChunkSide != chunkSideLength) {
+            // picture has both higher and wider chunks plus one big square chunk
+
+            ArrayList&lt;Bitmap&gt; widerChunks = new ArrayList&lt;Bitmap&gt;(rows - 1);
+            ArrayList&lt;Bitmap&gt; higherChunks = new ArrayList&lt;Bitmap&gt;(cols - 1);
+            Bitmap squareChunk;
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols - 1; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                // add last chunk in a row to array of wider chunks
+                widerChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, chunkSideLength));
+
+                yCoord += chunkSideLength;
+            }
+
+            // add last row to array of higher chunks
+            int xCoord = 0;
+            for (int x = 0; x &lt; cols - 1; ++x) {
+                higherChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, higherChunkSide));
+                xCoord += chunkSideLength;
+            }
+
+            //save bottom-right big square chunk 
+            squareChunk = Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, higherChunkSide);
+
+            //shuffle arrays
+/*          Collections.shuffle(chunkedImage);
+            Collections.shuffle(higherChunks);
+            Collections.shuffle(widerChunks);
+*/
+            //determine random position of big square chunk
+            int bigChunkX = cols - 1;
+            int bigChunkY = rows - 1;
+
+            //add wider and higher chunks into resulting array of chunks
+            //all wider(higher) chunks should be in one column(row) to avoid collisions between chunks
+            //We must insert it row by row because they will displace each other from their columns otherwise
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                chunkedImage.add(cols * y + bigChunkX, widerChunks.get(y));
+            }
+
+            //And then we insert the whole row of higher chunks
+            for (int x = 0; x &lt; cols - 1; ++x) {
+                chunkedImage.add(bigChunkY * cols + x, higherChunks.get(x));
+            }
+
+            chunkedImage.add(bigChunkY * cols + bigChunkX, squareChunk);
+        } else {
+            // picture has only number of higher chunks 
+
+            ArrayList&lt;Bitmap&gt; higherChunks = new ArrayList&lt;Bitmap&gt;(cols);
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows - 1; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                yCoord += chunkSideLength;
+            }
+
+            // add last row to array of higher chunks
+            int xCoord = 0;
+            for (int x = 0; x &lt; cols; ++x) {
+                higherChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, higherChunkSide));
+                xCoord += chunkSideLength;
+            }
+
+            //shuffle arrays
+/*          Collections.shuffle(chunkedImage);
+            Collections.shuffle(higherChunks);
+*/
+            //add higher chunks into resulting array of chunks
+            //Each higher chunk should be in his own column to preserve original image size
+            //We must insert it row by row because they will displace each other from their columns otherwise
+            List&lt;Point&gt; higherChunksPositions = new ArrayList&lt;Point&gt;(cols);
+            for (int x = 0; x &lt; cols; ++x) {
+                higherChunksPositions.add(new Point(x, rows - 1));
+            }
+
+            //sort positions of higher chunks. THe upper-left elements should be first 
+            Collections.sort(higherChunksPositions, new Comparator&lt;Point&gt;() {
+                @Override
+                public int compare(Point lhs, Point rhs) {
+                    if (lhs.y != rhs.y) {
+                        return lhs.y &lt; rhs.y ? -1 : 1;
+                    } else if (lhs.x != rhs.x) {
+                        return lhs.x &lt; rhs.x ? -1 : 1;
+                    }
+                    return 0;
+                }
+            });
+
+            for (int x = 0; x &lt; cols; ++x) {
+                Point currentCoord = higherChunksPositions.get(x);
+                chunkedImage.add(currentCoord.y * cols + currentCoord.x, higherChunks.get(x));
+            }
+
+        }
+    } else {
+        if (widerChunkSide != chunkSideLength) {
+            // picture has only number of wider chunks
+
+            ArrayList&lt;Bitmap&gt; widerChunks = new ArrayList&lt;Bitmap&gt;(rows);
+
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols - 1; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                // add last chunk in a row to array of wider chunks
+                widerChunks.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, widerChunkSide, chunkSideLength));
+
+                yCoord += chunkSideLength;
+            }
+
+            //shuffle arrays
+/*          Collections.shuffle(chunkedImage);
+            Collections.shuffle(widerChunks);
+*/
+            //add wider chunks into resulting array of chunks
+            //Each wider chunk should be in his own row to preserve original image size
+            for (int y = 0; y &lt; rows; ++y) {
+                chunkedImage.add(cols * y + cols - 1, widerChunks.get(y));
+            }
+
+        } else {
+            // picture perfectly splits into square chunks
+            int yCoord = 0;
+            for (int y = 0; y &lt; rows; ++y) {
+                int xCoord = 0;
+                for (int x = 0; x &lt; cols; ++x) {
+                    chunkedImage.add(Bitmap.createBitmap(bitmap, xCoord, yCoord, chunkSideLength, chunkSideLength));
+                    xCoord += chunkSideLength;
+                }
+                yCoord += chunkSideLength;
+            }
+
+/*          Collections.shuffle(chunkedImage);
+*/          }
+    }
+
+    // Function of merge the chunks images(after image divided in pieces then i can call this function to combine
+    // and merge the image as one)
+    mergeImage(chunkedImage, bitmap.getWidth(), bitmap.getHeight());
+}
+</code></pre>

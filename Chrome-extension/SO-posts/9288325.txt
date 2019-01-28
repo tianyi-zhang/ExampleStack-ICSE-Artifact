@@ -1,0 +1,239 @@
+<p>You can use following to show image view and textview on the same cell of gridview </p>
+
+<p>Create a viewHolder class and edit the <code>getView()</code> of your adapter as shown below </p>
+
+<pre><code>public static class ViewHolder {
+    public TextView text;
+    public ImageView image;
+}
+
+@Override
+public View getView(int position, View convertView, ViewGroup parent) {
+    // TODO Auto-generated method stub
+    View vi;
+    ViewHolder holder;
+    if (convertView == null) {
+        vi = new View(activity);
+        LayoutInflater inflater = activity.getLayoutInflater();
+        vi = inflater.inflate(R.layout.item, null, true);
+        holder = new ViewHolder();
+        holder.text = (TextView) vi.findViewById(R.id.text);
+        holder.image = (ImageView) vi.findViewById(R.id.image);
+        vi.setTag(holder);
+    } else {
+        vi = convertView;
+        holder = (ViewHolder) vi.getTag();
+        holder.text.setText(CategoryList.get(position).toString());
+        holder.image.setImageDrawable(drawable);
+        holder.image.setTag(R.drawable.arrow);
+    }
+    holder.text.setText(CategoryList.get(position).toString());
+    holder.image.setTag(R.drawable.arrow);
+    vi.setTag(holder);
+    return vi;
+}
+</code></pre>
+
+<p>Edit :</p>
+
+<p>I also had the same issue i was getting image url from webservices and i wanted to show the images on listview : so i used following class to save images using hashset on sd card </p>
+
+<pre><code>public class CacheImages {
+
+    private HashMap&lt;String, Bitmap&gt; cache = new HashMap&lt;String, Bitmap&gt;();
+
+    private File cacheDir;
+
+    final int stub_id = your.package.name.R.drawable.stub;
+
+    PhotosQueue photosQueue = new PhotosQueue();
+
+    PhotosLoader photoLoaderThread = new PhotosLoader();
+
+    CacheImages(Context context) {
+        // Make the background thead low priority. This way it will not affect
+        // the UI performance
+        photoLoaderThread.setPriority(Thread.NORM_PRIORITY - 1);
+
+        // Find the dir to save cached images
+        if (android.os.Environment.getExternalStorageState().equals(
+                android.os.Environment.MEDIA_MOUNTED)) {
+            cacheDir = new File(
+                    android.os.Environment.getExternalStorageDirectory(),
+                    "/data/projectname");
+            //Log.v("cacheDir ", cacheDir + "");
+        } else {
+            cacheDir = context.getCacheDir();
+        }
+        if (!cacheDir.exists())
+            cacheDir.mkdirs();
+    }
+
+    // Task for the queue
+    private class PhotoToLoad {
+        public String url;
+        public ImageView imageView;
+
+        public PhotoToLoad(String u, ImageView i) {
+            url = u;
+            imageView = i;
+        }
+    }
+
+    class PhotosLoader extends Thread {
+        public void run() {
+            try {
+                while (true) {
+                    // thread waits until there are any images to load in the
+                    // queue
+                    if (photosQueue.photosToLoad.size() == 0)
+                        synchronized (photosQueue.photosToLoad) {
+                            photosQueue.photosToLoad.wait();
+                        }
+                    //else{
+                        if (photosQueue.photosToLoad.size() != 0) {
+                            PhotoToLoad photoToLoad;
+                            synchronized (photosQueue.photosToLoad) {
+                                photoToLoad = photosQueue.photosToLoad.pop();
+                            }
+                            Bitmap bmp = getBitmap(photoToLoad.url);
+                            cache.put(photoToLoad.url, bmp);
+                            if ((photoToLoad.imageView.getTag())
+                                    .equals(photoToLoad.url)) {
+                                BitmapDisplayer bd = new BitmapDisplayer(bmp,
+                                        photoToLoad.imageView);
+                                Activity a = (Activity) photoToLoad.imageView
+                                        .getContext();
+                                a.runOnUiThread(bd);
+                            }
+                        }
+                    //}
+                    if (Thread.interrupted())
+                        break;
+                }
+            } catch (InterruptedException e) {
+                // allow thread to exit
+            }
+        }
+    }
+private Bitmap getBitmap(String url) {
+//      PhotoToLoad photoToLoad = new PhotoToLoad(url, new ImageView(a));
+//      String filename = photoToLoad.url;
+        //String filename = url;
+        String filename = String.valueOf(url.hashCode());
+        //Log.v("TAG FILE :", filename);
+        File f = new File(cacheDir, filename);
+        // Is the bitmap in our cache?
+        Bitmap bitmap = BitmapFactory.decodeFile(f.getPath());
+        if (bitmap != null)
+            return bitmap;
+        else {
+            // Nope, have to download it
+            try {
+                bitmap = BitmapFactory.decodeStream(new URL(url)
+                        .openConnection().getInputStream());
+                // save bitmap to cache for later
+                writeFile(bitmap, f);
+                return bitmap;
+            } catch (FileNotFoundException ex) {
+                ex.printStackTrace();
+                //Log.v("FILE NOT FOUND", "FILE NOT FOUND");
+                return null;
+            }catch (Exception e) {
+                // TODO: handle exception
+                e.printStackTrace();
+                return null;
+            }
+        }
+    }
+
+    private void writeFile(Bitmap bmp, File f) {
+        FileOutputStream out = null;
+
+        try {
+            out = new FileOutputStream(f);
+            bmp.compress(Bitmap.CompressFormat.PNG, 80, out);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (out != null)
+                    out.close();
+            } catch (Exception ex) {
+            }
+        }
+    }
+
+public void DisplayImage(String url, Activity activity, ImageView imageView) {
+        if (cache.containsKey(url))
+            imageView.setImageBitmap(cache.get(url));
+        else {
+            queuePhoto(url, activity, imageView);
+            imageView.setImageResource(stub_id);
+        }
+    }
+
+    private void queuePhoto(String url, Activity activity, ImageView imageView) {
+        // This ImageView may be used for other images before. So there may be
+        // some old tasks in the queue. We need to discard them.
+        photosQueue.Clean(imageView);
+        PhotoToLoad p = new PhotoToLoad(url, imageView);
+        synchronized (photosQueue.photosToLoad) {
+            photosQueue.photosToLoad.push(p);
+            photosQueue.photosToLoad.notifyAll();
+        }
+
+        // start thread if it's not started yet
+        if (photoLoaderThread.getState() == Thread.State.NEW)
+            photoLoaderThread.start();
+    }
+
+    // stores list of photos to download
+    class PhotosQueue {
+        private Stack&lt;PhotoToLoad&gt; photosToLoad = new Stack&lt;PhotoToLoad&gt;();
+
+        // removes all instances of this ImageView
+        public void Clean(ImageView image) {
+            for (int j = 0; j &lt; photosToLoad.size();) {
+                if (photosToLoad.get(j).imageView == image)
+                    photosToLoad.remove(j);
+                else
+                    ++j;
+            }
+        }
+    }
+
+    // Used to display bitmap in the UI thread
+    class BitmapDisplayer implements Runnable {
+        Bitmap bitmap;
+        ImageView imageView;
+
+        public BitmapDisplayer(Bitmap b, ImageView i) {
+            bitmap = b;
+            imageView = i;
+        }
+
+        public void run() {
+            if (bitmap != null)
+                imageView.setImageBitmap(bitmap);
+            else
+                imageView.setImageResource(stub_id);
+        }
+    }
+
+    public void clearCache() {
+        // clear memory cache
+        cache.clear();
+
+        // clear SD cache
+        File[] files = cacheDir.listFiles();
+        for (File f : files)
+            f.delete();
+    }
+}
+</code></pre>
+
+<p>and then to load the image from url i used following code to display image on listitem </p>
+
+<pre><code>holder.image.setTag(img.getImage(holder.image, Url));
+</code></pre>
