@@ -1,4 +1,4 @@
-This folder contains two source datasets (downloaded GitHub repositories and SO code examples) and two generated datasets (variation dataset and adaptation datatset) presented in Section II in ICSE Paper#401.  
+This file describes two source datasets (downloaded GitHub repositories and SO code examples) and two generated datasets (variation dataset and adaptation datatset) presented in Section II in ICSE Paper#401.  
 
 Please first download the datasets at https://figshare.com/s/299da5ec6d7ab0ee1878 (DOI: 10.6084/m9.figshare.7722068).The datasets can also be downloaded from Dropbox link https://bit.ly/2WmsztO. Unzip the two zip files.
 
@@ -6,6 +6,7 @@ Note that the variation dataset is 1.3G before unzip and 4.8G after unzip. Make 
 
 
 1. Downloaded GitHub repositories and processed SO code examples (Section II in the ICSE paper)
+
 We downloaded 50,826 non-forked Java repositories with at least five stars. All urls of the repositories are provided in file "github-java-5-star-url.txt".
 We extracted the code snippets from SO answer posts whose corresponding question posts have "java" or "android" tags. Then we wrapped the snippets as Java methods and kept those ones with at least 50 tokens. The processed SO code examples are presented in file "so-more-than-50-tokens.txt".
 
