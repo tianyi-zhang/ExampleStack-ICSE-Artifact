@@ -1,0 +1,44 @@
+public class foo {
+private boolean unpackZip(String path, String zipname)
+{       
+     InputStream is;
+     ZipInputStream zis;
+     try 
+     {
+         is = new FileInputStream(path + zipname);
+         zis = new ZipInputStream(new BufferedInputStream(is));          
+         ZipEntry ze;
+
+         while((ze = zis.getNextEntry()) != null) 
+         {
+             ByteArrayOutputStream baos = new ByteArrayOutputStream();
+             byte[] buffer = new byte[1024];
+             int count;
+
+             String filename = ze.getName();
+             FileOutputStream fout = new FileOutputStream(path + filename);
+
+             // reading and writing
+             while((count = zis.read(buffer)) != -1) 
+             {
+                 baos.write(buffer, 0, count);
+                 byte[] bytes = baos.toByteArray();
+                 fout.write(bytes);             
+                 baos.reset();
+             }
+
+             fout.close();               
+             zis.closeEntry();
+         }
+
+         zis.close();
+     } 
+     catch(IOException e)
+     {
+         e.printStackTrace();
+         return false;
+     }
+
+    return true;
+}
+}

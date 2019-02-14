@@ -1,0 +1,96 @@
+/*
+ * Copyright 2011 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package fuzion24.device.vulnerability.vulnerabilities.helper;
+
+import android.content.Context;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.lang.reflect.Method;
+
+/**
+ * Utilities for accessing /proc filesystem information.
+ */
+public class SystemUtils {
+    private SystemUtils() {
+    }
+
+    public static int ProcfindPidFor(String executable) throws IOException {
+        File f = new File("/proc");
+        for (File d : f.listFiles()) {
+            String cmdLineString = d.getAbsolutePath() + "/cmdline";
+            File cmdLine = new File(cmdLineString);
+            if (cmdLine.exists()) {
+                BufferedReader in = null;
+                try {
+                    in = new BufferedReader(new FileReader(cmdLine));
+                    String line = in.readLine();
+                    if ((line != null) && line.startsWith(executable)) {
+                        return Integer.decode(d.getName());
+                    }
+                } finally {
+                    if (in != null) {
+                        in.close();
+                    }
+                }
+            }
+        }
+        throw new RuntimeException("should never get here");
+    }
+
+    //https://stackoverflow.com/questions/2641111/where-is-android-os-systemproperties
+    /**
+     * Get the value for the given key.
+     * @return an empty string if the key isn't found
+     * @throws IllegalArgumentException if the key exceeds 32 characters
+     */
+    public static String propertyGet(Context context, String key) throws IllegalArgumentException {
+
+        String ret= "";
+
+        try{
+
+            ClassLoader cl = context.getClassLoader();
+            @SuppressWarnings("rawtypes")
+            Class SystemProperties = cl.loadClass("android.os.SystemProperties");
+
+            //Parameters Types
+            @SuppressWarnings("rawtypes")
+            Class[] paramTypes= new Class[1];
+            paramTypes[0]= String.class;
+
+            Method get = SystemProperties.getMethod("get", paramTypes);
+
+            //Parameters
+            Object[] params= new Object[1];
+            params[0]= new String(key);
+
+            ret= (String) get.invoke(SystemProperties, params);
+
+        }catch( IllegalArgumentException iAE ){
+            throw iAE;
+        }catch( Exception e ){
+            ret= "";
+            //TODO
+        }
+
+        return ret;
+
+    }
+
+}
