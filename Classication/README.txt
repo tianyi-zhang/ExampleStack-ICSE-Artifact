@@ -1,3 +1,5 @@
+Note (Mar 20, 2021): The test data in test-data/clones is no longer available on GitHub. Please download it from our artifact on Zenodo (https://zenodo.org/record/2576449#.YFZLY7RKglI).
+
 This folder contains the artifacts involved in Section III and Section IV in ICSE Paper#401. First, we provide the manual inspection spreadsheet for developing the 24 adaptation categories. Second, we provide an automatic adaptation classification tool and the instructions to reproduce the evaluation result of this tool. Third, we provide the instructions to reproduce the type frequency analysis result using the automated classification tool.
 
 1. Manual Inspection (Section III.A in the ICSE paper)
